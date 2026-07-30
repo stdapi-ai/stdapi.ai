@@ -9,35 +9,23 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Convers
      stdapi/models/chat/amazon_nova_2.py:ChatModel._prepare_converse_request
 """
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import pytest
 
 from stdapi.models.chat.amazon_nova_2 import ChatModel
-from stdapi.monitoring import REQUEST_LOG
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
-
     from types_aiobotocore_bedrock_runtime.type_defs import (
         InferenceConfigurationTypeDef,
     )
 
     from stdapi.monitoring import EventLog
 
-pytestmark = pytest.mark.local
+pytestmark = [pytest.mark.local, pytest.mark.usefixtures("request_log")]
 
 #: Model instance used across tests; construction is side-effect free.
 _MODEL = ChatModel("amazon.nova-2-lite-v1:0")
-
-
-@pytest.fixture(autouse=True)
-def request_log() -> Generator[EventLog]:
-    """Provide an empty request log context for ``log_error_details`` calls."""
-    log: EventLog = cast("EventLog", {"level": "info"})
-    token = REQUEST_LOG.set(log)
-    yield log
-    REQUEST_LOG.reset(token)
 
 
 class TestPrepareConverseRequestReasoningMaxTokens:

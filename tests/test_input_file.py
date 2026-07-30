@@ -20,24 +20,37 @@ from stdapi.config import SETTINGS
 from stdapi.files._multipart import create_multipart_session
 from stdapi.input_file import InputFile
 
+pytestmark = pytest.mark.local
 
-async def test_to_bytes_rejects_oversized_inline_input(
-    monkeypatch: pytest.MonkeyPatch,
+
+@pytest.mark.parametrize(
+    ("accessor", "payload"),
+    [
+        pytest.param("to_bytes", b64encode(b"x" * 64).decode(), id="to_bytes"),
+        pytest.param("to_base64", b64encode(b"x" * 64).decode(), id="to_base64"),
+        pytest.param(
+            "to_data_uri",
+            f"data:image/png;base64,{b64encode(b'x' * 64).decode()}",
+            id="to_data_uri",
+        ),
+    ],
+)
+async def test_accessors_reject_oversized_inline_input(
+    monkeypatch: pytest.MonkeyPatch, accessor: str, payload: str
 ) -> None:
-    """An inline base64 input larger than the limit is rejected with HTTP 413.
+    """Every inline accessor rejects an over-limit payload with the same HTTP 413.
 
-    The size is checked against the decoded payload before it is read, so the
-    request is refused without buffering the whole body.
+    The size is checked against the decoded payload before it is read, so the request
+    is refused without buffering the whole body — and that check lives below the three
+    accessors rather than in any one of them.
 
     Ref: stdapi/input_file.py:InputFile.to_bytes
          stdapi/config.py:_Settings.max_input_file_size
     """
     monkeypatch.setattr(SETTINGS, "max_input_file_size", 8)
-    payload = b64encode(b"x" * 64).decode()
-    with pytest.raises(ApiError) as exc:
-        await InputFile(payload).to_bytes()
+    with pytest.raises(ApiError, match="8 bytes") as exc:
+        await getattr(InputFile(payload), accessor)()
     assert exc.value.status == 413
-    assert "8 bytes" in str(exc.value), exc.value.args
 
 
 async def test_to_bytes_allows_input_within_limit(
@@ -124,31 +137,31 @@ async def test_create_multipart_session_rejects_unsafe_filename() -> None:
     assert "forbidden characters" in str(exc.value), exc.value.args
 
 
-async def test_to_base64_rejects_oversized_inline_input(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An oversized inline base64 input is rejected via the to_base64 path (413).
+async def test_create_multipart_session_rejects_overlong_filename() -> None:
+    """A filename longer than 500 characters is rejected before any S3 call.
 
-    Ref: stdapi/input_file.py:InputFile.to_base64
+    The filename is interpolated into the object's ``Content-Disposition`` header, and
+    500 is the Anthropic Files API cap the gateway mirrors.
+
+    Ref: stdapi/files/_core.py:_validate_filename
+         stdapi/files/_multipart.py:create_multipart_session
     """
-    monkeypatch.setattr(SETTINGS, "max_input_file_size", 8)
-    payload = b64encode(b"x" * 64).decode()
-    with pytest.raises(ApiError) as exc:
-        await InputFile(payload).to_base64()
-    assert exc.value.status == 413
-    assert "8 bytes" in str(exc.value), exc.value.args
+    with pytest.raises(ApiError, match="maximum length of 500") as exc:
+        await create_multipart_session("a" * 501, "text/plain", "", 10)
+    assert exc.value.status == 400
 
 
-async def test_to_data_uri_rejects_oversized_inline_input(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An oversized inline data URI is rejected via the to_data_uri path (413).
+async def test_filename_length_check_runs_before_the_character_check() -> None:
+    """At exactly 500 characters the length branch passes and the character check runs.
 
-    Ref: stdapi/input_file.py:InputFile.to_data_uri
+    The length branch is evaluated first, so it would mask the character rejection for
+    any name at or above the cap; a 500-character name carrying a forbidden character
+    must still report the character failure.
+
+    Ref: stdapi/files/_core.py:_validate_filename
     """
-    monkeypatch.setattr(SETTINGS, "max_input_file_size", 8)
-    data_uri = f"data:image/png;base64,{b64encode(b'x' * 64).decode()}"
-    with pytest.raises(ApiError) as exc:
-        await InputFile(data_uri).to_data_uri()
-    assert exc.value.status == 413
-    assert "8 bytes" in str(exc.value), exc.value.args
+    filename = 'a"' + "a" * 498
+    assert len(filename) == 500
+    with pytest.raises(ApiError, match="forbidden characters") as exc:
+        await create_multipart_session(filename, "text/plain", "", 10)
+    assert exc.value.status == 400

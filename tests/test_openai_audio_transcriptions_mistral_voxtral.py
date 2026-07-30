@@ -22,6 +22,15 @@ VOXTRAL_SAMPLE = (VOXTRAL_MINI,)
 _SAMPLE_AUDIO_WORDS = ("test", "this")
 
 
+@pytest.fixture(autouse=True)
+def _skip_on_official_api(use_official_api: bool) -> None:
+    """Skip every test here: the Voxtral models have no official OpenAI equivalent."""
+    if use_official_api:
+        pytest.skip(
+            "Mistral Voxtral models are not available on the official OpenAI API"
+        )
+
+
 class TestMistralVoxtralTranscriptions:
     """Transcription behavior specific to the Mistral Voxtral models.
 
@@ -35,11 +44,7 @@ class TestMistralVoxtralTranscriptions:
 
     @pytest.mark.parametrize("model_id", VOXTRAL_ALL)
     def test_basic_transcription_json(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_audio_mp3_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_audio_mp3_file: bytes, model_id: str
     ) -> None:
         """``response_format=json`` returns the transcript plus token usage.
 
@@ -54,11 +59,6 @@ class TestMistralVoxtralTranscriptions:
              stdapi/models/audio/mistral_voxtral.py:AudioModel.stt
              https://github.com/stdapi-ai/stdapi.ai/issues/95
         """
-        if use_official_api:
-            pytest.skip(
-                "Mistral Voxtral models are not available on the official OpenAI API"
-            )
-
         response = openai_client.audio.transcriptions.create(
             file=("test.mp3", sample_audio_mp3_file),
             model=model_id,
@@ -91,11 +91,7 @@ class TestMistralVoxtralTranscriptions:
 
     @pytest.mark.parametrize("model_id", VOXTRAL_ALL)
     def test_transcription_text_format(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_audio_mp3_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_audio_mp3_file: bytes, model_id: str
     ) -> None:
         """``response_format=text`` returns the bare transcript as a string.
 
@@ -105,11 +101,6 @@ class TestMistralVoxtralTranscriptions:
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/models/audio/mistral_voxtral.py:AudioModel.stt
         """
-        if use_official_api:
-            pytest.skip(
-                "Mistral Voxtral models are not available on the official OpenAI API"
-            )
-
         response = openai_client.audio.transcriptions.create(
             file=("test.mp3", sample_audio_mp3_file),
             model=model_id,
@@ -125,11 +116,7 @@ class TestMistralVoxtralTranscriptions:
 
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_transcription_with_temperature(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_audio_mp3_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_audio_mp3_file: bytes, model_id: str
     ) -> None:
         """``temperature`` is accepted and forwarded to the Bedrock request.
 
@@ -139,11 +126,6 @@ class TestMistralVoxtralTranscriptions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-voxtral-mini-3b-2507.html
              stdapi/models/audio/mistral_voxtral.py:AudioModel._build_request
         """
-        if use_official_api:
-            pytest.skip(
-                "Mistral Voxtral models are not available on the official OpenAI API"
-            )
-
         response = openai_client.audio.transcriptions.create(
             file=("test.mp3", sample_audio_mp3_file),
             model=model_id,
@@ -160,11 +142,7 @@ class TestMistralVoxtralTranscriptions:
 
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_transcription_with_prompt(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_audio_mp3_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_audio_mp3_file: bytes, model_id: str
     ) -> None:
         """``prompt`` is accepted and appended to the model's instruction text.
 
@@ -178,11 +156,6 @@ class TestMistralVoxtralTranscriptions:
         Ref: https://developers.openai.com/api/docs/guides/speech-to-text#prompting
              stdapi/models/audio/__init__.py:AudioModelBase._built_prompt
         """
-        if use_official_api:
-            pytest.skip(
-                "Mistral Voxtral models are not available on the official OpenAI API"
-            )
-
         response = openai_client.audio.transcriptions.create(
             file=("test.mp3", sample_audio_mp3_file),
             model=model_id,
@@ -201,11 +174,7 @@ class TestMistralVoxtralTranscriptions:
 
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_transcription_with_language(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_audio_mp3_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_audio_mp3_file: bytes, model_id: str
     ) -> None:
         """``language`` is accepted and expressed as a natural-language hint.
 
@@ -216,11 +185,6 @@ class TestMistralVoxtralTranscriptions:
         Ref: https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create
              stdapi/models/audio/__init__.py:AudioModelBase._built_prompt
         """
-        if use_official_api:
-            pytest.skip(
-                "Mistral Voxtral models are not available on the official OpenAI API"
-            )
-
         response = openai_client.audio.transcriptions.create(
             file=("test.mp3", sample_audio_mp3_file),
             model=model_id,
@@ -237,11 +201,7 @@ class TestMistralVoxtralTranscriptions:
 
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_transcription_all_parameters(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_audio_mp3_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_audio_mp3_file: bytes, model_id: str
     ) -> None:
         """``language``, ``prompt`` and ``temperature`` are accepted together.
 
@@ -252,11 +212,6 @@ class TestMistralVoxtralTranscriptions:
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/models/audio/mistral_voxtral.py:AudioModel._build_request
         """
-        if use_official_api:
-            pytest.skip(
-                "Mistral Voxtral models are not available on the official OpenAI API"
-            )
-
         response = openai_client.audio.transcriptions.create(
             file=("test.mp3", sample_audio_mp3_file),
             model=model_id,
@@ -277,11 +232,7 @@ class TestMistralVoxtralTranscriptions:
 
     @pytest.mark.parametrize("model_id", VOXTRAL_ALL)
     def test_streaming_transcription(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_audio_mp3_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_audio_mp3_file: bytes, model_id: str
     ) -> None:
         """Streaming emits ``transcript.text.delta`` events then a final ``done`` event.
 
@@ -293,11 +244,6 @@ class TestMistralVoxtralTranscriptions:
         Ref: https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create
              stdapi/models/audio/mistral_voxtral.py:AudioModel.stt_stream
         """
-        if use_official_api:
-            pytest.skip(
-                "Mistral Voxtral models are not available on the official OpenAI API"
-            )
-
         response = openai_client.audio.transcriptions.create(
             file=("test.mp3", sample_audio_mp3_file), model=model_id, stream=True
         )
@@ -345,9 +291,7 @@ class TestMistralVoxtralTranscriptions:
         )
 
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
-    def test_invalid_audio_file(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
-    ) -> None:
+    def test_invalid_audio_file(self, openai_client: OpenAI, model_id: str) -> None:
         """A non-audio upload is rejected as a 400 ``invalid_request_error``.
 
         The gateway does not sniff the media itself: the ``text/plain`` upload becomes
@@ -357,11 +301,6 @@ class TestMistralVoxtralTranscriptions:
         Ref: stdapi/models/audio/mistral_voxtral.py:AudioModel._build_request
              stdapi/aws_bedrock.py:AWS_ERROR_MAP
         """
-        if use_official_api:
-            pytest.skip(
-                "Mistral Voxtral models are not available on the official OpenAI API"
-            )
-
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.transcriptions.create(
                 file=("test.txt", b"This is not an audio file"), model=model_id
@@ -376,11 +315,7 @@ class TestMistralVoxtralTranscriptions:
 
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_verbose_json_unsupported(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_audio_mp3_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_audio_mp3_file: bytes, model_id: str
     ) -> None:
         """``response_format=verbose_json`` is rejected with 400 for Voxtral.
 
@@ -391,11 +326,6 @@ class TestMistralVoxtralTranscriptions:
         Ref: https://stdapi.ai/api_openai_audio_transcriptions/
              stdapi/models/audio/__init__.py:AudioModelBase._validate_response_formats
         """
-        if use_official_api:
-            pytest.skip(
-                "Mistral Voxtral models are not available on the official OpenAI API"
-            )
-
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.transcriptions.create(
                 file=("test.mp3", sample_audio_mp3_file),
@@ -415,11 +345,7 @@ class TestMistralVoxtralTranscriptions:
 
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_logprobs_accepted_but_not_populated(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_audio_mp3_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_audio_mp3_file: bytes, model_id: str
     ) -> None:
         """``include=["logprobs"]`` is accepted but no log probabilities are returned.
 
@@ -430,11 +356,6 @@ class TestMistralVoxtralTranscriptions:
         Ref: https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create
              stdapi/models/audio/mistral_voxtral.py:AudioModel.stt
         """
-        if use_official_api:
-            pytest.skip(
-                "Mistral Voxtral models are not available on the official OpenAI API"
-            )
-
         response = openai_client.audio.transcriptions.create(
             file=("test.mp3", sample_audio_mp3_file),
             model=model_id,
@@ -446,11 +367,7 @@ class TestMistralVoxtralTranscriptions:
 
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_srt_format_unsupported(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_audio_mp3_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_audio_mp3_file: bytes, model_id: str
     ) -> None:
         """``response_format=srt`` is rejected with 400 for Voxtral.
 
@@ -460,11 +377,6 @@ class TestMistralVoxtralTranscriptions:
         Ref: https://docs.aws.amazon.com/transcribe/latest/dg/subtitles.html
              stdapi/models/audio/__init__.py:AudioModelBase._validate_response_formats
         """
-        if use_official_api:
-            pytest.skip(
-                "Mistral Voxtral models are not available on the official OpenAI API"
-            )
-
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.transcriptions.create(
                 file=("test.mp3", sample_audio_mp3_file),

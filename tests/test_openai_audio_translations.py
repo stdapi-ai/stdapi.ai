@@ -17,7 +17,10 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from openai import BadRequestError, NotFoundError, OpenAI
+from starlette.responses import Response
 
+from stdapi.api_errors import ApiError
+from stdapi.input_file import InputFile
 from stdapi.models.audio.amazon_transcribe import AudioModel
 from tests.conftest import logged_usage_entries
 
@@ -310,9 +313,10 @@ class TestAudioTranslations:
             )
 
     @pytest.mark.slow
+    @pytest.mark.local
     def test_translation_usage_logged(
         self,
-        test_client: TestClientType | None,
+        test_client: TestClientType,
         api_key: str,
         sample_audio_fr_file: bytes,
         capfd: pytest.CaptureFixture[str],
@@ -327,9 +331,6 @@ class TestAudioTranslations:
         Ref: https://docs.aws.amazon.com/transcribe/latest/dg/what-is.html
              stdapi/usage.py:record_translate_usage
         """
-        if test_client is None:
-            pytest.skip("Requires local test server")
-
         capfd.readouterr()
 
         response = test_client.post(
@@ -506,18 +507,13 @@ class TestAudioTranslationsResponseFormatBugs:
     """
 
     def test_text_format_returns_raw_plain_text(
-        self,
-        test_client: TestClientType | None,
-        api_key: str,
-        monkeypatch: pytest.MonkeyPatch,
+        self, test_client: TestClientType, api_key: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """response_format=text returns raw text/plain, not a JSON-quoted string.
 
         The stubbed transcript is English, so AWS Translate is skipped and the
         returned body is exactly the concatenated transcript.
         """
-        if test_client is None:
-            pytest.skip("Requires local test server")
 
         async def _fake_transcribe(
             _self: AudioModel, *_args: object, **_kwargs: object
@@ -535,4 +531,71 @@ class TestAudioTranslationsResponseFormatBugs:
 
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("text/plain")
+        assert response.text == "hello world"
+
+
+@pytest.mark.local
+class TestTranslateUnsupportedParameters:
+    """Amazon Transcribe rejects the translation parameters it cannot honour.
+
+    ``prompt`` and ``temperature`` are valid OpenAI translation fields with no
+    Transcribe equivalent: forwarding them would change nothing, so the backend
+    fails the request instead of transcribing while ignoring them.
+
+    Ref: https://stdapi.ai/api_openai_audio_translations/
+         stdapi/models/audio/amazon_transcribe.py:AudioModel.stt_translate
+         stdapi/models/audio/__init__.py:AudioModelBase._validate_no_prompt
+    """
+
+    @staticmethod
+    def _audio() -> InputFile:
+        """Return a tiny data-URI audio input; it is never read.
+
+        Returns:
+            An ``InputFile`` pointing at inline base64 audio.
+        """
+        return InputFile("data:audio/wav;base64,AAAA")
+
+    async def test_prompt_is_rejected(self) -> None:
+        """A ``prompt`` fails with 400 before the transcription job is started."""
+        with pytest.raises(ApiError) as exc_info:
+            await AudioModel("amazon.transcribe").stt_translate(
+                self._audio(), "json", prompt="Translate carefully"
+            )
+
+        assert exc_info.value.status == 400
+        assert "prompt" in str(exc_info.value)
+
+    async def test_temperature_is_rejected(self) -> None:
+        """A non-zero ``temperature`` fails with 400: Transcribe has no sampling knob."""
+        with pytest.raises(ApiError) as exc_info:
+            await AudioModel("amazon.transcribe").stt_translate(
+                self._audio(), "json", prompt=None, temperature=0.5
+            )
+
+        assert exc_info.value.status == 400
+        assert "temperature" in str(exc_info.value)
+
+    @pytest.mark.usefixtures("request_log")
+    async def test_no_prompt_and_zero_temperature_are_accepted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The documented defaults reach the backend and return the transcript.
+
+        The stubbed transcript is English, so AWS Translate short-circuits and
+        the text is returned unchanged.
+        """
+
+        async def _fake_transcribe(
+            _self: AudioModel, *_args: object, **_kwargs: object
+        ) -> dict[str, Any]:
+            return _STUB_TRANSCRIPT_DATA
+
+        monkeypatch.setattr(AudioModel, "_transcribe", _fake_transcribe)
+
+        response = await AudioModel("amazon.transcribe").stt_translate(
+            self._audio(), "json", prompt=None, temperature=0.0
+        )
+
+        assert not isinstance(response, str | Response)
         assert response.text == "hello world"

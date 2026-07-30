@@ -11,17 +11,20 @@ Ref: https://docs.cohere.com/v2/reference/rerank
 """
 
 from os import getenv
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import cohere
 import pytest
-from starlette.testclient import TestClient
 
 from stdapi.api_errors import UnsupportedModelError
+from stdapi.config import SETTINGS
 from stdapi.models import RERANKING_MODALITY, ModelDetails
 from stdapi.models.rerank import RerankedDocument, RerankResponse
 from stdapi.routes import cohere_rerank, cohere_rerank_v1
 from tests.test_models_rerank import RERANK_MODELS
+
+if TYPE_CHECKING:
+    from starlette.testclient import TestClient
 
 
 class _StubRerankModel:
@@ -50,14 +53,6 @@ class _StubRerankModel:
         return RerankResponse(
             results=[RerankedDocument(index=1, relevance_score=0.98)], search_units=1
         )
-
-
-@pytest.fixture
-def client(api_key: str) -> TestClient:
-    """Test client without lifespan (no AWS startup), pre-authenticated."""
-    from stdapi.main import app  # noqa: PLC0415
-
-    return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
 
 
 @pytest.fixture
@@ -95,7 +90,7 @@ class TestCohereRerankRoute:
     """
 
     def test_rerank_success(
-        self, client: TestClient, rerank_backend: _StubRerankModel
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
     ) -> None:
         """A valid request returns ``{id, results, meta}`` with ``api_version`` "2".
 
@@ -106,7 +101,7 @@ class TestCohereRerankRoute:
         Ref: stdapi/types/cohere_rerank.py:RerankResponse
              stdapi/types/cohere.py:ApiMeta
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/rerank",
             json={
                 "model": "cohere.rerank-v3-5:0",
@@ -132,7 +127,7 @@ class TestCohereRerankRoute:
         assert call["extra_params"] == {}
 
     def test_max_tokens_per_doc_forwarded(
-        self, client: TestClient, rerank_backend: _StubRerankModel
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
     ) -> None:
         """max_tokens_per_doc is forwarded to the backend as an extra parameter.
 
@@ -143,7 +138,7 @@ class TestCohereRerankRoute:
         Ref: https://docs.cohere.com/v2/reference/rerank
              stdapi/models/rerank/bedrock_rerank.py:RerankModel
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/rerank",
             json={
                 "model": "cohere.rerank-v3-5:0",
@@ -156,9 +151,97 @@ class TestCohereRerankRoute:
         (call,) = rerank_backend.calls
         assert call["extra_params"] == {"max_tokens_per_doc": 512}
 
+    def test_unknown_body_field_is_forwarded_as_an_extra_param(
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
+    ) -> None:
+        """An undeclared body field reaches the backend as an additional model parameter.
+
+        Undeclared fields land in the request model's ``model_extra`` and are
+        merged over the operator's ``default_model_params``, so a client can
+        drive ``additionalModelRequestFields`` without a gateway change.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Rerank.html
+             stdapi/aws_bedrock.py:get_extra_model_parameters
+             stdapi/routes/cohere_rerank.py:rerank
+        """
+        response = app_client.post(
+            "/cohere/v2/rerank",
+            json={
+                "model": "cohere.rerank-v3-5:0",
+                "query": "q",
+                "documents": ["a"],
+                "custom_knob": 3,
+            },
+        )
+        assert response.status_code == 200, response.text
+        (call,) = rerank_backend.calls
+        assert call["extra_params"] == {"custom_knob": 3}
+
+    def test_operator_default_model_params_are_merged_and_overridable(
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
+    ) -> None:
+        """Operator defaults apply to rerank models and lose to a same-named body field.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Rerank.html
+             stdapi/aws_bedrock.py:get_extra_model_parameters
+        """
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setitem(
+                SETTINGS.default_model_params,
+                "cohere.rerank-v3-5:0",
+                {"custom_knob": 1, "operator_only": "kept"},
+            )
+            response = app_client.post(
+                "/cohere/v2/rerank",
+                json={
+                    "model": "cohere.rerank-v3-5:0",
+                    "query": "q",
+                    "documents": ["a"],
+                    "custom_knob": 3,
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        (call,) = rerank_backend.calls
+        assert call["extra_params"] == {"custom_knob": 3, "operator_only": "kept"}
+
+    def test_reranked_documents_are_not_written_to_the_request_log(
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
+    ) -> None:
+        """The logged response keeps ``meta`` but never the reranked ``results``.
+
+        ``log_request_params`` is enabled in this test environment; without the
+        route's ``exclude`` argument every ranked customer document would be
+        copied into the structured request log.
+
+        Ref: https://stdapi.ai/api_cohere_rerank/
+             stdapi/routes/cohere_rerank.py:rerank
+             stdapi/monitoring.py:log_response_params
+        """
+        from stdapi import monitoring  # noqa: PLC0415
+
+        written: list[dict[str, Any]] = []
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(monitoring, "write_log_event", written.append)
+            response = app_client.post(
+                "/cohere/v2/rerank",
+                json={
+                    "model": "cohere.rerank-v3-5:0",
+                    "query": "q",
+                    "documents": ["a", "b"],
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["results"] == [{"index": 1, "relevance_score": 0.98}]
+        (log,) = [entry for entry in written if entry.get("type") == "request"]
+        logged = log["request_response"]
+        assert "results" not in logged
+        assert logged["meta"]["billed_units"]["search_units"] == 1
+
     @pytest.mark.parametrize("priority", [5, 1000])
     def test_priority_is_ignored(
-        self, client: TestClient, rerank_backend: _StubRerankModel, priority: int
+        self, app_client: TestClient, rerank_backend: _StubRerankModel, priority: int
     ) -> None:
         """The Cohere priority hint is accepted (no upper bound) but not forwarded to AWS.
 
@@ -167,7 +250,7 @@ class TestCohereRerankRoute:
 
         Ref: stdapi/types/cohere_rerank.py:RerankRequest
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/rerank",
             json={
                 "model": "cohere.rerank-v3-5:0",
@@ -184,7 +267,7 @@ class TestCohereRerankRoute:
     @pytest.mark.parametrize("return_documents", [True, False])
     def test_return_documents_is_ignored(
         self,
-        client: TestClient,
+        app_client: TestClient,
         rerank_backend: _StubRerankModel,
         return_documents: bool,
     ) -> None:
@@ -196,7 +279,7 @@ class TestCohereRerankRoute:
         Ref: https://docs.cohere.com/v2/reference/rerank
              stdapi/types/cohere_rerank.py:RerankRequest
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/rerank",
             json={
                 "model": "cohere.rerank-v3-5:0",
@@ -211,7 +294,7 @@ class TestCohereRerankRoute:
         assert "return_documents" not in call["extra_params"]
 
     def test_unknown_model_returns_cohere_error_envelope(
-        self, client: TestClient, rerank_backend: _StubRerankModel
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
     ) -> None:
         """An unknown model yields a 404 in the Cohere ``{message, id}`` envelope.
 
@@ -222,7 +305,7 @@ class TestCohereRerankRoute:
              stdapi/api_providers/cohere.py:_format_error
              stdapi/api_errors.py:UnsupportedModelError
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/rerank",
             json={"model": "unknown-model", "query": "q", "documents": ["a"]},
         )
@@ -236,7 +319,7 @@ class TestCohereRerankRoute:
 
     def test_resolved_model_not_rerank_capable_returns_cohere_error_envelope(
         self,
-        client: TestClient,
+        app_client: TestClient,
         rerank_backend: _StubRerankModel,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -255,7 +338,7 @@ class TestCohereRerankRoute:
 
         monkeypatch.setattr(cohere_rerank, "get_rerank_model", _get_rerank_model)
 
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/rerank",
             json={
                 "model": "anthropic.claude-3-5-haiku-20241022-v1:0",
@@ -272,7 +355,7 @@ class TestCohereRerankRoute:
         assert not rerank_backend.calls
 
     def test_missing_query_is_rejected(
-        self, client: TestClient, rerank_backend: _StubRerankModel
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
     ) -> None:
         """A request without ``query`` is a 400 naming the offending body field.
 
@@ -282,7 +365,7 @@ class TestCohereRerankRoute:
         Ref: https://docs.cohere.com/v2/reference/rerank
              stdapi/main.py:handle_validation_exception
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/rerank",
             json={"model": "cohere.rerank-v3-5:0", "documents": ["a"]},
         )
@@ -293,7 +376,7 @@ class TestCohereRerankRoute:
         assert not rerank_backend.calls
 
     def test_empty_documents_are_rejected(
-        self, client: TestClient, rerank_backend: _StubRerankModel
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
     ) -> None:
         """An empty ``documents`` list is a 400 naming ``body.documents``.
 
@@ -303,7 +386,7 @@ class TestCohereRerankRoute:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Rerank.html
              stdapi/types/cohere_rerank.py:RerankRequest
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/rerank",
             json={"model": "cohere.rerank-v3-5:0", "query": "q", "documents": []},
         )
@@ -324,14 +407,14 @@ class TestCohereRerankV1Route:
     """
 
     def test_rerank_success_with_string_documents(
-        self, client: TestClient, rerank_backend: _StubRerankModel
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
     ) -> None:
         """A valid v1 request returns ``{id, results, meta}`` with ``api_version`` "1".
 
         Ref: stdapi/types/cohere_rerank.py:RerankV1Result
              stdapi/types/cohere.py:ApiMeta
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/rerank",
             json={
                 "model": "cohere.rerank-v3-5:0",
@@ -358,8 +441,33 @@ class TestCohereRerankV1Route:
         assert call["top_n"] == 1
         assert call["extra_params"] == {}
 
+    def test_unknown_body_field_is_forwarded_as_an_extra_param(
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
+    ) -> None:
+        """v1 forwards undeclared body fields as extra model parameters, like v2.
+
+        The two routes carry independent parameter-mapping code, so the v1 copy
+        needs its own proof that ``model_extra`` reaches the backend.
+
+        Ref: https://docs.cohere.com/v1/reference/rerank
+             stdapi/aws_bedrock.py:get_extra_model_parameters
+             stdapi/routes/cohere_rerank_v1.py:rerank_v1
+        """
+        response = app_client.post(
+            "/cohere/v1/rerank",
+            json={
+                "model": "cohere.rerank-v3-5:0",
+                "query": "q",
+                "documents": ["a"],
+                "custom_knob": 3,
+            },
+        )
+        assert response.status_code == 200, response.text
+        (call,) = rerank_backend.calls
+        assert call["extra_params"] == {"custom_knob": 3}
+
     def test_single_key_text_object_documents_are_passed_through(
-        self, client: TestClient, rerank_backend: _StubRerankModel
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
     ) -> None:
         """Single-key ``{"text": ...}`` object documents reach the backend unchanged.
 
@@ -369,7 +477,7 @@ class TestCohereRerankV1Route:
         Ref: https://docs.cohere.com/v1/reference/rerank
              stdapi/routes/cohere_rerank_v1.py:_project_document
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/rerank",
             json={
                 "model": "cohere.rerank-v3-5:0",
@@ -385,14 +493,14 @@ class TestCohereRerankV1Route:
         ]
 
     def test_multi_field_object_documents_are_passed_through(
-        self, client: TestClient, rerank_backend: _StubRerankModel
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
     ) -> None:
         """Multi-field object documents reach the backend as-is without rank_fields.
 
         Ref: stdapi/routes/cohere_rerank_v1.py:_project_document
         """
         document = {"title": "Nevada", "body": "Carson City is its capital."}
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/rerank",
             json={
                 "model": "cohere.rerank-v3-5:0",
@@ -405,7 +513,7 @@ class TestCohereRerankV1Route:
         assert call["documents"] == [document]
 
     def test_rank_fields_projects_object_documents(
-        self, client: TestClient, rerank_backend: _StubRerankModel
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
     ) -> None:
         """rank_fields keeps only the requested keys of object documents.
 
@@ -415,7 +523,7 @@ class TestCohereRerankV1Route:
         Ref: https://docs.cohere.com/v1/reference/rerank
              stdapi/routes/cohere_rerank_v1.py:_project_document
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/rerank",
             json={
                 "model": "cohere.rerank-v3-5:0",
@@ -431,13 +539,13 @@ class TestCohereRerankV1Route:
         assert call["documents"] == [{"title": "Nevada", "body": "Carson City."}]
 
     def test_rank_fields_do_not_affect_string_documents(
-        self, client: TestClient, rerank_backend: _StubRerankModel
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
     ) -> None:
         """rank_fields is only meaningful for object documents; strings pass through.
 
         Ref: stdapi/routes/cohere_rerank_v1.py:_project_document
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/rerank",
             json={
                 "model": "cohere.rerank-v3-5:0",
@@ -451,7 +559,7 @@ class TestCohereRerankV1Route:
         assert call["documents"] == ["a"]
 
     def test_return_documents_echoes_original_multi_field_document(
-        self, client: TestClient, rerank_backend: _StubRerankModel
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
     ) -> None:
         """return_documents echoes the original object, not the rank_fields projection.
 
@@ -462,7 +570,7 @@ class TestCohereRerankV1Route:
 
         Ref: stdapi/routes/cohere_rerank_v1.py:_echo_document_text
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/rerank",
             json={
                 "model": "cohere.rerank-v3-5:0",
@@ -482,7 +590,7 @@ class TestCohereRerankV1Route:
         ]
 
     def test_return_documents_echoes_documents(
-        self, client: TestClient, rerank_backend: _StubRerankModel
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
     ) -> None:
         """return_documents=true echoes the input text back in each result.
 
@@ -492,7 +600,7 @@ class TestCohereRerankV1Route:
         Ref: https://docs.cohere.com/v1/reference/rerank
              stdapi/routes/cohere_rerank_v1.py:_echo_document_text
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/rerank",
             json={
                 "model": "cohere.rerank-v3-5:0",
@@ -511,7 +619,7 @@ class TestCohereRerankV1Route:
         ]
 
     def test_documents_are_not_echoed_by_default(
-        self, client: TestClient, rerank_backend: _StubRerankModel
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
     ) -> None:
         """Without return_documents, results carry only index and score.
 
@@ -521,7 +629,7 @@ class TestCohereRerankV1Route:
         Ref: https://docs.cohere.com/v1/reference/rerank
              stdapi/types/cohere_rerank.py:RerankV1Result
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/rerank",
             json={"model": "cohere.rerank-v3-5:0", "query": "q", "documents": ["a"]},
         )
@@ -529,7 +637,7 @@ class TestCohereRerankV1Route:
         assert response.json()["results"] == [{"index": 1, "relevance_score": 0.98}]
 
     def test_default_rank_fields_value_is_accepted(
-        self, client: TestClient, rerank_backend: _StubRerankModel
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
     ) -> None:
         """rank_fields=["text"] leaves string documents untouched.
 
@@ -539,7 +647,7 @@ class TestCohereRerankV1Route:
         Ref: https://docs.cohere.com/v1/reference/rerank
              stdapi/routes/cohere_rerank_v1.py:_project_document
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/rerank",
             json={
                 "model": "cohere.rerank-v3-5:0",
@@ -556,7 +664,7 @@ class TestCohereRerankV1Route:
     @pytest.mark.parametrize("rank_fields", [["title"], ["title", "text"], []])
     def test_custom_rank_fields_are_accepted(
         self,
-        client: TestClient,
+        app_client: TestClient,
         rerank_backend: _StubRerankModel,
         rank_fields: list[str],
     ) -> None:
@@ -568,7 +676,7 @@ class TestCohereRerankV1Route:
         Ref: https://docs.cohere.com/v1/reference/rerank
              stdapi/routes/cohere_rerank_v1.py:_project_document
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/rerank",
             json={
                 "model": "cohere.rerank-v3-5:0",
@@ -587,7 +695,7 @@ class TestCohereRerankV1Route:
         assert call["documents"] == expected[tuple(rank_fields)]
 
     def test_max_chunks_per_doc_is_rejected(
-        self, client: TestClient, rerank_backend: _StubRerankModel
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
     ) -> None:
         """max_chunks_per_doc has no Bedrock equivalent and is rejected with a 400.
 
@@ -598,7 +706,7 @@ class TestCohereRerankV1Route:
         Ref: https://docs.cohere.com/v1/reference/rerank
              stdapi/routes/cohere_rerank_v1.py:rerank_v1
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/rerank",
             json={
                 "model": "cohere.rerank-v3-5:0",
@@ -618,14 +726,14 @@ class TestCohereRerankV1Route:
         assert not rerank_backend.calls
 
     def test_unknown_model_returns_cohere_error_envelope(
-        self, client: TestClient, rerank_backend: _StubRerankModel
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
     ) -> None:
         """An unknown model yields a 404 in the Cohere ``{message, id}`` envelope.
 
         Ref: https://docs.cohere.com/reference/errors
              stdapi/api_providers/cohere.py:_format_error
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/rerank",
             json={"model": "unknown-model", "query": "q", "documents": ["a"]},
         )
@@ -638,14 +746,14 @@ class TestCohereRerankV1Route:
         assert not rerank_backend.calls
 
     def test_empty_documents_are_rejected(
-        self, client: TestClient, rerank_backend: _StubRerankModel
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
     ) -> None:
         """An empty ``documents`` list is a 400 naming ``body.documents``.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Rerank.html
              stdapi/types/cohere_rerank.py:RerankV1Request
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/rerank",
             json={"model": "cohere.rerank-v3-5:0", "query": "q", "documents": []},
         )

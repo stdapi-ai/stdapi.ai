@@ -31,10 +31,14 @@ class TestKimiK25ChatCompletions:
          stdapi/models/chat/kimi_k25.py:ChatModel
     """
 
+    @pytest.fixture(autouse=True)
+    def _skip_official_api(self, use_official_api: bool) -> None:
+        """Skip the whole class: Kimi models are not served by the official OpenAI API."""
+        if use_official_api:
+            pytest.skip("Kimi is not supported on the official API")
+
     @pytest.mark.parametrize("model", KIMI_ALL)
-    def test_thinking_not_set(
-        self, openai_client: OpenAI, use_official_api: bool, model: str
-    ) -> None:
+    def test_thinking_not_set(self, openai_client: OpenAI, model: str) -> None:
         """Omitting every reasoning field leaves the model's own thinking default alone.
 
         ``extract_reasoning`` returns ``None`` when ``reasoning_effort``,
@@ -45,8 +49,6 @@ class TestKimiK25ChatCompletions:
         Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_reasoning
              https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-thinking.html
         """
-        if use_official_api:
-            pytest.skip("Kimi is not supported on the official API")
         resp = openai_client.chat.completions.create(
             model=model, messages=[{"role": "user", "content": "Reply with OK."}]
         )
@@ -62,9 +64,7 @@ class TestKimiK25ChatCompletions:
         assert resp.usage.completion_tokens > 0
 
     @pytest.mark.parametrize("model", KIMI_ALL)
-    def test_thinking_disabled(
-        self, openai_client: OpenAI, use_official_api: bool, model: str
-    ) -> None:
+    def test_thinking_disabled(self, openai_client: OpenAI, model: str) -> None:
         """``enable_thinking=False`` is accepted, and only Kimi K2.5 answers without reasoning.
 
         Kimi K2.5 returns no ``reasoningContent`` block, so ``reasoning_content`` is
@@ -76,8 +76,6 @@ class TestKimiK25ChatCompletions:
              stdapi/models/chat/kimi_k25.py:ChatModel._req_configure_reasoning
              stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_output_text
         """
-        if use_official_api:
-            pytest.skip("Kimi is not supported on the official API")
         resp = openai_client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": "Reply with OK."}],
@@ -105,9 +103,7 @@ class TestKimiK25ChatCompletions:
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model", KIMI_ALL)
-    def test_thinking_enabled(
-        self, openai_client: OpenAI, use_official_api: bool, model: str
-    ) -> None:
+    def test_thinking_enabled(self, openai_client: OpenAI, model: str) -> None:
         """``enable_thinking=True`` turns thinking on and surfaces ``reasoning_content``.
 
         The gateway sends ``thinking={"type": "enabled"}``; the Bedrock
@@ -118,8 +114,6 @@ class TestKimiK25ChatCompletions:
         Ref: https://developers.openai.com/api/docs/guides/reasoning
              stdapi/models/chat/kimi_k25.py:ChatModel._req_configure_reasoning
         """
-        if use_official_api:
-            pytest.skip("Kimi is not supported on the official API")
         resp = openai_client.chat.completions.create(
             model=model,
             messages=[

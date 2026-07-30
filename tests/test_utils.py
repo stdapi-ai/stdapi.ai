@@ -28,6 +28,8 @@ from stdapi.utils import (
     strip_url_query,
 )
 
+pytestmark = pytest.mark.local
+
 
 def test_hide_security_details_masks_auth_statuses() -> None:
     """401 and 403 responses return fixed, detail-free messages.
@@ -266,71 +268,47 @@ async def test_alpha_mask_to_bw_passes_through_undecodable_content() -> None:
     assert await alpha_mask_to_bw(source) == source
 
 
-async def test_alpha_mask_to_bw_converts_transparent_pixels_to_black() -> None:
-    """Transparent (low-alpha) pixels become pure black -- the OpenAI 'edit' region.
+async def _mask_pixel(
+    alpha: int, *, invert: bool = False, threshold: int | None = None
+) -> tuple[int, ...]:
+    """Convert a one-pixel RGBA mask and return the resulting RGB pixel.
+
+    The source colour under the alpha is deliberately non-grey so a pass-through
+    bug cannot be mistaken for a correct conversion.
+    """
+    image = Image.new("RGBA", (1, 1), (10, 20, 30, alpha))
+    kwargs = {} if threshold is None else {"threshold": threshold}
+    result = await alpha_mask_to_bw(_b64_png(image), invert=invert, **kwargs)
+
+    with BytesIO(pybase64_b64decode(result)) as buffer, Image.open(buffer) as converted:
+        assert converted.mode == "RGB", "the alpha channel must be dropped"
+        pixel = converted.getpixel((0, 0))
+    assert isinstance(pixel, tuple)
+    return pixel
+
+
+@pytest.mark.parametrize(
+    ("alpha", "invert", "threshold", "expected"),
+    [
+        pytest.param(0, False, None, (0, 0, 0), id="transparent-inpaint-black"),
+        pytest.param(255, False, None, (255, 255, 255), id="opaque-inpaint-white"),
+        pytest.param(127, False, 127, (255, 255, 255), id="alpha-at-threshold-white"),
+        pytest.param(0, True, None, (255, 255, 255), id="transparent-outpaint-white"),
+        pytest.param(255, True, None, (0, 0, 0), id="opaque-outpaint-black"),
+    ],
+)
+async def test_alpha_mask_to_bw_maps_alpha_to_black_and_white(
+    alpha: int, invert: bool, threshold: int | None, expected: tuple[int, ...]
+) -> None:
+    """Alpha decides the output colour, and ``invert`` flips the mask polarity.
 
     OpenAI marks the region to regenerate with transparency; Titan/Nova inpainting
-    expects that region as black, and the RGB colour under the alpha is discarded.
+    expects that region black, while Nova Canvas outpainting uses the opposite
+    polarity. The edit region is ``alpha < threshold``, so a pixel sitting exactly at
+    the threshold falls on the preserve (white) side.
 
     Ref: https://stdapi.ai/api_openai_images_edits/
          https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
+         https://docs.aws.amazon.com/nova/latest/userguide/image-gen-access.html
     """
-    image = Image.new("RGBA", (1, 1), (10, 20, 30, 0))
-    result = await alpha_mask_to_bw(_b64_png(image))
-
-    with BytesIO(pybase64_b64decode(result)) as buffer, Image.open(buffer) as converted:
-        assert converted.mode == "RGB"
-        assert converted.getpixel((0, 0)) == (0, 0, 0)
-
-
-async def test_alpha_mask_to_bw_converts_opaque_pixels_to_white() -> None:
-    """Opaque pixels become pure white -- the OpenAI 'preserve' region.
-
-    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
-    """
-    image = Image.new("RGBA", (1, 1), (10, 20, 30, 255))
-    result = await alpha_mask_to_bw(_b64_png(image))
-
-    with BytesIO(pybase64_b64decode(result)) as buffer, Image.open(buffer) as converted:
-        assert converted.mode == "RGB"
-        assert converted.getpixel((0, 0)) == (255, 255, 255)
-
-
-async def test_alpha_mask_to_bw_threshold_is_inclusive_on_the_white_side() -> None:
-    """Alpha exactly at the threshold resolves to white (preserve), not black.
-
-    The edit region is ``alpha < threshold``, so the boundary pixel falls on the
-    preserve side; an inclusive test would widen every mask by one alpha step.
-    """
-    image = Image.new("RGBA", (1, 1), (0, 0, 0, 127))
-    result = await alpha_mask_to_bw(_b64_png(image), threshold=127)
-
-    with BytesIO(pybase64_b64decode(result)) as buffer, Image.open(buffer) as converted:
-        assert converted.getpixel((0, 0)) == (255, 255, 255)
-
-
-async def test_alpha_mask_to_bw_invert_converts_transparent_pixels_to_white() -> None:
-    """With invert=True (outpainting polarity), transparent pixels become white.
-
-    Nova Canvas outpainting uses the opposite mask polarity from inpainting, so
-    the same OpenAI alpha mask must be emitted inverted for that task type.
-
-    Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-access.html
-    """
-    image = Image.new("RGBA", (1, 1), (10, 20, 30, 0))
-    result = await alpha_mask_to_bw(_b64_png(image), invert=True)
-
-    with BytesIO(pybase64_b64decode(result)) as buffer, Image.open(buffer) as converted:
-        assert converted.getpixel((0, 0)) == (255, 255, 255)
-
-
-async def test_alpha_mask_to_bw_invert_converts_opaque_pixels_to_black() -> None:
-    """With invert=True (outpainting polarity), opaque pixels become black.
-
-    Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-access.html
-    """
-    image = Image.new("RGBA", (1, 1), (10, 20, 30, 255))
-    result = await alpha_mask_to_bw(_b64_png(image), invert=True)
-
-    with BytesIO(pybase64_b64decode(result)) as buffer, Image.open(buffer) as converted:
-        assert converted.getpixel((0, 0)) == (0, 0, 0)
+    assert await _mask_pixel(alpha, invert=invert, threshold=threshold) == expected

@@ -23,7 +23,6 @@ import httpx
 import pytest
 from openai import BadRequestError
 from PIL import Image
-from starlette.testclient import TestClient
 
 from stdapi.api_errors import ApiError
 from stdapi.config import SETTINGS
@@ -34,6 +33,7 @@ from stdapi.routes import openai_videos
 if TYPE_CHECKING:
     from openai import OpenAI
     from openai.types.video import Video
+    from starlette.testclient import TestClient
 
 #: A well-formed async invocation ARN in the primary test region.
 _ARN = "arn:aws:bedrock:us-east-1:000000000000:async-invoke/abc123xyz"
@@ -90,14 +90,6 @@ _DUMMY_VIDEO_ID = openai_videos._encode_video_id(_ARN, 6, "1280x720")  # noqa: S
 
 
 @pytest.fixture
-def client(api_key: str) -> TestClient:
-    """Test client without lifespan (no AWS startup), pre-authenticated."""
-    from stdapi.main import app  # noqa: PLC0415
-
-    return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
-
-
-@pytest.fixture
 def video_backend(monkeypatch: pytest.MonkeyPatch) -> _StubVideoModel:
     """Stub model validation and the video generation backend."""
 
@@ -147,7 +139,7 @@ class TestOpenAIVideoRoutes:
     """
 
     def test_create_json(
-        self, client: TestClient, video_backend: _StubVideoModel
+        self, app_client: TestClient, video_backend: _StubVideoModel
     ) -> None:
         """A JSON creation request returns a queued Video job echoing its parameters.
 
@@ -158,7 +150,7 @@ class TestOpenAIVideoRoutes:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_GetAsyncInvoke.html
              stdapi/routes/openai_videos.py:_encode_video_id
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/videos",
             json={
                 "model": "amazon.nova-reel-v1:0",
@@ -189,7 +181,7 @@ class TestOpenAIVideoRoutes:
         assert call["extra_params"] == {}
 
     def test_create_json_with_reference_and_extra_params(
-        self, client: TestClient, video_backend: _StubVideoModel
+        self, app_client: TestClient, video_backend: _StubVideoModel
     ) -> None:
         """A data URI reference and extra body fields reach the backend.
 
@@ -200,7 +192,7 @@ class TestOpenAIVideoRoutes:
         Ref: https://stdapi.ai/api_openai_videos/
              stdapi/aws_bedrock.py:get_extra_model_parameters
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/videos",
             json={
                 "model": "amazon.nova-reel-v1:0",
@@ -222,7 +214,7 @@ class TestOpenAIVideoRoutes:
         assert call["size"] is None
 
     def test_create_multipart(
-        self, client: TestClient, video_backend: _StubVideoModel
+        self, app_client: TestClient, video_backend: _StubVideoModel
     ) -> None:
         """A multipart request with a binary reference image succeeds.
 
@@ -233,7 +225,7 @@ class TestOpenAIVideoRoutes:
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/routes/openai_videos.py:_decode_form_extras
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/videos",
             data={
                 "model": "luma.ray-v2:0",
@@ -257,7 +249,7 @@ class TestOpenAIVideoRoutes:
         )
 
     def test_create_multipart_with_flattened_input_reference(
-        self, client: TestClient, video_backend: _StubVideoModel
+        self, app_client: TestClient, video_backend: _StubVideoModel
     ) -> None:
         """The SDK's flattened `input_reference[image_url]` key becomes the reference.
 
@@ -271,7 +263,7 @@ class TestOpenAIVideoRoutes:
         data_uri = (
             "data:image/png;base64," + b64encode(_reference_frame("64x64")).decode()
         )
-        response = client.post(
+        response = app_client.post(
             "/v1/videos",
             data={
                 "model": "luma.ray-v2:0",
@@ -287,7 +279,7 @@ class TestOpenAIVideoRoutes:
         )
 
     def test_create_without_prompt_is_rejected(
-        self, client: TestClient, video_backend: _StubVideoModel
+        self, app_client: TestClient, video_backend: _StubVideoModel
     ) -> None:
         """A request without a prompt fails validation before any model call.
 
@@ -297,7 +289,9 @@ class TestOpenAIVideoRoutes:
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/types/openai_videos.py:VideoCreateParams
         """
-        response = client.post("/v1/videos", json={"model": "amazon.nova-reel-v1:0"})
+        response = app_client.post(
+            "/v1/videos", json={"model": "amazon.nova-reel-v1:0"}
+        )
         assert response.status_code == 400
         err = response.json()["error"]
         assert err["type"] == "invalid_request_error"
@@ -305,7 +299,7 @@ class TestOpenAIVideoRoutes:
         assert not video_backend.calls
 
     def test_create_with_non_integer_seconds_is_rejected(
-        self, client: TestClient, video_backend: _StubVideoModel
+        self, app_client: TestClient, video_backend: _StubVideoModel
     ) -> None:
         """A non-integer duration fails the seconds pattern validation.
 
@@ -315,7 +309,7 @@ class TestOpenAIVideoRoutes:
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/types/openai_videos.py:VideoCreateParams
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/videos",
             json={
                 "model": "amazon.nova-reel-v1:0",
@@ -330,7 +324,7 @@ class TestOpenAIVideoRoutes:
         assert not video_backend.calls
 
     def test_create_with_zero_size_is_rejected(
-        self, client: TestClient, video_backend: _StubVideoModel
+        self, app_client: TestClient, video_backend: _StubVideoModel
     ) -> None:
         """A "0x0" size fails the size pattern validation instead of reaching gcd(0, 0).
 
@@ -340,7 +334,7 @@ class TestOpenAIVideoRoutes:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-luma.html
              stdapi/types/openai_videos.py:VideoCreateParams
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/videos",
             json={"model": "amazon.nova-reel-v1:0", "prompt": "a cat", "size": "0x0"},
         )
@@ -351,7 +345,7 @@ class TestOpenAIVideoRoutes:
         assert not video_backend.calls
 
     def test_create_with_malformed_json_body_is_rejected(
-        self, client: TestClient, video_backend: _StubVideoModel
+        self, app_client: TestClient, video_backend: _StubVideoModel
     ) -> None:
         """A malformed JSON body is rejected as a validation error, not a 500.
 
@@ -361,7 +355,7 @@ class TestOpenAIVideoRoutes:
         Ref: stdapi/utils.py:validation_error_handler
              stdapi/main.py:handle_validation_exception
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/videos", content=b"{", headers={"content-type": "application/json"}
         )
         assert response.status_code == 400, response.text
@@ -372,7 +366,7 @@ class TestOpenAIVideoRoutes:
 
     def test_create_then_retrieve_roundtrip(
         self,
-        client: TestClient,
+        app_client: TestClient,
         video_backend: _StubVideoModel,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -385,7 +379,7 @@ class TestOpenAIVideoRoutes:
         Ref: https://stdapi.ai/api_openai_videos/
              stdapi/routes/openai_videos.py:_decode_video_id
         """
-        create_response = client.post(
+        create_response = app_client.post(
             "/v1/videos", json={"model": "amazon.nova-reel-v1:0", "prompt": "a cat"}
         )
         assert create_response.status_code == 200, create_response.text
@@ -394,7 +388,7 @@ class TestOpenAIVideoRoutes:
         assert created["prompt"] == "a cat"
 
         _stub_job(monkeypatch, "completed")
-        retrieve_response = client.get(f"/v1/videos/{video_id}")
+        retrieve_response = app_client.get(f"/v1/videos/{video_id}")
 
         assert retrieve_response.status_code == 200, retrieve_response.text
         body = retrieve_response.json()
@@ -407,7 +401,7 @@ class TestOpenAIVideoRoutes:
         assert "prompt" not in body, "the prompt is echoed only by create"
 
     def test_retrieve_propagates_model_layer_not_found(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A 404 ApiError raised by get_video_job propagates as an OpenAI 404 envelope.
 
@@ -421,14 +415,14 @@ class TestOpenAIVideoRoutes:
 
         monkeypatch.setattr(openai_videos, "get_video_job", _get_video_job)
         video_id = openai_videos._encode_video_id(_ARN, 6, "1280x720")  # noqa: SLF001
-        response = client.get(f"/v1/videos/{video_id}")
+        response = app_client.get(f"/v1/videos/{video_id}")
         assert response.status_code == 404
         err = response.json()["error"]
         assert err["type"] == "invalid_request_error"
         assert err["message"] == "Video not found."
 
     def test_retrieve_completed(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A completed job maps to a completed Video with progress 100.
 
@@ -441,7 +435,7 @@ class TestOpenAIVideoRoutes:
         """
         _stub_job(monkeypatch, "completed")
         video_id = openai_videos._encode_video_id(_ARN, 6, "1280x720")  # noqa: SLF001
-        response = client.get(f"/v1/videos/{video_id}")
+        response = app_client.get(f"/v1/videos/{video_id}")
         assert response.status_code == 200, response.text
         body = response.json()
         assert body["status"] == "completed"
@@ -454,7 +448,7 @@ class TestOpenAIVideoRoutes:
         assert "expires_at" not in body
 
     def test_retrieve_reports_expires_at_when_retention_set(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """With a retention period configured the Video reports expires_at.
 
@@ -467,12 +461,12 @@ class TestOpenAIVideoRoutes:
         monkeypatch.setattr(SETTINGS, "aws_s3_videos_expires_after", 3600)
         _stub_job(monkeypatch, "completed")
         video_id = openai_videos._encode_video_id(_ARN, 6, "1280x720")  # noqa: SLF001
-        response = client.get(f"/v1/videos/{video_id}")
+        response = app_client.get(f"/v1/videos/{video_id}")
         assert response.status_code == 200, response.text
         assert response.json()["expires_at"] == 1752000090 + 3600
 
     def test_retrieve_failed(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A failed job carries the AWS failure reason in the error payload.
 
@@ -484,7 +478,7 @@ class TestOpenAIVideoRoutes:
         """
         _stub_job(monkeypatch, "failed", "content filters blocked the prompt")
         video_id = openai_videos._encode_video_id(_ARN, 6, "1280x720")  # noqa: SLF001
-        response = client.get(f"/v1/videos/{video_id}")
+        response = app_client.get(f"/v1/videos/{video_id}")
         assert response.status_code == 200, response.text
         body = response.json()
         assert body["status"] == "failed"
@@ -494,7 +488,7 @@ class TestOpenAIVideoRoutes:
             "message": "content filters blocked the prompt",
         }
 
-    def test_retrieve_bad_id_is_not_found(self, client: TestClient) -> None:
+    def test_retrieve_bad_id_is_not_found(self, app_client: TestClient) -> None:
         """An undecodable video ID surfaces as an OpenAI 404 error.
 
         The ID is self-describing, so a syntactically valid but undecodable one is
@@ -502,14 +496,14 @@ class TestOpenAIVideoRoutes:
 
         Ref: stdapi/routes/openai_videos.py:_decode_video_id
         """
-        response = client.get("/v1/videos/video_bogus")
+        response = app_client.get("/v1/videos/video_bogus")
         assert response.status_code == 404
         err = response.json()["error"]
         assert err["type"] == "invalid_request_error"
         assert "video_bogus" in err["message"]
 
     def test_list_videos(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The list endpoint pages the backend listings as Video objects.
 
@@ -528,7 +522,7 @@ class TestOpenAIVideoRoutes:
         monkeypatch.setattr(openai_videos, "list_video_jobs", _list_video_jobs)
         after = openai_videos._encode_video_id(_ARN, 6, "1280x720")  # noqa: SLF001
 
-        response = client.get(f"/v1/videos?limit=5&order=asc&after={after}")
+        response = app_client.get(f"/v1/videos?limit=5&order=asc&after={after}")
 
         assert response.status_code == 200, response.text
         body = response.json()
@@ -544,19 +538,19 @@ class TestOpenAIVideoRoutes:
         assert body["first_id"] == body["last_id"] == video["id"]
         assert calls == [{"order": "asc", "after_arn": _ARN, "limit": 5}]
 
-    def test_list_videos_bad_cursor_is_not_found(self, client: TestClient) -> None:
+    def test_list_videos_bad_cursor_is_not_found(self, app_client: TestClient) -> None:
         """An undecodable after cursor surfaces as an OpenAI 404 error.
 
         Ref: stdapi/routes/openai_videos.py:list_videos
         """
-        response = client.get("/v1/videos?after=video_bogus")
+        response = app_client.get("/v1/videos?after=video_bogus")
         assert response.status_code == 404
         err = response.json()["error"]
         assert err["type"] == "invalid_request_error"
         assert "video_bogus" in err["message"]
 
     def test_content_streams_video(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A completed job's MP4 is streamed with the video/mp4 content type.
 
@@ -570,13 +564,13 @@ class TestOpenAIVideoRoutes:
 
         monkeypatch.setattr(openai_videos, "open_video_content", _open_video_content)
         video_id = openai_videos._encode_video_id(_ARN, 6, "1280x720")  # noqa: SLF001
-        response = client.get(f"/v1/videos/{video_id}/content")
+        response = app_client.get(f"/v1/videos/{video_id}/content")
         assert response.status_code == 200
         assert response.headers["content-type"] == "video/mp4"
         assert response.content == b"mp4-bytes"
 
     def test_content_not_ready(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Downloading an unfinished job's content is a 404, like upstream.
 
@@ -585,14 +579,14 @@ class TestOpenAIVideoRoutes:
         """
         _stub_job(monkeypatch, "in_progress")
         video_id = openai_videos._encode_video_id(_ARN, 6, "1280x720")  # noqa: SLF001
-        response = client.get(f"/v1/videos/{video_id}/content")
+        response = app_client.get(f"/v1/videos/{video_id}/content")
         assert response.status_code == 404
         err = response.json()["error"]
         assert err["type"] == "invalid_request_error"
         assert "not ready" in err["message"]
 
     def test_content_variant_not_available(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A resolvable job with an unsupported variant is a 400.
 
@@ -605,14 +599,14 @@ class TestOpenAIVideoRoutes:
         """
         _stub_job(monkeypatch, "completed")
         video_id = openai_videos._encode_video_id(_ARN, 6, "1280x720")  # noqa: SLF001
-        response = client.get(f"/v1/videos/{video_id}/content?variant=thumbnail")
+        response = app_client.get(f"/v1/videos/{video_id}/content?variant=thumbnail")
         assert response.status_code == 400
         err = response.json()["error"]
         assert err["type"] == "invalid_request_error"
         assert "variant" in err["message"]
 
     def test_content_unknown_id_with_variant_is_not_found(
-        self, client: TestClient
+        self, app_client: TestClient
     ) -> None:
         """An unresolvable video ID with variant=thumbnail is a 404, not the variant 400.
 
@@ -621,14 +615,14 @@ class TestOpenAIVideoRoutes:
 
         Ref: stdapi/routes/openai_videos.py:get_video_content
         """
-        response = client.get("/v1/videos/video_bogus/content?variant=thumbnail")
+        response = app_client.get("/v1/videos/video_bogus/content?variant=thumbnail")
         assert response.status_code == 404
         assert "video_bogus" in response.json()["error"]["message"], (
             "the ID must be resolved before the variant is validated"
         )
 
     def test_delete_completed(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Deleting a completed job removes its output and confirms deletion.
 
@@ -646,7 +640,7 @@ class TestOpenAIVideoRoutes:
 
         monkeypatch.setattr(openai_videos, "delete_video_output", _delete_video_output)
         video_id = openai_videos._encode_video_id(_ARN, 6, "1280x720")  # noqa: SLF001
-        response = client.delete(f"/v1/videos/{video_id}")
+        response = app_client.delete(f"/v1/videos/{video_id}")
         assert response.status_code == 200, response.text
         assert response.json() == {
             "id": video_id,
@@ -656,7 +650,7 @@ class TestOpenAIVideoRoutes:
         assert [job.invocation_arn for job in deleted] == [_ARN]
 
     def test_delete_in_progress_is_rejected(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A job still being processed cannot be deleted, like upstream.
 
@@ -668,7 +662,7 @@ class TestOpenAIVideoRoutes:
         """
         _stub_job(monkeypatch, "in_progress")
         video_id = openai_videos._encode_video_id(_ARN, 6, "1280x720")  # noqa: SLF001
-        response = client.delete(f"/v1/videos/{video_id}")
+        response = app_client.delete(f"/v1/videos/{video_id}")
         assert response.status_code == 400
         err = response.json()["error"]
         assert err["type"] == "invalid_request_error"
@@ -680,7 +674,7 @@ class TestOpenAIVideoAuthRejection:
     """A wrong bearer token is rejected with a 401 OpenAI envelope before any model call.
 
     Uses the session-wide ``test_client`` (lifespan-started, unlike the
-    lifespan-free ``client`` fixture) so the auth handler is actually
+    lifespan-free ``app_client`` fixture) so the auth handler is actually
     initialized and able to reject a bad token.
 
     Ref: stdapi/auth.py:authenticate
@@ -779,7 +773,7 @@ def _advertised_model_ids(
 ) -> list[str]:
     """Return the model IDs advertising the video generation route.
 
-    Queries the in-process test client when available, or the ``--server-url``
+    Queries the in-process test app_client when available, or the ``--server-url``
     target otherwise.
     """
     if test_client is not None:

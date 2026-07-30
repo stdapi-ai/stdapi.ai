@@ -12,7 +12,6 @@ Ref: https://docs.aws.amazon.com/transcribe/latest/dg/what-is.html
 
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Self
-from unittest.mock import MagicMock
 
 import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError
@@ -28,7 +27,6 @@ from stdapi.aws import (
     service_regions,
 )
 from stdapi.config import AWS_SESSION, SETTINGS
-from stdapi.monitoring import REQUEST_LOG, EventLog
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -481,7 +479,7 @@ class TestFailoverWarningLog:
         return "served"
 
     async def test_failover_logs_warning_naming_service_and_region(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
     ) -> None:
         """A failover raises the request log to ``warning`` and names service and region.
 
@@ -489,22 +487,10 @@ class TestFailoverWarningLog:
         region from an unreachable one without a second log source.
         """
         _patch_get_client(monkeypatch)
-        log: EventLog = EventLog(
-            type="request",
-            level="info",
-            date=MagicMock(),
-            server_id="test-server",
-            server_version="0.0.0",
+        log = request_log
+        await call_with_region_failover(
+            "comprehend", ["us-east-1", "eu-west-1"], self._failing_then_serving_call
         )
-        token = REQUEST_LOG.set(log)
-        try:
-            await call_with_region_failover(
-                "comprehend",
-                ["us-east-1", "eu-west-1"],
-                self._failing_then_serving_call,
-            )
-        finally:
-            REQUEST_LOG.reset(token)
         assert log["level"] == "warning"
         assert any(
             "comprehend" in str(detail)
@@ -824,5 +810,32 @@ class TestFailoverRetryConfig:
             # Identity, not contents: botocore renames CONFIG.retries keys in
             # place once a real client is created elsewhere in the test run.
             assert recorded[("polly", "eu-west-1")] is CONFIG
+        finally:
+            await manager.__aexit__(None, None, None)
+
+    @pytest.mark.parametrize("accelerate", [True, False])
+    async def test_s3_accelerate_setting_reaches_the_botocore_config(
+        self, monkeypatch: pytest.MonkeyPatch, accelerate: bool
+    ) -> None:
+        """``aws_s3_accelerate`` is what sets botocore's ``use_accelerate_endpoint``.
+
+        The setting is only ever read here; a broken wiring would silently keep
+        downloads on the regional endpoint with no error to notice.
+
+        Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/transfer-acceleration.html
+             stdapi/aws.py:AWSConnectionManager.__aenter__
+        """
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1"])
+        monkeypatch.setattr(SETTINGS, "aws_s3_accelerate", accelerate)
+        recorded = self._record_configs(monkeypatch)
+
+        manager = AWSConnectionManager(("s3.accelerate", "us-east-1"))
+        await manager.__aenter__()
+        try:
+            # The dotted spec selects the config; the client itself is plain "s3".
+            config = recorded[("s3", "us-east-1")]
+            assert config is not CONFIG
+            # AioConfig stores `s3` as a runtime attribute the stubs don't declare.
+            assert config.s3 == {"use_accelerate_endpoint": accelerate}  # type: ignore[attr-defined]
         finally:
             await manager.__aexit__(None, None, None)

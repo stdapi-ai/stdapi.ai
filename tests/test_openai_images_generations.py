@@ -10,21 +10,25 @@ import json
 import re
 import time
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, cast
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from openai import BadRequestError, OpenAI
 from pydantic import ValidationError
 
+from stdapi.api_errors import UnsupportedModelError
+from stdapi.config import SETTINGS
 from stdapi.models.image import ImageGenerationJobBase, ImageGenerationResponse
 from stdapi.monitoring import REQUEST_LOG, REQUEST_TIME, EventLog
+from stdapi.routes import openai_images_generations
 from stdapi.routes._images_common import build_images_response
 from stdapi.routes.openai_images_generations import stream_generator
-from stdapi.types.openai_images import ImageGenerateParams
+from stdapi.types.openai_images import ImageEditParams, ImageGenerateParams
 from tests.conftest import logged_usage_entries
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Iterable
+    from collections.abc import AsyncGenerator, Callable, Iterable
 
     from openai.types import ImageEditCompletedEvent, ImageEditPartialImageEvent
     from openai.types.image_gen_completed_event import ImageGenCompletedEvent
@@ -37,6 +41,8 @@ if TYPE_CHECKING:
         | ImageEditPartialImageEvent
         | ImageEditCompletedEvent
     )
+
+    type ImageParams = ImageGenerateParams | ImageEditParams
 
 
 def validate_base64_image(b64_data: str) -> str:
@@ -260,16 +266,8 @@ class TestImageGeneration:
     """
 
     @pytest.mark.expensive
-    @pytest.mark.parametrize(
-        ("prompt", "description"),
-        [("A beautiful sunset over mountains", "basic prompt")],
-    )
-    def test_image_generation_with_various_prompts(
-        self,
-        openai_client: OpenAI,
-        image_generation_model: str,
-        prompt: str,
-        description: str,
+    def test_image_generation_default_response_format_is_url(
+        self, openai_client: OpenAI, image_generation_model: str
     ) -> None:
         """A text prompt returns a single image referenced by URL.
 
@@ -279,27 +277,21 @@ class TestImageGeneration:
         Ref: stdapi/routes/_images_common.py:build_images_response
         """
         response = openai_client.images.generate(
-            prompt=prompt, model=image_generation_model, n=1, size="512x512"
+            prompt="A beautiful sunset over mountains",
+            model=image_generation_model,
+            n=1,
+            size="512x512",
         )
 
-        # Validate response structure
-        assert response.created is not None, (
-            f"Missing 'created' field for {description}"
-        )
+        assert response.created is not None
         validate_timestamp(response.created)
+        assert response.data is not None
+        assert len(response.data) == 1
 
-        assert response.data is not None, f"Missing 'data' field for {description}"
-        assert len(response.data) == 1, (
-            f"Expected 1 image, got {len(response.data)} for {description}"
-        )
-
-        # Validate image data
         image = response.data[0]
-        assert image.url is not None, f"Missing URL for {description}"
+        assert image.url is not None
         validate_url_format(image.url)
-        assert image.b64_json is None, (
-            f"Unexpected b64_json in URL response for {description}"
-        )
+        assert image.b64_json is None, "the url default must not inline base64 data"
 
     @pytest.mark.expensive
     def test_image_generation_with_user_parameter(
@@ -1008,36 +1000,365 @@ class TestSizeAutoAccepted:
         ), errors
 
 
-class TestPartialImagesAccepted:
-    """ImageGenerateParams.partial_images: accepted (0-3) even though no model emits partials.
+def _generation_params(**kwargs: object) -> ImageGenerateParams:
+    """Build generation request params, filling in the required prompt.
 
-    Ref: stdapi/types/openai_images.py:ImageGenerateParams._unsupported
+    Args:
+        **kwargs: Fields under test, merged over the required ones.
+
+    Returns:
+        The validated generation request params.
+    """
+    return ImageGenerateParams.model_validate({"model": "m", "prompt": "p", **kwargs})
+
+
+def _edit_params(**kwargs: object) -> ImageEditParams:
+    """Build multipart edit request params (their prompt defaults to empty).
+
+    Args:
+        **kwargs: Fields under test, merged over the required ones.
+
+    Returns:
+        The validated edit request params.
+    """
+    return ImageEditParams.model_validate({"model": "m", **kwargs})
+
+
+#: Both request models declaring ``partial_images``, each with its own validator.
+_PARAMS_FACTORIES = pytest.mark.parametrize(
+    "make_params", [_generation_params, _edit_params], ids=["generations", "edits"]
+)
+
+
+class TestPartialImagesAccepted:
+    """``partial_images``: accepted (0-3) with ``stream``, rejected without it.
+
+    The generation and edit request models validate the field with two separate
+    validators, so both are exercised here rather than in each endpoint's module.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/types/openai_images.py:ImageGenerateParams._unsupported
+         stdapi/types/openai_images.py:_ImageEditCommonParams._unsupported
     """
 
     pytestmark = pytest.mark.local
 
+    @_PARAMS_FACTORIES
     @pytest.mark.parametrize("value", [0, 1, 2, 3])
-    def test_value_is_accepted(self, value: int) -> None:
+    def test_value_is_accepted(
+        self, make_params: Callable[..., ImageParams], value: int
+    ) -> None:
         """`partial_images` in 0-3 is accepted; no current model emits partial events."""
-        params = ImageGenerateParams(
-            model="m", prompt="p", stream=True, partial_images=value
-        )
+        params = make_params(stream=True, partial_images=value)
         assert params.partial_images == value
         assert params.stream is True
 
-    def test_omitted_is_accepted(self) -> None:
-        """Omitting `partial_images` (None) is accepted."""
-        params = ImageGenerateParams(model="m", prompt="p", stream=True)
+    @_PARAMS_FACTORIES
+    def test_omitted_is_accepted(self, make_params: Callable[..., ImageParams]) -> None:
+        """Omitting `partial_images` leaves it unset rather than defaulting to 0."""
+        params = make_params(stream=True)
         assert params.partial_images is None
 
-    def test_requires_stream(self) -> None:
-        """`partial_images` without `stream=True` is rejected by the model validator."""
+    @_PARAMS_FACTORIES
+    def test_requires_stream(self, make_params: Callable[..., ImageParams]) -> None:
+        """`partial_images` without `stream=True` is a single value error on the model."""
         with pytest.raises(ValidationError, match="partial_images") as exc_info:
-            ImageGenerateParams(model="m", prompt="p", partial_images=0)
+            make_params(partial_images=0)
 
         errors = exc_info.value.errors()
+        assert len(errors) == 1
+        assert errors[0]["type"] == "value_error"
+        assert "partial_images requires streaming mode." in errors[0]["msg"]
+
+
+@pytest.mark.local
+class TestImageGenerationUnsupportedOptions:
+    """Generation options the backend cannot honour are rejected, never ignored.
+
+    Every response is built with ``background="opaque"`` and no Bedrock image
+    model exposes a moderation level, so accepting these values would let a
+    caller believe the request changed the output when it did not.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/types/openai_images.py:ImageGenerateParams._unsupported
+    """
+
+    def test_transparent_background_rejected(self) -> None:
+        """``background="transparent"`` is a single value error on the request model.
+
+        Ref: stdapi/routes/_images_common.py:build_images_response
+        """
+        with pytest.raises(ValidationError) as exc_info:
+            _generation_params(background="transparent")
+
+        errors = exc_info.value.errors()
+        assert len(errors) == 1
+        assert errors[0]["type"] == "value_error"
+        assert "Background transparency is not supported" in errors[0]["msg"]
+
+    @pytest.mark.parametrize("value", ["auto", "opaque"])
+    def test_non_transparent_background_accepted(self, value: str) -> None:
+        """``auto`` and ``opaque`` backgrounds are accepted and kept verbatim."""
+        params = ImageGenerateParams.model_validate(
+            {"model": "m", "prompt": "p", "background": value}
+        )
+        assert params.background == value
+
+    def test_moderation_low_rejected(self) -> None:
+        """``moderation="low"`` is rejected instead of silently keeping ``auto``.
+
+        Loosening content filtering is not something the gateway can pass on to
+        Bedrock, so accepting the value would misrepresent the safety level
+        actually applied.
+        """
+        with pytest.raises(ValidationError) as exc_info:
+            _generation_params(moderation="low")
+
+        errors = exc_info.value.errors()
+        assert len(errors) == 1
+        assert errors[0]["type"] == "value_error"
+        assert "'moderation' parameter is not supported" in errors[0]["msg"]
+
+    def test_moderation_auto_is_the_default_and_accepted(self) -> None:
+        """``auto`` is the default and the only accepted moderation level."""
+        assert _generation_params().moderation == "auto"
+        assert _generation_params(moderation="auto").moderation == "auto"
+
+
+@pytest.mark.local
+class TestResponseFormatUrlRequiresBucket:
+    """``response_format="url"`` is refused when the server has no S3 bucket.
+
+    ``url`` is the default for all three image endpoints, so without this guard
+    a bucket-less deployment would fail deep in the S3 upload instead of at
+    request validation.
+
+    Ref: https://stdapi.ai/api_openai_images_generations/
+         stdapi/types/openai_images.py:_ImageBaseParams._validate_response_format
+    """
+
+    def test_url_rejected_without_a_bucket(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """The default ``url`` format fails validation and logs an operator diagnostic."""
+        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
+
+        with pytest.raises(ValidationError) as exc_info:
+            _generation_params(response_format="url")
+
+        errors = exc_info.value.errors()
+        assert len(errors) == 1
+        assert errors[0]["loc"] == ("response_format",)
+        assert "url response format is not enabled on this server" in errors[0]["msg"]
         assert any(
-            error["type"] == "value_error"
-            and "partial_images requires streaming mode" in error["msg"]
-            for error in errors
-        ), errors
+            "No S3 bucket configured for presigned URLs" in str(detail)
+            for detail in request_log["error_detail"]
+        ), request_log
+
+    def test_b64_json_still_accepted_without_a_bucket(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``b64_json`` needs no bucket and stays available on such a deployment."""
+        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
+
+        assert _generation_params(response_format="b64_json").response_format == (
+            "b64_json"
+        )
+
+
+@pytest.mark.local
+class TestImageGenerationJobParameters:
+    """The route translates request options into image generation job parameters.
+
+    ``quality`` is remapped through the OpenAI compatibility table and
+    ``output_compression`` is forwarded as-is; both are only observable at the
+    job boundary, so the job is stubbed and the request stops there.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/routes/openai_images_generations.py:create_images
+    """
+
+    @pytest.fixture
+    def job_kwargs(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+        """Stub model resolution and the image model, recording the job parameters.
+
+        The stub fails the request with a 400 once the parameters are recorded,
+        so nothing reaches Bedrock.
+
+        Returns:
+            The dict the stub records the job keyword arguments into.
+        """
+        captured: dict[str, Any] = {}
+
+        class _StubModel:
+            """Image model recording the requested generation job parameters."""
+
+            def get_image_generation_job(self, **kwargs: object) -> object:
+                """Record the job parameters, then fail the request with a 400."""
+                captured.update(kwargs)
+                model_id = "stub-model"
+                raise UnsupportedModelError(model_id, status=400)
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> object:
+            """Accept any model ID without calling AWS."""
+            return SimpleNamespace(id=model_id)
+
+        monkeypatch.setattr(
+            openai_images_generations, "validate_model", _validate_model
+        )
+        monkeypatch.setattr(
+            openai_images_generations, "get_image_model", lambda _model_id: _StubModel()
+        )
+        return captured
+
+    @pytest.mark.parametrize(
+        ("requested", "expected"),
+        [
+            ("standard", "medium"),
+            ("hd", "high"),
+            ("low", "low"),
+            ("medium", "medium"),
+            ("high", "high"),
+            ("auto", None),
+            ("premium", "premium"),
+        ],
+    )
+    def test_quality_is_mapped_to_the_backend_levels(
+        self,
+        app_client: TestClientType,
+        job_kwargs: dict[str, Any],
+        requested: str,
+        expected: str | None,
+    ) -> None:
+        """OpenAI quality names collapse to the three backend levels; others pass through.
+
+        ``auto`` becomes ``None`` so the backend keeps its own default, and a
+        backend-native value such as Nova Canvas' ``premium`` is forwarded
+        unchanged.
+
+        Ref: stdapi/routes/openai_images_generations.py:_OPENAI_QUALITY_LEVELS
+        """
+        response = app_client.post(
+            "/v1/images/generations",
+            json={
+                "model": "stub-model",
+                "prompt": "a cat",
+                "quality": requested,
+                "response_format": "b64_json",
+            },
+        )
+
+        assert response.status_code == 400
+        assert job_kwargs["quality"] == expected
+
+    def test_output_compression_reaches_the_job(
+        self, app_client: TestClientType, job_kwargs: dict[str, Any]
+    ) -> None:
+        """``output_compression`` is forwarded to the job as requested.
+
+        Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._encode_image
+        """
+        response = app_client.post(
+            "/v1/images/generations",
+            json={
+                "model": "stub-model",
+                "prompt": "a cat",
+                "output_format": "jpeg",
+                "output_compression": 42,
+                "response_format": "b64_json",
+            },
+        )
+
+        assert response.status_code == 400
+        assert job_kwargs["output_compression"] == 42
+        assert job_kwargs["output_format"] == "jpeg"
+
+    def test_output_compression_below_the_minimum_is_rejected(
+        self, app_client: TestClientType
+    ) -> None:
+        """``output_compression=0`` is outside the documented 1-100 range."""
+        response = app_client.post(
+            "/v1/images/generations",
+            json={
+                "model": "stub-model",
+                "prompt": "a cat",
+                "output_format": "jpeg",
+                "output_compression": 0,
+            },
+        )
+
+        assert response.status_code == 400
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "output_compression" in error["message"]
+
+
+@pytest.mark.local
+class TestStreamGeneratorPartialImages:
+    """stream_generator: partial images are numbered per source image, starting at 1.
+
+    No Bedrock backend sets ``partial=True`` today, so the branch is only
+    reachable from a stubbed stream. The emitted ``partial_image_index`` starts
+    at 1 even though ``ImageGenPartialImageEvent`` documents a 0-based index;
+    this test pins the implemented numbering.
+
+    Ref: stdapi/routes/openai_images_generations.py:stream_generator
+         stdapi/types/openai_images.py:ImageGenPartialImageEvent
+    """
+
+    async def test_partial_events_carry_job_metadata_and_a_per_image_counter(
+        self,
+    ) -> None:
+        """Each source image gets its own counter, and partials carry no usage."""
+        REQUEST_TIME.set(datetime.now(UTC))
+        log_token = REQUEST_LOG.set(cast("EventLog", {"level": "info"}))
+        try:
+            job = object.__new__(ImageGenerationJobBase)
+            job._count = 2  # noqa: SLF001
+            job._response_width = 512  # noqa: SLF001
+            job._response_height = 512  # noqa: SLF001
+            job._response_quality = "medium"  # noqa: SLF001
+            job._output_format = "png"  # noqa: SLF001
+            job._response_output_format = "png"  # noqa: SLF001
+            job._input_tokens = 7  # noqa: SLF001
+            job._output_tokens = 2  # noqa: SLF001
+
+            async def image_stream() -> AsyncGenerator[ImageGenerationResponse]:
+                """Emit two previews for image 0 and one for image 1, then finals."""
+                yield ImageGenerationResponse(image="p0a", index=0, partial=True)
+                yield ImageGenerationResponse(image="p0b", index=0, partial=True)
+                yield ImageGenerationResponse(image="p1a", index=1, partial=True)
+                yield ImageGenerationResponse(image="final0", index=0)
+                yield ImageGenerationResponse(image="final1", index=1)
+
+            events = [
+                json.loads(event.data)
+                async for event in stream_generator(image_stream(), job, created=11)
+                if event.data is not None
+            ]
+        finally:
+            REQUEST_LOG.reset(log_token)
+
+        partials = [
+            event
+            for event in events
+            if event["type"] == "image_generation.partial_image"
+        ]
+        assert [event["b64_json"] for event in partials] == ["p0a", "p0b", "p1a"]
+        # The counter restarts for every source image index.
+        assert [event["partial_image_index"] for event in partials] == [1, 2, 1]
+        assert all(event["created_at"] == 11 for event in partials)
+        assert all(event["size"] == "512x512" for event in partials)
+        assert all(event["output_format"] == "png" for event in partials)
+        assert all(event["quality"] == "medium" for event in partials)
+        assert all(event["background"] == "opaque" for event in partials)
+        assert all("usage" not in event for event in partials), (
+            "usage is only reported on completed events"
+        )
+        assert [
+            event["b64_json"]
+            for event in events
+            if event["type"] == "image_generation.completed"
+        ] == ["final0", "final1"]

@@ -13,13 +13,20 @@ from typing import Any
 
 import pytest
 
+from stdapi.types import BaseModelRequestWithFormExtra
 
-@pytest.fixture
-def base_model_form_extra() -> type[Any]:
-    """Import and return BaseModelRequestWithFormExtra only when tests run."""
-    from stdapi.types import BaseModelRequestWithFormExtra  # noqa: PLC0415
+pytestmark = pytest.mark.local
 
-    return BaseModelRequestWithFormExtra
+
+def _form_extra(payload: dict[str, Any]) -> dict[str, Any]:
+    """Parse a bracket-notation form payload and return the rebuilt ``model_extra``.
+
+    Returns:
+        The extra fields the ``before`` validator reconstructed.
+    """
+    model = BaseModelRequestWithFormExtra(**payload)
+    assert model.model_extra is not None
+    return model.model_extra
 
 
 class TestBaseModelRequestWithFormExtra:
@@ -28,134 +35,136 @@ class TestBaseModelRequestWithFormExtra:
     Ref: stdapi/types/__init__.py:BaseModelRequestWithFormExtra._deserialize_forms
     """
 
-    def test_simple_key(self, base_model_form_extra: type[Any]) -> None:
-        """A key with no brackets is stored under its own name, unchanged."""
-        model = base_model_form_extra(key="value")
-        assert model.model_extra == {"key": "value"}
-
-    def test_nested_dict(self, base_model_form_extra: type[Any]) -> None:
-        """``param[key]`` becomes a one-entry dict under ``param``."""
-        model = base_model_form_extra(**{"param[key]": "value"})
-        assert model.model_extra == {"param": {"key": "value"}}
-
-    def test_array_append(self, base_model_form_extra: type[Any]) -> None:
-        """``param[]`` becomes a list, so a single value yields a one-element list."""
-        model = base_model_form_extra(**{"param[]": "value1"})
-        assert model.model_extra == {"param": ["value1"]}
-
-    def test_array_explicit_index(self, base_model_form_extra: type[Any]) -> None:
-        """``param[0]`` becomes a list, not a dict keyed by the string "0"."""
-        model = base_model_form_extra(**{"param[0]": "value"})
-        assert model.model_extra == {"param": ["value"]}
-
-    def test_nested_dict_with_array(self, base_model_form_extra: type[Any]) -> None:
-        """``param[key][]`` nests a list inside a dict."""
-        model = base_model_form_extra(**{"param[key][]": "value"})
-        assert model.model_extra == {"param": {"key": ["value"]}}
-
-    def test_deep_nesting(self, base_model_form_extra: type[Any]) -> None:
-        """Every intermediate bracket segment creates one more dict level."""
-        model = base_model_form_extra(**{"param[a][b][c]": "value"})
-        assert model.model_extra == {"param": {"a": {"b": {"c": "value"}}}}
-
-    def test_consecutive_brackets_nested_dict(
-        self, base_model_form_extra: type[Any]
+    @pytest.mark.parametrize(
+        ("payload", "expected"),
+        [
+            pytest.param({"key": "value"}, {"key": "value"}, id="plain-key"),
+            pytest.param(
+                {"param[key]": "value"}, {"param": {"key": "value"}}, id="nested-dict"
+            ),
+            pytest.param(
+                {"param[]": "value1"}, {"param": ["value1"]}, id="array-append"
+            ),
+            pytest.param(
+                {"param[0]": "value"}, {"param": ["value"]}, id="array-explicit-index"
+            ),
+            pytest.param(
+                {"param[key][]": "value"},
+                {"param": {"key": ["value"]}},
+                id="array-inside-dict",
+            ),
+            pytest.param(
+                {"param[a][b][c]": "value"},
+                {"param": {"a": {"b": {"c": "value"}}}},
+                id="deep-nesting",
+            ),
+            pytest.param(
+                {"colorGuidedGenerationParams[colors][]": "#3357FF"},
+                {"colorGuidedGenerationParams": {"colors": ["#3357FF"]}},
+                id="array-append-at-nested-leaf",
+            ),
+            pytest.param(
+                {"simple": "value1", "nested[key]": "value2", "array[]": "value3"},
+                {"simple": "value1", "nested": {"key": "value2"}, "array": ["value3"]},
+                id="mixed-plain-dict-and-list",
+            ),
+            pytest.param(
+                {"items[0]": "first", "items[1]": "second", "items[2]": "third"},
+                {"items": ["first", "second", "third"]},
+                id="consecutive-numeric-indices",
+            ),
+            pytest.param(
+                {"config[settings][0]": "option1", "config[settings][1]": "option2"},
+                {"config": {"settings": ["option1", "option2"]}},
+                id="indexed-leaves-under-dict-key",
+            ),
+            pytest.param(
+                {
+                    "root[level1][level2][level3]": "deep",
+                    "root[level1][sibling]": "value",
+                },
+                {
+                    "root": {
+                        "level1": {"level2": {"level3": "deep"}, "sibling": "value"}
+                    }
+                },
+                id="deep-branch-merges-with-shallow-sibling",
+            ),
+            pytest.param(
+                {"a[b][c][d]": "value"},
+                {"a": {"b": {"c": {"d": "value"}}}},
+                id="three-bracket-levels",
+            ),
+            pytest.param(
+                {"mixed[0][name]": "first", "mixed[1][name]": "second"},
+                {"mixed": [{"name": "first"}, {"name": "second"}]},
+                id="numeric-then-named-segment",
+            ),
+            pytest.param(
+                {"param": "not-json-value"},
+                {"param": "not-json-value"},
+                id="bracket-free-value-not-json-decoded",
+            ),
+            pytest.param({}, {}, id="empty-payload"),
+        ],
+    )
+    def test_bracket_key_expansion(
+        self, payload: dict[str, Any], expected: dict[str, Any]
     ) -> None:
+        """A bracket path is expanded into the nested dicts and lists it describes.
+
+        A numeric or empty final segment yields a list; every other segment yields a
+        dict. Keys carrying no bracket are copied through verbatim, value included.
+        """
+        assert _form_extra(payload) == expected
+
+    def test_consecutive_brackets_nested_dict(self) -> None:
         """Two keys sharing a prefix merge into one dict instead of overwriting it.
 
         The Nova Canvas virtual-try-on payload sends ``maskType`` and
         ``imageBasedMask[maskImage]`` under the same parent, which the original
         implementation flattened into a single overwritten branch.
         """
-        model = base_model_form_extra(
-            **{
+        extra = _form_extra(
+            {
                 "virtualTryOnParams[maskType]": "IMAGE",
                 "virtualTryOnParams[imageBasedMask][maskImage]": "/9j/4A",
             }
         )
-        assert model.model_extra == {
+        assert extra == {
             "virtualTryOnParams": {
                 "maskType": "IMAGE",
                 "imageBasedMask": {"maskImage": "/9j/4A"},
             }
         }
 
-    def test_array_append_with_nested_key(
-        self, base_model_form_extra: type[Any]
-    ) -> None:
-        """A trailing ``[]`` inside a nested path appends to a list at that leaf."""
-        model = base_model_form_extra(
-            **{"colorGuidedGenerationParams[colors][]": "#3357FF"}
-        )
-        assert model.model_extra == {
-            "colorGuidedGenerationParams": {"colors": ["#3357FF"]}
-        }
-
-    def test_multiple_array_appends(self, base_model_form_extra: type[Any]) -> None:
+    def test_multiple_array_appends(self) -> None:
         """A single ``items[]`` field still yields a list, not a scalar.
 
         Repeated form fields with the same name cannot be expressed as Python
         keyword arguments, so only the one-value case is reachable here; the
         multi-value case is handled by the web framework before this validator.
         """
-        model = base_model_form_extra(**{"items[]": "value2"})
-        assert model.model_extra == {"items": ["value2"]}
+        extra = _form_extra({"items[]": "value2"})
+        assert extra == {"items": ["value2"]}
 
-    def test_mixed_simple_and_nested(self, base_model_form_extra: type[Any]) -> None:
-        """Plain, dict and list keys coexist in one payload without interfering."""
-        model = base_model_form_extra(
-            **{"simple": "value1", "nested[key]": "value2", "array[]": "value3"}
-        )
-        assert model.model_extra == {
-            "simple": "value1",
-            "nested": {"key": "value2"},
-            "array": ["value3"],
-        }
-
-    def test_numeric_array_indices(self, base_model_form_extra: type[Any]) -> None:
-        """Consecutive explicit indices produce one list in index order."""
-        model = base_model_form_extra(
-            **{"items[0]": "first", "items[1]": "second", "items[2]": "third"}
-        )
-        assert model.model_extra == {"items": ["first", "second", "third"]}
-
-    def test_sparse_array(self, base_model_form_extra: type[Any]) -> None:
+    def test_sparse_array(self) -> None:
         """A gap between explicit indices is padded with ``None`` up to the highest one.
 
         The index is honoured as a position rather than an append order, so
         ``items[5]`` lands at index 5 and the list keeps a stable length of 6.
         """
-        model = base_model_form_extra(**{"items[0]": "first", "items[5]": "sixth"})
-        assert model.model_extra == {
-            "items": ["first", None, None, None, None, "sixth"]
-        }
+        extra = _form_extra({"items[0]": "first", "items[5]": "sixth"})
+        assert extra == {"items": ["first", None, None, None, None, "sixth"]}
 
-    def test_nested_array_in_dict(self, base_model_form_extra: type[Any]) -> None:
-        """Indexed leaves under a dict key build a list, not an integer-keyed dict."""
-        model = base_model_form_extra(
-            **{"config[settings][0]": "option1", "config[settings][1]": "option2"}
-        )
-        assert model.model_extra == {"config": {"settings": ["option1", "option2"]}}
-
-    def test_complex_nested_structure(self, base_model_form_extra: type[Any]) -> None:
-        """A deep branch and a shallower sibling merge into the same parent dict."""
-        model = base_model_form_extra(
-            **{"root[level1][level2][level3]": "deep", "root[level1][sibling]": "value"}
-        )
-        assert model.model_extra == {
-            "root": {"level1": {"level2": {"level3": "deep"}, "sibling": "value"}}
-        }
-
-    def test_json_string_deserialization(
-        self, base_model_form_extra: type[Any]
-    ) -> None:
+    def test_json_string_deserialization(self) -> None:
         """Bracket values are JSON-decoded, so numbers, booleans and null keep their type.
 
         Form fields are always strings on the wire, but Bedrock model parameters
         are typed, so ``"123"`` must reach the backend as the integer 123.
         """
-        model = base_model_form_extra(
-            **{
+        extra = _form_extra(
+            {
                 "param[number]": "123",
                 "param[boolean]": "true",
                 "param[null]": "null",
@@ -163,7 +172,7 @@ class TestBaseModelRequestWithFormExtra:
                 "param[array]": "[1,2,3]",
             }
         )
-        assert model.model_extra == {
+        assert extra == {
             "param": {
                 "number": 123,
                 "boolean": True,
@@ -173,13 +182,6 @@ class TestBaseModelRequestWithFormExtra:
             }
         }
 
-    def test_invalid_json_string_kept_as_string(
-        self, base_model_form_extra: type[Any]
-    ) -> None:
-        """A value under a bracket-free key is never JSON-decoded, so it stays a string."""
-        model = base_model_form_extra(param="not-json-value")
-        assert model.model_extra == {"param": "not-json-value"}
-
     @pytest.mark.xfail(
         reason="Pattern outer[][inner] cannot be handled: [] means append but we need to "
         "navigate into the appended item. This would require lookahead to determine if "
@@ -187,9 +189,7 @@ class TestBaseModelRequestWithFormExtra:
         "implementation for a rare edge case.",
         strict=True,
     )
-    def test_empty_bracket_in_middle_position(
-        self, base_model_form_extra: type[Any]
-    ) -> None:
+    def test_empty_bracket_in_middle_position(self) -> None:
         """An empty bracket in a non-final position is not supported (documented xfail).
 
         ``outer[][inner]`` would have to append a dict and then descend into it,
@@ -198,18 +198,11 @@ class TestBaseModelRequestWithFormExtra:
 
         Ref: stdapi/types/__init__.py:_navigate_bracket_part
         """
-        model = base_model_form_extra(**{"outer[][inner]": "value"})
+        extra = _form_extra({"outer[][inner]": "value"})
         # Expected: outer should be an array containing one dict with key 'inner'
-        assert model.model_extra == {"outer": [{"inner": "value"}]}
+        assert extra == {"outer": [{"inner": "value"}]}
 
-    def test_empty_dict(self, base_model_form_extra: type[Any]) -> None:
-        """A payload with no fields yields an empty ``model_extra``, not None."""
-        model = base_model_form_extra()
-        assert model.model_extra == {}
-
-    def test_real_world_virtual_tryon_params(
-        self, base_model_form_extra: type[Any]
-    ) -> None:
+    def test_real_world_virtual_tryon_params(self) -> None:
         """A full VIRTUAL_TRY_ON form payload rebuilds its nested Nova Canvas params.
 
         The declared OpenAI image fields travel alongside the bracket keys, so
@@ -217,8 +210,8 @@ class TestBaseModelRequestWithFormExtra:
 
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
         """
-        model = base_model_form_extra(
-            **{
+        extra = _form_extra(
+            {
                 "prompt": "ignored",
                 "model": "amazon.nova-canvas-v1:0",
                 "response_format": "b64_json",
@@ -237,25 +230,23 @@ class TestBaseModelRequestWithFormExtra:
                 "virtualTryOnParams[imageBasedMask][maskImage]": "/9j/4A",
             }
         )
-        assert model.model_extra["virtualTryOnParams"] == {
+        assert extra["virtualTryOnParams"] == {
             "maskType": "IMAGE",
             "imageBasedMask": {"maskImage": "/9j/4A"},
         }
         # Bracket-free fields keep their original name, value and Python type.
-        assert model.model_extra["taskType"] == "VIRTUAL_TRY_ON"
-        assert model.model_extra["size"] == "1024x1024"
-        assert model.model_extra["n"] == 1
-        assert model.model_extra["user"] is None
+        assert extra["taskType"] == "VIRTUAL_TRY_ON"
+        assert extra["size"] == "1024x1024"
+        assert extra["n"] == 1
+        assert extra["user"] is None
 
-    def test_real_world_color_guided_generation(
-        self, base_model_form_extra: type[Any]
-    ) -> None:
+    def test_real_world_color_guided_generation(self) -> None:
         """A full COLOR_GUIDED_GENERATION form payload rebuilds its nested colour list.
 
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
         """
-        model = base_model_form_extra(
-            **{
+        extra = _form_extra(
+            {
                 "model": "amazon.titan-image-generator-v2:0",
                 "response_format": "b64_json",
                 "n": 1,
@@ -265,41 +256,23 @@ class TestBaseModelRequestWithFormExtra:
                 "colorGuidedGenerationParams[colors][]": "#3357FF",
             }
         )
-        assert model.model_extra["colorGuidedGenerationParams"] == {
-            "colors": ["#3357FF"]
-        }
-        assert model.model_extra["taskType"] == "COLOR_GUIDED_GENERATION"
+        assert extra["colorGuidedGenerationParams"] == {"colors": ["#3357FF"]}
+        assert extra["taskType"] == "COLOR_GUIDED_GENERATION"
 
-    def test_array_of_objects(self, base_model_form_extra: type[Any]) -> None:
+    def test_array_of_objects(self) -> None:
         """Indexed object keys build a list of dicts, with each value JSON-decoded.
 
         ``items[0][value]="1"`` yields the integer 1: JSON decoding applies to
         every bracket leaf, including those inside an array of objects.
         """
-        model = base_model_form_extra(
-            **{
+        extra = _form_extra(
+            {
                 "items[0][name]": "first",
                 "items[0][value]": "1",
                 "items[1][name]": "second",
                 "items[1][value]": "2",
             }
         )
-        assert model.model_extra == {
+        assert extra == {
             "items": [{"name": "first", "value": 1}, {"name": "second", "value": 2}]
         }
-
-    def test_consecutive_brackets_three_levels(
-        self, base_model_form_extra: type[Any]
-    ) -> None:
-        """Three consecutive brackets nest three dict levels under the root key."""
-        model = base_model_form_extra(**{"a[b][c][d]": "value"})
-        assert model.model_extra == {"a": {"b": {"c": {"d": "value"}}}}
-
-    def test_brackets_with_numbers_and_names(
-        self, base_model_form_extra: type[Any]
-    ) -> None:
-        """A numeric segment followed by a named one builds a list of dicts."""
-        model = base_model_form_extra(
-            **{"mixed[0][name]": "first", "mixed[1][name]": "second"}
-        )
-        assert model.model_extra == {"mixed": [{"name": "first"}, {"name": "second"}]}

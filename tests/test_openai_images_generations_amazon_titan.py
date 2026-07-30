@@ -18,14 +18,25 @@ TITAN_ALL = (TITAN_V2,)
 TITAN_SAMPLE = (TITAN_V2,)
 
 
+#: Every test in this module is reported as skipped: the model is deprecated.
+pytestmark = pytest.mark.skip(reason="Amazon Titan Image Generator is deprecated")
+
+
+@pytest.fixture(autouse=True)
+def _skip_on_official_api(use_official_api: bool) -> None:
+    """Skip every test here: Titan Image Generator has no official OpenAI equivalent."""
+    if use_official_api:
+        pytest.skip(
+            "Amazon Titan Image Generator is not available on the official OpenAI API"
+        )
+
+
 class TestAmazonTitanImageGenerator:
     """Text-to-image generation with the Amazon Titan Image Generator family."""
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_ALL)
-    def test_generate_b64_single(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
-    ) -> None:
+    def test_generate_b64_single(self, openai_client: OpenAI, model_id: str) -> None:
         """A prompt returns one base64 PNG at the requested size with default quality.
 
         Titan always emits PNG and honors the requested ``width``/``height``
@@ -36,11 +47,6 @@ class TestAmazonTitanImageGenerator:
         Ref: stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._invoke_and_process_response
              stdapi/routes/_images_common.py:build_images_response
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Titan models are not available on the official OpenAI API"
-            )
-
         response = openai_client.images.generate(
             model=model_id,
             prompt="A simple watercolor of a mountain.",
@@ -59,9 +65,7 @@ class TestAmazonTitanImageGenerator:
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
-    def test_extra_params_cfg_scale(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
-    ) -> None:
+    def test_extra_params_cfg_scale(self, openai_client: OpenAI, model_id: str) -> None:
         """``imageGenerationConfig.cfgScale`` is accepted as a provider extra.
 
         ``cfgScale`` is not an OpenAI Images field: the gateway collects unknown
@@ -72,10 +76,6 @@ class TestAmazonTitanImageGenerator:
         Ref: stdapi/aws_bedrock.py:get_extra_model_parameters
              stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._set_extra_config
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Titan models are not available on the official OpenAI API"
-            )
         response = openai_client.images.generate(
             model=model_id,
             prompt="A watercolor of a mountain.",
@@ -90,9 +90,7 @@ class TestAmazonTitanImageGenerator:
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
-    def test_multiple_images(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
-    ) -> None:
+    def test_multiple_images(self, openai_client: OpenAI, model_id: str) -> None:
         """``n=2`` returns two base64 images from a single Titan invocation.
 
         ``n`` maps to ``imageGenerationConfig.numberOfImages``, so both images
@@ -101,11 +99,6 @@ class TestAmazonTitanImageGenerator:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
              stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._generate_images_from_text
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Titan models are not available on the official OpenAI API"
-            )
-
         response = openai_client.images.generate(
             model=model_id,
             prompt="Three variations of a sunset over the ocean.",
@@ -121,9 +114,7 @@ class TestAmazonTitanImageGenerator:
             assert item.url is None
 
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
-    def test_style_unsupported(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
-    ) -> None:
+    def test_style_unsupported(self, openai_client: OpenAI, model_id: str) -> None:
         """``style`` is rejected with a 400 naming the parameter.
 
         Titan has no style knob, so the job rejects any style before invoking
@@ -133,11 +124,6 @@ class TestAmazonTitanImageGenerator:
         Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._validate_no_style
              stdapi/api_providers/openai.py:_format_error
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Titan models are not available on the official OpenAI API"
-            )
-
         with pytest.raises(BadRequestError) as excinfo:
             openai_client.images.generate(
                 model=model_id,
@@ -156,7 +142,7 @@ class TestAmazonTitanImageGenerator:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_generate_with_color_guided_task_type(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
+        self, openai_client: OpenAI, model_id: str
     ) -> None:
         """``taskType=COLOR_GUIDED_GENERATION`` generates from a hex color palette.
 
@@ -167,11 +153,6 @@ class TestAmazonTitanImageGenerator:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
              stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._get_request_color_guided_generation
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Titan models are not available on the official OpenAI API"
-            )
-
         response = openai_client.images.generate(
             model=model_id,
             prompt="A vibrant sunset with these specific colors",
@@ -196,7 +177,7 @@ class TestAmazonTitanImageGenerator:
 
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_generate_with_invalid_task_type(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
+        self, openai_client: OpenAI, model_id: str
     ) -> None:
         """An unknown ``taskType`` is rejected with the list of legal values.
 
@@ -207,11 +188,6 @@ class TestAmazonTitanImageGenerator:
         Ref: stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._generate_images_from_text
              stdapi/api_providers/openai.py:_format_error
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Titan models are not available on the official OpenAI API"
-            )
-
         with pytest.raises(BadRequestError) as excinfo:
             openai_client.images.generate(
                 model=model_id,
@@ -233,7 +209,7 @@ class TestAmazonTitanImageGenerator:
 
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_generate_color_guided_missing_colors(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
+        self, openai_client: OpenAI, model_id: str
     ) -> None:
         """``COLOR_GUIDED_GENERATION`` without ``colors`` is rejected before invoking Bedrock.
 
@@ -243,11 +219,6 @@ class TestAmazonTitanImageGenerator:
         Ref: stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._get_request_color_guided_generation
              stdapi/api_providers/openai.py:_format_error
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Titan models are not available on the official OpenAI API"
-            )
-
         with pytest.raises(BadRequestError) as excinfo:
             openai_client.images.generate(
                 model=model_id,
@@ -266,6 +237,3 @@ class TestAmazonTitanImageGenerator:
             "Required parameter for COLOR_GUIDED_GENERATION: "
             "colorGuidedGenerationParams.colors"
         )
-
-
-pytest.skip("Amazon Titan Image Generator is deprecated", allow_module_level=True)

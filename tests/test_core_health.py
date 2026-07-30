@@ -26,23 +26,20 @@ class TestHealth:
          stdapi/routes/core_root.py:HealthResponse
     """
 
-    def test_returns_200(self, client: TestClient) -> None:
-        """GET /health returns HTTP 200."""
-        assert client.get("/health").status_code == 200
-
     def test_response_body(self, client: TestClient) -> None:
-        """GET /health returns exactly ``{"status": "ok"}``.
+        """GET /health returns HTTP 200 with exactly ``{"status": "ok"}``.
 
         The route returns the ``HealthResponse`` dataclass whose only field
         defaults to ``"ok"``; FastAPI serialises it with no extra envelope.
         """
-        assert client.get("/health").json() == {"status": "ok"}
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
 
     def test_json_content_type(self, client: TestClient) -> None:
         """GET /health is served as ``application/json``."""
         response = client.get("/health")
         assert "application/json" in response.headers["content-type"]
-        assert response.json() == {"status": "ok"}
 
     def test_no_auth_required(self, client: TestClient) -> None:
         """GET /health succeeds with no credentials and with invalid ones alike.
@@ -60,9 +57,3 @@ class TestHealth:
         bad_key = client.get("/health", headers={"Authorization": "Bearer wrong-key"})
         assert bad_key.status_code == 200
         assert bad_key.json() == {"status": "ok"}
-
-    def test_repeated_calls_consistent(self, client: TestClient) -> None:
-        """GET /health is stateless: every call returns the same ``ok`` body."""
-        first = client.get("/health").json()
-        second = client.get("/health").json()
-        assert first == second == {"status": "ok"}

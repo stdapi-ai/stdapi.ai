@@ -9,19 +9,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from tests.test_openai_chat_completions_anthropic_claude import CLAUDE_ALL
+
 if TYPE_CHECKING:
     from openai import OpenAI
-
-#: Anthropic models supporting all Claude features.
-CLAUDE_ALL = (
-    "anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "anthropic.claude-fable-5",
-    "anthropic.claude-haiku-4-5-20251001-v1:0",
-    "anthropic.claude-opus-4-7",
-    "anthropic.claude-opus-4-8",
-    "anthropic.claude-opus-5",
-    "anthropic.claude-sonnet-5",
-)
 
 
 class TestClaudeReasoning:

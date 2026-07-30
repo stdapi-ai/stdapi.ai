@@ -29,9 +29,17 @@ class TestMistral7bChatCompletions:
          stdapi/models/chat/mistral_7b.py:ChatModel
     """
 
+    @pytest.fixture(autouse=True)
+    def _skip_official_api(self, use_official_api: bool) -> None:
+        """Skip the whole class: Mistral 7B models are not served by the official OpenAI API."""
+        if use_official_api:
+            pytest.skip(
+                "Mistral 7b models are not supported on the official OpenAI API"
+            )
+
     @pytest.mark.parametrize("model", MISTRAL_7B_MODELS)
     def test_system_prompt_silently_dropped_when_enabled(
-        self, openai_client: OpenAI, use_official_api: bool, model: str
+        self, openai_client: OpenAI, model: str
     ) -> None:
         """A ``system`` message is dropped instead of failing on Mistral 7B / Mixtral 8x7B.
 
@@ -45,10 +53,6 @@ class TestMistral7bChatCompletions:
              stdapi/models/chat/_default.py:ChatModel._prepare_converse_request
              stdapi/config.py:Settings.drop_unsupported_system_prompt
         """
-        if use_official_api:
-            pytest.skip(
-                "Mistral 7b models are not supported on the official OpenAI API"
-            )
         resp = openai_client.chat.completions.create(
             model=model,
             messages=[

@@ -6,11 +6,12 @@ Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
 """
 
 import re
+from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 import pytest
 from openai import BadRequestError, OpenAI
 from pydantic import ValidationError
-from starlette.testclient import TestClient
 
 from stdapi.api_errors import UnsupportedModelError
 from stdapi.routes import openai_images_edits
@@ -24,6 +25,9 @@ from .test_openai_images_generations import (
     validate_timestamp,
     validate_url_format,
 )
+
+if TYPE_CHECKING:
+    from starlette.testclient import TestClient
 
 #: Shape of the ``size`` field built by ``build_images_response`` ("WIDTHxHEIGHT")
 _SIZE_PATTERN = re.compile(r"^\d+x\d+$")
@@ -671,13 +675,6 @@ class TestImagesEditsModelField:
     """
 
     @pytest.fixture
-    def client(self, api_key: str) -> TestClient:
-        """Test client without lifespan (no AWS startup), pre-authenticated."""
-        from stdapi.main import app  # noqa: PLC0415
-
-        return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
-
-    @pytest.fixture
     def probed_model_ids(self, monkeypatch: pytest.MonkeyPatch) -> list[str]:
         """Stub validate_model to record the requested model id and fail fast."""
         calls: list[str] = []
@@ -692,7 +689,7 @@ class TestImagesEditsModelField:
         return calls
 
     def test_json_body_model_field_reaches_model_resolution(
-        self, client: TestClient, probed_model_ids: list[str]
+        self, app_client: TestClient, probed_model_ids: list[str]
     ) -> None:
         """A model supplied only in the JSON body reaches model resolution.
 
@@ -702,7 +699,7 @@ class TestImagesEditsModelField:
 
         Ref: stdapi/types/openai_images.py:ImageEditJsonBody
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/images/edits",
             json={
                 "model": "probe-model-id",
@@ -715,13 +712,13 @@ class TestImagesEditsModelField:
         assert probed_model_ids == ["probe-model-id"]
 
     def test_multipart_form_model_field_still_works(
-        self, client: TestClient, probed_model_ids: list[str]
+        self, app_client: TestClient, probed_model_ids: list[str]
     ) -> None:
         """A model supplied via multipart form data reaches model resolution unchanged.
 
         Ref: stdapi/types/openai_images.py:ImageEditParams
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/images/edits",
             data={"model": "probe-model-id", "prompt": "test"},
             files={"image": ("image.png", b"fake-bytes", "image/png")},
@@ -732,39 +729,102 @@ class TestImagesEditsModelField:
 
 
 @pytest.mark.local
-class TestPartialImagesAccepted:
-    """``partial_images`` validation on the multipart edit request model.
+class TestImagesEditsUnsupportedOptions:
+    """Edit options the backend cannot honour are rejected, never silently ignored.
 
-    The OpenAI schema allows 0-3 preview images while streaming; the gateway
-    accepts and keeps the value even though no backend emits previews.
+    Every edit response is built with ``background="opaque"``, and no Bedrock
+    backend exposes an input-fidelity control, so accepting these values would
+    return an image that contradicts the request without any signal.
 
     Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-         stdapi/types/openai_images.py:_ImageEditCommonParams
+         stdapi/types/openai_images.py:_ImageEditCommonParams._unsupported
     """
 
-    @pytest.mark.parametrize("value", [0, 1, 2, 3])
-    def test_value_is_accepted(self, value: int) -> None:
-        """`partial_images` in 0-3 is kept verbatim on the parsed request."""
-        params = ImageEditParams(model="m", stream=True, partial_images=value)
-        assert params.partial_images == value
+    def test_transparent_background_rejected(self) -> None:
+        """``background="transparent"`` is a single value error on the request model.
 
-    def test_omitted_is_accepted(self) -> None:
-        """Omitting `partial_images` leaves it unset rather than defaulting to 0."""
-        params = ImageEditParams(model="m", stream=True)
-        assert params.partial_images is None
-
-    def test_requires_stream(self) -> None:
-        """`partial_images` without `stream=True` is a single value error on the model.
-
-        Ref: stdapi/types/openai_images.py:_ImageEditCommonParams._unsupported
+        Ref: stdapi/routes/_images_common.py:build_images_response
         """
         with pytest.raises(ValidationError) as exc_info:
-            ImageEditParams(model="m", partial_images=0)
+            ImageEditParams(model="m", background="transparent")
 
         errors = exc_info.value.errors()
         assert len(errors) == 1
         assert errors[0]["type"] == "value_error"
-        assert "partial_images requires streaming mode." in errors[0]["msg"]
+        assert "Background transparency is not supported" in errors[0]["msg"]
+
+    @pytest.mark.parametrize("value", ["auto", "opaque"])
+    def test_non_transparent_background_accepted(self, value: str) -> None:
+        """``auto`` and ``opaque`` backgrounds are accepted and kept verbatim."""
+        params = ImageEditParams.model_validate({"model": "m", "background": value})
+        assert params.background == value
+
+    def test_input_fidelity_high_rejected(self) -> None:
+        """``input_fidelity="high"`` is rejected rather than accepted and ignored.
+
+        The gateway has no way to bias a Bedrock edit towards the input image,
+        so the documented "high" effort level fails validation instead of
+        returning an image that ignored the request.
+        """
+        with pytest.raises(ValidationError) as exc_info:
+            ImageEditParams(model="m", input_fidelity="high")
+
+        errors = exc_info.value.errors()
+        assert len(errors) == 1
+        assert errors[0]["type"] == "value_error"
+        assert "'input_fidelity' parameter is not supported" in errors[0]["msg"]
+
+    def test_input_fidelity_low_is_the_default_and_accepted(self) -> None:
+        """``low`` is the default and the only accepted input fidelity."""
+        assert ImageEditParams(model="m").input_fidelity == "low"
+        assert ImageEditParams(model="m", input_fidelity="low").input_fidelity == "low"
+
+    def test_multipart_form_transparent_background_returns_400(
+        self, app_client: TestClient
+    ) -> None:
+        """The multipart form path rejects ``transparent`` before resolving the model.
+
+        The form field is validated by the same request model, so no Bedrock
+        call is made and the failure carries the OpenAI error envelope.
+
+        Ref: stdapi/routes/openai_images_edits.py:edit_images
+        """
+        response = app_client.post(
+            "/v1/images/edits",
+            data={
+                "model": "probe-model-id",
+                "prompt": "test",
+                "background": "transparent",
+            },
+            files={"image": ("image.png", b"fake-bytes", "image/png")},
+        )
+
+        assert response.status_code == 400
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "Background transparency is not supported" in error["message"]
+
+    def test_multipart_form_input_fidelity_high_returns_400(
+        self, app_client: TestClient
+    ) -> None:
+        """The multipart form path rejects ``input_fidelity=high`` with a 400.
+
+        Ref: stdapi/routes/openai_images_edits.py:edit_images
+        """
+        response = app_client.post(
+            "/v1/images/edits",
+            data={
+                "model": "probe-model-id",
+                "prompt": "test",
+                "input_fidelity": "high",
+            },
+            files={"image": ("image.png", b"fake-bytes", "image/png")},
+        )
+
+        assert response.status_code == 400
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "'input_fidelity' parameter is not supported" in error["message"]
 
 
 @pytest.mark.local
@@ -775,15 +835,8 @@ class TestImagesEditsSizeAuto:
          stdapi/types/openai_images.py:_ImageBaseParams._resolve_auto_size
     """
 
-    @pytest.fixture
-    def client(self, api_key: str) -> TestClient:
-        """Test client without lifespan (no AWS startup), pre-authenticated."""
-        from stdapi.main import app  # noqa: PLC0415
-
-        return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
-
     def test_multipart_form_auto_size_reaches_model_resolution(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """`size=auto` in multipart form data is resolved instead of rejected with 422.
 
@@ -800,7 +853,7 @@ class TestImagesEditsSizeAuto:
             raise UnsupportedModelError(model_id, status=400)
 
         monkeypatch.setattr(openai_images_edits, "validate_model", _validate_model)
-        response = client.post(
+        response = app_client.post(
             "/v1/images/edits",
             data={
                 "model": "probe-model-id",
@@ -812,3 +865,97 @@ class TestImagesEditsSizeAuto:
         )
         assert response.status_code == 400
         assert response.json()["error"]["code"] == "model_not_found"
+
+
+@pytest.mark.local
+class TestImagesEditsJsonBodyMask:
+    """The JSON body ``mask`` is resolved and handed to the job as the mask, not an image.
+
+    OpenAI's edits API is multipart-only, so the JSON body is a gateway extra;
+    inpainting is its main use case, and the mask must stay separate from the
+    ``images`` array because it also feeds the alpha-to-black/white conversion
+    and the billed input image count.
+
+    Ref: https://stdapi.ai/api_openai_images_edits/
+         stdapi/routes/openai_images_edits.py:edit_images
+    """
+
+    @pytest.fixture
+    def edit_job_calls(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+        """Stub model resolution and the edit job, recording its call arguments.
+
+        The stub job fails with a 400 once it has recorded the arguments, so the
+        request never reaches Bedrock and the response body is deterministic.
+
+        Returns:
+            The dict the stub job records ``images``/``mask`` into.
+        """
+        calls: dict[str, object] = {}
+
+        class _StubJob:
+            """Edit job recording the resolved images and mask."""
+
+            async def edit_images(
+                self, images: list[str], mask: str | None
+            ) -> list[object]:
+                """Record the arguments, then fail the request with a 400."""
+                calls["images"] = images
+                calls["mask"] = mask
+                model_id = "stub-model"
+                raise UnsupportedModelError(model_id, status=400)
+
+        class _StubModel:
+            """Image model returning the recording edit job."""
+
+            def get_image_edit_job(self, **_kwargs: object) -> _StubJob:
+                """Return the recording job, ignoring the job parameters."""
+                return _StubJob()
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> object:
+            """Accept any model ID without calling AWS."""
+            return SimpleNamespace(id=model_id)
+
+        monkeypatch.setattr(openai_images_edits, "validate_model", _validate_model)
+        monkeypatch.setattr(
+            openai_images_edits, "get_image_model", lambda _model_id: _StubModel()
+        )
+        return calls
+
+    def test_mask_reference_is_passed_as_the_mask(
+        self, app_client: TestClient, edit_job_calls: dict[str, object]
+    ) -> None:
+        """A ``mask`` data URL is decoded and passed separately from ``images``."""
+        response = app_client.post(
+            "/v1/images/edits",
+            json={
+                "model": "stub-model",
+                "prompt": "Make it darker",
+                "images": [{"image_url": "data:image/png;base64,aW1hZ2U="}],
+                "mask": {"image_url": "data:image/png;base64,bWFzaw=="},
+                "response_format": "b64_json",
+            },
+        )
+
+        assert response.status_code == 400
+        assert edit_job_calls["images"] == ["aW1hZ2U="]
+        assert edit_job_calls["mask"] == "bWFzaw=="
+
+    def test_omitted_mask_leaves_the_job_mask_unset(
+        self, app_client: TestClient, edit_job_calls: dict[str, object]
+    ) -> None:
+        """Without a ``mask`` field the job receives ``None``, not an extra image."""
+        response = app_client.post(
+            "/v1/images/edits",
+            json={
+                "model": "stub-model",
+                "prompt": "Make it darker",
+                "images": [{"image_url": "data:image/png;base64,aW1hZ2U="}],
+                "response_format": "b64_json",
+            },
+        )
+
+        assert response.status_code == 400
+        assert edit_job_calls["images"] == ["aW1hZ2U="]
+        assert edit_job_calls["mask"] is None

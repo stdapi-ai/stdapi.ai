@@ -21,8 +21,9 @@ flag the gateway injects on its behalf:
 - ``code_execution_20250522`` and ``web_fetch_20250910``: absent from Bedrock
 
 Every test needs the local gateway, so the autouse ``_skip_on_official_api`` fixture
-skips the module under ``--use-official-api``; the classes that additionally require
-the official Anthropic API are therefore always skipped.
+skips the module under ``--use-official-api``.  For the two tool types Bedrock does
+not implement (``code_execution`` and ``web_fetch``) only the rejection path is
+reachable here, so that is all these classes assert.
 
 Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
      https://platform.claude.com/docs/en/build-with-claude/claude-on-amazon-bedrock-legacy
@@ -36,11 +37,7 @@ from pathlib import Path
 
 import pytest
 from anthropic import Anthropic, BadRequestError
-from anthropic.types import ServerToolUseBlock, ToolUseBlock
-
-from tests.test_openai_chat_completions_anthropic_claude import (
-    CLAUDE_ALL as _CLAUDE_ALL,
-)
+from anthropic.types import Message, ToolUseBlock
 
 #: Claude models covering every system-tool code branch (old and new computer-use
 #: tool types, and the unsupported-model skip), for tools billed on every call.
@@ -108,6 +105,62 @@ _TURN_STOP_REASONS = frozenset({"end_turn", "max_tokens", "stop_sequence", "tool
 #: Commands of the ``text_editor_20250728`` tool (``undo_edit`` exists only up to ``20250124``).
 _TEXT_EDITOR_COMMANDS = frozenset({"view", "create", "str_replace", "insert"})
 
+
+def _tool_result(
+    tool_use_id: str, content: str, *, is_error: bool = False
+) -> dict[str, object]:
+    """Build the ``tool_result`` block answering the tool use *tool_use_id*."""
+    block: dict[str, object] = {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": content,
+    }
+    if is_error:
+        block["is_error"] = True
+    return block
+
+
+def _reply_with_tool_result(
+    anthropic_client: Anthropic,
+    model: str,
+    user_prompt: str,
+    first_turn: Message,
+    tools: list[dict[str, object]],
+    result: dict[str, object],
+    *,
+    extra_headers: dict[str, str] | None = None,
+) -> Message:
+    """Answer a forced ``tool_use`` turn with *result* and return the model's reply.
+
+    Turn 2 replays the original user prompt and the assistant's tool-use blocks
+    verbatim: Bedrock rejects a conversation whose earlier turns changed, and the
+    declared tools must still be present for the ``tool_result`` to be accepted.
+
+    Args:
+        anthropic_client: SDK client bound to the target under test.
+        model: Model ID for both turns.
+        user_prompt: The turn-1 user prompt, replayed unchanged.
+        first_turn: The turn-1 assistant message.
+        tools: Tool definitions, re-sent unchanged.
+        result: ``tool_result`` block built by :func:`_tool_result`.
+        extra_headers: Beta headers the tool type requires, if any.
+
+    Returns:
+        The assistant message of the second turn.
+    """
+    return anthropic_client.messages.create(
+        model=model,
+        max_tokens=1024,
+        messages=[
+            {"role": "user", "content": user_prompt},
+            {"role": "assistant", "content": list(first_turn.content)},
+            {"role": "user", "content": [result]},  # type: ignore[list-item]
+        ],
+        tools=tools,  # type: ignore[arg-type]
+        extra_headers=extra_headers,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Beta header constants
 # ---------------------------------------------------------------------------
@@ -154,8 +207,8 @@ def anthropic_chat_model(
     """Provide the Anthropic chat model for the current test.
 
     When ``model_id`` is non-empty (class decorated with
-    ``@pytest.mark.parametrize("model_id", _CLAUDE_ALL)``), converts the raw
-    Bedrock-format ID to the format expected by the active backend:
+    ``@pytest.mark.parametrize("model_id", _CLAUDE_SYSTEM_TOOLS)``), converts the
+    raw Bedrock-format ID to the format expected by the active backend:
 
     - Local gateway or remote URL: use as-is
       (e.g. ``anthropic.claude-haiku-4-5-20251001-v1:0``).
@@ -343,24 +396,13 @@ class TestTextEditorTool:
         assert tool_block.name == "str_replace_based_edit_tool"
         assert tool_block.input.get("command") == "view"
 
-        resp2 = anthropic_client.messages.create(
-            model=anthropic_chat_model,
-            max_tokens=1024,
-            messages=[
-                {"role": "user", "content": user_prompt},
-                {"role": "assistant", "content": list(resp1.content)},
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_block.id,
-                            "content": "test-host\n",
-                        }
-                    ],
-                },
-            ],
-            tools=tools,  # type: ignore[arg-type]
+        resp2 = _reply_with_tool_result(
+            anthropic_client,
+            anthropic_chat_model,
+            user_prompt,
+            resp1,
+            tools,
+            _tool_result(tool_block.id, "test-host\n"),
         )
         assert resp2.stop_reason == "end_turn"
         assert any(b.type == "text" for b in resp2.content)
@@ -606,25 +648,13 @@ class TestTextEditorTool:
         assert isinstance(tool_block, ToolUseBlock)
         assert tool_block.id
         assert tool_block.name == "str_replace_based_edit_tool"
-        resp2 = anthropic_client.messages.create(
-            model=anthropic_chat_model,
-            max_tokens=1024,
-            messages=[
-                {"role": "user", "content": user_prompt},
-                {"role": "assistant", "content": list(resp1.content)},
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_block.id,
-                            "content": "Error: File not found",
-                            "is_error": True,
-                        }
-                    ],
-                },
-            ],
-            tools=tools,  # type: ignore[arg-type]
+        resp2 = _reply_with_tool_result(
+            anthropic_client,
+            anthropic_chat_model,
+            user_prompt,
+            resp1,
+            tools,
+            _tool_result(tool_block.id, "Error: File not found", is_error=True),
         )
         assert resp2.type == "message"
         assert resp2.role == "assistant"
@@ -716,24 +746,13 @@ class TestTextEditorTool:
         assert tool_block.id
         assert tool_block.name == "str_replace_based_edit_tool"
 
-        resp2 = anthropic_client.messages.create(
-            model=anthropic_chat_model,
-            max_tokens=1024,
-            messages=[
-                {"role": "user", "content": user_prompt},
-                {"role": "assistant", "content": list(resp1.content)},
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_block.id,
-                            "content": "test-host\n",
-                        }
-                    ],
-                },
-            ],
-            tools=tools,  # type: ignore[arg-type]
+        resp2 = _reply_with_tool_result(
+            anthropic_client,
+            anthropic_chat_model,
+            user_prompt,
+            resp1,
+            tools,
+            _tool_result(tool_block.id, "test-host\n"),
         )
         assert resp2.stop_reason == "end_turn"
         assert any(b.type == "text" for b in resp2.content)
@@ -855,24 +874,13 @@ class TestBashTool:
         assert bash_block.name == "bash"
         assert bash_block.name == "bash"
 
-        resp2 = anthropic_client.messages.create(
-            model=anthropic_chat_model,
-            max_tokens=1024,
-            messages=[
-                {"role": "user", "content": user_prompt},
-                {"role": "assistant", "content": list(resp1.content)},
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": bash_block.id,
-                            "content": "hello_test\n",
-                        }
-                    ],
-                },
-            ],
-            tools=tools,  # type: ignore[arg-type]
+        resp2 = _reply_with_tool_result(
+            anthropic_client,
+            anthropic_chat_model,
+            user_prompt,
+            resp1,
+            tools,
+            _tool_result(bash_block.id, "hello_test\n"),
             extra_headers=extra_headers,
         )
         assert resp2.stop_reason == "end_turn"
@@ -910,27 +918,17 @@ class TestBashTool:
         assert isinstance(tool_block, ToolUseBlock)
         assert tool_block.id
         assert tool_block.name == "bash"
-        resp2 = anthropic_client.messages.create(
-            model=anthropic_chat_model,
-            max_tokens=1024,
-            messages=[
-                {"role": "user", "content": user_prompt},
-                {"role": "assistant", "content": list(resp1.content)},
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_block.id,
-                            "content": (
-                                "cat: /nonexistent_file.txt: No such file or directory"
-                            ),
-                            "is_error": True,
-                        }
-                    ],
-                },
-            ],
-            tools=tools,  # type: ignore[arg-type]
+        resp2 = _reply_with_tool_result(
+            anthropic_client,
+            anthropic_chat_model,
+            user_prompt,
+            resp1,
+            tools,
+            _tool_result(
+                tool_block.id,
+                "cat: /nonexistent_file.txt: No such file or directory",
+                is_error=True,
+            ),
             extra_headers=extra_headers,
         )
         assert resp2.type == "message"
@@ -971,24 +969,13 @@ class TestBashTool:
         assert isinstance(tool_block, ToolUseBlock)
         assert tool_block.id
         assert tool_block.name == "bash"
-        resp2 = anthropic_client.messages.create(
-            model=anthropic_chat_model,
-            max_tokens=1024,
-            messages=[
-                {"role": "user", "content": user_prompt},
-                {"role": "assistant", "content": list(resp1.content)},
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_block.id,
-                            "content": "Bash session restarted",
-                        }
-                    ],
-                },
-            ],
-            tools=tools,  # type: ignore[arg-type]
+        resp2 = _reply_with_tool_result(
+            anthropic_client,
+            anthropic_chat_model,
+            user_prompt,
+            resp1,
+            tools,
+            _tool_result(tool_block.id, "Bash session restarted"),
             extra_headers=extra_headers,
         )
         assert resp2.type == "message"
@@ -1158,28 +1145,18 @@ class TestMemoryTool:
         assert tool_block.id
         assert tool_block.name == "memory"
 
-        resp2 = anthropic_client.messages.create(
-            model=anthropic_chat_model,
-            max_tokens=1024,
-            messages=[
-                {"role": "user", "content": user_prompt},
-                {"role": "assistant", "content": list(resp1.content)},
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_block.id,
-                            "content": (
-                                "Here're the files and directories up to 2 levels deep "
-                                "in /memories, excluding hidden items and node_modules:\n"
-                                "4.0K\t/memories\n"
-                            ),
-                        }
-                    ],
-                },
-            ],
-            tools=tools,  # type: ignore[arg-type]
+        resp2 = _reply_with_tool_result(
+            anthropic_client,
+            anthropic_chat_model,
+            user_prompt,
+            resp1,
+            tools,
+            _tool_result(
+                tool_block.id,
+                "Here're the files and directories up to 2 levels deep "
+                "in /memories, excluding hidden items and node_modules:\n"
+                "4.0K\t/memories\n",
+            ),
             extra_headers=extra_headers,
         )
         assert resp2.type == "message"
@@ -1193,188 +1170,55 @@ class TestMemoryTool:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("model_id", _CLAUDE_ALL)
 class TestCodeExecutionTool:
     """Code execution tool type ``code_execution_20250522`` — Anthropic-only, never on Bedrock.
 
-    ``code_execution_20250522`` is the legacy Python-only version; the API runs the
-    code itself and answers with ``server_tool_use`` plus ``code_execution_tool_result``
-    blocks, so no host round trip happens.  Bedrock exposes no equivalent, therefore
-    the whole class needs ``--use-official-api`` — which the module-level
-    ``_skip_on_official_api`` fixture also excludes, leaving these tests permanently
-    skipped in this suite.
+    Upstream this is a server tool: the API runs the code itself and answers with
+    ``server_tool_use`` plus ``code_execution_tool_result`` blocks.  Bedrock exposes
+    no equivalent for Claude, so the only behavior reachable through this gateway is
+    the rejection.  (Amazon Nova serves the same tool type through its own
+    ``nova_code_interpreter`` system tool; see
+    ``tests/test_anthropic_messages_amazon_nova_2.py``.)
 
     Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
          https://platform.claude.com/docs/en/build-with-claude/claude-on-amazon-bedrock-legacy
     """
 
-    @pytest.fixture(autouse=True)
-    def _skip_on_bedrock(
-        self, is_bedrock_direct: bool, use_anthropic_api: bool
+    def test_unsupported_on_bedrock_raises_error(
+        self,
+        anthropic_client: Anthropic,
+        anthropic_chat_model: str,
+        is_bedrock_direct: bool,
+        use_anthropic_api: bool,
     ) -> None:
-        """Skip all tests in this class unless running against official Anthropic API.
+        """``code_execution`` on a Bedrock-backed Claude model is refused as a 400.
 
-        ``code_execution_20250522`` is not a recognised tool type on AWS Bedrock
-        or on stdapi (which proxies to Bedrock).  It requires a direct
-        ``ANTHROPIC_API_KEY`` connection to the official Anthropic API.
+        No Bedrock system tool matches ``code_execution_20250522`` for Claude, so the
+        native definition reaches Bedrock and is rejected there; the Anthropic
+        envelope reports the resulting 400 as ``invalid_request_error``.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/claude-on-amazon-bedrock-legacy
+             https://platform.claude.com/docs/en/api/errors
+             stdapi/api_providers/anthropic.py:_format_error
         """
-        if is_bedrock_direct or not use_anthropic_api:
-            pytest.skip(
-                "code_execution_20250522 requires official Anthropic API "
-                "(set ANTHROPIC_API_KEY and use --use-official-api)"
+        if use_anthropic_api and not is_bedrock_direct:
+            pytest.skip("Error path only applies when Bedrock is the backend")
+        with pytest.raises(BadRequestError) as excinfo:
+            anthropic_client.messages.create(
+                model=anthropic_chat_model,
+                max_tokens=300,
+                messages=[{"role": "user", "content": "Compute 2 ** 10 using code."}],
+                tools=[_CODE_EXECUTION_TOOL],  # type: ignore[list-item]
             )
-
-    @pytest.mark.expensive
-    def test_accepted(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
-    ) -> None:
-        """A ``code_execution_20250522`` definition is accepted with no beta header.
-
-        All GA code-execution versions are documented as needing no
-        ``anthropic-beta`` header.
-
-        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
-        """
-        response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": "Say hello."}],
-            tools=[_CODE_EXECUTION_TOOL],  # type: ignore[list-item]
-        )
-        assert response.type == "message"
-        assert response.role == "assistant"
-        assert len(response.content) >= 1
-        assert response.usage.output_tokens > 0
-
-    @pytest.mark.expensive
-    def test_triggers_tool_use(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
-    ) -> None:
-        """Code execution is a server tool: the block is ``server_tool_use`` carrying ``code``.
-
-        Server tools run on Anthropic infrastructure and their ids use the
-        ``srvtoolu_`` prefix, unlike the ``toolu_`` ids of host-executed tools.
-
-        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
-             https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
-        """
-        response = anthropic_client.messages.create(  # type: ignore[call-overload]
-            model=anthropic_chat_model,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": "Compute 2 + 2 using code."}],
-            tools=[_CODE_EXECUTION_TOOL],
-            tool_choice={"type": "any"},
-        )
-        tool_blocks = [b for b in response.content if isinstance(b, ServerToolUseBlock)]
-        assert len(tool_blocks) >= 1
-        block = tool_blocks[0]
-        assert isinstance(block, ServerToolUseBlock)
-        assert block.id
-        assert block.id.startswith("srvtoolu_")
-        assert block.name == "code_execution"
-        assert "code" in block.input
-        assert block.input["code"]
-
-    @pytest.mark.expensive
-    def test_multiturn_with_result(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
-    ) -> None:
-        """An execution result fed back as ``tool_result`` is reused in the final answer.
-
-        The prompt asks for ``2 ** 10`` and the stubbed result is ``1024``, so the
-        closing text must quote that value.
-
-        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
-        """
-        tools = [_CODE_EXECUTION_TOOL]
-        user_prompt = "Compute 2 ** 10 using code."
-
-        resp1 = anthropic_client.messages.create(  # type: ignore[call-overload]
-            model=anthropic_chat_model,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": user_prompt}],
-            tools=tools,
-            tool_choice={"type": "any"},
-        )
-        tool_blocks = [b for b in resp1.content if isinstance(b, ServerToolUseBlock)]
-        assert tool_blocks
-        code_block = tool_blocks[0]
-        assert isinstance(code_block, ServerToolUseBlock)
-        assert code_block.id
-
-        resp2 = anthropic_client.messages.create(
-            model=anthropic_chat_model,
-            max_tokens=1024,
-            messages=[
-                {"role": "user", "content": user_prompt},
-                {"role": "assistant", "content": list(resp1.content)},
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": code_block.id,
-                            "content": "1024\n",
-                        }
-                    ],
-                },
-            ],
-            tools=tools,  # type: ignore[arg-type]
-        )
-        assert resp2.stop_reason == "end_turn"
-        text_blocks = [b for b in resp2.content if b.type == "text"]
-        assert len(text_blocks) >= 1
-        assert "1024" in " ".join(b.text for b in text_blocks)
-
-    @pytest.mark.expensive
-    def test_runtime_error_result_accepted(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
-    ) -> None:
-        """A ``tool_result`` carrying a Python traceback with ``is_error=true`` is accepted.
-
-        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
-             https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
-        """
-        tools = [_CODE_EXECUTION_TOOL]
-        user_prompt = "Divide 1 by 0 using code."
-
-        resp1 = anthropic_client.messages.create(  # type: ignore[call-overload]
-            model=anthropic_chat_model,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": user_prompt}],
-            tools=tools,
-            tool_choice={"type": "any"},
-        )
-        tool_blocks = [b for b in resp1.content if isinstance(b, ServerToolUseBlock)]
-        assert tool_blocks
-
-        tool_block = tool_blocks[0]
-        assert isinstance(tool_block, ServerToolUseBlock)
-        assert tool_block.id
-        assert tool_block.name == "code_execution"
-        resp2 = anthropic_client.messages.create(
-            model=anthropic_chat_model,
-            max_tokens=1024,
-            messages=[
-                {"role": "user", "content": user_prompt},
-                {"role": "assistant", "content": list(resp1.content)},
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_block.id,
-                            "content": "ZeroDivisionError: division by zero",
-                            "is_error": True,
-                        }
-                    ],
-                },
-            ],
-            tools=tools,  # type: ignore[arg-type]
-        )
-        assert resp2.type == "message"
-        assert resp2.role == "assistant"
-        assert resp2.usage.output_tokens > 0
+        error = excinfo.value
+        assert error.status_code == 400
+        assert error.type == "invalid_request_error"
+        body = error.body
+        assert isinstance(body, dict)
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "invalid_request_error"
+        assert body["error"]["message"]
+        assert "request_id" in body
 
 
 # ===========================================================================
@@ -1586,20 +1430,13 @@ class TestComputerUseTool:
         assert first_block.id
         assert first_block.name == "computer"
 
-        resp2 = anthropic_client.messages.create(
-            model=anthropic_chat_model,
-            max_tokens=1024,
-            messages=[
-                {"role": "user", "content": user_prompt},
-                {"role": "assistant", "content": list(resp1.content)},
-                {
-                    "role": "user",
-                    "content": [
-                        self._screenshot_result(first_block.id, desktop_screenshot_b64)  # type: ignore[list-item]
-                    ],
-                },
-            ],
-            tools=tools,  # type: ignore[arg-type]
+        resp2 = _reply_with_tool_result(
+            anthropic_client,
+            anthropic_chat_model,
+            user_prompt,
+            resp1,
+            tools,
+            self._screenshot_result(first_block.id, desktop_screenshot_b64),
             extra_headers=extra_headers,
         )
         assert resp2.type == "message"
@@ -1798,147 +1635,16 @@ class TestWebSearchTool:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("model_id", _CLAUDE_ALL)
 class TestWebFetchTool:
     """Web fetch tool type ``web_fetch_20250910`` — Anthropic-only, never on Bedrock.
 
     Upstream, web fetch is server-executed and answers with a ``server_tool_use``
-    block carrying a ``url``.  Bedrock offers no equivalent, so the inference tests
-    require ``--use-official-api`` (which the module-level skip excludes) and only the
-    rejection test actually runs here.
+    block carrying a ``url``.  Bedrock offers no equivalent, so the only behavior
+    reachable through this gateway is the rejection.
 
     Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
          https://platform.claude.com/docs/en/build-with-claude/claude-on-amazon-bedrock-legacy
     """
-
-    @pytest.fixture(autouse=True)
-    def _skip_inference_on_bedrock(
-        self,
-        request: pytest.FixtureRequest,
-        is_bedrock_direct: bool,
-        use_anthropic_api: bool,
-    ) -> None:
-        """Skip inference tests when the backend is Bedrock (direct or via gateway).
-
-        ``web_fetch_20250910`` is not a recognised tool type on Bedrock.
-        The error-path test ``test_unsupported_on_bedrock_raises_error`` is exempt.
-        """
-        inference_tests = {
-            "test_accepted",
-            "test_triggers_tool_use",
-            "test_multiturn_with_page_content",
-        }
-        if (
-            is_bedrock_direct or not use_anthropic_api
-        ) and request.node.originalname in inference_tests:
-            pytest.skip(
-                "web_fetch_20250910 requires official Anthropic API "
-                "(set ANTHROPIC_API_KEY and use --use-official-api)"
-            )
-
-    @pytest.mark.expensive
-    def test_accepted(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
-    ) -> None:
-        """A ``web_fetch_20250910`` definition is accepted on the official Anthropic API.
-
-        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
-        """
-        response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": "Say hello."}],
-            tools=[_WEB_FETCH_TOOL],  # type: ignore[list-item]
-        )
-        assert response.type == "message"
-        assert response.role == "assistant"
-        assert len(response.content) >= 1
-        assert response.usage.output_tokens > 0
-
-    @pytest.mark.expensive
-    def test_triggers_tool_use(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
-    ) -> None:
-        """Web fetch is a server tool: the block is ``server_tool_use`` carrying the ``url``.
-
-        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
-             https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
-        """
-        response = anthropic_client.messages.create(  # type: ignore[call-overload]
-            model=anthropic_chat_model,
-            max_tokens=1024,
-            messages=[
-                {
-                    "role": "user",
-                    "content": "Fetch https://example.com and tell me the title.",
-                }
-            ],
-            tools=[_WEB_FETCH_TOOL],
-            tool_choice={"type": "any"},
-        )
-        tool_blocks = [b for b in response.content if isinstance(b, ServerToolUseBlock)]
-        assert len(tool_blocks) >= 1
-        block = tool_blocks[0]
-        assert isinstance(block, ServerToolUseBlock)
-        assert block.id
-        assert block.id.startswith("srvtoolu_")
-        assert block.name == "web_fetch"
-        assert "url" in block.input
-        assert "example.com" in str(block.input["url"])
-
-    @pytest.mark.expensive
-    def test_multiturn_with_page_content(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
-    ) -> None:
-        """Page HTML returned as ``tool_result`` closes the turn with an ``end_turn`` summary.
-
-        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
-             https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
-        """
-        tools = [_WEB_FETCH_TOOL]
-        user_prompt = "Fetch https://example.com and summarize it."
-
-        resp1 = anthropic_client.messages.create(  # type: ignore[call-overload]
-            model=anthropic_chat_model,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": user_prompt}],
-            tools=tools,
-            tool_choice={"type": "any"},
-        )
-        tool_blocks = [b for b in resp1.content if isinstance(b, ServerToolUseBlock)]
-        assert tool_blocks
-        fetch_block = tool_blocks[0]
-        assert isinstance(fetch_block, ServerToolUseBlock)
-        assert fetch_block.id
-        assert fetch_block.name == "web_fetch"
-
-        resp2 = anthropic_client.messages.create(
-            model=anthropic_chat_model,
-            max_tokens=1024,
-            messages=[
-                {"role": "user", "content": user_prompt},
-                {"role": "assistant", "content": list(resp1.content)},
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": fetch_block.id,
-                            "content": (
-                                "<html><head><title>Example Domain</title></head>"
-                                "<body><h1>Example Domain</h1>"
-                                "<p>This domain is for illustrative examples.</p>"
-                                "</body></html>"
-                            ),
-                        }
-                    ],
-                },
-            ],
-            tools=tools,  # type: ignore[arg-type]
-        )
-        assert resp2.stop_reason == "end_turn"
-        assert any(b.type == "text" for b in resp2.content)
-        assert resp2.usage.output_tokens > 0
 
     def test_unsupported_on_bedrock_raises_error(
         self,

@@ -19,7 +19,7 @@ from pydantic_core import from_json
 
 import stdapi.models
 from stdapi.models import _build_invoke_kwargs
-from stdapi.monitoring import REQUEST_ID, REQUEST_LOG, EventLog
+from stdapi.monitoring import REQUEST_ID, EventLog
 from stdapi.server import SERVER_NAME
 
 if TYPE_CHECKING:
@@ -38,13 +38,14 @@ _MAX_USER_ID_LENGTH = 256
 
 
 @pytest.fixture
-def request_context() -> Iterator[EventLog]:
-    """Provide a minimal request context for metadata injection."""
-    log: EventLog = {"level": "info"}  # type: ignore[typeddict-item]
+def request_context(request_log: EventLog) -> Iterator[EventLog]:
+    """Add the request ID the metadata builder reads to the shared request-log context.
+
+    Yields:
+        The mutable request log, so a test can assert what was recorded.
+    """
     id_token = REQUEST_ID.set("req-1234")
-    log_token = REQUEST_LOG.set(log)
-    yield log
-    REQUEST_LOG.reset(log_token)
+    yield request_log
     REQUEST_ID.reset(id_token)
 
 

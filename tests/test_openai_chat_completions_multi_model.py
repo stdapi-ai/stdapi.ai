@@ -3,9 +3,9 @@
 The gateway funnels every family through the same Converse adapter, so these tests are
 the cross-model regression net for the shared envelope: response/chunk shape, the
 Bedrock ``stopReason`` → ``finish_reason`` map, usage accounting, tool-call plumbing and
-image input.  A Claude model heads every parametrize list as the reference baseline, and
-the narrower lists reflect Bedrock capabilities (Mistral 7B and Llama 3.3 70B reject
-streaming with tools, Llama 3.3 70B emits raw JSON instead of ``toolUse`` blocks).
+image input.  A Claude model heads every parametrize list as the reference baseline, and the
+tool roster is narrower than the basic one because Mistral 7B and Llama 3.3 70B reject
+streaming with tools and Llama 3.3 70B emits raw JSON instead of ``toolUse`` blocks.
 
 Model-specific behaviour lives in the per-family modules; only vendor-neutral behaviour
 is asserted here, because live model text is not reproducible.
@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 from openai import BadRequestError
+
+from tests.conftest import REPO_ROOT
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -57,7 +59,10 @@ _BASIC_MODELS = pytest.mark.parametrize(
     ],
 )
 
-#: Models confirmed to support non-streaming tool use.
+#: Models confirmed to support tool use, in both buffered and streaming mode.
+#: One roster drives the single-turn, continuation, streaming and agentic tool tests:
+#: Mistral 7B and Llama 3.3 70B are absent because Bedrock returns 400 for
+#: streaming+tools on them and Llama 3.3 70B emits raw JSON instead of ``toolUse``.
 _TOOL_MODELS = pytest.mark.parametrize(
     "model",
     [
@@ -88,70 +93,11 @@ _TOOL_MODELS = pytest.mark.parametrize(
     ],
 )
 
-#: Models confirmed to support tool use in streaming mode.
-#: Only Mistral 7B and Llama 3.3 70B are excluded — Bedrock returns 400 for
-#: streaming+tools on those specific models.
-_STREAMING_TOOL_MODELS = pytest.mark.parametrize(
-    "model",
-    [
-        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
-        "amazon.nova-lite-v1:0",  # Amazon Nova
-        "amazon.nova-2-lite-v1:0",  # Amazon Nova 2
-        # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
-        # "ai21.jamba-1-5-large-v1:0",  # AI21 Jamba Large
-        "deepseek.v3-v1:0",  # DeepSeek V3
-        "deepseek.v3.2",  # DeepSeek V3.2 (newer revision)
-        "meta.llama3-1-70b-instruct-v1:0",  # Meta Llama 3.1 70B
-        "minimax.minimax-m2.5",  # MiniMax
-        "mistral.mistral-large-3-675b-instruct",  # Mistral Large 3
-        "mistral.pixtral-large-2502-v1:0",  # Mistral Pixtral Large
-        "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
-        pytest.param(
-            "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock)
-            marks=pytest.mark.xfail(  # type: ignore[call-overload]
-                match="toolUse.*failed to satisfy constraint.*[a-zA-Z0-9_-]",
-                reason="Model generates invalid tool names (fails regex [a-zA-Z0-9_-]+)",
-            ),
-        ),
-        "openai.gpt-oss-120b-1:0",  # OpenAI GPT-OSS 120B (Bedrock)
-        "qwen.qwen3-32b-v1:0",  # Qwen3 32B
-        "writer.palmyra-x4-v1:0",  # Writer Palmyra X4
-        "writer.palmyra-x5-v1:0",  # Writer Palmyra X5
-        "zai.glm-5",  # Z.AI GLM-5
-    ],
-)
+#: Alias kept for readability at the streaming tool-use tests.
+_STREAMING_TOOL_MODELS = _TOOL_MODELS
 
-#: Models for the full agentic loop (excludes llama3-3-70b which outputs raw JSON
-#: instead of using the Converse native tool_use block format).
-_AGENTIC_MODELS = pytest.mark.parametrize(
-    "model",
-    [
-        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
-        "amazon.nova-lite-v1:0",  # Amazon Nova
-        "amazon.nova-2-lite-v1:0",  # Amazon Nova 2
-        # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
-        # "ai21.jamba-1-5-large-v1:0",  # AI21 Jamba Large
-        "deepseek.v3-v1:0",  # DeepSeek V3
-        "deepseek.v3.2",  # DeepSeek V3.2 (newer revision)
-        "meta.llama3-1-70b-instruct-v1:0",  # Meta Llama 3.1 70B
-        "minimax.minimax-m2.5",  # MiniMax
-        "mistral.mistral-large-3-675b-instruct",  # Mistral Large 3
-        "mistral.pixtral-large-2502-v1:0",  # Mistral Pixtral Large
-        "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
-        pytest.param(
-            "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock)
-            marks=pytest.mark.xfail(  # type: ignore[call-overload]
-                match="toolUse.*failed to satisfy constraint.*[a-zA-Z0-9_-]",
-                reason="Model generates invalid tool names (fails regex [a-zA-Z0-9_-]+)",
-            ),
-        ),
-        "openai.gpt-oss-120b-1:0",  # OpenAI GPT-OSS 120B (Bedrock)
-        "qwen.qwen3-32b-v1:0",  # Qwen3 32B
-        "writer.palmyra-x4-v1:0",  # Writer Palmyra X4
-        "writer.palmyra-x5-v1:0",  # Writer Palmyra X5
-        "zai.glm-5",  # Z.AI GLM-5
-    ],
-)
+#: Alias kept for readability at the agentic tool-loop test.
+_AGENTIC_MODELS = _TOOL_MODELS
 
 # ---------------------------------------------------------------------------
 # Shared tool definitions and local tool executor
@@ -188,7 +134,8 @@ _TOOLS: list[dict[str, object]] = [
     },
 ]
 
-_PROJECT_ROOT = "/var/opt/projects/stdapi.ai"
+#: Directory the tool tests ask the models to list and read from.
+_PROJECT_ROOT = str(REPO_ROOT)
 
 #: finish_reason values the OpenAI Chat Completions reference defines.
 _FINISH_REASONS = frozenset({"stop", "length", "content_filter", "tool_calls"})
@@ -237,6 +184,17 @@ def _message_text(completion: ChatCompletion) -> str:
     return completion.choices[0].message.content or ""
 
 
+@pytest.fixture(autouse=True)
+def _skip_official_api(use_official_api: bool) -> None:
+    """Skip every test in this module when a remote official API is targeted.
+
+    The matrix is keyed by Bedrock model ids, which the official OpenAI API does
+    not serve, so no test here has a meaningful remote counterpart.
+    """
+    if use_official_api:
+        pytest.skip("Multi-model tests only run against the local server")
+
+
 # ---------------------------------------------------------------------------
 # Tests: basic completion, streaming, multi-turn
 # ---------------------------------------------------------------------------
@@ -251,9 +209,7 @@ class TestMultiModelChatCompletions:
 
     @pytest.mark.expensive
     @_BASIC_MODELS
-    def test_basic_chat_completion(
-        self, model: str, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_basic_chat_completion(self, model: str, openai_client: OpenAI) -> None:
         """Every family answers with the same ``chat.completion`` envelope.
 
         The id prefix, the ``chat.completion`` literal and ``total_tokens`` as the sum of
@@ -264,9 +220,6 @@ class TestMultiModelChatCompletions:
         Ref: https://developers.openai.com/api/reference/resources/chat.md
              stdapi/models/chat/_adapters/_openai_chat_completion.py:format_response
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         completion = openai_client.chat.completions.create(
             model=model,
             messages=[
@@ -300,9 +253,7 @@ class TestMultiModelChatCompletions:
 
     @pytest.mark.expensive
     @_BASIC_MODELS
-    def test_streaming_chat_completion(
-        self, model: str, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_streaming_chat_completion(self, model: str, openai_client: OpenAI) -> None:
         """Streaming delivers a role chunk, text deltas and exactly one stop chunk.
 
         Chat Completions has a single SSE event type, ``chat.completion.chunk``.  The
@@ -313,9 +264,6 @@ class TestMultiModelChatCompletions:
         Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
              stdapi/models/chat/_adapters/_openai_chat_completion.py:format_stream
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         accumulated = ""
         finish_reasons: list[str | None] = []
         delta_count = 0
@@ -355,7 +303,7 @@ class TestMultiModelChatCompletions:
     @pytest.mark.expensive
     @_BASIC_MODELS
     def test_multi_turn_context_retention(
-        self, model: str, openai_client: OpenAI, use_official_api: bool
+        self, model: str, openai_client: OpenAI
     ) -> None:
         """Prior turns reach the model, so a first-turn identifier can be recalled.
 
@@ -366,9 +314,6 @@ class TestMultiModelChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
              stdapi/models/chat/_adapters/_openai_chat_completion.py:map_messages
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         completion = openai_client.chat.completions.create(
             model=model,
             max_tokens=256,
@@ -413,9 +358,7 @@ class TestMultiModelToolUse:
 
     @pytest.mark.expensive
     @_TOOL_MODELS
-    def test_tool_call_single_turn(
-        self, model: str, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_tool_call_single_turn(self, model: str, openai_client: OpenAI) -> None:
         """A ``toolUse`` answer becomes a ``tool_calls`` message with JSON arguments.
 
         Bedrock's ``tool_use`` stop reason maps to ``finish_reason="tool_calls"``, the
@@ -425,9 +368,6 @@ class TestMultiModelToolUse:
         Ref: https://developers.openai.com/api/docs/guides/function-calling
              stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_tool_calls
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         completion = openai_client.chat.completions.create(
             model=model,
             max_tokens=512,
@@ -457,9 +397,7 @@ class TestMultiModelToolUse:
 
     @pytest.mark.expensive
     @_TOOL_MODELS
-    def test_tool_result_continuation(
-        self, model: str, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_tool_result_continuation(self, model: str, openai_client: OpenAI) -> None:
         """A ``tool`` message closes the tool cycle and the model answers from it.
 
         The second request replays the assistant ``tool_calls`` message and a ``tool``
@@ -470,9 +408,6 @@ class TestMultiModelToolUse:
         Ref: https://developers.openai.com/api/docs/guides/function-calling
              stdapi/models/chat/_adapters/_openai_chat_completion.py:_extract_tool_blocks
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         tools = [_TOOLS[0]]  # list_directory only
 
         # Turn 1: model decides to call the tool
@@ -523,9 +458,7 @@ class TestMultiModelToolUse:
 
     @pytest.mark.expensive
     @_STREAMING_TOOL_MODELS
-    def test_streaming_tool_call(
-        self, model: str, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_streaming_tool_call(self, model: str, openai_client: OpenAI) -> None:
         """Streaming tool calls arrive as deltas indexed from zero, then a stop chunk.
 
         Bedrock content-block indices are remapped to contiguous OpenAI
@@ -537,9 +470,6 @@ class TestMultiModelToolUse:
         Ref: https://developers.openai.com/api/docs/guides/function-calling
              stdapi/models/chat/_adapters/_openai_chat_completion.py:_stream_delta_chunk
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         tool_call_chunks = 0
         finish_reasons: list[str | None] = []
         first_call_index: int | None = None
@@ -593,7 +523,7 @@ class TestMultiModelToolUse:
     @pytest.mark.agentic
     @_AGENTIC_MODELS
     def test_agentic_loop_directory_and_file(
-        self, model: str, openai_client: OpenAI, use_official_api: bool
+        self, model: str, openai_client: OpenAI
     ) -> None:
         """A multi-turn loop with two distinct tools reaches a grounded final answer.
 
@@ -606,9 +536,6 @@ class TestMultiModelToolUse:
         Ref: https://developers.openai.com/api/docs/guides/function-calling
              stdapi/models/chat/_adapters/_openai_chat_completion.py:map_messages
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         messages: list[object] = [
             {
                 "role": "user",
@@ -681,9 +608,7 @@ class TestStructuredOutput:
             "minimax.minimax-m2.5",
         ],
     )
-    def test_json_output_parseable(
-        self, model: str, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_json_output_parseable(self, model: str, openai_client: OpenAI) -> None:
         """Prompted JSON output round-trips through the gateway unaltered.
 
         No ``response_format`` is sent: the JSON contract here is prompt-only, which is
@@ -694,9 +619,6 @@ class TestStructuredOutput:
         Ref: https://developers.openai.com/api/docs/guides/structured-outputs
              stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_output_text
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         completion = openai_client.chat.completions.create(
             model=model,
             max_tokens=256,
@@ -785,9 +707,7 @@ class TestVision:
 
     @pytest.mark.expensive
     @_VISION_MODELS
-    def test_image_color_recognition(
-        self, model: str, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_image_color_recognition(self, model: str, openai_client: OpenAI) -> None:
         """A base64 ``image_url`` data URI reaches vision models as a Bedrock image block.
 
         ``_convert_content_part`` decodes the data URI and emits a Converse ``image``
@@ -799,9 +719,6 @@ class TestVision:
              https://docs.aws.amazon.com/nova/latest/userguide/modalities-image.html
              stdapi/models/chat/_adapters/_openai_chat_completion.py:_convert_content_part
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         completion = openai_client.chat.completions.create(
             model=model,
             max_tokens=64,

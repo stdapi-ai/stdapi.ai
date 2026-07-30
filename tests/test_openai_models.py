@@ -13,9 +13,14 @@ Ref: https://developers.openai.com/api/reference/resources/models/methods/list
 """
 
 import time
+from typing import TYPE_CHECKING
 
 import pytest
 from openai import NotFoundError, OpenAI
+
+if TYPE_CHECKING:
+    from openai.pagination import SyncPage
+    from openai.types import Model
 
 #: The four fields the OpenAI Models API documents on a Model object.
 _MODEL_FIELDS = frozenset({"id", "object", "created", "owned_by"})
@@ -31,12 +36,24 @@ class TestModels:
          stdapi/routes/openai_models.py:list_models
     """
 
-    def test_list_models_basic_functionality(self, openai_client: OpenAI) -> None:
+    @pytest.fixture(scope="module")
+    def model_catalog(self, openai_client: OpenAI) -> SyncPage[Model]:
+        """The whole model catalogue, listed once for the module.
+
+        Every test here treats the catalogue as read-only, so one round trip is
+        enough; the tests that must observe a *second* call list again
+        explicitly.
+        """
+        return openai_client.models.list()
+
+    def test_list_models_basic_functionality(
+        self, model_catalog: SyncPage[Model]
+    ) -> None:
         """``GET /models`` returns a ``list`` envelope of ``model`` objects.
 
         Ref: stdapi/types/openai_models.py:Model
         """
-        response = openai_client.models.list()
+        response = model_catalog
 
         assert response.object == "list"
         assert isinstance(response.data, list)
@@ -53,7 +70,7 @@ class TestModels:
             assert model.owned_by
 
     def test_list_models_response_structure_validation(
-        self, openai_client: OpenAI
+        self, model_catalog: SyncPage[Model]
     ) -> None:
         """Every listed model carries all four documented fields, none of them null.
 
@@ -64,7 +81,7 @@ class TestModels:
         Ref: https://developers.openai.com/api/reference/overview
              stdapi/types/openai_models.py:Model
         """
-        response = openai_client.models.list()
+        response = model_catalog
 
         assert response.object == "list"
         assert response.data
@@ -78,7 +95,9 @@ class TestModels:
             assert all(dumped[field] is not None for field in _MODEL_FIELDS)
             assert dumped["object"] == "model"
 
-    def test_retrieve_specific_model(self, openai_client: OpenAI) -> None:
+    def test_retrieve_specific_model(
+        self, openai_client: OpenAI, model_catalog: SyncPage[Model]
+    ) -> None:
         """``GET /models/{model}`` returns a bare Model echoing the requested id.
 
         Unlike the list route the payload is not wrapped in a ``list`` envelope,
@@ -87,7 +106,7 @@ class TestModels:
         Ref: https://developers.openai.com/api/reference/resources/models/methods/retrieve
              stdapi/routes/openai_models.py:retrieve_model
         """
-        models_response = openai_client.models.list()
+        models_response = model_catalog
         assert models_response.data
 
         test_model_id = models_response.data[0].id
@@ -103,7 +122,9 @@ class TestModels:
         assert dumped.keys() >= _MODEL_FIELDS
         assert "data" not in dumped, "retrieve must not return a list envelope"
 
-    def test_model_filtering_and_availability(self, openai_client: OpenAI) -> None:
+    def test_model_filtering_and_availability(
+        self, openai_client: OpenAI, model_catalog: SyncPage[Model]
+    ) -> None:
         """Listed ids are unique and every advertised id is individually retrievable.
 
         A model reachable in several regions is merged into a single catalogue
@@ -113,7 +134,7 @@ class TestModels:
 
         Ref: stdapi/models/__init__.py:get_all_models_details
         """
-        response = openai_client.models.list()
+        response = model_catalog
 
         model_ids = [model.id for model in response.data]
         assert model_ids, "Should have at least one model available"
@@ -125,7 +146,9 @@ class TestModels:
         for model_id in (model_ids[0], model_ids[-1]):
             assert openai_client.models.retrieve(model_id).id == model_id
 
-    def test_model_metadata_consistency(self, openai_client: OpenAI) -> None:
+    def test_model_metadata_consistency(
+        self, openai_client: OpenAI, model_catalog: SyncPage[Model]
+    ) -> None:
         """List and retrieve return byte-identical metadata for the same model.
 
         Both routes serialize through ``format_bedrock_model_to_openai``, so
@@ -134,7 +157,7 @@ class TestModels:
 
         Ref: stdapi/routes/openai_models.py:format_bedrock_model_to_openai
         """
-        models_response = openai_client.models.list()
+        models_response = model_catalog
         assert models_response.data
 
         test_models = models_response.data[: min(3, len(models_response.data))]
@@ -147,7 +170,7 @@ class TestModels:
                 f"list and retrieve disagree on {list_model.id}"
             )
 
-    def test_model_creation_timestamps(self, openai_client: OpenAI) -> None:
+    def test_model_creation_timestamps(self, model_catalog: SyncPage[Model]) -> None:
         """``created`` is either 0 (launch date unknown) or a past Unix timestamp.
 
         The gateway derives it from the Bedrock model lifecycle's
@@ -157,7 +180,7 @@ class TestModels:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html
              stdapi/models/__init__.py:ModelDetails
         """
-        response = openai_client.models.list()
+        response = model_catalog
         now = int(time.time())
 
         for model in response.data:
@@ -205,7 +228,7 @@ class TestModels:
         )
         assert "model" in error_message.lower()
 
-    def test_model_ownership_validation(self, openai_client: OpenAI) -> None:
+    def test_model_ownership_validation(self, model_catalog: SyncPage[Model]) -> None:
         """``owned_by`` is a per-model provider string, not a constant or the model id.
 
         The gateway fills it from the Bedrock ``providerName`` (e.g. ``Amazon``,
@@ -214,7 +237,7 @@ class TestModels:
 
         Ref: stdapi/routes/openai_models.py:format_bedrock_model_to_openai
         """
-        response = openai_client.models.list()
+        response = model_catalog
 
         owners = set()
         for model in response.data:
@@ -228,7 +251,9 @@ class TestModels:
             f"owned_by must be derived per model, got a single value: {owners}"
         )
 
-    def test_model_list_pagination_behavior(self, openai_client: OpenAI) -> None:
+    def test_model_list_pagination_behavior(
+        self, openai_client: OpenAI, model_catalog: SyncPage[Model]
+    ) -> None:
         """The catalogue is returned in a single, stably ordered page.
 
         ``GET /models`` takes no cursor parameters: iterating the SDK pager
@@ -238,7 +263,7 @@ class TestModels:
 
         Ref: stdapi/routes/openai_models.py:list_models
         """
-        response = openai_client.models.list()
+        response = model_catalog
 
         assert response.data
         assert len(response.data) < 1000  # Reasonable upper bound
@@ -256,7 +281,9 @@ class TestModels:
             model.id for model in response.data
         ], "repeated calls must return the same models in the same order"
 
-    def test_model_id_format_validation(self, openai_client: OpenAI) -> None:
+    def test_model_id_format_validation(
+        self, openai_client: OpenAI, model_catalog: SyncPage[Model]
+    ) -> None:
         """Model ids are URL-usable path segments, including Bedrock ``:`` versions.
 
         Bedrock ids embed a version suffix (``…-v1:0``); the retrieve route must
@@ -265,7 +292,7 @@ class TestModels:
 
         Ref: stdapi/routes/openai_models.py:retrieve_model
         """
-        response = openai_client.models.list()
+        response = model_catalog
 
         for model in response.data:
             model_id = model.id
@@ -281,7 +308,7 @@ class TestModels:
             assert openai_client.models.retrieve(versioned).id == versioned
 
     def test_model_capabilities_detection(
-        self, openai_client: OpenAI, models: dict[str, str]
+        self, model_catalog: SyncPage[Model], models: dict[str, str]
     ) -> None:
         """The catalogue advertises the models the suite actually calls.
 
@@ -292,7 +319,7 @@ class TestModels:
 
         Ref: stdapi/models/__init__.py:EXTRA_MODELS
         """
-        response = openai_client.models.list()
+        response = model_catalog
         model_ids = {model.id for model in response.data}
 
         for capability in ("chat", "embedding", "transcription"):

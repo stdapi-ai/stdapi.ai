@@ -16,6 +16,9 @@ from typing import TYPE_CHECKING
 import pytest
 from openai import BadRequestError
 
+#: Every test in this module is reported as skipped: the model is deprecated.
+pytestmark = pytest.mark.skip(reason="Amazon Titan Image Generator is deprecated")
+
 if TYPE_CHECKING:
     from openai import OpenAI
 
@@ -40,6 +43,15 @@ def _decoded_png(b64_json: str | None) -> bytes:
     return data
 
 
+@pytest.fixture(autouse=True)
+def _skip_on_official_api(use_official_api: bool) -> None:
+    """Skip every test here: Titan Image Generator has no official OpenAI equivalent."""
+    if use_official_api:
+        pytest.skip(
+            "Amazon Titan Image Generator is not available on the official OpenAI API"
+        )
+
+
 class TestAmazonTitanEditing:
     """Titan ``taskType`` dispatch and provider extras on the edits route.
 
@@ -52,7 +64,6 @@ class TestAmazonTitanEditing:
     def test_edit_with_extra_parameters(
         self,
         openai_client: OpenAI,
-        use_official_api: bool,
         sample_image_file: bytes,
         sample_mask_file: bytes,
         model_id: str,
@@ -69,9 +80,6 @@ class TestAmazonTitanEditing:
         Ref: stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._set_extra_config
              stdapi/aws_bedrock.py:get_extra_model_parameters
         """
-        if use_official_api:
-            pytest.skip("Amazon Titan is not available on the official OpenAI API")
-
         response = openai_client.images.edit(
             image=sample_image_file,
             mask=sample_mask_file,
@@ -101,7 +109,6 @@ class TestAmazonTitanEditing:
     def test_edit_b64_single(
         self,
         openai_client: OpenAI,
-        use_official_api: bool,
         sample_image_file: bytes,
         sample_mask_file: bytes,
         model_id: str,
@@ -116,9 +123,6 @@ class TestAmazonTitanEditing:
         Ref: stdapi/utils.py:alpha_mask_to_bw
              https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
         """
-        if use_official_api:
-            pytest.skip("Amazon Titan is not available on the official OpenAI API")
-
         response = openai_client.images.edit(
             image=sample_image_file,
             mask=sample_mask_file,
@@ -162,7 +166,6 @@ class TestAmazonTitanEditing:
     def test_edit_with_outpainting_task_type(
         self,
         openai_client: OpenAI,
-        use_official_api: bool,
         sample_image_file: bytes,
         sample_mask_file: bytes,
         model_id: str,
@@ -175,9 +178,6 @@ class TestAmazonTitanEditing:
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
         """
-        if use_official_api:
-            pytest.skip("Amazon Titan is not available on the official OpenAI API")
-
         response = openai_client.images.edit(
             image=sample_image_file,
             mask=sample_mask_file,
@@ -202,7 +202,6 @@ class TestAmazonTitanEditing:
     def test_edit_with_outpainting_task_type_and_alpha_mask(
         self,
         openai_client: OpenAI,
-        use_official_api: bool,
         sample_image_file: bytes,
         sample_alpha_mask_file: bytes,
         model_id: str,
@@ -219,9 +218,6 @@ class TestAmazonTitanEditing:
         Ref: stdapi/utils.py:alpha_mask_to_bw
              https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
         """
-        if use_official_api:
-            pytest.skip("Amazon Titan is not available on the official OpenAI API")
-
         response = openai_client.images.edit(
             image=sample_image_file,
             mask=sample_alpha_mask_file,
@@ -248,11 +244,7 @@ class TestAmazonTitanEditing:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_edit_with_background_removal_task_type(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file: bytes, model_id: str
     ) -> None:
         """``BACKGROUND_REMOVAL`` needs no mask and ignores the prompt.
 
@@ -263,9 +255,6 @@ class TestAmazonTitanEditing:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
              stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._get_request_background_removal
         """
-        if use_official_api:
-            pytest.skip("Amazon Titan is not available on the official OpenAI API")
-
         response = openai_client.images.edit(
             image=sample_image_file,
             prompt="Remove background",
@@ -287,11 +276,7 @@ class TestAmazonTitanEditing:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_edit_inpainting_without_mask(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file: bytes, model_id: str
     ) -> None:
         """``INPAINTING`` accepts a ``maskPrompt`` instead of an uploaded mask.
 
@@ -300,9 +285,6 @@ class TestAmazonTitanEditing:
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
         """
-        if use_official_api:
-            pytest.skip("Amazon Titan is not available on the official OpenAI API")
-
         response = openai_client.images.edit(
             image=sample_image_file,
             prompt="A blue square in the center",
@@ -327,11 +309,7 @@ class TestAmazonTitanEditing:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_edit_outpainting_without_mask(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file: bytes, model_id: str
     ) -> None:
         """``OUTPAINTING`` accepts a ``maskPrompt`` instead of an uploaded mask.
 
@@ -340,9 +318,6 @@ class TestAmazonTitanEditing:
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
         """
-        if use_official_api:
-            pytest.skip("Amazon Titan is not available on the official OpenAI API")
-
         response = openai_client.images.edit(
             image=sample_image_file,
             prompt="Extend with ocean view",
@@ -368,7 +343,6 @@ class TestAmazonTitanEditing:
     def test_edit_with_invalid_task_type(
         self,
         openai_client: OpenAI,
-        use_official_api: bool,
         sample_image_file: bytes,
         sample_mask_file: bytes,
         model_id: str,
@@ -382,9 +356,6 @@ class TestAmazonTitanEditing:
         Ref: stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._edit_image
              stdapi/api_providers/openai.py:_format_error
         """
-        if use_official_api:
-            pytest.skip("Amazon Titan is not available on the official OpenAI API")
-
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.edit(
                 image=sample_image_file,
@@ -405,6 +376,3 @@ class TestAmazonTitanEditing:
         assert "BACKGROUND_REMOVAL" in message, (
             f"expected the Titan edit task types, got: {message}"
         )
-
-
-pytest.skip("Amazon Titan Image Generator is deprecated", allow_module_level=True)

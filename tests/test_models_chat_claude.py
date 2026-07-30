@@ -14,25 +14,13 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from stdapi.models.chat import get_chat_model
-from stdapi.monitoring import REQUEST_LOG
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from stdapi.models.chat._anthropic_claude import AnthropicClaudeChatModel
     from stdapi.monitoring import EventLog
     from stdapi.types import JsonMapping
 
 pytestmark = pytest.mark.local
-
-
-@pytest.fixture
-def request_log() -> Iterator[EventLog]:
-    """Provide a request log context capturing warnings."""
-    log: EventLog = cast("EventLog", {"level": "info"})
-    token = REQUEST_LOG.set(log)
-    yield log
-    REQUEST_LOG.reset(token)
 
 
 def _claude_model(model_id: str) -> AnthropicClaudeChatModel:

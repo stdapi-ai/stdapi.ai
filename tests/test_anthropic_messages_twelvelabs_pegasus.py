@@ -17,13 +17,53 @@ Ref: https://platform.claude.com/docs/en/api/messages
      stdapi/models/chat/twelvelabs_pegasus.py:ChatModel
 """
 
+from typing import TYPE_CHECKING
+
 import pytest
 from anthropic import Anthropic, BadRequestError
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 PEGASUS_MODEL = "twelvelabs.pegasus-1-2-v1:0"
 
 #: Anthropic stop_reason values reachable from Pegasus's ``finishReason`` (stop, length).
 _PEGASUS_STOP_REASONS = frozenset({"end_turn", "max_tokens"})
+
+
+@pytest.fixture(autouse=True)
+def _skip_on_official_api(use_official_api: bool) -> None:
+    """Skip the module when a remote Anthropic-compatible target is selected."""
+    if use_official_api:
+        pytest.skip("Pegasus is not supported on the official API")
+
+
+@pytest.fixture
+def video_message(sample_video_file_base64: str) -> Callable[..., dict[str, object]]:
+    """Build the user message carrying the sample video, skipping when it is absent.
+
+    Videos travel as an ``image`` block with ``media_type: "video/mp4"``; the
+    optional prompt becomes the trailing text block Pegasus uses as ``inputPrompt``.
+    """
+    if not sample_video_file_base64:
+        pytest.skip("No sample video available")
+
+    def _build(prompt: str | None = None) -> dict[str, object]:
+        content: list[dict[str, object]] = [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "video/mp4",
+                    "data": sample_video_file_base64,
+                },
+            }
+        ]
+        if prompt is not None:
+            content.append({"type": "text", "text": prompt})
+        return {"role": "user", "content": content}
+
+    return _build
 
 
 class TestTwelveLabsPegasusAnthropicMessages:
@@ -37,8 +77,7 @@ class TestTwelveLabsPegasusAnthropicMessages:
     def test_video_basic(
         self,
         anthropic_client: Anthropic,
-        use_official_api: bool,
-        sample_video_file_base64: str,
+        video_message: Callable[..., dict[str, object]],
     ) -> None:
         """A video block plus a prompt returns a single assistant text block.
 
@@ -49,33 +88,10 @@ class TestTwelveLabsPegasusAnthropicMessages:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus.html
              stdapi/models/chat/twelvelabs_pegasus.py:ChatModel._converse
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-        if not sample_video_file_base64:
-            pytest.skip("No sample video available")
-
         response = anthropic_client.messages.create(
             model=PEGASUS_MODEL,
             max_tokens=256,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {  # type: ignore[list-item]
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "video/mp4",
-                                "data": sample_video_file_base64,
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": "Describe what happens in this video.",
-                        },
-                    ],
-                }
-            ],
+            messages=[video_message("Describe what happens in this video.")],  # type: ignore[list-item]
         )
         assert response.content
         assert response.content[0].type == "text"
@@ -93,8 +109,7 @@ class TestTwelveLabsPegasusAnthropicMessages:
     def test_video_streaming(
         self,
         anthropic_client: Anthropic,
-        use_official_api: bool,
-        sample_video_file_base64: str,
+        video_message: Callable[..., dict[str, object]],
     ) -> None:
         """Video input with streaming yields delta events.
 
@@ -106,33 +121,10 @@ class TestTwelveLabsPegasusAnthropicMessages:
         Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
              stdapi/models/chat/twelvelabs_pegasus.py:ChatModel._format_converse_stream
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-        if not sample_video_file_base64:
-            pytest.skip("No sample video available")
-
         with anthropic_client.messages.stream(
             model=PEGASUS_MODEL,
             max_tokens=256,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {  # type: ignore[list-item]
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "video/mp4",
-                                "data": sample_video_file_base64,
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": "Describe what happens in this video.",
-                        },
-                    ],
-                }
-            ],
+            messages=[video_message("Describe what happens in this video.")],  # type: ignore[list-item]
         ) as stream:
             events = list(stream)
             final = stream.get_final_message()
@@ -175,8 +167,7 @@ class TestTwelveLabsPegasusAnthropicMessages:
     def test_video_in_assistant_history(
         self,
         anthropic_client: Anthropic,
-        use_official_api: bool,
-        sample_video_file_base64: str,
+        video_message: Callable[..., dict[str, object]],
     ) -> None:
         """A follow-up turn reuses the video sent in an earlier user message.
 
@@ -187,28 +178,11 @@ class TestTwelveLabsPegasusAnthropicMessages:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus.html
              stdapi/models/chat/twelvelabs_pegasus.py:_extract_latest_video
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-        if not sample_video_file_base64:
-            pytest.skip("No sample video available")
-
         response = anthropic_client.messages.create(
             model=PEGASUS_MODEL,
             max_tokens=256,
             messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {  # type: ignore[list-item]
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "video/mp4",
-                                "data": sample_video_file_base64,
-                            },
-                        }
-                    ],
-                },
+                video_message(),  # type: ignore[list-item]
                 {"role": "assistant", "content": "I see a video."},
                 {"role": "user", "content": "What else do you notice?"},
             ],
@@ -220,9 +194,7 @@ class TestTwelveLabsPegasusAnthropicMessages:
             f"Unexpected stop_reason: {response.stop_reason!r}"
         )
 
-    def test_no_video_returns_400(
-        self, anthropic_client: Anthropic, use_official_api: bool
-    ) -> None:
+    def test_no_video_returns_400(self, anthropic_client: Anthropic) -> None:
         """A text-only request is rejected because Pegasus requires a video.
 
         ``mediaSource`` is mandatory in the Pegasus body, so the gateway fails the request
@@ -232,9 +204,6 @@ class TestTwelveLabsPegasusAnthropicMessages:
              stdapi/models/chat/twelvelabs_pegasus.py:ChatModel._build_pegasus_body
              stdapi/api_providers/anthropic.py:_format_error
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-
         with pytest.raises(BadRequestError) as exc_info:
             anthropic_client.messages.create(
                 model=PEGASUS_MODEL,
@@ -254,8 +223,7 @@ class TestTwelveLabsPegasusAnthropicMessages:
     def test_max_tokens_forwarded(
         self,
         anthropic_client: Anthropic,
-        use_official_api: bool,
-        sample_video_file_base64: str,
+        video_message: Callable[..., dict[str, object]],
     ) -> None:
         """``max_tokens`` reaches Pegasus as ``maxOutputTokens`` and truncates the answer.
 
@@ -266,30 +234,10 @@ class TestTwelveLabsPegasusAnthropicMessages:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus.html
              stdapi/models/chat/twelvelabs_pegasus.py:ChatModel._build_pegasus_body
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-        if not sample_video_file_base64:
-            pytest.skip("No sample video available")
-
         response = anthropic_client.messages.create(
             model=PEGASUS_MODEL,
             max_tokens=8,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {  # type: ignore[list-item]
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "video/mp4",
-                                "data": sample_video_file_base64,
-                            },
-                        },
-                        {"type": "text", "text": "Describe this video briefly."},
-                    ],
-                }
-            ],
+            messages=[video_message("Describe this video briefly.")],  # type: ignore[list-item]
         )
         assert response.content
         assert response.content[0].type == "text"
@@ -304,8 +252,7 @@ class TestTwelveLabsPegasusAnthropicMessages:
     def test_tools_silently_ignored(
         self,
         anthropic_client: Anthropic,
-        use_official_api: bool,
-        sample_video_file_base64: str,
+        video_message: Callable[..., dict[str, object]],
     ) -> None:
         """``tools`` are dropped instead of failing the request on Pegasus.
 
@@ -316,30 +263,10 @@ class TestTwelveLabsPegasusAnthropicMessages:
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
              stdapi/models/chat/twelvelabs_pegasus.py:ChatModel._build_pegasus_body
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-        if not sample_video_file_base64:
-            pytest.skip("No sample video available")
-
         response = anthropic_client.messages.create(
             model=PEGASUS_MODEL,
             max_tokens=256,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {  # type: ignore[list-item]
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "video/mp4",
-                                "data": sample_video_file_base64,
-                            },
-                        },
-                        {"type": "text", "text": "Describe this video."},
-                    ],
-                }
-            ],
+            messages=[video_message("Describe this video.")],  # type: ignore[list-item]
             tools=[
                 {
                     "name": "test_func",
@@ -362,8 +289,7 @@ class TestTwelveLabsPegasusAnthropicMessages:
     def test_system_prompt_silently_ignored(
         self,
         anthropic_client: Anthropic,
-        use_official_api: bool,
-        sample_video_file_base64: str,
+        video_message: Callable[..., dict[str, object]],
     ) -> None:
         """A ``system`` prompt is dropped instead of failing the request on Pegasus.
 
@@ -376,31 +302,11 @@ class TestTwelveLabsPegasusAnthropicMessages:
              stdapi/models/chat/twelvelabs_pegasus.py:ChatModel
              stdapi/config.py:Settings.drop_unsupported_system_prompt
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-        if not sample_video_file_base64:
-            pytest.skip("No sample video available")
-
         response = anthropic_client.messages.create(
             model=PEGASUS_MODEL,
             max_tokens=256,
             system="You are a helpful assistant.",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {  # type: ignore[list-item]
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "video/mp4",
-                                "data": sample_video_file_base64,
-                            },
-                        },
-                        {"type": "text", "text": "Describe this video."},
-                    ],
-                }
-            ],
+            messages=[video_message("Describe this video.")],  # type: ignore[list-item]
         )
         assert response.content
         assert response.content[0].type == "text"

@@ -27,12 +27,14 @@ from stdapi.config import SETTINGS
 from stdapi.models import _PROMPTS, ModelDetails, resolve_bedrock_prompt
 from stdapi.models.chat._adapters._openai_responses import map_prompt_variables
 from stdapi.models.chat._default import ChatModel
-from stdapi.monitoring import REQUEST_ID, REQUEST_LOG
-from stdapi.types.openai_responses import ResponseCreateParams, ResponsePrompt
+from stdapi.monitoring import REQUEST_ID
+from stdapi.types.openai_responses import Response, ResponseCreateParams, ResponsePrompt
 from stdapi.utils import match_bedrock_prompt_arn
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Iterator
+    from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
+
+    from starlette.testclient import TestClient
 
     from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
 
@@ -130,6 +132,52 @@ def prompt_enabled(
     _PROMPTS.clear()
 
 
+def _capturing_converse(
+    captured: dict[str, Any],
+) -> Callable[[ChatModel, ConverseRequestBaseTypeDef], Awaitable[dict[str, Any]]]:
+    """Build a ``ChatModel.converse`` replacement recording the request body.
+
+    Args:
+        captured: Mapping updated with the Converse request body.
+
+    Returns:
+        A coroutine function returning a canned one-token Converse response.
+    """
+
+    async def fake_converse(
+        _self: ChatModel, request: ConverseRequestBaseTypeDef
+    ) -> dict[str, Any]:
+        captured.update(request)
+        return {
+            "output": {"message": {"role": "assistant", "content": []}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        }
+
+    return fake_converse
+
+
+def _capturing_converse_stream(
+    captured: dict[str, Any],
+) -> Callable[[ChatModel, ConverseRequestBaseTypeDef], Awaitable[dict[str, Any]]]:
+    """Build a ``ChatModel.converse_stream`` replacement recording the request body.
+
+    Args:
+        captured: Mapping updated with the ConverseStream request body.
+
+    Returns:
+        A coroutine function returning an empty Converse event stream.
+    """
+
+    async def fake_converse_stream(
+        _self: ChatModel, request: ConverseRequestBaseTypeDef
+    ) -> dict[str, Any]:
+        captured.update(request)
+        return {"stream": _empty_stream()}
+
+    return fake_converse_stream
+
+
 class TestPromptArnMatcher:
     """The prompt ARN matcher accepts only Prompt Management ARNs.
 
@@ -208,6 +256,166 @@ class TestPromptVariables:
             map_prompt_variables(variables)  # type: ignore[arg-type]
         assert excinfo.value.status == 400
         assert "'doc'" in str(excinfo.value), "the offending variable is named"
+
+
+class _StubPromptChatModel:
+    """Stub chat backend recording generation calls and the prompt in scope."""
+
+    IS_MANTLE = False
+
+    def __init__(self) -> None:
+        self.requests: list[ResponseCreateParams] = []
+        self.prompts: list[BedrockPrompt | None] = []
+
+    def native_store_supported(self) -> bool:
+        """Local-store stub: no Mantle native storage."""
+        return False
+
+    async def create_response(
+        self,
+        request: ResponseCreateParams,
+        response_id: str,
+        created_at: float,
+        moderation_builder: Any = None,  # noqa: ANN401
+    ) -> Response:
+        """Record the request and the pinned prompt, and return a canned response."""
+        self.requests.append(request)
+        self.prompts.append(BEDROCK_PROMPT_VAR.get(None))
+        return Response(
+            id=response_id,
+            created_at=int(created_at),
+            model=request.model,
+            object="response",
+            output=[],
+            parallel_tool_calls=True,
+            tool_choice="auto",
+            tools=[],
+        )
+
+
+class TestPromptRouteGuards:
+    """POST /v1/responses refuses a ``prompt`` the target model cannot serve.
+
+    The prompt version carries its own model, so a request naming another model
+    would silently run somewhere else — different capabilities, price and region
+    pinning. Bedrock Mantle endpoints cannot resolve a prompt ARN at all.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-management.html
+         stdapi/routes/openai_responses.py:_apply_prompt_template
+    """
+
+    @pytest.fixture
+    def backend(self, monkeypatch: pytest.MonkeyPatch) -> _StubPromptChatModel:
+        """Stub model validation and the generation backend of the route."""
+        from stdapi.routes import openai_responses  # noqa: PLC0415
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> ModelDetails:
+            del model_id
+            return _model_details()
+
+        stub = _StubPromptChatModel()
+        monkeypatch.setattr(openai_responses, "validate_model", _validate_model)
+        monkeypatch.setattr(openai_responses, "get_chat_model", lambda _model_id: stub)
+        return stub
+
+    @staticmethod
+    def _resolving_to(
+        monkeypatch: pytest.MonkeyPatch, model_id: str
+    ) -> list[tuple[str, str | None]]:
+        """Stub ``resolve_bedrock_prompt`` and record its calls.
+
+        Args:
+            monkeypatch: Patcher applied to the route module.
+            model_id: Model the stubbed prompt version is bound to.
+
+        Returns:
+            The mutable list of ``(prompt id, version)`` resolution calls.
+        """
+        from stdapi.routes import openai_responses  # noqa: PLC0415
+
+        calls: list[tuple[str, str | None]] = []
+
+        async def _resolve(prompt_id: str, version: str | None) -> BedrockPrompt:
+            calls.append((prompt_id, version))
+            return BedrockPrompt(arn=prompt_id, region="us-east-1", model_id=model_id)
+
+        monkeypatch.setattr(openai_responses, "resolve_bedrock_prompt", _resolve)
+        return calls
+
+    def test_prompt_model_mismatch_is_rejected(
+        self,
+        app_client: TestClient,
+        backend: _StubPromptChatModel,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A prompt bound to another model is a 400 naming both models.
+
+        Nothing is generated, so the caller is never billed on a model it did
+        not ask for.
+        """
+        calls = self._resolving_to(monkeypatch, "vendor.other-v1")
+        response = app_client.post(
+            "/v1/responses",
+            json={"model": _PROMPT_MODEL, "prompt": {"id": _PROMPT_ARN}},
+        )
+        assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert "vendor.other-v1" in error["message"]
+        assert _PROMPT_MODEL in error["message"]
+        assert error["type"] == "invalid_request_error"
+        assert calls == [(_PROMPT_ARN, None)]
+        assert not backend.requests, "generation ran on a mismatched prompt model"
+
+    def test_prompt_on_a_mantle_model_is_rejected_before_resolution(
+        self,
+        app_client: TestClient,
+        backend: _StubPromptChatModel,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A Mantle-served model rejects ``prompt`` without calling GetPrompt.
+
+        Mantle's OpenAI-shaped API has no notion of a Bedrock prompt resource,
+        so resolving the ARN would be wasted work.
+        """
+        backend.IS_MANTLE = True
+        calls = self._resolving_to(monkeypatch, _PROMPT_MODEL)
+        response = app_client.post(
+            "/v1/responses",
+            json={"model": _PROMPT_MODEL, "prompt": {"id": _PROMPT_ARN}},
+        )
+        assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert "does not support the 'prompt' parameter" in error["message"]
+        assert _PROMPT_MODEL in error["message"]
+        assert calls == [], "the prompt was resolved for a model that cannot use it"
+        assert not backend.requests
+
+    def test_matching_prompt_pins_the_request(
+        self,
+        app_client: TestClient,
+        backend: _StubPromptChatModel,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A prompt bound to the requested model reaches generation, pinned in scope.
+
+        ``BEDROCK_PROMPT_VAR`` is what makes the Converse call use the prompt
+        ARN as its ``modelId``, so it must be set before the backend runs.
+        """
+        self._resolving_to(monkeypatch, _PROMPT_MODEL)
+        response = app_client.post(
+            "/v1/responses",
+            json={
+                "model": _PROMPT_MODEL,
+                "prompt": {"id": _PROMPT_ARN, "version": "3"},
+            },
+        )
+        assert response.status_code == 200, response.text
+        (pinned,) = backend.prompts
+        assert pinned is not None
+        assert pinned.arn == _PROMPT_ARN
+        assert pinned.model_id == _PROMPT_MODEL
 
 
 class TestPromptRequestValidation:
@@ -481,16 +689,21 @@ class TestPromptConverseRequest:
     """
 
     @pytest.fixture
-    def prompt_context(self) -> Iterator[BedrockPrompt]:
-        """Install a resolved prompt and a minimal request scope."""
-        REQUEST_ID.set("test-request")
-        REQUEST_LOG.set({"level": "info"})  # type: ignore[typeddict-item]
+    def prompt_context(self, request_log: dict[str, Any]) -> Iterator[BedrockPrompt]:
+        """Install a resolved prompt and a minimal request scope.
+
+        Every context variable set here is reset on teardown so the request
+        scope does not leak into the tests that follow.
+        """
+        del request_log
+        request_id_token = REQUEST_ID.set("test-request")
         prompt = BedrockPrompt(
             arn=f"{_PROMPT_ARN}:1", region="us-east-1", model_id=_PROMPT_MODEL
         )
         token = BEDROCK_PROMPT_VAR.set(prompt)
         yield prompt
         BEDROCK_PROMPT_VAR.reset(token)
+        REQUEST_ID.reset(request_id_token)
 
     async def test_body_carries_only_prompt_variables(
         self, monkeypatch: pytest.MonkeyPatch, prompt_context: BedrockPrompt
@@ -502,18 +715,7 @@ class TestPromptConverseRequest:
         upstream.
         """
         captured: dict[str, Any] = {}
-
-        async def fake_converse(
-            _self: ChatModel, request: ConverseRequestBaseTypeDef
-        ) -> dict[str, Any]:
-            captured.update(request)
-            return {
-                "output": {"message": {"role": "assistant", "content": []}},
-                "stopReason": "end_turn",
-                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
-            }
-
-        monkeypatch.setattr(ChatModel, "converse", fake_converse)
+        monkeypatch.setattr(ChatModel, "converse", _capturing_converse(captured))
         request = ResponseCreateParams(
             model=_PROMPT_MODEL,
             prompt=ResponsePrompt(id=prompt_context.arn, variables={"genre": "pop"}),
@@ -531,18 +733,7 @@ class TestPromptConverseRequest:
         omitted rather than sent as ``{}``.
         """
         captured: dict[str, Any] = {}
-
-        async def fake_converse(
-            _self: ChatModel, request: ConverseRequestBaseTypeDef
-        ) -> dict[str, Any]:
-            captured.update(request)
-            return {
-                "output": {"message": {"role": "assistant", "content": []}},
-                "stopReason": "end_turn",
-                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
-            }
-
-        monkeypatch.setattr(ChatModel, "converse", fake_converse)
+        monkeypatch.setattr(ChatModel, "converse", _capturing_converse(captured))
         request = ResponseCreateParams(
             model=_PROMPT_MODEL, prompt=ResponsePrompt(id=prompt_context.arn)
         )
@@ -558,14 +749,9 @@ class TestPromptConverseRequest:
         the SSE path must carry the prompt variables just like Converse does.
         """
         captured: dict[str, Any] = {}
-
-        async def fake_converse_stream(
-            _self: ChatModel, request: ConverseRequestBaseTypeDef
-        ) -> dict[str, Any]:
-            captured.update(request)
-            return {"stream": _empty_stream()}
-
-        monkeypatch.setattr(ChatModel, "converse_stream", fake_converse_stream)
+        monkeypatch.setattr(
+            ChatModel, "converse_stream", _capturing_converse_stream(captured)
+        )
         request = ResponseCreateParams(
             model=_PROMPT_MODEL,
             prompt=ResponsePrompt(id=prompt_context.arn, variables={"genre": "pop"}),

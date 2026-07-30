@@ -12,6 +12,7 @@ Ref: https://developers.openai.com/api/reference/resources/chat/subresources/com
 
 import base64
 import json
+from typing import Any
 
 import pytest
 from openai import BadRequestError, OpenAI
@@ -20,7 +21,29 @@ PEGASUS_MODEL = "twelvelabs.pegasus-1-2-v1:0"
 PEGASUS_INLINE_BYTES = 18_874_368
 
 #: finish_reason values reachable from Pegasus' ``stop`` / ``length`` finishReason.
+#: Deliberately narrower than the Chat Completions enum: Pegasus reports only these two.
 _FINISH_REASONS = frozenset({"stop", "length"})
+
+
+def _video_messages(video_url: str, text: str) -> list[Any]:
+    """Build the one user turn Pegasus accepts: one video part plus one text part.
+
+    Args:
+        video_url: Video data URI, sent as an ``image_url`` part.
+        text: Prompt text, which becomes Pegasus' ``inputPrompt``.
+
+    Returns:
+        A single-message ``messages`` list.
+    """
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": video_url}},
+                {"type": "text", "text": text},
+            ],
+        }
+    ]
 
 
 class TestTwelveLabsPegasusChatCompletions:
@@ -30,13 +53,21 @@ class TestTwelveLabsPegasusChatCompletions:
          stdapi/models/chat/twelvelabs_pegasus.py:ChatModel
     """
 
+    @pytest.fixture(autouse=True)
+    def _skip_official_api(self, use_official_api: bool) -> None:
+        """Skip the whole class: Pegasus is a Bedrock-only model."""
+        if use_official_api:
+            pytest.skip("Pegasus is not supported on the official API")
+
+    @pytest.fixture
+    def video_url(self, sample_video_file_base64: str) -> str:
+        """The shared sample video as a data URI, skipping when it is unavailable."""
+        if not sample_video_file_base64:
+            pytest.skip("No sample video available")
+        return sample_video_file_base64
+
     @pytest.mark.expensive
-    def test_video_basic(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_video_file_base64: str,
-    ) -> None:
+    def test_video_basic(self, openai_client: OpenAI, video_url: str) -> None:
         """A data-URI video plus a text part yields one assistant text choice.
 
         Pegasus returns a flat ``{"message", "finishReason"}`` body; ``_converse``
@@ -46,26 +77,9 @@ class TestTwelveLabsPegasusChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus.html
              stdapi/models/chat/twelvelabs_pegasus.py:ChatModel._converse
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-        if not sample_video_file_base64:
-            pytest.skip("No sample video available")
-
-        video_url = sample_video_file_base64
         resp = openai_client.chat.completions.create(
             model=PEGASUS_MODEL,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": video_url}},
-                        {
-                            "type": "text",
-                            "text": "Describe what happens in this video.",
-                        },
-                    ],
-                }
-            ],
+            messages=_video_messages(video_url, "Describe what happens in this video."),
         )
         assert resp.object == "chat.completion"
         assert resp.id.startswith("chatcmpl-")
@@ -84,12 +98,7 @@ class TestTwelveLabsPegasusChatCompletions:
         )
 
     @pytest.mark.expensive
-    def test_video_streaming(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_video_file_base64: str,
-    ) -> None:
+    def test_video_streaming(self, openai_client: OpenAI, video_url: str) -> None:
         """Streaming a video prompt yields a role chunk, text deltas and one stop chunk.
 
         ``_format_converse_stream`` synthesises the Bedrock ``messageStart`` /
@@ -101,27 +110,12 @@ class TestTwelveLabsPegasusChatCompletions:
              stdapi/models/chat/twelvelabs_pegasus.py:ChatModel._format_converse_stream
              stdapi/models/chat/_adapters/_openai_chat_completion.py:format_stream
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-        if not sample_video_file_base64:
-            pytest.skip("No sample video available")
-
-        video_url = sample_video_file_base64
         chunks = list(
             openai_client.chat.completions.create(
                 model=PEGASUS_MODEL,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "image_url", "image_url": {"url": video_url}},
-                            {
-                                "type": "text",
-                                "text": "Describe what happens in this video.",
-                            },
-                        ],
-                    }
-                ],
+                messages=_video_messages(
+                    video_url, "Describe what happens in this video."
+                ),
                 stream=True,
             )
         )
@@ -147,10 +141,7 @@ class TestTwelveLabsPegasusChatCompletions:
 
     @pytest.mark.expensive
     def test_video_in_assistant_history(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_video_file_base64: str,
+        self, openai_client: OpenAI, video_url: str
     ) -> None:
         """A video from an earlier turn is reused for a later text-only question.
 
@@ -163,12 +154,6 @@ class TestTwelveLabsPegasusChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus.html
              stdapi/models/chat/twelvelabs_pegasus.py:_extract_latest_video
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-        if not sample_video_file_base64:
-            pytest.skip("No sample video available")
-
-        video_url = sample_video_file_base64
         resp = openai_client.chat.completions.create(
             model=PEGASUS_MODEL,
             messages=[
@@ -190,10 +175,7 @@ class TestTwelveLabsPegasusChatCompletions:
 
     @pytest.mark.expensive
     def test_concat_consecutive_user_text(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_video_file_base64: str,
+        self, openai_client: OpenAI, video_url: str
     ) -> None:
         """Two trailing user messages are answered by a single Pegasus call.
 
@@ -205,22 +187,10 @@ class TestTwelveLabsPegasusChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus.html
              stdapi/models/chat/twelvelabs_pegasus.py:_extract_latest_user_text
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-        if not sample_video_file_base64:
-            pytest.skip("No sample video available")
-
-        video_url = sample_video_file_base64
         resp = openai_client.chat.completions.create(
             model=PEGASUS_MODEL,
             messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": video_url}},
-                        {"type": "text", "text": "Watch this video."},
-                    ],
-                },
+                *_video_messages(video_url, "Watch this video."),
                 {"role": "user", "content": "Summarize the video."},
             ],
         )
@@ -234,10 +204,7 @@ class TestTwelveLabsPegasusChatCompletions:
 
     @pytest.mark.expensive
     def test_temperature_and_max_tokens_forwarded(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_video_file_base64: str,
+        self, openai_client: OpenAI, video_url: str
     ) -> None:
         """``max_tokens`` caps the answer through ``maxOutputTokens``.
 
@@ -250,23 +217,9 @@ class TestTwelveLabsPegasusChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus.html
              stdapi/models/chat/twelvelabs_pegasus.py:ChatModel._build_pegasus_body
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-        if not sample_video_file_base64:
-            pytest.skip("No sample video available")
-
-        video_url = sample_video_file_base64
         resp = openai_client.chat.completions.create(
             model=PEGASUS_MODEL,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": video_url}},
-                        {"type": "text", "text": "Describe this video in detail."},
-                    ],
-                }
-            ],
+            messages=_video_messages(video_url, "Describe this video in detail."),
             temperature=0,
             max_tokens=8,
         )
@@ -279,10 +232,7 @@ class TestTwelveLabsPegasusChatCompletions:
 
     @pytest.mark.expensive
     def test_response_format_json_schema(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_video_file_base64: str,
+        self, openai_client: OpenAI, video_url: str
     ) -> None:
         """``response_format=json_schema`` reaches Pegasus as ``responseFormat.jsonSchema``.
 
@@ -294,23 +244,9 @@ class TestTwelveLabsPegasusChatCompletions:
              https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus.html
              stdapi/models/chat/twelvelabs_pegasus.py:ChatModel._build_pegasus_body
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-        if not sample_video_file_base64:
-            pytest.skip("No sample video available")
-
-        video_url = sample_video_file_base64
         resp = openai_client.chat.completions.create(
             model=PEGASUS_MODEL,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": video_url}},
-                        {"type": "text", "text": "Describe this video."},
-                    ],
-                }
-            ],
+            messages=_video_messages(video_url, "Describe this video."),
             extra_body={
                 "response_format": {
                     "type": "json_schema",
@@ -335,9 +271,7 @@ class TestTwelveLabsPegasusChatCompletions:
             f"schema requires a string 'description', got: {data}"
         )
 
-    def test_no_video_returns_400(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_no_video_returns_400(self, openai_client: OpenAI) -> None:
         """A text-only conversation is rejected as ``invalid_request_error``.
 
         Pegasus' ``mediaSource`` is mandatory, so ``_build_pegasus_body`` raises before
@@ -349,9 +283,6 @@ class TestTwelveLabsPegasusChatCompletions:
              https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/models/chat/twelvelabs_pegasus.py:ChatModel._build_pegasus_body
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-
         with pytest.raises(BadRequestError) as excinfo:
             openai_client.chat.completions.create(
                 model=PEGASUS_MODEL, messages=[{"role": "user", "content": "Hello"}]
@@ -369,10 +300,7 @@ class TestTwelveLabsPegasusChatCompletions:
 
     @pytest.mark.expensive
     def test_system_prompt_silently_ignored(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_video_file_base64: str,
+        self, openai_client: OpenAI, video_url: str
     ) -> None:
         """A ``system`` message neither errors nor blocks the video answer.
 
@@ -383,23 +311,11 @@ class TestTwelveLabsPegasusChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus.html
              stdapi/models/chat/twelvelabs_pegasus.py:ChatModel
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-        if not sample_video_file_base64:
-            pytest.skip("No sample video available")
-
-        video_url = sample_video_file_base64
         resp = openai_client.chat.completions.create(
             model=PEGASUS_MODEL,
             messages=[
                 {"role": "system", "content": "You are a test assistant."},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": video_url}},
-                        {"type": "text", "text": "Describe this video."},
-                    ],
-                },
+                *_video_messages(video_url, "Describe this video."),
             ],
         )
         assert resp.object == "chat.completion"
@@ -412,10 +328,7 @@ class TestTwelveLabsPegasusChatCompletions:
 
     @pytest.mark.expensive
     def test_tools_silently_ignored(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_video_file_base64: str,
+        self, openai_client: OpenAI, video_url: str
     ) -> None:
         """A ``tools`` array is accepted but can never produce ``tool_calls``.
 
@@ -426,23 +339,9 @@ class TestTwelveLabsPegasusChatCompletions:
         Ref: https://developers.openai.com/api/docs/guides/function-calling
              stdapi/models/chat/twelvelabs_pegasus.py:ChatModel._build_pegasus_body
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-        if not sample_video_file_base64:
-            pytest.skip("No sample video available")
-
-        video_url = sample_video_file_base64
         resp = openai_client.chat.completions.create(
             model=PEGASUS_MODEL,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": video_url}},
-                        {"type": "text", "text": "Describe this video."},
-                    ],
-                }
-            ],
+            messages=_video_messages(video_url, "Describe this video."),
             tools=[
                 {
                     "type": "function",
@@ -461,12 +360,7 @@ class TestTwelveLabsPegasusChatCompletions:
         assert resp.choices[0].finish_reason != "tool_calls"
 
     @pytest.mark.expensive
-    def test_large_video_auto_s3(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_video_file_base64: str,
-    ) -> None:
+    def test_large_video_auto_s3(self, openai_client: OpenAI, video_url: str) -> None:
         """A video above the inline limit is uploaded to S3 and passed by reference.
 
         Bedrock caps an invocation payload at 25 MB, i.e. ~18.75 MB of raw bytes once
@@ -477,29 +371,15 @@ class TestTwelveLabsPegasusChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus.html
              stdapi/models/chat/twelvelabs_pegasus.py:_video_to_media_source
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-        if not sample_video_file_base64:
-            pytest.skip("No sample video available")
-
         # Skip if raw bytes are under the threshold
         _prefix = "data:video/mp4;base64,"
-        raw_bytes = base64.b64decode(sample_video_file_base64[len(_prefix) :])
+        raw_bytes = base64.b64decode(video_url[len(_prefix) :])
         if len(raw_bytes) <= PEGASUS_INLINE_BYTES:
             pytest.skip("Sample video is too small to test auto-S3")
 
-        video_url = sample_video_file_base64
         resp = openai_client.chat.completions.create(
             model=PEGASUS_MODEL,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": video_url}},
-                        {"type": "text", "text": "Describe this video."},
-                    ],
-                }
-            ],
+            messages=_video_messages(video_url, "Describe this video."),
         )
         assert resp.object == "chat.completion"
         assert len(resp.choices) >= 1

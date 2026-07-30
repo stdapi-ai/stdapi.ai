@@ -31,9 +31,11 @@ from stdapi.types.openai_responses import (
     FunctionCallOutput,
     ImageGenerationCallInput,
     InputTokenCountParams,
+    ItemReference,
     LocalShellCallInput,
     LocalShellCallOutputInput,
     McpApprovalRequestInput,
+    McpApprovalResponse,
     McpCallInput,
     McpListToolsInput,
     Reasoning,
@@ -75,6 +77,54 @@ _JPEG_BYTES = b"\xff\xd8\xff\xe0-fake-jpeg-body"
 def _parse(payload: dict[str, object]) -> object:
     """Validate a raw item payload against the ResponseInputItem union."""
     return _ITEM_ADAPTER.validate_python(payload)
+
+
+def _stub_input_file(
+    monkeypatch: pytest.MonkeyPatch,
+    block: dict[str, object],
+    attribute: str = "InputFile",
+) -> list[str]:
+    """Replace an adapter file loader with a stub returning a fixed Bedrock block.
+
+    Args:
+        monkeypatch: Patcher applied to the adapter module.
+        block: Bedrock content block the stub resolves to.
+        attribute: Loader to replace, ``InputFile`` or ``FileIdInputFile``.
+
+    Returns:
+        The mutable list recording every source handed to that loader.
+    """
+    sources: list[str] = []
+
+    class _StubInputFile:
+        def __init__(self, source: str) -> None:
+            self.source = source
+            sources.append(source)
+
+        async def to_bedrock_content_block(self) -> dict[str, object]:
+            return block
+
+    monkeypatch.setattr(adapter, attribute, _StubInputFile)
+    return sources
+
+
+@pytest.fixture
+def captured_count_tokens(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Patch the Bedrock runtime client used for CountTokens with a recorder.
+
+    Returns:
+        The mutable dict receiving the ``count_tokens`` keyword arguments; the
+        stub always reports seven input tokens.
+    """
+    captured: dict[str, Any] = {}
+
+    class _StubClient:
+        async def count_tokens(self, **kwargs: object) -> dict[str, int]:
+            captured.update(kwargs)
+            return {"inputTokens": 7}
+
+    monkeypatch.setattr(adapter, "get_client", lambda *_args, **_kwargs: _StubClient())
+    return captured
 
 
 class TestHostedToolItemsParseAndDrop:
@@ -251,6 +301,15 @@ class TestHostedToolItemsParseAndDrop:
                 },
                 ComputerCallOutput,
             ),
+            (
+                {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": "mar_1",
+                    "approve": True,
+                },
+                McpApprovalResponse,
+            ),
+            ({"type": "item_reference", "id": "ref_1"}, ItemReference),
         ],
     )
     async def test_parses_and_is_dropped(
@@ -484,17 +543,7 @@ class TestFunctionCallOutputContentParts:
         image_block: dict[str, object] = {
             "image": {"format": "png", "source": {"bytes": b"img"}}
         }
-        sources: list[str] = []
-
-        class _StubInputFile:
-            def __init__(self, source: str) -> None:
-                self.source = source
-                sources.append(source)
-
-            async def to_bedrock_content_block(self) -> dict[str, object]:
-                return image_block
-
-        monkeypatch.setattr(adapter, "InputFile", _StubInputFile)
+        sources = _stub_input_file(monkeypatch, image_block)
         item = FunctionCallOutput(
             type="function_call_output",
             call_id="call_1",
@@ -515,17 +564,7 @@ class TestFunctionCallOutputContentParts:
         document_block: dict[str, object] = {
             "document": {"format": "pdf", "name": "doc", "source": {"bytes": b"pdf"}}
         }
-        sources: list[str] = []
-
-        class _StubInputFile:
-            def __init__(self, source: str) -> None:
-                self.source = source
-                sources.append(source)
-
-            async def to_bedrock_content_block(self) -> dict[str, object]:
-                return document_block
-
-        monkeypatch.setattr(adapter, "InputFile", _StubInputFile)
+        sources = _stub_input_file(monkeypatch, document_block)
         item = FunctionCallOutput(
             type="function_call_output",
             call_id="call_1",
@@ -710,29 +749,15 @@ class TestCountInputTokensToolConfig:
          stdapi/models/chat/_adapters/_openai_responses.py:count_input_tokens_via_bedrock
     """
 
-    @staticmethod
-    def _stub_client(captured: dict[str, Any]) -> object:
-        """Build a fake Bedrock runtime client recording count_tokens kwargs."""
-
-        class _StubClient:
-            async def count_tokens(self, **kwargs: object) -> dict[str, int]:
-                captured.update(kwargs)
-                return {"inputTokens": 7}
-
-        return _StubClient()
-
     async def test_synthetic_image_generation_tool_is_counted(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, captured_count_tokens: dict[str, Any]
     ) -> None:
         """The counted toolConfig holds the function and synthetic image tools.
 
         ``image_generation`` is executed gateway-side but is still presented to
         the model as a function tool, so its schema is part of the billed input.
         """
-        captured: dict[str, Any] = {}
-        monkeypatch.setattr(
-            adapter, "get_client", lambda *_args, **_kwargs: self._stub_client(captured)
-        )
+        captured = captured_count_tokens
         request = InputTokenCountParams.model_validate(
             {
                 "model": "m",
@@ -759,17 +784,14 @@ class TestCountInputTokensToolConfig:
         )
 
     async def test_tool_choice_none_omits_tool_config(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, captured_count_tokens: dict[str, Any]
     ) -> None:
         """``tool_choice="none"`` keeps the whole toolConfig out of the count.
 
         The gateway implements ``none`` by omitting the Bedrock tool
         configuration, so the declared tools are not billed either.
         """
-        captured: dict[str, Any] = {}
-        monkeypatch.setattr(
-            adapter, "get_client", lambda *_args, **_kwargs: self._stub_client(captured)
-        )
+        captured = captured_count_tokens
         request = InputTokenCountParams.model_validate(
             {
                 "model": "m",
@@ -788,6 +810,165 @@ class TestCountInputTokensToolConfig:
         assert captured["input"]["converse"]["messages"] == [
             {"role": "user", "content": [{"text": "hi"}]}
         ]
+
+    async def test_image_and_file_parts_are_counted(
+        self, captured_count_tokens: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``input_image`` and ``input_file`` parts reach the counted Converse request.
+
+        Media dominates the token cost this route exists to predict, so the
+        resolved image and document blocks must be part of what CountTokens
+        sees; dropping them would under-report against the create call's bill.
+
+        Ref: https://developers.openai.com/api/docs/guides/token-counting
+             stdapi/models/chat/_adapters/_openai_responses.py:count_input_tokens_via_bedrock
+        """
+        media_block: dict[str, object] = {
+            "image": {"format": "png", "source": {"bytes": _PNG_BYTES}}
+        }
+        sources = _stub_input_file(monkeypatch, media_block)
+        request = InputTokenCountParams.model_validate(
+            {
+                "model": "m",
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "hi"},
+                            {
+                                "type": "input_image",
+                                "image_url": "https://example.com/a.png",
+                            },
+                            {"type": "input_file", "file_url": "https://x/d.pdf"},
+                        ],
+                    }
+                ],
+            }
+        )
+        assert (
+            await adapter.count_input_tokens_via_bedrock(
+                request, "model-id", "us-east-1"
+            )
+            == 7
+        )
+        assert captured_count_tokens["input"]["converse"]["messages"] == [
+            {"role": "user", "content": [{"text": "hi"}, media_block, media_block]}
+        ]
+        assert sources == ["https://example.com/a.png", "https://x/d.pdf"]
+
+
+class TestRequestMetadata:
+    """``metadata`` reaches Bedrock as the Converse ``requestMetadata`` mapping.
+
+    The pairs are cost-attribution tags, so they must arrive verbatim: the
+    response object echoing them proves nothing about what Converse received.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+         stdapi/models/chat/_adapters/_openai_responses.py:translate_request
+    """
+
+    def test_metadata_pairs_are_forwarded_verbatim(self) -> None:
+        """Every key/value pair is handed over unchanged as ``request_metadata``."""
+        metadata = {"session_id": "abc", "test_type": "automated"}
+        request = ResponseCreateParams.model_validate(
+            {"model": "m", "input": "hi", "metadata": metadata}
+        )
+        assert adapter.translate_request(request, "model-id")[-1] == metadata
+
+    def test_absent_metadata_forwards_none(self) -> None:
+        """No ``metadata`` yields ``None`` so the Converse key is omitted entirely.
+
+        An empty mapping would still be sent and count against the Bedrock
+        16-pair budget the gateway's own tracing keys share.
+        """
+        request = ResponseCreateParams.model_validate({"model": "m", "input": "hi"})
+        assert adapter.translate_request(request, "model-id")[-1] is None
+
+
+class TestInputFileAndImageSources:
+    """Every documented ``input_file``/``input_image`` source reaches a file loader.
+
+    Upstream accepts a Files API ``file_id``, base64 ``file_data`` or a
+    ``file_url`` on ``input_file``, and a ``file_id`` or ``image_url`` on
+    ``input_image``. Bedrock accepts inline bytes only, so each source is
+    resolved before the Converse block is built: ``file_id`` through the
+    S3-backed ``FileIdInputFile``, every other source through ``InputFile``.
+
+    Ref: https://developers.openai.com/api/docs/guides/file-inputs
+         stdapi/models/chat/_adapters/_openai_responses.py:_convert_input_content
+    """
+
+    @pytest.mark.parametrize(
+        ("part", "loader"),
+        [
+            ({"type": "input_file", "file_id": "file-abc"}, "FileIdInputFile"),
+            ({"type": "input_file", "file_url": "https://x/d.pdf"}, "InputFile"),
+            ({"type": "input_file", "file_data": "JVBER"}, "InputFile"),
+            ({"type": "input_image", "file_id": "file-abc"}, "FileIdInputFile"),
+            ({"type": "input_image", "image_url": "https://x/i.png"}, "InputFile"),
+        ],
+        ids=[
+            "file-file_id",
+            "file-file_url",
+            "file-file_data",
+            "image-file_id",
+            "image-image_url",
+        ],
+    )
+    async def test_source_routes_to_its_loader(
+        self, monkeypatch: pytest.MonkeyPatch, part: dict[str, str], loader: str
+    ) -> None:
+        """The part's source is handed to its loader and becomes the message block.
+
+        Both loaders are stubbed, so the assertion pins the routing decision
+        rather than S3 access or URL fetching.
+        """
+        block: dict[str, object] = {
+            "document": {"format": "pdf", "name": "d", "source": {"bytes": b"pdf"}}
+        }
+        other = "InputFile" if loader == "FileIdInputFile" else "FileIdInputFile"
+        used = _stub_input_file(monkeypatch, block, loader)
+        unused = _stub_input_file(monkeypatch, block, other)
+        item = _parse({"type": "message", "role": "user", "content": [part]})
+        messages, system = await map_input(
+            cast("list[ResponseInputItem]", [item]), None
+        )
+        assert system == []
+        assert messages == [{"role": "user", "content": [block]}]
+        assert used == [next(value for key, value in part.items() if key != "type")]
+        assert unused == [], "the other loader must not be involved"
+
+    async def test_file_id_takes_precedence_over_a_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A part carrying both ``file_id`` and ``file_url`` resolves the ``file_id``.
+
+        The match arms are ordered, so the stored file wins over the URL rather
+        than the block being built twice or the URL being fetched needlessly.
+        """
+        block: dict[str, object] = {
+            "document": {"format": "pdf", "name": "d", "source": {"bytes": b"pdf"}}
+        }
+        by_id = _stub_input_file(monkeypatch, block, "FileIdInputFile")
+        by_url = _stub_input_file(monkeypatch, block, "InputFile")
+        item = _parse(
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_file",
+                        "file_id": "file-abc",
+                        "file_url": "https://x/d.pdf",
+                    }
+                ],
+            }
+        )
+        messages, _ = await map_input(cast("list[ResponseInputItem]", [item]), None)
+        assert messages == [{"role": "user", "content": [block]}]
+        assert by_id == ["file-abc"]
+        assert by_url == []
 
 
 class TestRefusalParts:

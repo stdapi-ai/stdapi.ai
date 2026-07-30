@@ -264,36 +264,15 @@ class TestRobotsTxt:
         """GET /robots.txt is served as ``text/plain``."""
         assert "text/plain" in client.get("/robots.txt").headers["content-type"]
 
-    def test_has_user_agent_directive(self, client: TestClient) -> None:
-        """The record opens with a wildcard ``User-agent: *`` group."""
-        lines = client.get("/robots.txt").text.splitlines()
-        assert lines[0] == "User-agent: *"
-
-    def test_has_disallow_all(self, client: TestClient) -> None:
-        """``Disallow: /`` is the last line, so it denies everything not allowed above it.
-
-        Position is load-bearing: the ``Allow:`` lines must precede the blanket
-        disallow for crawlers applying longest-match precedence to reach them.
-        """
-        lines = client.get("/robots.txt").text.splitlines()
-        assert lines[-1] == "Disallow: /"
-
-    def test_allows_well_known(self, client: TestClient) -> None:
-        """``Allow: /.well-known/`` is present unconditionally, whatever the settings."""
-        lines = client.get("/robots.txt").text.splitlines()
-        assert "Allow: /.well-known/" in lines
-
-    def test_has_ai_content_signal(self, client: TestClient) -> None:
-        """The AI Content-Signal line opts the API docs into training, search and AI input."""
-        lines = client.get("/robots.txt").text.splitlines()
-        assert "Content-Signal: ai-train=yes, search=yes, ai-input=yes" in lines
-
     def test_matches_settings(self, client: TestClient) -> None:
         """The record lists exactly the doc paths the current settings enable.
 
         Built from ``SETTINGS`` rather than compared against ``_ROBOTS_TXT`` so a
         path allowed for a disabled feature — or a missing allow for an enabled
-        one — is caught.
+        one — is caught. Ordering is asserted too: the wildcard ``User-agent: *``
+        group opens the record, the AI ``Content-Signal`` opts the docs into
+        training, search and AI input, and the blanket ``Disallow: /`` comes last
+        so the ``Allow:`` lines win under longest-match precedence.
         """
         expected = [
             line

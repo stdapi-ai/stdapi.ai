@@ -11,6 +11,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from stdapi.api_errors import ApiError
+from stdapi.input_file import InputFile
+from stdapi.models.audio.mistral_voxtral import AudioModel
+
 if TYPE_CHECKING:
     from openai import OpenAI
 
@@ -18,6 +22,15 @@ VOXTRAL_MINI = "mistral.voxtral-mini-3b-2507"
 
 VOXTRAL_ALL = (VOXTRAL_MINI,)
 VOXTRAL_SAMPLE = (VOXTRAL_MINI,)
+
+
+@pytest.fixture(autouse=True)
+def _skip_on_official_api(use_official_api: bool) -> None:
+    """Skip every test here: the Voxtral models have no official OpenAI equivalent."""
+    if use_official_api:
+        pytest.skip(
+            "Mistral Voxtral models are not available on the official OpenAI API"
+        )
 
 
 class TestMistralVoxtralTranslations:
@@ -32,18 +45,9 @@ class TestMistralVoxtralTranslations:
 
     @pytest.mark.parametrize("model_id", VOXTRAL_ALL)
     def test_basic_translation_json(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_audio_mp3_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_audio_mp3_file: bytes, model_id: str
     ) -> None:
         """Basic translation returns JSON with translated English text."""
-        if use_official_api:
-            pytest.skip(
-                "Mistral Voxtral models are not available on the official OpenAI API"
-            )
-
         response = openai_client.audio.translations.create(
             file=("test.mp3", sample_audio_mp3_file),
             model=model_id,
@@ -59,18 +63,9 @@ class TestMistralVoxtralTranslations:
 
     @pytest.mark.parametrize("model_id", VOXTRAL_ALL)
     def test_translation_text_format(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_audio_mp3_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_audio_mp3_file: bytes, model_id: str
     ) -> None:
         """Text format returns the plain English string, not a JSON envelope."""
-        if use_official_api:
-            pytest.skip(
-                "Mistral Voxtral models are not available on the official OpenAI API"
-            )
-
         response = openai_client.audio.translations.create(
             file=("test.mp3", sample_audio_mp3_file),
             model=model_id,
@@ -85,3 +80,37 @@ class TestMistralVoxtralTranslations:
         assert "test" in response.lower(), (
             f"translated text does not reflect the sample audio: {response!r}"
         )
+
+
+@pytest.mark.local
+class TestMistralVoxtralTranslationsResponseFormats:
+    """Voxtral translation accepts only ``json`` and ``text``.
+
+    ``stt_translate`` runs its own ``_validate_response_formats`` check, so the
+    subtitle and verbose formats are refused there independently of the
+    transcription surface, before any Bedrock invocation.
+
+    Ref: https://stdapi.ai/api_openai_audio_translations/
+         stdapi/models/audio/mistral_voxtral.py:AudioModel.stt_translate
+         stdapi/models/audio/__init__.py:AudioModelBase._validate_response_formats
+    """
+
+    @pytest.mark.parametrize("response_format", ["verbose_json", "srt", "vtt"])
+    async def test_unsupported_response_format_is_rejected(
+        self, response_format: str
+    ) -> None:
+        """A format Voxtral cannot produce fails with a 400 naming it."""
+        with pytest.raises(ApiError) as exc_info:
+            await AudioModel(VOXTRAL_MINI).stt_translate(
+                InputFile("data:audio/mp3;base64,AAAA"),
+                response_format,  # type: ignore[arg-type]
+                None,
+            )
+
+        assert exc_info.value.status == 400
+        assert response_format in str(exc_info.value)
+        assert "not supported" in str(exc_info.value)
+
+    def test_supported_response_formats_are_json_and_text(self) -> None:
+        """The model declares exactly the two formats it can serve."""
+        assert frozenset({"json", "text"}) == AudioModel.SUPPORTED_RESPONSES_FORMATS

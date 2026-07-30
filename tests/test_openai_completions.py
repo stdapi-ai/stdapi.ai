@@ -14,16 +14,31 @@ Ref: https://developers.openai.com/api/reference/resources/completions/methods/c
 """
 
 import io
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from openai import BadRequestError, NotFoundError, OpenAI
+from pybase64 import b64encode
+
+from stdapi.models.chat._adapters._openai_completion import (
+    _FINISH_REASONS as _LEGACY_FINISH_REASONS,
+)
+from stdapi.models.chat._adapters._openai_completion import (
+    _map_finish_reason,
+    build_user_messages,
+    translate_request,
+)
+from stdapi.models.chat._mantle._convert import chat_response_as_text_completion
+from stdapi.types.openai_completions import CompletionCreateParams
 
 if TYPE_CHECKING:
     from starlette.testclient import TestClient as TestClientType
 
 #: Every ``finish_reason`` the legacy adapter can emit for a successful request.
 _TERMINAL_REASONS = {"stop", "length"}
+
+#: PNG file signature, the shortest byte string typed as an image by the file detector.
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
 class TestCompletions:
@@ -410,20 +425,27 @@ class TestCompletions:
         finally:
             openai_client.files.delete(uploaded.id)
 
-    def test_single_text_plus_files_returns_single_choice(
+    @pytest.mark.parametrize(
+        "with_text",
+        [
+            pytest.param(True, id="text_plus_image"),
+            pytest.param(False, id="image_only"),
+        ],
+    )
+    def test_multimodal_prompt_returns_single_choice(
         self,
         openai_client: OpenAI,
         chat_vision_model: str,
         sample_image_file_base64: str,
         use_official_api: bool,
+        with_text: bool,
     ) -> None:
-        """One text + one image data URI collapse into a single multimodal request.
+        """A text+image prompt and a lone image both yield exactly one choice.
 
-        Sends a list prompt containing one question and one ``data:image/png;base64,...``
-        image URI to a vision-capable model (Claude).  stdapi builds a single
-        multimodal Bedrock message (one ``text`` block + one ``image`` block)
-        and returns exactly one completion choice — the natural "analyse this
-        image" workflow.  A per-element fan-out would have produced two choices.
+        The list form (one question plus one ``data:image/png;base64,...`` URI)
+        collapses into a single multimodal Bedrock message, and the bare image is
+        a single ``image`` block; a per-element fan-out would have produced two
+        choices for the first case.
 
         Ref: stdapi/models/chat/_adapters/_openai_completion.py:build_user_messages
         """
@@ -432,42 +454,16 @@ class TestCompletions:
                 "multimodal input on v1/completions is a stdapi extension; "
                 "the official legacy Completions API rejects chat/vision models"
             )
-        response = openai_client.completions.create(
-            model=chat_vision_model,
-            prompt=[
+        prompt: str | list[str] = (
+            [
                 "Describe what is shown in this image in one short sentence:",
                 sample_image_file_base64,
-            ],
-            max_tokens=80,
+            ]
+            if with_text
+            else sample_image_file_base64
         )
-        assert len(response.choices) == 1
-        assert response.choices[0].index == 0
-        assert response.choices[0].text
-        assert response.choices[0].finish_reason in _TERMINAL_REASONS
-        assert response.usage is not None
-        assert response.usage.prompt_tokens > 0
-
-    def test_image_only_prompt_returns_single_choice(
-        self,
-        openai_client: OpenAI,
-        chat_vision_model: str,
-        sample_image_file_base64: str,
-        use_official_api: bool,
-    ) -> None:
-        """A lone image data URI is sent as a single multimodal request.
-
-        With no accompanying text instruction, the image is forwarded to the
-        model as an ``image`` block; the model decides how to respond.
-
-        Ref: stdapi/models/chat/_adapters/_openai_completion.py:build_user_messages
-        """
-        if use_official_api:
-            pytest.skip(
-                "multimodal input on v1/completions is a stdapi extension; "
-                "the official legacy Completions API rejects chat/vision models"
-            )
         response = openai_client.completions.create(
-            model=chat_vision_model, prompt=sample_image_file_base64, max_tokens=80
+            model=chat_vision_model, prompt=prompt, max_tokens=80
         )
         assert response.object == "text_completion"
         assert len(response.choices) == 1
@@ -493,17 +489,8 @@ class TestStopSequenceValidation:
 
     pytestmark = pytest.mark.local
 
-    @pytest.fixture
-    def client(self, api_key: str) -> TestClientType:
-        """Test client without lifespan (no AWS startup), pre-authenticated."""
-        from starlette.testclient import TestClient  # noqa: PLC0415
-
-        from stdapi.main import app  # noqa: PLC0415
-
-        return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
-
     def test_whitespace_only_stop_sequence_is_rejected(
-        self, client: TestClientType
+        self, app_client: TestClientType
     ) -> None:
         r"""stop=["\n"] is rejected with a clean 400 (Bedrock cannot honor blank stops).
 
@@ -515,7 +502,7 @@ class TestStopSequenceValidation:
         Ref: stdapi/api_providers/openai.py:_format_error
              stdapi/main.py:handle_validation_exception
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/completions",
             json={"model": "test-model", "prompt": "hi", "stop": ["\n"]},
         )
@@ -525,3 +512,294 @@ class TestStopSequenceValidation:
         assert error_body["error"].keys() == {"message", "type", "param", "code"}
         assert error_body["error"]["type"] == "invalid_request_error"
         assert "whitespace" in error_body["error"]["message"].lower()
+
+
+class TestLegacyFinishReasonMapping:
+    """Bedrock stop reasons map onto the narrower legacy ``finish_reason`` enum.
+
+    The legacy Completions enum has no ``tool_calls``/``function_call``, so this
+    surface keeps a table of its own; an unknown reason degrades to ``stop``.
+
+    Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+         stdapi/models/chat/_adapters/_openai_completion.py:_map_finish_reason
+    """
+
+    pytestmark = pytest.mark.local
+
+    @pytest.mark.parametrize(
+        ("stop_reason", "expected"),
+        [
+            ("end_turn", "stop"),
+            ("stop_sequence", "stop"),
+            ("max_tokens", "length"),
+            ("model_context_window_exceeded", "length"),
+            ("incomplete", "length"),
+            ("content_filtered", "content_filter"),
+            ("guardrail_intervened", "content_filter"),
+            ("malformed_model_output", "content_filter"),
+        ],
+    )
+    def test_every_bedrock_stop_reason_maps_to_its_legacy_value(
+        self, stop_reason: str, expected: str
+    ) -> None:
+        """A filtered or truncated legacy completion is never reported as ``stop``.
+
+        Guardrail interventions and malformed model output must surface as
+        ``content_filter``, and a context-window overflow as ``length``, so a
+        client can tell a censored or cut-off answer from a finished one.
+        """
+        assert _map_finish_reason(stop_reason) == expected
+
+    @pytest.mark.parametrize("stop_reason", ["tool_use", "not-a-real-reason", None, ""])
+    def test_unknown_stop_reason_falls_back_to_stop(
+        self, stop_reason: str | None
+    ) -> None:
+        """Reasons absent from the legacy table (``tool_use`` included) become ``stop``.
+
+        ``tool_use`` is deliberately unmapped: the legacy enum has no
+        ``tool_calls`` value.
+        """
+        assert _map_finish_reason(stop_reason) == "stop"
+
+    def test_table_contains_no_chat_only_finish_reason(self) -> None:
+        """The legacy table never emits ``tool_calls`` or ``function_call``."""
+        assert set(_LEGACY_FINISH_REASONS.values()) == {
+            "stop",
+            "length",
+            "content_filter",
+        }
+
+
+class TestLegacyRequestTranslation:
+    """``translate_request`` maps the legacy request onto Converse primitives.
+
+    Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+         stdapi/models/chat/_adapters/_openai_completion.py:translate_request
+    """
+
+    pytestmark = pytest.mark.local
+
+    #: Bedrock model the inference config is clamped against.
+    _MODEL_ID = "anthropic.claude-haiku-4-5-20251001-v1:0"
+
+    def _translate(self, **kwargs: object) -> tuple[Any, ...]:
+        """Validate a minimal completion request and translate it.
+
+        Args:
+            **kwargs: Extra request fields merged onto ``model``/``prompt``.
+
+        Returns:
+            The tuple returned by ``translate_request``.
+        """
+        request = CompletionCreateParams.model_validate(
+            {"model": "model", "prompt": "hi", **kwargs}
+        )
+        return translate_request(request, self._MODEL_ID)
+
+    @pytest.mark.parametrize(
+        ("service_tier", "expected"),
+        [
+            ("priority", ("priority", "priority")),
+            ("flex", ("flex", "flex")),
+            ("reserved", ("reserved", "reserved")),
+            ("auto", (None, "default")),
+            ("default", (None, "default")),
+            ("scale", (None, "default")),
+        ],
+    )
+    def test_service_tier_is_forwarded_and_echoed(
+        self, service_tier: str, expected: tuple[str | None, str]
+    ) -> None:
+        """Only the Bedrock-backed tiers reach Converse; the rest echo ``default``.
+
+        The first element is applied to the Converse call and the second is what
+        the ``Completion`` echoes back, so losing the first would silently
+        downgrade a paid ``priority`` request without changing the response.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html
+             stdapi/models/chat/_adapters/_openai_common.py:map_service_tier
+        """
+        bedrock_tier, openai_tier = self._translate(service_tier=service_tier)[2:4]
+        assert (bedrock_tier, openai_tier) == expected
+
+    def test_no_service_tier_leaves_both_sides_unset(self) -> None:
+        """Omitting ``service_tier`` echoes nothing rather than ``default``."""
+        assert self._translate()[2:4] == (None, None)
+
+    @pytest.mark.parametrize(
+        ("fields", "expected"),
+        [
+            ({"user": "u-1"}, {"user": "u-1"}),
+            ({"safety_identifier": "s-1"}, {"user": "s-1"}),
+            ({"user": "u-1", "safety_identifier": "s-1"}, {"user": "s-1"}),
+            ({}, None),
+        ],
+    )
+    def test_request_metadata_prefers_safety_identifier(
+        self, fields: dict[str, str], expected: dict[str, str] | None
+    ) -> None:
+        """``safety_identifier`` wins over the deprecated ``user`` in requestMetadata.
+
+        This is the only legacy-route hook putting a client-supplied identifier
+        into Bedrock ``requestMetadata``, so it is omitted entirely when neither
+        field is set rather than sent as an empty value.
+
+        Ref: https://developers.openai.com/api/docs/guides/safety-best-practices#implement-safety-identifiers
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+        """
+        assert self._translate(**fields)[5] == expected
+
+
+class TestLegacyPromptFanOut:
+    """``build_user_messages`` decides how many Bedrock calls a prompt becomes.
+
+    A list holding exactly one string plus one or more file references collapses
+    into a single multimodal message; anything else fans out one message — and
+    therefore one choice — per element.
+
+    Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+         stdapi/models/chat/_adapters/_openai_completion.py:build_user_messages
+    """
+
+    pytestmark = pytest.mark.local
+
+    #: Minimal PNG (signature bytes only) as a data URI, enough to type the block.
+    _IMAGE_URI = f"data:image/png;base64,{b64encode(_PNG_SIGNATURE).decode()}"
+
+    async def _messages(self, prompt: object) -> list[Any]:
+        """Validate a prompt then build its Bedrock user messages.
+
+        Args:
+            prompt: Raw ``prompt`` value from the request body.
+
+        Returns:
+            The Bedrock user messages.
+        """
+        request = CompletionCreateParams.model_validate(
+            {"model": "model", "prompt": prompt}
+        )
+        return list(await build_user_messages(request.prompt))
+
+    async def test_files_only_prompt_array_fans_out_one_message_per_file(self) -> None:
+        """Two file references with no text produce one message — one choice — each.
+
+        This is the negative case proving the collapse is not over-eager: it fires
+        only when the array carries exactly one string.
+        """
+        messages = await self._messages([self._IMAGE_URI, self._IMAGE_URI])
+        assert len(messages) == 2
+        assert all(len(message["content"]) == 1 for message in messages)
+        assert all("image" in message["content"][0] for message in messages)
+
+    async def test_one_text_plus_files_collapses_into_one_message(self) -> None:
+        """One string plus one file becomes a single multimodal message."""
+        messages = await self._messages(["describe this", self._IMAGE_URI])
+        assert len(messages) == 1
+        assert [sorted(block) for block in messages[0]["content"]] == [
+            ["text"],
+            ["image"],
+        ]
+
+    async def test_two_texts_fan_out(self) -> None:
+        """Two strings stay two messages, matching the batch-prompt contract."""
+        messages = await self._messages(["one", "two"])
+        assert len(messages) == 2
+        assert [message["content"][0]["text"] for message in messages] == ["one", "two"]
+
+
+class TestTokenArrayPrompt:
+    """Token-array prompts are rejected with a 400 before any model dispatch.
+
+    OpenAI's legacy surface accepts token and token-array prompts; this backend
+    speaks Converse text blocks only.  The purpose-written "Token array prompts
+    are not supported" message is unreachable — ``prompt`` is typed as
+    ``InputFileUrl | str | list[InputFileUrl | str]``, so union validation fails
+    before ``_validate_prompt_and_streaming`` runs — and the client sees the
+    generic union errors instead.
+
+    Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+         stdapi/types/openai_completions.py:CompletionCreateParams._validate_prompt_and_streaming
+    """
+
+    pytestmark = pytest.mark.local
+
+    def test_token_array_prompt_is_rejected(self, app_client: TestClientType) -> None:
+        """``prompt=[[15496, 11]]`` is a 400 naming ``prompt``, not a 500."""
+        response = app_client.post(
+            "/v1/completions", json={"model": "test-model", "prompt": [[15496, 11]]}
+        )
+        assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "prompt" in error["message"]
+
+    def test_flat_token_prompt_is_rejected(self, app_client: TestClientType) -> None:
+        """A flat token list is rejected too — integers are not valid prompt parts."""
+        response = app_client.post(
+            "/v1/completions", json={"model": "test-model", "prompt": [15496, 11]}
+        )
+        assert response.status_code == 400, response.text
+        assert response.json()["error"]["type"] == "invalid_request_error"
+
+
+class TestMantleTextCompletionPassthrough:
+    """Bedrock Mantle chat responses converted to a legacy ``Completion``.
+
+    Mantle serves OpenAI-shaped chat responses; the legacy route reshapes them
+    into a ``Completion``.  ``system_fingerprint`` has no other producer in this
+    codebase, so this passthrough is the only way it ever reaches a client.
+
+    Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+         https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions-mantle.html
+         stdapi/models/chat/_mantle/_convert.py:chat_response_as_text_completion
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    def _raw(**extra: object) -> dict[str, Any]:
+        """Build a minimal Mantle chat completion payload.
+
+        Args:
+            **extra: Optional top-level fields to add.
+
+        Returns:
+            A Chat Completions response dict.
+        """
+        return {
+            "id": "chatcmpl-mantle",
+            "object": "chat.completion",
+            "created": 1_700_000_000,
+            "model": "openai.gpt-oss-20b-1:0",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "hi"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+            **extra,
+        }
+
+    def test_fingerprint_and_service_tier_survive_the_conversion(self) -> None:
+        """``system_fingerprint`` and ``service_tier`` are copied onto the Completion.
+
+        ``system_fingerprint`` is what upstream tells clients to watch alongside
+        ``seed`` for backend-configuration changes.
+        """
+        completion = chat_response_as_text_completion(
+            self._raw(system_fingerprint="fp_abc123", service_tier="flex"), "cmpl-1"
+        )
+        assert completion.system_fingerprint == "fp_abc123"
+        assert completion.service_tier == "flex"
+        assert completion.id == "cmpl-1", "the legacy id replaces the Mantle chat id"
+        assert completion.object == "text_completion"
+        assert completion.choices[0].text == "hi"
+
+    def test_absent_fields_are_not_invented(self) -> None:
+        """A payload without the two fields yields a Completion without them."""
+        completion = chat_response_as_text_completion(self._raw(), "cmpl-2")
+        assert completion.system_fingerprint is None
+        assert completion.service_tier is None

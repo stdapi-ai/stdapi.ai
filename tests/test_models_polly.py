@@ -25,7 +25,7 @@ from stdapi.models.audio.amazon_polly import (
 from stdapi.monitoring import REQUEST_LOG, EventLog
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Mapping
+    from collections.abc import Callable, Generator, Mapping
 
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_polly.literals import EngineType, VoiceIdType
@@ -577,6 +577,52 @@ class _StubPollyClient:
         return self._outcome
 
 
+@pytest.fixture
+def _request_context() -> Generator[None]:
+    """Bind the request-log and usage contexts the synthesis path writes into.
+
+    ``AudioModel.tts`` logs the selected voice and records Polly usage, both of
+    which read context variables that only exist inside a real request.
+    """
+    log_token = REQUEST_LOG.set(_start_event())
+    usage_token = usage.init_usage()
+    try:
+        yield
+    finally:
+        usage.USAGE.reset(usage_token)
+        REQUEST_LOG.reset(log_token)
+
+
+@pytest.fixture
+async def stub_polly(
+    monkeypatch: pytest.MonkeyPatch, _request_context: None
+) -> Callable[[bytes], _StubPollyClient]:
+    """Register a single neural ``Joanna`` voice and stub the Polly client.
+
+    ``_patch_voices`` bypasses the real metadata merge, so the lowercase lookup
+    ``_select_voice`` uses is seeded explicitly.
+
+    Returns:
+        Factory binding a stub client that answers ``synthesize_speech`` with
+        the given payload bytes, and returning it for request assertions.
+    """
+    _patch_voices(monkeypatch, {("neural", "us-east-1"): {"Joanna"}})
+    await initialize_polly_models()
+    amazon_polly._VOICES_BY_NAME_LOWER["joanna"] = "Joanna"  # noqa: SLF001
+
+    def _bind(payload: bytes) -> _StubPollyClient:
+        client = _StubPollyClient(
+            {"AudioStream": _FakeAudioStream(payload), "RequestCharacters": "5"}
+        )
+        monkeypatch.setattr(
+            stdapi.aws, "get_client", lambda _service, _region=None: client
+        )
+        return client
+
+    return _bind
+
+
+@pytest.mark.usefixtures("_request_context")
 class TestSynthesizeSpeechFailover:
     """AudioModel.tts: end-to-end synthesis fails over across candidate regions.
 
@@ -617,18 +663,12 @@ class TestSynthesizeSpeechFailover:
         monkeypatch.setattr(
             stdapi.aws, "get_client", lambda _service, region=None: clients[region]
         )
-        log_token = REQUEST_LOG.set(_start_event())
-        usage_token = usage.init_usage()
-        try:
-            response = await get_audio_model("amazon.polly-neural").tts(
-                text="Hello", voice="Joanna", resp_format="mp3"
-            )
-            audio = b"".join([chunk async for chunk in response["audio_stream"]])
-            records = usage.USAGE.get()
-            log = REQUEST_LOG.get()
-        finally:
-            usage.USAGE.reset(usage_token)
-            REQUEST_LOG.reset(log_token)
+        response = await get_audio_model("amazon.polly-neural").tts(
+            text="Hello", voice="Joanna", resp_format="mp3"
+        )
+        audio = b"".join([chunk async for chunk in response["audio_stream"]])
+        records = usage.USAGE.get()
+        log = REQUEST_LOG.get()
 
         assert audio == b"audio-bytes"
         assert clients["us-east-1"].calls == 1
@@ -654,33 +694,16 @@ class TestSynthesizeSpeechEncodedFormats:
     """
 
     async def test_wav_request_synthesizes_from_pcm_by_default(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, stub_polly: Callable[[bytes], _StubPollyClient]
     ) -> None:
         """A wav request asks Polly for pcm, not ogg_vorbis, with no SampleRate."""
-        _patch_voices(monkeypatch, {("neural", "us-east-1"): {"Joanna"}})
-        await initialize_polly_models()
-        amazon_polly._VOICES_BY_NAME_LOWER["joanna"] = "Joanna"  # noqa: SLF001
-
         # 0.5s of 16-bit mono silence at Polly's default 16 kHz pcm rate.
-        client = _StubPollyClient(
-            {
-                "AudioStream": _FakeAudioStream(b"\x00\x00" * 8000),
-                "RequestCharacters": "5",
-            }
+        client = stub_polly(b"\x00\x00" * 8000)
+
+        response = await get_audio_model("amazon.polly-neural").tts(
+            text="Hello", voice="Joanna", resp_format="wav"
         )
-        monkeypatch.setattr(
-            stdapi.aws, "get_client", lambda _service, _region=None: client
-        )
-        log_token = REQUEST_LOG.set(_start_event())
-        usage_token = usage.init_usage()
-        try:
-            response = await get_audio_model("amazon.polly-neural").tts(
-                text="Hello", voice="Joanna", resp_format="wav"
-            )
-            audio = b"".join([chunk async for chunk in response["audio_stream"]])
-        finally:
-            usage.USAGE.reset(usage_token)
-            REQUEST_LOG.reset(log_token)
+        audio = b"".join([chunk async for chunk in response["audio_stream"]])
 
         (request,) = client.requests
         assert request["OutputFormat"] == "pcm"
@@ -688,73 +711,30 @@ class TestSynthesizeSpeechEncodedFormats:
         # ffmpeg successfully decoded the raw pcm at the assumed 16 kHz rate.
         assert audio.startswith(b"RIFF")
 
-    async def test_explicit_sample_rate_overrides_the_pcm_default(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        ("sample_rate", "expected_output_format"),
+        [(8000, "pcm"), (24000, "ogg_vorbis")],
+        ids=["within-pcm-cap", "above-pcm-cap"],
+    )
+    async def test_explicit_sample_rate_selects_the_source_format(
+        self,
+        stub_polly: Callable[[bytes], _StubPollyClient],
+        sample_rate: int,
+        expected_output_format: str,
     ) -> None:
-        """A caller-provided SampleRate is still forwarded for the pcm source."""
-        _patch_voices(monkeypatch, {("neural", "us-east-1"): {"Joanna"}})
-        await initialize_polly_models()
-        amazon_polly._VOICES_BY_NAME_LOWER["joanna"] = "Joanna"  # noqa: SLF001
+        """A caller SampleRate is forwarded; above Polly's pcm cap the source is Vorbis."""
+        client = stub_polly(b"\x00\x00" * 4000)
 
-        client = _StubPollyClient(
-            {
-                "AudioStream": _FakeAudioStream(b"\x00\x00" * 4000),
-                "RequestCharacters": "5",
-            }
+        await get_audio_model("amazon.polly-neural").tts(
+            text="Hello",
+            voice="Joanna",
+            resp_format="flac",
+            extra_params={"SampleRate": sample_rate},
         )
-        monkeypatch.setattr(
-            stdapi.aws, "get_client", lambda _service, _region=None: client
-        )
-        log_token = REQUEST_LOG.set(_start_event())
-        usage_token = usage.init_usage()
-        try:
-            await get_audio_model("amazon.polly-neural").tts(
-                text="Hello",
-                voice="Joanna",
-                resp_format="flac",
-                extra_params={"SampleRate": 8000},
-            )
-        finally:
-            usage.USAGE.reset(usage_token)
-            REQUEST_LOG.reset(log_token)
 
         (request,) = client.requests
-        assert request["OutputFormat"] == "pcm"
-        assert request["SampleRate"] == "8000"
-
-    async def test_sample_rate_above_pcm_cap_falls_back_to_vorbis(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A SampleRate Polly pcm cannot serve keeps the Ogg Vorbis source."""
-        _patch_voices(monkeypatch, {("neural", "us-east-1"): {"Joanna"}})
-        await initialize_polly_models()
-        amazon_polly._VOICES_BY_NAME_LOWER["joanna"] = "Joanna"  # noqa: SLF001
-
-        client = _StubPollyClient(
-            {
-                "AudioStream": _FakeAudioStream(b"\x00\x00" * 4000),
-                "RequestCharacters": "5",
-            }
-        )
-        monkeypatch.setattr(
-            stdapi.aws, "get_client", lambda _service, _region=None: client
-        )
-        log_token = REQUEST_LOG.set(_start_event())
-        usage_token = usage.init_usage()
-        try:
-            await get_audio_model("amazon.polly-neural").tts(
-                text="Hello",
-                voice="Joanna",
-                resp_format="flac",
-                extra_params={"SampleRate": 24000},
-            )
-        finally:
-            usage.USAGE.reset(usage_token)
-            REQUEST_LOG.reset(log_token)
-
-        (request,) = client.requests
-        assert request["OutputFormat"] == "ogg_vorbis"
-        assert request["SampleRate"] == "24000"
+        assert request["OutputFormat"] == expected_output_format
+        assert request["SampleRate"] == str(sample_rate)
 
 
 class TestSynthesizeSpeechPcmSampleRate:
@@ -766,33 +746,16 @@ class TestSynthesizeSpeechPcmSampleRate:
     """
 
     async def test_pcm_request_synthesizes_from_16khz_and_resamples_to_24khz(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, stub_polly: Callable[[bytes], _StubPollyClient]
     ) -> None:
         """A default pcm request asks Polly for 16 kHz pcm, then resamples to 24 kHz."""
-        _patch_voices(monkeypatch, {("neural", "us-east-1"): {"Joanna"}})
-        await initialize_polly_models()
-        amazon_polly._VOICES_BY_NAME_LOWER["joanna"] = "Joanna"  # noqa: SLF001
-
         # 0.5s of 16-bit mono silence at Polly's default 16 kHz pcm rate.
-        client = _StubPollyClient(
-            {
-                "AudioStream": _FakeAudioStream(b"\x00\x00" * 8000),
-                "RequestCharacters": "5",
-            }
+        client = stub_polly(b"\x00\x00" * 8000)
+
+        response = await get_audio_model("amazon.polly-neural").tts(
+            text="Hello", voice="Joanna", resp_format="pcm"
         )
-        monkeypatch.setattr(
-            stdapi.aws, "get_client", lambda _service, _region=None: client
-        )
-        log_token = REQUEST_LOG.set(_start_event())
-        usage_token = usage.init_usage()
-        try:
-            response = await get_audio_model("amazon.polly-neural").tts(
-                text="Hello", voice="Joanna", resp_format="pcm"
-            )
-            audio = b"".join([chunk async for chunk in response["audio_stream"]])
-        finally:
-            usage.USAGE.reset(usage_token)
-            REQUEST_LOG.reset(log_token)
+        audio = b"".join([chunk async for chunk in response["audio_stream"]])
 
         (request,) = client.requests
         assert request["OutputFormat"] == "pcm"
@@ -801,33 +764,19 @@ class TestSynthesizeSpeechPcmSampleRate:
         assert len(audio) == 24000
 
     async def test_pcm_explicit_sample_rate_bypasses_resampling(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, stub_polly: Callable[[bytes], _StubPollyClient]
     ) -> None:
         """A caller-provided pcm SampleRate is forwarded and left untouched."""
-        _patch_voices(monkeypatch, {("neural", "us-east-1"): {"Joanna"}})
-        await initialize_polly_models()
-        amazon_polly._VOICES_BY_NAME_LOWER["joanna"] = "Joanna"  # noqa: SLF001
-
         raw_audio = b"\x01\x02" * 4000
-        client = _StubPollyClient(
-            {"AudioStream": _FakeAudioStream(raw_audio), "RequestCharacters": "5"}
+        client = stub_polly(raw_audio)
+
+        response = await get_audio_model("amazon.polly-neural").tts(
+            text="Hello",
+            voice="Joanna",
+            resp_format="pcm",
+            extra_params={"SampleRate": 8000},
         )
-        monkeypatch.setattr(
-            stdapi.aws, "get_client", lambda _service, _region=None: client
-        )
-        log_token = REQUEST_LOG.set(_start_event())
-        usage_token = usage.init_usage()
-        try:
-            response = await get_audio_model("amazon.polly-neural").tts(
-                text="Hello",
-                voice="Joanna",
-                resp_format="pcm",
-                extra_params={"SampleRate": 8000},
-            )
-            audio = b"".join([chunk async for chunk in response["audio_stream"]])
-        finally:
-            usage.USAGE.reset(usage_token)
-            REQUEST_LOG.reset(log_token)
+        audio = b"".join([chunk async for chunk in response["audio_stream"]])
 
         (request,) = client.requests
         assert request["OutputFormat"] == "pcm"
@@ -848,34 +797,20 @@ class TestSynthesizeSpeechMarks:
     """
 
     async def test_speech_marks_request_json_output_and_content_type(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, stub_polly: Callable[[bytes], _StubPollyClient]
     ) -> None:
         """Marks force OutputFormat=json, bypass transcoding, and label the stream."""
-        _patch_voices(monkeypatch, {("neural", "us-east-1"): {"Joanna"}})
-        await initialize_polly_models()
-        amazon_polly._VOICES_BY_NAME_LOWER["joanna"] = "Joanna"  # noqa: SLF001
-
         marks = b'{"time":0,"type":"word","start":0,"end":5,"value":"Hello"}\n'
-        client = _StubPollyClient(
-            {"AudioStream": _FakeAudioStream(marks), "RequestCharacters": "5"}
+        client = stub_polly(marks)
+
+        response = await get_audio_model("amazon.polly-neural").tts(
+            text="Hello",
+            voice="Joanna",
+            # "wav" would normally be transcoded from pcm by ffmpeg.
+            resp_format="wav",
+            extra_params={"SpeechMarkTypes": ["word"]},
         )
-        monkeypatch.setattr(
-            stdapi.aws, "get_client", lambda _service, _region=None: client
-        )
-        log_token = REQUEST_LOG.set(_start_event())
-        usage_token = usage.init_usage()
-        try:
-            response = await get_audio_model("amazon.polly-neural").tts(
-                text="Hello",
-                voice="Joanna",
-                # "wav" would normally be transcoded from pcm by ffmpeg.
-                resp_format="wav",
-                extra_params={"SpeechMarkTypes": ["word"]},
-            )
-            payload = b"".join([chunk async for chunk in response["audio_stream"]])
-        finally:
-            usage.USAGE.reset(usage_token)
-            REQUEST_LOG.reset(log_token)
+        payload = b"".join([chunk async for chunk in response["audio_stream"]])
 
         (request,) = client.requests
         assert request["OutputFormat"] == "json"
@@ -884,30 +819,77 @@ class TestSynthesizeSpeechMarks:
         assert response["content_type"] == "application/x-json-stream"
 
     async def test_audio_request_has_no_content_type_override(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, stub_polly: Callable[[bytes], _StubPollyClient]
     ) -> None:
         """Without marks, the response keeps deriving its type from the format."""
-        _patch_voices(monkeypatch, {("neural", "us-east-1"): {"Joanna"}})
-        await initialize_polly_models()
-        amazon_polly._VOICES_BY_NAME_LOWER["joanna"] = "Joanna"  # noqa: SLF001
+        client = stub_polly(b"audio")
 
-        client = _StubPollyClient(
-            {"AudioStream": _FakeAudioStream(b"audio"), "RequestCharacters": "5"}
+        response = await get_audio_model("amazon.polly-neural").tts(
+            text="Hello", voice="Joanna", resp_format="mp3"
         )
-        monkeypatch.setattr(
-            stdapi.aws, "get_client", lambda _service, _region=None: client
-        )
-        log_token = REQUEST_LOG.set(_start_event())
-        usage_token = usage.init_usage()
-        try:
-            response = await get_audio_model("amazon.polly-neural").tts(
-                text="Hello", voice="Joanna", resp_format="mp3"
-            )
-            await response["audio_stream"].aclose()
-        finally:
-            usage.USAGE.reset(usage_token)
-            REQUEST_LOG.reset(log_token)
+        await response["audio_stream"].aclose()
 
         (request,) = client.requests
         assert request["OutputFormat"] == "mp3"
         assert response["content_type"] is None
+
+
+class TestSynthesizeSpeechTextType:
+    """AudioModel.tts: an SSML document is declared to Polly as ``TextType=ssml``.
+
+    Polly reads markup aloud verbatim when the request says ``TextType=text``,
+    so a regression in the ``<speak>`` detection produces a 200 with valid
+    audio of the tags being spoken -- invisible to a response-shape assertion.
+    Speed is applied by wrapping plain text in a prosody envelope, which is
+    SSML too.
+
+    Ref: https://docs.aws.amazon.com/polly/latest/dg/ssml.html
+         https://docs.aws.amazon.com/polly/latest/dg/supportedtags.html
+         stdapi/models/audio/amazon_polly.py:_prepare_text_for_speech
+    """
+
+    async def test_ssml_document_is_forwarded_verbatim_as_ssml(
+        self, stub_polly: Callable[[bytes], _StubPollyClient]
+    ) -> None:
+        """Input starting with ``<speak>`` is sent unchanged with TextType=ssml."""
+        client = stub_polly(b"audio")
+        document = '<speak>Hello <break time="1s"/> world</speak>'
+
+        response = await get_audio_model("amazon.polly-neural").tts(
+            text=document, voice="Joanna", resp_format="mp3"
+        )
+        await response["audio_stream"].aclose()
+
+        (request,) = client.requests
+        assert request["TextType"] == "ssml"
+        assert request["Text"] == document
+
+    async def test_plain_text_is_sent_as_text(
+        self, stub_polly: Callable[[bytes], _StubPollyClient]
+    ) -> None:
+        """Plain text at the default speed is sent unwrapped with TextType=text."""
+        client = stub_polly(b"audio")
+
+        response = await get_audio_model("amazon.polly-neural").tts(
+            text="Hello", voice="Joanna", resp_format="mp3"
+        )
+        await response["audio_stream"].aclose()
+
+        (request,) = client.requests
+        assert request["TextType"] == "text"
+        assert request["Text"] == "Hello"
+
+    async def test_speed_wraps_plain_text_in_an_ssml_prosody_envelope(
+        self, stub_polly: Callable[[bytes], _StubPollyClient]
+    ) -> None:
+        """A non-default speed becomes a ``<prosody rate>`` document, in percent."""
+        client = stub_polly(b"audio")
+
+        response = await get_audio_model("amazon.polly-neural").tts(
+            text="Hello", voice="Joanna", resp_format="mp3", speed=1.5
+        )
+        await response["audio_stream"].aclose()
+
+        (request,) = client.requests
+        assert request["TextType"] == "ssml"
+        assert request["Text"] == '<speak><prosody rate="150%">Hello</prosody></speak>'

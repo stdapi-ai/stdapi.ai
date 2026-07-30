@@ -184,3 +184,84 @@ class TestCohereEmbeddingModelQuantizedTypes:
         assert excinfo.value.status == 400
         assert "`float`" in str(excinfo.value)
         assert "supported" in str(excinfo.value)
+
+
+@pytest.mark.local
+class TestCohereEmbeddingModelImageSources:
+    """EmbeddingModel.embed_text: non-``data:`` image inputs are re-encoded before sending.
+
+    Bedrock Cohere Embed only accepts ``image/jpeg`` or ``image/png`` data URIs,
+    so the documented URL and S3-URI extension is implemented by fetching the
+    bytes and re-encoding them; only the transport is stubbed here.
+
+    Ref: https://docs.cohere.com/reference/embed
+         stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
+         stdapi/input_file.py:_HttpSource
+    """
+
+    async def test_image_https_url_is_converted_to_a_data_uri(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An ``https://`` image reaches Bedrock as a ``data:image/png;base64,`` URI.
+
+        The Bedrock body carries no URL locator, so a regression in the fetch or
+        re-encode path would send an unusable value (or the raw URL) instead.
+        """
+        from base64 import b64encode  # noqa: PLC0415
+
+        from stdapi import input_file  # noqa: PLC0415
+        from stdapi.input_file import InputFileUrl  # noqa: PLC0415
+
+        png = b"\x89PNG\r\n\x1a\nstub"
+
+        async def _resolve_metadata(source: Any) -> None:  # noqa: ANN401
+            source._content_type = "image/png"  # noqa: SLF001
+            source._size = len(png)  # noqa: SLF001
+            source._filename = "image.png"  # noqa: SLF001
+
+        async def _read(_source: Any) -> bytes:  # noqa: ANN401
+            return png
+
+        monkeypatch.setattr(
+            input_file._HttpSource,  # noqa: SLF001
+            "_resolve_metadata",
+            _resolve_metadata,
+        )
+        monkeypatch.setattr(input_file._HttpSource, "_read", _read)  # noqa: SLF001
+
+        model = EmbeddingModel("cohere.embed-multilingual-v3")
+        bodies: list[dict[str, Any]] = []
+
+        async def _invoke(
+            body: dict[str, Any],
+            **_kwargs: Any,  # noqa: ANN401
+        ) -> InvokeResult[Any]:
+            bodies.append(body)
+            return InvokeResult(
+                response={
+                    "id": "req-5",
+                    "response_type": "embeddings_floats",
+                    "embeddings": [[0.1, 0.2]],
+                    "texts": [],
+                    "images": [],
+                },
+                input_tokens=1,
+                output_tokens=0,
+            )
+
+        monkeypatch.setattr(model, "invoke", _invoke)
+
+        response = await model.embed_text(
+            [InputFileUrl("https://example.invalid/image.png")],
+            dimensions=None,
+            extra_params={},
+        )
+
+        (body,) = bodies
+        assert body["images"] == [f"data:image/png;base64,{b64encode(png).decode()}"], (
+            "the image must be inlined as a data URI, not forwarded as a URL"
+        )
+        assert body["input_type"] == "image", (
+            "an all-image batch switches a v3 model to the image input type"
+        )
+        assert response.embeddings == [[0.1, 0.2]]

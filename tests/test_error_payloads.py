@@ -35,24 +35,18 @@ from stdapi.monitoring import REQUEST
 from stdapi.region_routing import RegionRouter, quota_retry_after
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from starlette.testclient import TestClient
 
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
 
 
-def _openai_headers(api_key: str) -> dict[str, str]:
+def _bearer_headers(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
 
 
 def _anthropic_headers(api_key: str) -> dict[str, str]:
     return {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
-
-
-def _cohere_headers(api_key: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {api_key}"}
 
 
 # ---------------------------------------------------------------------------
@@ -267,12 +261,6 @@ class TestOpenaiErrorPayloads:
          stdapi/api_providers/openai.py:_format_error
     """
 
-    @pytest.fixture(autouse=True)
-    def _skip_non_local(self, test_client: TestClient) -> None:
-        """Skip the whole class unless the in-process test client is the target."""
-        if not test_client:
-            pytest.skip("Unittest only for local tests.")
-
     def test_invalid_model_returns_openai_envelope(
         self, test_client: TestClient, api_key: str
     ) -> None:
@@ -290,7 +278,7 @@ class TestOpenaiErrorPayloads:
                 "model": "nonexistent-model-xyz",
                 "messages": [{"role": "user", "content": "hi"}],
             },
-            headers=_openai_headers(api_key),
+            headers=_bearer_headers(api_key),
         )
         assert resp.status_code == 404
         err = _assert_openai_error_shape(resp.json())
@@ -313,7 +301,7 @@ class TestOpenaiErrorPayloads:
         resp = test_client.post(
             "/v1/chat/completions",
             json={"model": "x", "messages": "not-a-list"},
-            headers=_openai_headers(api_key),
+            headers=_bearer_headers(api_key),
         )
         assert resp.status_code == 400
         err = _assert_openai_error_shape(resp.json())
@@ -348,12 +336,6 @@ class TestAnthropicErrorPayloads:
     Ref: https://platform.claude.com/docs/en/api/errors
          stdapi/api_providers/anthropic.py:_format_error
     """
-
-    @pytest.fixture(autouse=True)
-    def _skip_non_local(self, test_client: TestClient) -> None:
-        """Skip the whole class unless the in-process test client is the target."""
-        if not test_client:
-            pytest.skip("Unittest only for local tests.")
 
     def test_invalid_model_returns_anthropic_envelope(
         self, test_client: TestClient, api_key: str
@@ -435,12 +417,6 @@ class TestCohereErrorPayloads:
          stdapi/api_providers/cohere.py:_format_error
     """
 
-    @pytest.fixture(autouse=True)
-    def _skip_non_local(self, test_client: TestClient) -> None:
-        """Skip the whole class unless the in-process test client is the target."""
-        if not test_client:
-            pytest.skip("Unittest only for local tests.")
-
     def test_invalid_model_returns_cohere_envelope(
         self, test_client: TestClient, api_key: str
     ) -> None:
@@ -451,7 +427,7 @@ class TestCohereErrorPayloads:
         resp = test_client.post(
             "/cohere/v2/rerank",
             json={"model": "nonexistent-model-xyz", "query": "q", "documents": ["a"]},
-            headers=_cohere_headers(api_key),
+            headers=_bearer_headers(api_key),
         )
         assert resp.status_code == 404
         message = _assert_cohere_error_shape(resp.json())
@@ -468,7 +444,7 @@ class TestCohereErrorPayloads:
         resp = test_client.post(
             "/cohere/v2/rerank",
             json={"model": "x", "query": "q", "documents": "not-a-list"},
-            headers=_cohere_headers(api_key),
+            headers=_bearer_headers(api_key),
         )
         assert resp.status_code == 400
         message = _assert_cohere_error_shape(resp.json())
@@ -513,12 +489,6 @@ class TestCrossRouteConsistency:
     Ref: stdapi/api_providers/__init__.py:format_http_error
     """
 
-    @pytest.fixture(autouse=True)
-    def _skip_non_local(self, test_client: TestClient) -> None:
-        """Skip the whole class unless the in-process test client is the target."""
-        if not test_client:
-            pytest.skip("Unittest only for local tests.")
-
     def test_same_invalid_model_different_envelopes(
         self, test_client: TestClient, api_key: str
     ) -> None:
@@ -537,7 +507,7 @@ class TestCrossRouteConsistency:
                 "model": "nonexistent-model-xyz",
                 "messages": [{"role": "user", "content": "hi"}],
             },
-            headers=_openai_headers(api_key),
+            headers=_bearer_headers(api_key),
         )
         anthropic_resp = test_client.post(
             "/anthropic/v1/messages",
@@ -581,12 +551,6 @@ class TestRoutingErrorPayloads:
     Ref: stdapi/main.py:handle_http_exception
          stdapi/api_providers/__init__.py:format_http_error
     """
-
-    @pytest.fixture(autouse=True)
-    def _skip_non_local(self, test_client: TestClient) -> None:
-        """Skip when running against a remote/official API (no in-process router)."""
-        if not test_client:
-            pytest.skip("Unittest only for local tests.")
 
     def test_wrong_method_returns_openai_envelope(
         self, test_client: TestClient
@@ -650,6 +614,7 @@ def _client_error(code: str, message: str = "boom") -> ClientError:
     return ClientError({"Error": {"Code": code, "Message": message}}, "SomeOperation")
 
 
+@pytest.mark.usefixtures("request_log")
 class TestBotocoreClientErrorEnvelope:
     """``handle_botocore_client_error`` maps an AWS error code onto the OpenAI envelope.
 
@@ -661,15 +626,6 @@ class TestBotocoreClientErrorEnvelope:
          stdapi/main.py:handle_botocore_client_error
          stdapi/aws_bedrock.py:AWS_ERROR_MAP
     """
-
-    @pytest.fixture(autouse=True)
-    def _request_log_context(self) -> Iterator[None]:
-        """Provide the request-log context that logging outside request scope needs."""
-        from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
-
-        token = REQUEST_LOG.set({"level": "info"})  # type: ignore[typeddict-item]
-        yield
-        REQUEST_LOG.reset(token)
 
     async def test_client_error_param_is_not_the_internal_error_type(self) -> None:
         """``ThrottlingException`` becomes a 429 whose ``param`` stays null.
@@ -723,6 +679,7 @@ def _tagged_request(tag: str) -> Request:
     )
 
 
+@pytest.mark.usefixtures("request_log")
 class TestRetryAfterHeader:
     """429 responses advertise the region router's own quota backoff as ``retry-after``.
 
@@ -735,15 +692,6 @@ class TestRetryAfterHeader:
          stdapi/main.py:set_retry_after_header
          stdapi/region_routing.py:quota_retry_after
     """
-
-    @pytest.fixture(autouse=True)
-    def _request_log_context(self) -> Iterator[None]:
-        """Provide the request-log context that ``mark_error`` logging needs."""
-        from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
-
-        token = REQUEST_LOG.set({"level": "info"})  # type: ignore[typeddict-item]
-        yield
-        REQUEST_LOG.reset(token)
 
     @staticmethod
     def _mark_error(

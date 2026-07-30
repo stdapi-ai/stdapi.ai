@@ -105,3 +105,59 @@ def test_tool_cache_point_placed_after_marked_tool_not_last() -> None:
     assert tools[1] == {"cachePoint": {"type": "default"}}
     assert tools[2]["toolSpec"]["name"] == "b"
     assert tools[3]["toolSpec"]["name"] == "c"
+
+
+def test_system_cache_point_carries_the_one_hour_ttl() -> None:
+    """``cache_control.ttl`` is forwarded to the Bedrock ``cachePoint`` block.
+
+    Bedrock's ``CachePointBlock`` takes the TTL as its own field, and a 1h cache
+    write is billed at twice the 5m rate, so dropping the value silently
+    downgrades the breakpoint to the default lifetime.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CachePointBlock.html
+         stdapi/models/chat/_adapters/_anthropic_message.py:_build_cache_point
+    """
+    blocks = _map_system_blocks(
+        [
+            TextBlockParam(
+                type="text",
+                text="a",
+                cache_control=CacheControlEphemeralParam(ttl="1h"),
+            )
+        ],
+        allow_explicit_caching=True,
+    )
+    assert blocks == [{"text": "a"}, {"cachePoint": {"type": "default", "ttl": "1h"}}]
+
+
+def test_cache_point_without_ttl_omits_the_key() -> None:
+    """A ttl-less ``cache_control`` produces a ``cachePoint`` with no ``ttl`` key.
+
+    Bedrock applies its own default lifetime when the field is absent, so the
+    gateway must not send an explicit value the caller did not ask for.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+         stdapi/models/chat/_adapters/_anthropic_message.py:_build_cache_point
+    """
+    blocks = _map_system_blocks(
+        [TextBlockParam(type="text", text="a", cache_control=_CACHE_CONTROL)],
+        allow_explicit_caching=True,
+    )
+    assert blocks[1] == {"cachePoint": {"type": "default"}}
+    assert "ttl" not in blocks[1]["cachePoint"]
+
+
+def test_tool_cache_point_carries_the_one_hour_ttl() -> None:
+    """A tool ``cache_control.ttl`` reaches the ``cachePoint`` element in ``toolConfig.tools``.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+         stdapi/models/chat/_adapters/_anthropic_message.py:_build_tool_config
+    """
+    tool_config = _build_tool_config(
+        [_tool("a", CacheControlEphemeralParam(ttl="1h")), _tool("b")],
+        None,
+        allow_explicit_caching=True,
+    )
+    assert tool_config is not None
+    assert tool_config["tools"][1] == {"cachePoint": {"type": "default", "ttl": "1h"}}

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from io import BytesIO
 from json import loads
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import pytest
 from botocore.exceptions import ClientError
@@ -25,21 +25,9 @@ from stdapi.models import ModelDetails
 from stdapi.routes import openai_chat_completions
 from stdapi.types.openai_chat_completions import ChatCompletion
 
-if TYPE_CHECKING:
-    from collections.abc import Iterator
-
-#: All tests in this module exercise the local implementation in-process.
-pytestmark = pytest.mark.local
-
-
-@pytest.fixture(autouse=True)
-def _request_log_context() -> Iterator[None]:
-    """Provide the request-log context that logging outside request scope needs."""
-    from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
-
-    token = REQUEST_LOG.set({"level": "info"})  # type: ignore[typeddict-item]
-    yield
-    REQUEST_LOG.reset(token)
+#: All tests in this module exercise the local implementation in-process, and log
+#: outside request scope, so they need the shared request-log context.
+pytestmark = [pytest.mark.local, pytest.mark.usefixtures("request_log")]
 
 
 class _FakeConnectionError:

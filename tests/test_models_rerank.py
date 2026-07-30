@@ -31,7 +31,7 @@ from stdapi.pricing import Dimension
 from stdapi.usage import USAGE, init_model_state, init_usage
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Callable, Generator
 
     from types_aiobotocore_bedrock.literals import RegionName
 
@@ -166,6 +166,18 @@ class _StubAgentRuntimeClient:
         return page
 
 
+def _bedrock_config(request: dict[str, Any]) -> dict[str, Any]:
+    """Return the Bedrock-specific block of one recorded Rerank request.
+
+    Args:
+        request: A request recorded by ``_StubAgentRuntimeClient``.
+
+    Returns:
+        ``rerankingConfiguration.bedrockRerankingConfiguration``.
+    """
+    return request["rerankingConfiguration"]["bedrockRerankingConfiguration"]  # type: ignore[no-any-return]
+
+
 def _throttling_error() -> ClientError:
     response: Any = {
         "Error": {"Code": "ThrottlingException", "Message": "Throttled"},
@@ -206,24 +218,37 @@ class TestRerankCall:
         REQUEST_LOG.reset(log_token)
         REQUEST_ID.reset(id_token)
 
-    @staticmethod
-    def _patch_infra(
-        monkeypatch: pytest.MonkeyPatch,
-        client: _StubAgentRuntimeClient,
-        region: str = "us-east-1",
-    ) -> None:
-        """Pin the candidate region and stub the agent-runtime client."""
+    @pytest.fixture
+    def rerank_client(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> Callable[..., _StubAgentRuntimeClient]:
+        """Return a factory that stubs the agent-runtime client for one pinned region.
 
-        async def _candidates(_model_id: str) -> list[RegionName]:
-            return [region]  # type: ignore[list-item]
+        Returns:
+            ``make(pages, region="us-east-1")`` -> the stub whose ``requests``
+            list records every Rerank call the model issued.
+        """
 
-        monkeypatch.setattr(bedrock_rerank, "compute_candidate_regions", _candidates)
-        monkeypatch.setattr(
-            bedrock_rerank, "get_client", lambda _service, _region: client
-        )
+        def _make(
+            pages: list[dict[str, Any] | Exception], region: str = "us-east-1"
+        ) -> _StubAgentRuntimeClient:
+            client = _StubAgentRuntimeClient(pages)
+
+            async def _candidates(_model_id: str) -> list[RegionName]:
+                return [region]  # type: ignore[list-item]
+
+            monkeypatch.setattr(
+                bedrock_rerank, "compute_candidate_regions", _candidates
+            )
+            monkeypatch.setattr(
+                bedrock_rerank, "get_client", lambda _service, _region: client
+            )
+            return client
+
+        return _make
 
     async def test_rerank_maps_results_and_bills_one_unit(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, rerank_client: Callable[..., _StubAgentRuntimeClient]
     ) -> None:
         """Results map to (index, relevance_score) and one search unit is billed.
 
@@ -234,10 +259,7 @@ class TestRerankCall:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Rerank.html
              stdapi/usage.py:record_bedrock_usage
         """
-        client = _StubAgentRuntimeClient(
-            [{"results": [{"index": 1, "relevanceScore": 0.9}]}]
-        )
-        self._patch_infra(monkeypatch, client)
+        client = rerank_client([{"results": [{"index": 1, "relevanceScore": 0.9}]}])
 
         response = await RerankModel(RERANK_MODELS[1]).rerank(
             "query", ["a", "b"], top_n=None, extra_params={}
@@ -256,9 +278,7 @@ class TestRerankCall:
         assert request["rerankingConfiguration"]["type"] == "BEDROCK_RERANKING_MODEL", (
             "the reranking configuration must be discriminated for Bedrock models"
         )
-        configuration = request["rerankingConfiguration"][
-            "bedrockRerankingConfiguration"
-        ]
+        configuration = _bedrock_config(request)
         assert configuration["numberOfResults"] == 2
         assert configuration["modelConfiguration"] == {
             "modelArn": f"arn:aws:bedrock:us-east-1::foundation-model/{RERANK_MODELS[1]}"
@@ -268,7 +288,7 @@ class TestRerankCall:
         assert records[0].quantities == {Dimension.SEARCH_UNITS: 1}
 
     async def test_top_n_caps_number_of_results(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, rerank_client: Callable[..., _StubAgentRuntimeClient]
     ) -> None:
         """NumberOfResults is min(top_n, document count).
 
@@ -279,23 +299,19 @@ class TestRerankCall:
         Ref: https://docs.cohere.com/v2/reference/rerank
              stdapi/models/rerank/bedrock_rerank.py:RerankModel
         """
-        client = _StubAgentRuntimeClient([{"results": []}, {"results": []}])
-        self._patch_infra(monkeypatch, client)
+        client = rerank_client([{"results": []}, {"results": []}])
         model = RerankModel(RERANK_MODELS[0])
 
         await model.rerank("q", ["a", "b", "c"], top_n=2, extra_params={})
         await model.rerank("q", ["a", "b"], top_n=9, extra_params={})
 
         counts = [
-            request["rerankingConfiguration"]["bedrockRerankingConfiguration"][
-                "numberOfResults"
-            ]
-            for request in client.requests
+            _bedrock_config(request)["numberOfResults"] for request in client.requests
         ]
         assert counts == [2, 2]
 
     async def test_top_n_zero_requests_zero_results(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, rerank_client: Callable[..., _StubAgentRuntimeClient]
     ) -> None:
         """top_n=0 is honoured literally; only None means all documents.
 
@@ -305,16 +321,13 @@ class TestRerankCall:
         Ref: stdapi/types/cohere_rerank.py:RerankRequest
              botocore/data/bedrock-agent-runtime/2023-07-26/service-2.json
         """
-        client = _StubAgentRuntimeClient([{"results": []}])
-        self._patch_infra(monkeypatch, client)
+        client = rerank_client([{"results": []}])
 
         await RerankModel(RERANK_MODELS[0]).rerank(
             "q", ["a", "b"], top_n=0, extra_params={}
         )
 
-        configuration = client.requests[0]["rerankingConfiguration"][
-            "bedrockRerankingConfiguration"
-        ]
+        configuration = _bedrock_config(client.requests[0])
         assert configuration["numberOfResults"] == 0
 
     async def test_throttled_region_fails_over_via_no_retry_client(
@@ -373,7 +386,7 @@ class TestRerankCall:
         assert record.quantities == {Dimension.SEARCH_UNITS: 1}
 
     async def test_pagination_follows_next_token(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, rerank_client: Callable[..., _StubAgentRuntimeClient]
     ) -> None:
         """Paginated results are concatenated and billed once.
 
@@ -383,7 +396,7 @@ class TestRerankCall:
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Rerank.html
         """
-        client = _StubAgentRuntimeClient(
+        client = rerank_client(
             [
                 {
                     "results": [{"index": 0, "relevanceScore": 0.8}],
@@ -392,7 +405,6 @@ class TestRerankCall:
                 {"results": [{"index": 1, "relevanceScore": 0.2}]},
             ]
         )
-        self._patch_infra(monkeypatch, client)
 
         response = await RerankModel(RERANK_MODELS[1]).rerank(
             "q", ["a", "b"], top_n=None, extra_params={}
@@ -411,7 +423,7 @@ class TestRerankCall:
         assert record.quantities == {Dimension.SEARCH_UNITS: 1}
 
     async def test_search_units_scale_with_document_count(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, rerank_client: Callable[..., _StubAgentRuntimeClient]
     ) -> None:
         """One search unit is billed per started batch of 100 documents.
 
@@ -421,8 +433,7 @@ class TestRerankCall:
         Ref: stdapi/models/rerank/bedrock_rerank.py:RerankModel
              stdapi/usage.py:record_bedrock_usage
         """
-        client = _StubAgentRuntimeClient([{"results": []}])
-        self._patch_infra(monkeypatch, client)
+        client = rerank_client([{"results": []}])
 
         response = await RerankModel(RERANK_MODELS[1]).rerank(
             "q", [f"doc{i}" for i in range(150)], top_n=1, extra_params={}
@@ -430,17 +441,12 @@ class TestRerankCall:
 
         assert response.search_units == 2
         assert len(client.requests[0]["sources"]) == 150
-        assert (
-            client.requests[0]["rerankingConfiguration"][
-                "bedrockRerankingConfiguration"
-            ]["numberOfResults"]
-            == 1
-        )
+        assert _bedrock_config(client.requests[0])["numberOfResults"] == 1
         records = list(USAGE.get().values())
         assert records[0].quantities == {Dimension.SEARCH_UNITS: 2}
 
     async def test_extra_params_forwarded_as_additional_fields(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, rerank_client: Callable[..., _StubAgentRuntimeClient]
     ) -> None:
         """Extra model parameters land in additionalModelRequestFields.
 
@@ -450,16 +456,13 @@ class TestRerankCall:
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Rerank.html
         """
-        client = _StubAgentRuntimeClient([{"results": []}])
-        self._patch_infra(monkeypatch, client)
+        client = rerank_client([{"results": []}])
 
         await RerankModel(RERANK_MODELS[1]).rerank(
             "q", ["a"], top_n=None, extra_params={"max_tokens_per_doc": 512}
         )
 
-        configuration = client.requests[0]["rerankingConfiguration"][
-            "bedrockRerankingConfiguration"
-        ]["modelConfiguration"]
+        configuration = _bedrock_config(client.requests[0])["modelConfiguration"]
         assert configuration["additionalModelRequestFields"] == {
             "max_tokens_per_doc": 512
         }
@@ -468,7 +471,7 @@ class TestRerankCall:
         )
 
     async def test_single_key_text_object_uses_text_document_fast_path(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, rerank_client: Callable[..., _StubAgentRuntimeClient]
     ) -> None:
         """A ``{"text": ...}`` object document keeps the plain textDocument wire shape.
 
@@ -477,8 +480,7 @@ class TestRerankCall:
 
         Ref: stdapi/models/rerank/bedrock_rerank.py:_document_source
         """
-        client = _StubAgentRuntimeClient([{"results": []}])
-        self._patch_infra(monkeypatch, client)
+        client = rerank_client([{"results": []}])
 
         await RerankModel(RERANK_MODELS[1]).rerank(
             "q", [{"text": "a"}], top_n=None, extra_params={}
@@ -491,16 +493,18 @@ class TestRerankCall:
         }
 
     async def test_multi_field_object_uses_json_document_source(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, rerank_client: Callable[..., _StubAgentRuntimeClient]
     ) -> None:
         """A multi-field object document is sent as a Bedrock jsonDocument source.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Rerank.html
              stdapi/models/rerank/bedrock_rerank.py:_document_source
         """
-        client = _StubAgentRuntimeClient([{"results": []}])
-        self._patch_infra(monkeypatch, client)
-        document = {"title": "Nevada", "body": "Carson City is its capital."}
+        client = rerank_client([{"results": []}])
+        document: dict[str, Any] = {
+            "title": "Nevada",
+            "body": "Carson City is its capital.",
+        }
 
         await RerankModel(RERANK_MODELS[1]).rerank(
             "q", [document], top_n=None, extra_params={}
@@ -513,14 +517,13 @@ class TestRerankCall:
         }
 
     async def test_object_without_text_key_uses_json_document_source(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, rerank_client: Callable[..., _StubAgentRuntimeClient]
     ) -> None:
         """An object document without a ``text`` key is sent as a jsonDocument source.
 
         Ref: stdapi/models/rerank/bedrock_rerank.py:_document_source
         """
-        client = _StubAgentRuntimeClient([{"results": []}])
-        self._patch_infra(monkeypatch, client)
+        client = rerank_client([{"results": []}])
 
         await RerankModel(RERANK_MODELS[1]).rerank(
             "q", [{"title": "Nevada"}], top_n=None, extra_params={}
@@ -533,7 +536,7 @@ class TestRerankCall:
         }
 
     async def test_mixed_string_and_object_documents(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, rerank_client: Callable[..., _StubAgentRuntimeClient]
     ) -> None:
         """String and object documents in the same request build distinct sources.
 
@@ -542,8 +545,7 @@ class TestRerankCall:
 
         Ref: stdapi/models/rerank/bedrock_rerank.py:_document_source
         """
-        client = _StubAgentRuntimeClient([{"results": []}])
-        self._patch_infra(monkeypatch, client)
+        client = rerank_client([{"results": []}])
 
         await RerankModel(RERANK_MODELS[1]).rerank(
             "q", ["a", {"title": "b"}], top_n=None, extra_params={}
@@ -558,7 +560,7 @@ class TestRerankCall:
         ]
 
     async def test_model_arn_uses_region_partition(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, rerank_client: Callable[..., _StubAgentRuntimeClient]
     ) -> None:
         """The model ARN partition follows the serving region.
 
@@ -568,16 +570,13 @@ class TestRerankCall:
         Ref: stdapi/pricing.py:partition_of_region
              stdapi/models/rerank/bedrock_rerank.py:RerankModel
         """
-        client = _StubAgentRuntimeClient([{"results": []}])
-        self._patch_infra(monkeypatch, client, region="eusc-de-east-1")
+        client = rerank_client([{"results": []}], region="eusc-de-east-1")
 
         await RerankModel(RERANK_MODELS[1]).rerank(
             "q", ["a"], top_n=None, extra_params={}
         )
 
-        arn = client.requests[0]["rerankingConfiguration"][
-            "bedrockRerankingConfiguration"
-        ]["modelConfiguration"]["modelArn"]
+        arn = _bedrock_config(client.requests[0])["modelConfiguration"]["modelArn"]
         assert arn == (
             f"arn:aws-eusc:bedrock:eusc-de-east-1::foundation-model/{RERANK_MODELS[1]}"
         )

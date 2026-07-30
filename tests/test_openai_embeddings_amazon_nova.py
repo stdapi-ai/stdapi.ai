@@ -10,17 +10,18 @@ Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
      stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 if TYPE_CHECKING:
     from openai import OpenAI
 
+#: Only Nova multimodal embedding model currently reachable on Bedrock.
 NOVA_V1 = "amazon.nova-2-multimodal-embeddings-v1:0"
 
-NOVA_ALL = (NOVA_V1,)
-NOVA_SAMPLE = (NOVA_V1,)
+#: Nova model IDs the live tests run against.
+NOVA_MODELS = [NOVA_V1]
 
 #: The four ``embeddingDimension`` values Nova multimodal embeddings can return.
 _SUPPORTED_DIMENSIONS = frozenset({256, 384, 1024, 3072})
@@ -33,19 +34,21 @@ class TestAmazonNovaEmbeddings:
          stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel.embed_text
     """
 
-    @pytest.mark.parametrize("model_id", NOVA_ALL)
-    def test_text_single(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
-    ) -> None:
+    @pytest.fixture(autouse=True)
+    def _skip_on_official_api(self, use_official_api: bool) -> None:
+        """Skip the whole class when the target is the official OpenAI API."""
+        if use_official_api:
+            pytest.skip(
+                "Amazon Nova models are not available on the official OpenAI API"
+            )
+
+    @pytest.mark.parametrize("model_id", NOVA_MODELS)
+    def test_text_single(self, openai_client: OpenAI, model_id: str) -> None:
         """A text input returns one vector of a documented Nova width.
 
         Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/embeddings.html
              stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel._embed_single
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova models are not available on the official OpenAI API"
-            )
         response = openai_client.embeddings.create(
             model=model_id, input="Hello from Amazon Nova multimodal embeddings."
         )
@@ -58,10 +61,8 @@ class TestAmazonNovaEmbeddings:
         assert len(item.embedding) in _SUPPORTED_DIMENSIONS
         assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
 
-    @pytest.mark.parametrize("model_id", NOVA_ALL)
-    def test_text_batch(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
-    ) -> None:
+    @pytest.mark.parametrize("model_id", NOVA_MODELS)
+    def test_text_batch(self, openai_client: OpenAI, model_id: str) -> None:
         """A text batch returns one distinct vector per item, in request order.
 
         Nova has no batch request shape, so the gateway fans the array out into one
@@ -70,11 +71,6 @@ class TestAmazonNovaEmbeddings:
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
              stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel.embed_text
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova models are not available on the official OpenAI API"
-            )
-
         inputs = [
             "First text input for embedding.",
             "Second different sentence.",
@@ -97,10 +93,8 @@ class TestAmazonNovaEmbeddings:
             "distinct inputs produced identical vectors"
         )
 
-    @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
-    def test_dimensions(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
-    ) -> None:
+    @pytest.mark.parametrize("model_id", NOVA_MODELS)
+    def test_dimensions(self, openai_client: OpenAI, model_id: str) -> None:
         """``dimensions`` becomes ``embeddingDimension`` and is honored exactly.
 
         Nova accepts 256, 384, 1024 and 3072; the OpenAI ``dimensions`` value is
@@ -109,11 +103,6 @@ class TestAmazonNovaEmbeddings:
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
              stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel.embed_text
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova models are not available on the official OpenAI API"
-            )
-
         dimensions = 256
         response = openai_client.embeddings.create(
             model=model_id,
@@ -128,9 +117,9 @@ class TestAmazonNovaEmbeddings:
         assert len(item.embedding) == dimensions
         assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
 
-    @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
+    @pytest.mark.parametrize("model_id", NOVA_MODELS)
     def test_extra_params_embedding_purpose(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
+        self, openai_client: OpenAI, model_id: str
     ) -> None:
         """The Nova-only ``embeddingPurpose`` body field is accepted for a text input.
 
@@ -142,11 +131,6 @@ class TestAmazonNovaEmbeddings:
         Ref: https://stdapi.ai/api_openai_embeddings/
              stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel.embed_text
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova models are not available on the official OpenAI API"
-            )
-
         response = openai_client.embeddings.create(
             model=model_id,
             input="Classification test sentence.",
@@ -161,13 +145,9 @@ class TestAmazonNovaEmbeddings:
         assert len(item.embedding) in _SUPPORTED_DIMENSIONS
         assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
 
-    @pytest.mark.parametrize("model_id", NOVA_ALL)
+    @pytest.mark.parametrize("model_id", NOVA_MODELS)
     def test_image_single(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file_base64: str,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file_base64: str, model_id: str
     ) -> None:
         """A PNG data URI is embedded as an ``image`` input, not as text.
 
@@ -177,10 +157,6 @@ class TestAmazonNovaEmbeddings:
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
              stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel._embed_single
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova models are not available on the official OpenAI API"
-            )
         response = openai_client.embeddings.create(
             model=model_id, input=sample_image_file_base64
         )
@@ -193,24 +169,15 @@ class TestAmazonNovaEmbeddings:
         assert len(item.embedding) in _SUPPORTED_DIMENSIONS
         assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
 
-    @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
+    @pytest.mark.parametrize("model_id", NOVA_MODELS)
     def test_image_batch(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file_base64: str,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file_base64: str, model_id: str
     ) -> None:
         """An image batch returns one same-width vector per image, in request order.
 
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
              stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel.embed_text
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova models are not available on the official OpenAI API"
-            )
-
         inputs = [sample_image_file_base64, sample_image_file_base64]
         response = openai_client.embeddings.create(model=model_id, input=inputs)
         assert response.object == "list"
@@ -226,13 +193,9 @@ class TestAmazonNovaEmbeddings:
             "batch returned vectors of different widths"
         )
 
-    @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
+    @pytest.mark.parametrize("model_id", NOVA_MODELS)
     def test_mixed_text_image_batch(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file_base64: str,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file_base64: str, model_id: str
     ) -> None:
         """A text+image batch returns one vector per input in the same vector space.
 
@@ -242,11 +205,6 @@ class TestAmazonNovaEmbeddings:
         Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/embeddings.html
              stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel.embed_text
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova models are not available on the official OpenAI API"
-            )
-
         inputs = [
             "A sample text description.",
             sample_image_file_base64,
@@ -269,13 +227,9 @@ class TestAmazonNovaEmbeddings:
             "distinct inputs produced identical vectors"
         )
 
-    @pytest.mark.parametrize("model_id", NOVA_ALL)
+    @pytest.mark.parametrize("model_id", NOVA_MODELS)
     def test_audio_single(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_audio_mp3_file_base64: str,
-        model_id: str,
+        self, openai_client: OpenAI, sample_audio_mp3_file_base64: str, model_id: str
     ) -> None:
         """An MP3 data URI is embedded as an ``audio`` input.
 
@@ -285,10 +239,6 @@ class TestAmazonNovaEmbeddings:
         Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/embeddings.html
              stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel._embed_single
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova models are not available on the official OpenAI API"
-            )
         response = openai_client.embeddings.create(
             model=model_id, input=sample_audio_mp3_file_base64
         )
@@ -302,13 +252,9 @@ class TestAmazonNovaEmbeddings:
             assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
 
     @pytest.mark.slow
-    @pytest.mark.parametrize("model_id", NOVA_ALL)
+    @pytest.mark.parametrize("model_id", NOVA_MODELS)
     def test_video_single(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_video_file_base64: str,
-        model_id: str,
+        self, openai_client: OpenAI, sample_video_file_base64: str, model_id: str
     ) -> None:
         """An MP4 data URI is embedded as a ``video`` input.
 
@@ -319,10 +265,6 @@ class TestAmazonNovaEmbeddings:
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
              stdapi/models/embedding/amazon_nova_embed.py:_DEFAULT_VIDEO_EMBEDDING_MODE
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova models are not available on the official OpenAI API"
-            )
         if not sample_video_file_base64:
             pytest.skip(
                 "Missing video sample file. Skipping test. Add a MP4 file to 'tests/.cache/video.mp4'."
@@ -339,11 +281,10 @@ class TestAmazonNovaEmbeddings:
             assert len(item.embedding) in _SUPPORTED_DIMENSIONS
             assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
 
-    @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
+    @pytest.mark.parametrize("model_id", NOVA_MODELS)
     def test_multimodal_batch(
         self,
         openai_client: OpenAI,
-        use_official_api: bool,
         sample_image_file_base64: str,
         sample_audio_mp3_file_base64: str,
         model_id: str,
@@ -356,11 +297,6 @@ class TestAmazonNovaEmbeddings:
         Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/embeddings.html
              stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel.embed_text
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova models are not available on the official OpenAI API"
-            )
-
         inputs = [
             "Text description of the content.",
             sample_image_file_base64,
@@ -381,13 +317,9 @@ class TestAmazonNovaEmbeddings:
             "modalities returned vectors of different widths"
         )
 
-    @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
+    @pytest.mark.parametrize("model_id", NOVA_MODELS)
     def test_image_with_dimensions(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file_base64: str,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file_base64: str, model_id: str
     ) -> None:
         """``dimensions`` applies to image inputs exactly as it does to text.
 
@@ -397,11 +329,6 @@ class TestAmazonNovaEmbeddings:
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
              stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel._embed_single
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova models are not available on the official OpenAI API"
-            )
-
         dimensions = 256
         response = openai_client.embeddings.create(
             model=model_id, input=sample_image_file_base64, dimensions=dimensions
@@ -414,10 +341,8 @@ class TestAmazonNovaEmbeddings:
         assert len(item.embedding) == dimensions
         assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
 
-    @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
-    def test_clustering_purpose(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
-    ) -> None:
+    @pytest.mark.parametrize("model_id", NOVA_MODELS)
+    def test_clustering_purpose(self, openai_client: OpenAI, model_id: str) -> None:
         """``embeddingPurpose=CLUSTERING`` is accepted for a whole batch.
 
         The purpose is a request-level parameter, so it is repeated on each of the
@@ -426,11 +351,6 @@ class TestAmazonNovaEmbeddings:
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
              stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel.embed_text
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova models are not available on the official OpenAI API"
-            )
-
         inputs = [
             "First document for clustering.",
             "Second document for clustering.",
@@ -451,13 +371,9 @@ class TestAmazonNovaEmbeddings:
             "distinct inputs produced identical vectors"
         )
 
-    @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
+    @pytest.mark.parametrize("model_id", NOVA_MODELS)
     def test_force_s3_data_with_small_image(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file_base64: str,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file_base64: str, model_id: str
     ) -> None:
         """``force_s3_data`` stages a small image on S3 instead of inlining it.
 
@@ -469,11 +385,6 @@ class TestAmazonNovaEmbeddings:
         Ref: https://stdapi.ai/api_openai_embeddings/
              stdapi/models/embedding/amazon_nova_embed.py:_SYNC_LIMIT_SIZES
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova models are not available on the official OpenAI API"
-            )
-
         response = openai_client.embeddings.create(
             model=model_id,
             input=sample_image_file_base64,
@@ -488,13 +399,9 @@ class TestAmazonNovaEmbeddings:
         assert len(item.embedding) in _SUPPORTED_DIMENSIONS
         assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
 
-    @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
+    @pytest.mark.parametrize("model_id", NOVA_MODELS)
     def test_force_s3_data_with_audio(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_audio_mp3_file_base64: str,
-        model_id: str,
+        self, openai_client: OpenAI, sample_audio_mp3_file_base64: str, model_id: str
     ) -> None:
         """``force_s3_data`` stages audio on S3 and still embeds it synchronously.
 
@@ -504,11 +411,6 @@ class TestAmazonNovaEmbeddings:
         Ref: https://stdapi.ai/api_openai_embeddings/
              stdapi/models/embedding/amazon_nova_embed.py:_SYNC_LIMIT_SIZES
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova models are not available on the official OpenAI API"
-            )
-
         response = openai_client.embeddings.create(
             model=model_id,
             input=sample_audio_mp3_file_base64,
@@ -524,23 +426,15 @@ class TestAmazonNovaEmbeddings:
             assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
 
     @pytest.mark.slow
-    @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
+    @pytest.mark.parametrize("model_id", NOVA_MODELS)
     def test_force_s3_data_with_video(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_video_file_base64: str,
-        model_id: str,
+        self, openai_client: OpenAI, sample_video_file_base64: str, model_id: str
     ) -> None:
         """``force_s3_data`` stages video on S3 and still embeds it synchronously.
 
         Ref: https://stdapi.ai/api_openai_embeddings/
              stdapi/models/embedding/amazon_nova_embed.py:_SYNC_LIMIT_SIZES
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova models are not available on the official OpenAI API"
-            )
         if not sample_video_file_base64:
             pytest.skip(
                 "Missing video sample file. Skipping test. Add a MP4 file to 'tests/.cache/video.mp4'."
@@ -560,11 +454,10 @@ class TestAmazonNovaEmbeddings:
             assert len(item.embedding) in _SUPPORTED_DIMENSIONS
             assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
 
-    @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
+    @pytest.mark.parametrize("model_id", NOVA_MODELS)
     def test_force_s3_data_with_multimodal_batch(
         self,
         openai_client: OpenAI,
-        use_official_api: bool,
         sample_image_file_base64: str,
         sample_audio_mp3_file_base64: str,
         model_id: str,
@@ -578,11 +471,6 @@ class TestAmazonNovaEmbeddings:
         Ref: https://stdapi.ai/api_openai_embeddings/
              stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel._embed
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova models are not available on the official OpenAI API"
-            )
-
         inputs = [
             "Text description of the content.",
             sample_image_file_base64,
@@ -604,3 +492,200 @@ class TestAmazonNovaEmbeddings:
         assert len({len(item.embedding) for item in response.data}) == 1, (
             "modalities returned vectors of different widths"
         )
+
+
+@pytest.mark.local
+class TestAmazonNovaSegmentedEmbedding:
+    """Offline unit tests: the asynchronous ``SEGMENTED_EMBEDDING`` path.
+
+    ``_embed`` routes here whenever an S3 input exceeds the per-media sync
+    cutoff, so this is the whole large-media embedding path. Bedrock and S3 are
+    stubbed; the request shaping, JSONL parsing and failure aggregation under
+    test are the gateway's own.
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
+         stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel._embed_segmented
+    """
+
+    @staticmethod
+    def _stub_backend(
+        monkeypatch: pytest.MonkeyPatch,
+        embedding_results: list[dict[str, Any]],
+        objects: dict[str, bytes],
+    ) -> list[dict[str, Any]]:
+        """Stub ``invoke_async``, the S3 fetch and the temporary-object tracker.
+
+        Returns:
+            The list the stub appends each ``invoke_async`` request body to.
+        """
+        from stdapi.models import InvokeResult  # noqa: PLC0415
+        from stdapi.models.embedding import amazon_nova_embed  # noqa: PLC0415
+
+        requests: list[dict[str, Any]] = []
+
+        async def _invoke_async(
+            _self: Any,  # noqa: ANN401
+            request: dict[str, Any],
+            **_kwargs: Any,  # noqa: ANN401
+        ) -> InvokeResult[Any]:
+            requests.append(request)
+            return InvokeResult(
+                response={"embeddingResults": embedding_results}, region="us-east-1"
+            )
+
+        class _StubBody:
+            def __init__(self, data: bytes) -> None:
+                self._data = data
+
+            async def read(self) -> bytes:
+                return self._data
+
+        class _StubS3Client:
+            async def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803
+                return {"Body": _StubBody(objects[f"s3://{Bucket}/{Key}"])}
+
+        monkeypatch.setattr(
+            amazon_nova_embed.EmbeddingModel, "invoke_async", _invoke_async
+        )
+        monkeypatch.setattr(
+            amazon_nova_embed, "get_client", lambda _service, _region: _StubS3Client()
+        )
+        monkeypatch.setattr(
+            amazon_nova_embed,
+            "track_temporary_s3_objects",
+            lambda *_args, **_kwargs: None,
+        )
+        return requests
+
+    async def test_segmented_text_job_parses_jsonl_in_order(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A segmented job asks for ``SEGMENTED_EMBEDDING`` and keeps the JSONL line order.
+
+        Nova writes one JSONL line per segment into
+        ``segmented-embedding-result.json``; the gateway concatenates the files
+        result-by-result and the lines within each file, so vector *n* stays the
+        embedding of segment *n*.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
+             stdapi/models/embedding/amazon_nova_embed.py:_fetch_and_parse_embedding_jsonl
+        """
+        from stdapi.aws_s3 import S3Object  # noqa: PLC0415
+        from stdapi.models.embedding.amazon_nova_embed import (  # noqa: PLC0415
+            EmbeddingModel,
+        )
+
+        requests = self._stub_backend(
+            monkeypatch,
+            [
+                {"status": "SUCCESS", "outputFileUri": "s3://out/a.jsonl"},
+                {"status": "SUCCESS", "outputFileUri": "s3://out/b.jsonl"},
+            ],
+            {
+                "s3://out/a.jsonl": (
+                    b'{"embedding": [1.0, 0.0], "segmentMetadata": {}}\n'
+                    b'{"embedding": [2.0, 0.0], "segmentMetadata": {}}\n'
+                ),
+                "s3://out/b.jsonl": b'{"embedding": [3.0, 0.0], "segmentMetadata": {}}',
+            },
+        )
+
+        result = await EmbeddingModel(NOVA_V1)._embed_segmented(  # noqa: SLF001
+            S3Object(bucket="in", key="big.txt"),
+            "text",
+            "txt",
+            {"embeddingPurpose": "GENERIC_INDEX"},
+            {},
+        )
+
+        assert [entry["embedding"] for entry in result.response["embeddings"]] == [
+            [1.0, 0.0],
+            [2.0, 0.0],
+            [3.0, 0.0],
+        ]
+        (request,) = requests
+        assert request["taskType"] == "SEGMENTED_EMBEDDING"
+        text_params = request["segmentedEmbeddingParams"]["text"]
+        assert text_params["source"] == {"s3Location": {"uri": "s3://in/big.txt"}}
+        assert "segmentationConfig" in text_params
+
+    async def test_failed_segment_result_raises_a_400_naming_the_reason(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-``SUCCESS`` result aborts the request with its ``failureReason``.
+
+        Partially-failed jobs must not return silently truncated vectors: the
+        failure is surfaced as a client error carrying Nova's own reason and
+        message rather than a 500 or a short result set.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
+             stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel._embed_segmented
+        """
+        from stdapi.api_errors import ApiError  # noqa: PLC0415
+        from stdapi.aws_s3 import S3Object  # noqa: PLC0415
+        from stdapi.models.embedding.amazon_nova_embed import (  # noqa: PLC0415
+            EmbeddingModel,
+        )
+
+        self._stub_backend(
+            monkeypatch,
+            [
+                {"status": "SUCCESS", "outputFileUri": "s3://out/a.jsonl"},
+                {
+                    "status": "FAILED",
+                    "failureReason": "INVALID_CONTENT",
+                    "message": "unreadable segment",
+                },
+            ],
+            {"s3://out/a.jsonl": b'{"embedding": [1.0], "segmentMetadata": {}}'},
+        )
+
+        with pytest.raises(ApiError) as exc_info:
+            await EmbeddingModel(NOVA_V1)._embed_segmented(  # noqa: SLF001
+                S3Object(bucket="in", key="big.txt"),
+                "text",
+                "txt",
+                {"embeddingPurpose": "GENERIC_INDEX"},
+                {},
+            )
+
+        assert "INVALID_CONTENT" in str(exc_info.value)
+        assert "unreadable segment" in str(exc_info.value)
+
+    def test_reserved_media_params_cannot_be_overridden(self) -> None:
+        """Client extras never rewrite ``source``, ``format`` or ``value``.
+
+        Extras are forwarded verbatim into the media object, so the reserved set
+        is the only thing stopping a caller from repointing ``source`` at an
+        arbitrary S3 URI the gateway's task role can read, or from swapping the
+        text that actually gets embedded.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
+             stdapi/models/embedding/amazon_nova_embed.py:_RESERVED_MEDIA_PARAMS
+        """
+        from stdapi.models.embedding.amazon_nova_embed import (  # noqa: PLC0415
+            EmbeddingModel,
+        )
+
+        params: dict[str, Any] = {
+            "image": {"source": {"s3Location": {"uri": "s3://mine/ok.png"}}}
+        }
+        EmbeddingModel._add_extra_params(  # noqa: SLF001
+            {
+                "image": {
+                    "source": {"s3Location": {"uri": "s3://other-bucket/secret"}},
+                    "format": "gif",
+                    "value": "attacker text",
+                    "detailLevel": "DOCUMENT_IMAGE",
+                }
+            },
+            "image",
+            params,  # type: ignore[arg-type]
+        )
+
+        assert params == {
+            "image": {
+                "source": {"s3Location": {"uri": "s3://mine/ok.png"}},
+                "detailLevel": "DOCUMENT_IMAGE",
+            }
+        }

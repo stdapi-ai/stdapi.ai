@@ -15,21 +15,13 @@ import pytest
 from stdapi.models.chat._adapters._anthropic_message import format_stream
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import AsyncIterator
 
     from types_aiobotocore_bedrock_runtime.type_defs import ConverseStreamOutputTypeDef
 
-pytestmark = pytest.mark.local
-
-
-@pytest.fixture(autouse=True)
-def _request_log_context() -> Iterator[None]:
-    """Provide the request-log context the streaming adapter logs into."""
-    from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
-
-    token = REQUEST_LOG.set({"level": "info"})  # type: ignore[typeddict-item]
-    yield
-    REQUEST_LOG.reset(token)
+# The streaming adapter writes into the request log, which only exists inside a
+# request, so every test needs the shared context fixture.
+pytestmark = [pytest.mark.local, pytest.mark.usefixtures("request_log")]
 
 
 async def _collect(events: list[dict[str, Any]]) -> list[tuple[str, dict[str, Any]]]:
@@ -43,6 +35,15 @@ async def _collect(events: list[dict[str, Any]]) -> list[tuple[str, dict[str, An
     return [
         (sse.event or "", loads(cast("str", sse.data)))
         async for sse in format_stream("msg_1", "model-x", stream, None)
+    ]
+
+
+def _text_stream_events(text: str = "hi") -> list[dict[str, Any]]:
+    """Return the Converse events of a stream emitting *text* as one text block."""
+    return [
+        {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": text}}},
+        {"contentBlockStop": {"contentBlockIndex": 0}},
+        {"messageStop": {"stopReason": "end_turn"}},
     ]
 
 
@@ -143,13 +144,7 @@ async def test_text_block_is_not_given_a_tool_input_delta() -> None:
 
     Ref: stdapi/models/chat/_adapters/_anthropic_message.py:_emit_synthesized_block
     """
-    pairs = await _collect(
-        [
-            {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "hello"}}},
-            {"contentBlockStop": {"contentBlockIndex": 0}},
-            {"messageStop": {"stopReason": "end_turn"}},
-        ]
-    )
+    pairs = await _collect(_text_stream_events("hello"))
     (start_data,) = [data for event, data in pairs if event == "content_block_start"]
     assert start_data["content_block"] == {"type": "text", "text": ""}
     (delta_data,) = [data for event, data in pairs if event == "content_block_delta"]
@@ -168,13 +163,7 @@ async def test_message_delta_always_carries_stop_sequence_key() -> None:
 
     Ref: stdapi/models/chat/_adapters/_anthropic_message.py:_make_message_delta_event
     """
-    pairs = await _collect(
-        [
-            {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "hi"}}},
-            {"contentBlockStop": {"contentBlockIndex": 0}},
-            {"messageStop": {"stopReason": "end_turn"}},
-        ]
-    )
+    pairs = await _collect(_text_stream_events())
     (delta_data,) = [data for event, data in pairs if event == "message_delta"]
     assert "stop_sequence" in delta_data["delta"]
     assert delta_data["delta"]["stop_sequence"] is None
@@ -190,13 +179,7 @@ async def test_message_start_always_carries_stop_reason_and_sequence_keys() -> N
 
     Ref: stdapi/models/chat/_adapters/_anthropic_message.py:_make_message_start_event
     """
-    pairs = await _collect(
-        [
-            {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "hi"}}},
-            {"contentBlockStop": {"contentBlockIndex": 0}},
-            {"messageStop": {"stopReason": "end_turn"}},
-        ]
-    )
+    pairs = await _collect(_text_stream_events())
     (start_data,) = [data for event, data in pairs if event == "message_start"]
     message = start_data["message"]
     assert "stop_reason" in message

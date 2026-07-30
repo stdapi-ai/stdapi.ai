@@ -26,17 +26,56 @@ import base64
 import json
 import struct
 import zlib
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 import pytest
 from openai import BadRequestError, NotFoundError
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from openai import OpenAI
     from openai.types.responses import ResponseFunctionToolCall, ResponseStreamEvent
 
 #: ~87 sequential live calls across many model families; requires --expensive --slow.
 pytestmark = pytest.mark.slow
+
+
+@pytest.fixture(autouse=True)
+def _skip_official_api(use_official_api: bool) -> None:
+    """Skip the whole module against the official API.
+
+    The point of these tests is the gateway's per-family mapping, and the model
+    IDs are Bedrock-only.
+    """
+    if use_official_api:
+        pytest.skip("Multi-model tests only run against the local server")
+
+
+@contextmanager
+def _skip_unavailable_model(
+    model: str, *, unsupported: tuple[str, ...] = ()
+) -> Iterator[None]:
+    """Turn "model absent" and "feature absent" answers into skips.
+
+    Args:
+        model: Model under test, named in the skip reason.
+        unsupported: Fragments of a ``BadRequestError`` message that mean the
+            model lacks the feature rather than the request being wrong.
+
+    Yields:
+        None, around the calls that may hit an unavailable model.
+    """
+    try:
+        yield
+    except NotFoundError:
+        pytest.skip(f"Model {model!r} not available in configured regions")
+    except BadRequestError as exc:
+        if any(fragment in str(exc).lower() for fragment in unsupported):
+            pytest.skip(f"Model {model!r} does not support this request: {exc}")
+        raise
+
 
 # ---------------------------------------------------------------------------
 # Model lists — one representative per family, prefer fast/cheap variants
@@ -173,9 +212,7 @@ class TestMultiModelResponses:
 
     @pytest.mark.expensive
     @_BASIC_MODELS
-    def test_basic_response(
-        self, model: str, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_basic_response(self, model: str, openai_client: OpenAI) -> None:
         """A plain string input returns one completed assistant message with usage.
 
         ``output_text`` is an SDK-side aggregation of the ``output_text`` parts of
@@ -186,17 +223,12 @@ class TestMultiModelResponses:
         Ref: https://developers.openai.com/api/docs/guides/migrate-to-responses
              stdapi/models/chat/_adapters/_openai_responses.py:_extract_output_items
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
-        try:
+        with _skip_unavailable_model(model):
             response = openai_client.responses.create(
                 model=model,
                 input="Reply with exactly one word: HELLO",
                 max_output_tokens=512,
             )
-        except NotFoundError:
-            pytest.skip(f"Model {model!r} not available in configured regions")
 
         assert response.object == "response"
         assert response.status == "completed"
@@ -225,9 +257,7 @@ class TestMultiModelResponses:
 
     @pytest.mark.expensive
     @_BASIC_MODELS
-    def test_streaming_response(
-        self, model: str, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_streaming_response(self, model: str, openai_client: OpenAI) -> None:
         """A stream opens with ``response.created`` and ends with ``response.completed``.
 
         Both backing paths emit the same wire grammar: ``response.created`` first,
@@ -239,14 +269,11 @@ class TestMultiModelResponses:
              stdapi/models/chat/_adapters/_openai_responses.py:format_stream
              stdapi/models/chat/_mantle/_convert.py:_chat_stream_to_responses
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         accumulated = ""
         completed_event = None
         events: list[ResponseStreamEvent] = []
 
-        try:
+        with _skip_unavailable_model(model):
             stream = openai_client.responses.create(
                 model=model,
                 max_output_tokens=512,
@@ -259,8 +286,6 @@ class TestMultiModelResponses:
                     accumulated += event.delta
                 elif event.type == "response.completed":
                     completed_event = event
-        except NotFoundError:
-            pytest.skip(f"Model {model!r} not available in configured regions")
 
         assert accumulated, f"No text deltas received for {model!r}"
         assert completed_event is not None, (
@@ -288,7 +313,7 @@ class TestMultiModelResponses:
     @pytest.mark.expensive
     @_BASIC_MODELS
     def test_multi_turn_context_retention(
-        self, model: str, openai_client: OpenAI, use_official_api: bool
+        self, model: str, openai_client: OpenAI
     ) -> None:
         """A prior ``assistant`` turn replayed in ``input`` is visible to the model.
 
@@ -300,10 +325,7 @@ class TestMultiModelResponses:
         Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
              stdapi/models/chat/_adapters/_openai_responses.py:map_input
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
-        try:
+        with _skip_unavailable_model(model):
             response = openai_client.responses.create(
                 model=model,
                 max_output_tokens=256,
@@ -322,8 +344,6 @@ class TestMultiModelResponses:
                     },
                 ],
             )
-        except NotFoundError:
-            pytest.skip(f"Model {model!r} not available in configured regions")
 
         assert response.output_text, "Expected non-empty response"
         assert "ZEBRA99" in response.output_text, (
@@ -352,9 +372,7 @@ class TestMultiModelToolUse:
 
     @pytest.mark.expensive
     @_TOOL_MODELS
-    def test_tool_call_single_turn(
-        self, model: str, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_tool_call_single_turn(self, model: str, openai_client: OpenAI) -> None:
         """``tool_choice="required"`` yields a function_call item for the declared tool.
 
         Bedrock's ``toolChoice: {any: {}}`` forces a tool call, so the output must
@@ -366,10 +384,7 @@ class TestMultiModelToolUse:
         Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
              stdapi/models/chat/_adapters/_openai_responses.py:_map_tool_choice
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
-        try:
+        with _skip_unavailable_model(model, unsupported=("toolchoice",)):
             response = openai_client.responses.create(  # type: ignore[call-overload]
                 model=model,
                 max_output_tokens=512,
@@ -377,14 +392,6 @@ class TestMultiModelToolUse:
                 tools=_LIST_DIR_TOOL,
                 tool_choice="required",
             )
-        except NotFoundError:
-            pytest.skip(f"Model {model!r} not available in configured regions")
-        except BadRequestError as exc:
-            if "toolChoice" in str(exc):
-                pytest.skip(
-                    f"Model {model!r} does not support tool_choice=required: {exc}"
-                )
-            raise
 
         tool_calls = [i for i in response.output if i.type == "function_call"]
         assert tool_calls, (
@@ -404,9 +411,7 @@ class TestMultiModelToolUse:
 
     @pytest.mark.expensive
     @_STREAMING_TOOL_MODELS
-    def test_streaming_tool_call(
-        self, model: str, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_streaming_tool_call(self, model: str, openai_client: OpenAI) -> None:
         """Streamed tool-call argument deltas concatenate to the ``.done`` arguments.
 
         Both backing paths build the ``.done`` event's ``arguments`` by joining the
@@ -420,14 +425,13 @@ class TestMultiModelToolUse:
              stdapi/models/chat/_adapters/_openai_responses.py:_emit_tool_done
              stdapi/models/chat/_mantle/_convert.py:_close_responses_tool
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         deltas: dict[str, str] = {}
         done_event = None
         done_items: list[ResponseFunctionToolCall] = []
 
-        try:
+        with _skip_unavailable_model(
+            model, unsupported=("streaming mode", "toolchoice")
+        ):
             stream = openai_client.responses.create(  # type: ignore[call-overload]
                 model=model,
                 max_output_tokens=512,
@@ -446,16 +450,6 @@ class TestMultiModelToolUse:
                     and event.item.type == "function_call"
                 ):
                     done_items.append(event.item)
-        except NotFoundError:
-            pytest.skip(f"Model {model!r} not available in configured regions")
-        except BadRequestError as exc:
-            if "streaming mode" in str(exc).lower():
-                pytest.skip(f"Model does not support streaming with tools: {exc}")
-            if "toolChoice" in str(exc):
-                pytest.skip(
-                    f"Model {model!r} does not support tool_choice=required: {exc}"
-                )
-            raise
 
         assert deltas, (
             f"Expected function_call_arguments.delta events for {model!r}, got 0"
@@ -533,9 +527,7 @@ class TestVision:
 
     @pytest.mark.expensive
     @_VISION_MODELS
-    def test_image_color_recognition(
-        self, model: str, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_image_color_recognition(self, model: str, openai_client: OpenAI) -> None:
         """A base64 ``input_image`` data URL reaches the model, which reports its color.
 
         The PNG is generated in-process, so no network fetch or Files API entry is
@@ -546,10 +538,7 @@ class TestVision:
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/modalities-image.html
              stdapi/models/chat/_adapters/_openai_responses.py:map_input
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
-        try:
+        with _skip_unavailable_model(model):
             response = openai_client.responses.create(
                 model=model,
                 max_output_tokens=64,
@@ -570,8 +559,6 @@ class TestVision:
                     }
                 ],
             )
-        except NotFoundError:
-            pytest.skip(f"Model {model!r} not available in configured regions")
 
         text = response.output_text
         assert text, f"Expected non-empty response from {model!r}"

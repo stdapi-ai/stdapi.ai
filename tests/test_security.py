@@ -16,12 +16,41 @@ Ref: stdapi/security.py:validate_host_ssrf
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 from aiohttp import ClientConnectorError, ClientSession, TCPConnector, web
 from aiohttp.test_utils import TestServer
 
 from stdapi import security
 from stdapi.api_errors import ApiError
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Awaitable, Callable
+
+pytestmark = pytest.mark.local
+
+
+@pytest.fixture
+async def start_test_server() -> AsyncGenerator[
+    Callable[[web.Application], Awaitable[TestServer]]
+]:
+    """Start aiohttp test servers, closing every one of them on teardown.
+
+    Yields:
+        A coroutine function starting a server for the given application.
+    """
+    servers: list[TestServer] = []
+
+    async def _start(app: web.Application) -> TestServer:
+        server = TestServer(app)
+        await server.start_server()
+        servers.append(server)
+        return server
+
+    yield _start
+    for server in servers:
+        await server.close()
 
 
 def _forbid_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -215,7 +244,9 @@ class TestSsrfSafeConnectorIntegration:
         assert security.ssrf_blocked_status(exc.value) == 400
 
     async def test_redirect_hop_to_unsafe_target_blocked(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        start_test_server: Callable[[web.Application], Awaitable[TestServer]],
     ) -> None:
         """A redirect from a safe host to an unsafe IP-literal target is blocked at the hop.
 
@@ -232,22 +263,19 @@ class TestSsrfSafeConnectorIntegration:
 
         app = web.Application()
         app.router.add_get("/redirect", redirect)
-        server = TestServer(app)
-        await server.start_server()
-        try:
-            async with ClientSession(
-                connector=security.ssrf_safe_connector()
-            ) as session:
-                with pytest.raises(ClientConnectorError) as exc:
-                    await session.get(server.make_url("/redirect"))
-            assert isinstance(exc.value.os_error, security.SsrfBlockedError)
-            assert "169.254.169.254" in str(exc.value.os_error)
-            assert security.ssrf_blocked_status(exc.value) == 403
-        finally:
-            await server.close()
+        server = await start_test_server(app)
+
+        async with ClientSession(connector=security.ssrf_safe_connector()) as session:
+            with pytest.raises(ClientConnectorError) as exc:
+                await session.get(server.make_url("/redirect"))
+        assert isinstance(exc.value.os_error, security.SsrfBlockedError)
+        assert "169.254.169.254" in str(exc.value.os_error)
+        assert security.ssrf_blocked_status(exc.value) == 403
 
     async def test_connection_pinned_to_validated_address(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        start_test_server: Callable[[web.Application], Awaitable[TestServer]],
     ) -> None:
         """A named host connects to the resolver-validated address, not system DNS.
 
@@ -263,15 +291,12 @@ class TestSsrfSafeConnectorIntegration:
 
         app = web.Application()
         app.router.add_get("/ok", ok)
-        server = TestServer(app)
-        await server.start_server()
-        try:
-            _patch_resolution(monkeypatch, ["127.0.0.1"])
-            async with (
-                ClientSession(connector=security.ssrf_safe_connector()) as session,
-                session.get(f"http://pinned.test:{server.port}/ok") as resp,
-            ):
-                assert resp.status == 200
-                assert await resp.text() == "pinned"
-        finally:
-            await server.close()
+        server = await start_test_server(app)
+
+        _patch_resolution(monkeypatch, ["127.0.0.1"])
+        async with (
+            ClientSession(connector=security.ssrf_safe_connector()) as session,
+            session.get(f"http://pinned.test:{server.port}/ok") as resp,
+        ):
+            assert resp.status == 200
+            assert await resp.text() == "pinned"

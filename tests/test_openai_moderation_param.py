@@ -13,7 +13,6 @@ from json import loads
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
-from starlette.testclient import TestClient
 
 import stdapi.models
 from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, GUARDRAIL_TRACE_VAR
@@ -33,6 +32,7 @@ from stdapi.types.openai_responses import (
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
+    from starlette.testclient import TestClient
     from types_aiobotocore_bedrock_runtime.type_defs import ConverseStreamOutputTypeDef
 
 #: All tests in this module exercise the local implementation in-process.
@@ -76,13 +76,10 @@ async def _validate_model(model_id: str, *_args: object, **_kwargs: object) -> A
 
 
 @pytest.fixture
-def client(monkeypatch: pytest.MonkeyPatch, api_key: str) -> TestClient:
-    """Test client without lifespan (no AWS startup), pre-authenticated."""
-    from stdapi.main import app  # noqa: PLC0415
-
+def configured_guardrail(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Configure a default server guardrail, as ``moderation: true`` requires."""
     monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", "gr123")
     monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_version", "1")
-    return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
 
 
 class _StubChatBackend:
@@ -183,6 +180,7 @@ def _assert_output_result(result: dict[str, Any]) -> None:
     assert result["model"] == "gr123"
 
 
+@pytest.mark.usefixtures("configured_guardrail")
 class TestChatModerationParam:
     """moderation parameter on POST /v1/chat/completions.
 
@@ -191,7 +189,7 @@ class TestChatModerationParam:
     """
 
     def test_moderation_sets_guardrail_and_reports_results(
-        self, client: TestClient, chat_backend: _StubChatBackend
+        self, app_client: TestClient, chat_backend: _StubChatBackend
     ) -> None:
         """The guardrail config is applied and trace results are reported.
 
@@ -203,7 +201,7 @@ class TestChatModerationParam:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html
              stdapi/routes/_moderation.py:_trace_results
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/chat/completions",
             json={
                 "model": "amazon.nova-micro-v1:0",
@@ -232,7 +230,7 @@ class TestChatModerationParam:
         _assert_output_result(output_result)
 
     def test_without_moderation_no_field(
-        self, client: TestClient, chat_backend: _StubChatBackend
+        self, app_client: TestClient, chat_backend: _StubChatBackend
     ) -> None:
         """Without the parameter no moderation field is reported.
 
@@ -242,7 +240,7 @@ class TestChatModerationParam:
 
         Ref: stdapi/routes/_moderation.py:build_chat_moderation
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/chat/completions",
             json={
                 "model": "amazon.nova-micro-v1:0",
@@ -257,7 +255,7 @@ class TestChatModerationParam:
         assert body["choices"][0]["finish_reason"] == "stop"
 
     def test_comprehend_model_is_rejected(
-        self, client: TestClient, chat_backend: _StubChatBackend
+        self, app_client: TestClient, chat_backend: _StubChatBackend
     ) -> None:
         """The Comprehend moderation model is not usable as request parameter.
 
@@ -268,7 +266,7 @@ class TestChatModerationParam:
         Ref: https://docs.aws.amazon.com/comprehend/latest/APIReference/API_DetectToxicContent.html
              stdapi/routes/_moderation.py:apply_request_moderation
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/chat/completions",
             json={
                 "model": "amazon.nova-micro-v1:0",
@@ -284,7 +282,7 @@ class TestChatModerationParam:
         assert not chat_backend.guardrail_configs, "no generation must have happened"
 
     def test_default_guardrail_model_id(
-        self, client: TestClient, chat_backend: _StubChatBackend
+        self, app_client: TestClient, chat_backend: _StubChatBackend
     ) -> None:
         """amazon.bedrock-runtime-guardrail selects the configured guardrail.
 
@@ -294,7 +292,7 @@ class TestChatModerationParam:
         Ref: stdapi/aws_bedrock.py:GUARDRAIL_MODERATION_MODEL
              stdapi/aws_bedrock.py:resolve_guardrail_model
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/chat/completions",
             json={
                 "model": "amazon.nova-micro-v1:0",
@@ -312,7 +310,7 @@ class TestChatModerationParam:
         assert moderation["output"]["model"] == "amazon.bedrock-runtime-guardrail"
 
     def test_text_moderation_model_is_rejected(
-        self, client: TestClient, chat_backend: _StubChatBackend
+        self, app_client: TestClient, chat_backend: _StubChatBackend
     ) -> None:
         """text-moderation-* aliases Comprehend and is rejected here.
 
@@ -322,7 +320,7 @@ class TestChatModerationParam:
         Ref: stdapi/aws_bedrock.py:is_comprehend_moderation_model
              stdapi/routes/_moderation.py:apply_request_moderation
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/chat/completions",
             json={
                 "model": "amazon.nova-micro-v1:0",
@@ -339,7 +337,7 @@ class TestChatModerationParam:
 
     def test_no_guardrail_configured_hides_settings(
         self,
-        client: TestClient,
+        app_client: TestClient,
         chat_backend: _StubChatBackend,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -353,7 +351,7 @@ class TestChatModerationParam:
              stdapi/utils.py:hide_security_details
         """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", None)
-        response = client.post(
+        response = app_client.post(
             "/v1/chat/completions",
             json={
                 "model": "amazon.nova-micro-v1:0",
@@ -371,6 +369,7 @@ class TestChatModerationParam:
         assert not chat_backend.guardrail_configs
 
 
+@pytest.mark.usefixtures("configured_guardrail")
 class TestResponsesModerationParam:
     """moderation parameter on POST /v1/responses.
 
@@ -379,7 +378,7 @@ class TestResponsesModerationParam:
     """
 
     def test_moderation_sets_guardrail_and_reports_results(
-        self, client: TestClient, chat_backend: _StubChatBackend
+        self, app_client: TestClient, chat_backend: _StubChatBackend
     ) -> None:
         """The guardrail config is applied and trace results are reported.
 
@@ -390,7 +389,7 @@ class TestResponsesModerationParam:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_GuardrailTraceAssessment.html
              stdapi/routes/_moderation.py:_to_moderation_result
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/responses",
             json={
                 "model": "amazon.nova-micro-v1:0",
@@ -426,7 +425,7 @@ class TestResponsesModerationParam:
 
     def test_unknown_guardrail_override_rejected(
         self,
-        client: TestClient,
+        app_client: TestClient,
         chat_backend: _StubChatBackend,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -439,7 +438,7 @@ class TestResponsesModerationParam:
              stdapi/config.py:_Settings.aws_bedrock_allow_guardrail_override
         """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_guardrail_override", False)
-        response = client.post(
+        response = app_client.post(
             "/v1/responses",
             json={
                 "model": "amazon.nova-micro-v1:0",
@@ -455,7 +454,7 @@ class TestResponsesModerationParam:
 
     def test_no_guardrail_configured_hides_settings(
         self,
-        client: TestClient,
+        app_client: TestClient,
         chat_backend: _StubChatBackend,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -468,7 +467,7 @@ class TestResponsesModerationParam:
              stdapi/utils.py:hide_security_details
         """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", None)
-        response = client.post(
+        response = app_client.post(
             "/v1/responses",
             json={
                 "model": "amazon.nova-micro-v1:0",

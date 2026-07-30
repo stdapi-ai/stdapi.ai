@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Any
 import cohere
 import httpx
 import pytest
-from starlette.testclient import TestClient
 
 from stdapi.api_errors import UnsupportedModelError
 from stdapi.config import SETTINGS
@@ -27,6 +26,7 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
     from cohere.types import EmbedByTypeResponse
+    from starlette.testclient import TestClient
 
 #: Model aliases resolved by the stubbed ``validate_model``.
 _MODEL_ALIASES = {"embed-multilingual": "cohere.embed-multilingual-v3"}
@@ -68,14 +68,6 @@ class _StubEmbeddingModel:
 
 
 @pytest.fixture
-def client(api_key: str) -> TestClient:
-    """Test client without lifespan (no AWS startup), pre-authenticated."""
-    from stdapi.main import app  # noqa: PLC0415
-
-    return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
-
-
-@pytest.fixture
 def embed_backend(monkeypatch: pytest.MonkeyPatch) -> _StubEmbeddingModel:
     """Stub model validation and the embedding backend."""
 
@@ -113,7 +105,7 @@ class TestCohereEmbedRoute:
     """
 
     def test_embed_texts_success(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """A valid request returns the Cohere v2 response shape.
 
@@ -122,7 +114,7 @@ class TestCohereEmbedRoute:
 
         Ref: stdapi/types/cohere_embed.py:build_embeddings_by_type
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={
                 "model": "cohere.embed-multilingual-v3",
@@ -147,7 +139,7 @@ class TestCohereEmbedRoute:
         assert call["extra_params"] == {"input_type": "search_document"}
 
     def test_cohere_params_forwarded_for_cohere_models(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """input_type/truncate/max_tokens and output_dimension are forwarded.
 
@@ -157,7 +149,7 @@ class TestCohereEmbedRoute:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v4.html
              stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={
                 "model": "cohere.embed-v4:0",
@@ -179,21 +171,25 @@ class TestCohereEmbedRoute:
         }
 
     def test_cohere_params_dropped_for_other_providers(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """Cohere-specific fields are not forwarded to non-Cohere models.
 
-        Titan Embed rejects unknown body fields, so `input_type` must be
-        consumed by the route instead of reaching InvokeModel.
+        Titan Embed rejects unknown body fields, so `input_type`, `truncate`
+        and `max_tokens` must all be consumed by the route instead of reaching
+        InvokeModel and turning a valid request into a ValidationException.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
+             stdapi/routes/cohere_embed.py:embed
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={
                 "model": "amazon.titan-embed-text-v2:0",
                 "input_type": "search_document",
                 "texts": ["hello"],
+                "truncate": "START",
+                "max_tokens": 128,
             },
         )
         assert response.status_code == 200, response.text
@@ -201,11 +197,45 @@ class TestCohereEmbedRoute:
         (call,) = embed_backend.calls
         assert call["extra_params"] == {}
 
+    def test_embedding_vectors_are_not_written_to_the_request_log(
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
+    ) -> None:
+        """The logged response keeps the envelope but never the embedding vectors.
+
+        ``log_request_params`` is enabled in this test environment. Dropping the
+        route's ``exclude`` argument would put every vector of every request
+        into the structured log, blowing up log volume and leaking content.
+
+        Ref: https://stdapi.ai/api_cohere_embed/
+             stdapi/routes/cohere_embed.py:embed
+             stdapi/monitoring.py:log_response_params
+        """
+        from stdapi import monitoring  # noqa: PLC0415
+
+        written: list[dict[str, Any]] = []
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(monitoring, "write_log_event", written.append)
+            response = app_client.post(
+                "/cohere/v2/embed",
+                json={
+                    "model": "cohere.embed-multilingual-v3",
+                    "input_type": "search_document",
+                    "texts": ["hello"],
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["embeddings"] == {"float": [[0.1, 0.2]]}
+        (log,) = [entry for entry in written if entry.get("type") == "request"]
+        logged = log["request_response"]
+        assert "embeddings" not in logged
+        assert logged["meta"]["billed_units"]["input_tokens"] == 7
+
     def test_image_data_uri_input(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """Image data URIs are parsed into file inputs and billed as images."""
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={
                 "model": "cohere.embed-v4:0",
@@ -225,7 +255,7 @@ class TestCohereEmbedRoute:
         assert call["extra_params"]["input_type"] == "image"
 
     def test_mixed_texts_and_images_input(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """Texts and images in one request are concatenated, texts first.
 
@@ -235,7 +265,7 @@ class TestCohereEmbedRoute:
         Ref: https://docs.cohere.com/docs/embeddings
              stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={
                 "model": "cohere.embed-v4:0",
@@ -255,13 +285,13 @@ class TestCohereEmbedRoute:
         assert isinstance(call["inputs"][2], InputFile)
 
     def test_no_input_is_rejected(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """A request without texts or images fails validation.
 
         Ref: stdapi/types/cohere_embed.py:_EmbedRequestBase
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={"model": "cohere.embed-v4:0", "input_type": "search_document"},
         )
@@ -273,13 +303,13 @@ class TestCohereEmbedRoute:
         assert not embed_backend.calls
 
     def test_non_float_embedding_types_are_rejected_for_unsupported_backends(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """embedding_types other than float/base64 are rejected for non-Cohere/Titan models.
 
         Ref: stdapi/types/cohere_embed.py:resolve_embedding_types
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={
                 "model": "some-vendor.embed-v1",
@@ -296,7 +326,7 @@ class TestCohereEmbedRoute:
         assert not embed_backend.calls
 
     def test_int8_embedding_type_is_forwarded_and_returned_for_cohere_model(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """embedding_types=["int8"] is forwarded to Bedrock Cohere Embed and returned as-is.
 
@@ -304,7 +334,7 @@ class TestCohereEmbedRoute:
              stdapi/types/cohere_embed.py:resolve_embedding_types
         """
         embed_backend.embeddings_by_type = {"int8": [[1, 2]]}
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={
                 "model": "cohere.embed-v4:0",
@@ -324,7 +354,7 @@ class TestCohereEmbedRoute:
         assert call["extra_params"]["embedding_types"] == ["float", "int8"]
 
     def test_binary_embedding_type_is_forwarded_for_titan_model(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """embedding_types=["binary"] is forwarded to Titan Embed v2 as `embeddingTypes`.
 
@@ -332,7 +362,7 @@ class TestCohereEmbedRoute:
              stdapi/types/cohere_embed.py:resolve_embedding_types
         """
         embed_backend.embeddings_by_type = {"binary": [[1, 0]]}
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={
                 "model": "amazon.titan-embed-text-v2:0",
@@ -351,14 +381,14 @@ class TestCohereEmbedRoute:
         )
 
     def test_int8_embedding_type_is_rejected_for_titan_model(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """Titan Embed v2 only supports float/binary; int8 returns 400.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
              stdapi/types/cohere_embed.py:resolve_embedding_types
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={
                 "model": "amazon.titan-embed-text-v2:0",
@@ -374,14 +404,14 @@ class TestCohereEmbedRoute:
         assert not embed_backend.calls
 
     def test_binary_embedding_type_is_rejected_for_titan_v1_model(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """Titan Embed G1 (v1) has no `embeddingTypes` support; binary returns 400.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
              stdapi/types/cohere_embed.py:resolve_embedding_types
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={
                 "model": "amazon.titan-embed-text-v1",
@@ -397,7 +427,7 @@ class TestCohereEmbedRoute:
         assert not embed_backend.calls
 
     def test_embedding_types_are_not_forwarded_to_titan_multimodal_model(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """Titan Multimodal Embeddings G1 has no `embeddingTypes` field at all.
 
@@ -407,7 +437,7 @@ class TestCohereEmbedRoute:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-mm.html
              stdapi/types/cohere_embed.py:resolve_embedding_types
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={
                 "model": "amazon.titan-embed-image-v1",
@@ -422,13 +452,13 @@ class TestCohereEmbedRoute:
         assert "embeddingTypes" not in call["extra_params"]
 
     def test_base64_embedding_type_is_computed_client_side(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """embedding_types=["base64"] is computed from `float`, not forwarded to Bedrock.
 
         Ref: stdapi/types/cohere_embed.py:_encode_base64
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={
                 "model": "cohere.embed-v4:0",
@@ -447,13 +477,13 @@ class TestCohereEmbedRoute:
         assert call["extra_params"]["embedding_types"] == ["float"]
 
     def test_base64_and_float_embedding_types_both_returned(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """Requesting both `float` and `base64` returns both keys.
 
         Ref: stdapi/types/cohere_embed.py:build_embeddings_by_type
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={
                 "model": "cohere.embed-v4:0",
@@ -474,14 +504,14 @@ class TestCohereEmbedRoute:
         assert call["extra_params"]["embedding_types"] == ["float"]
 
     def test_fused_inputs_are_rejected(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """The v2 fused multimodal `inputs` field is rejected with a clear error.
 
         Ref: https://docs.cohere.com/reference/embed
              stdapi/types/cohere_embed.py:_EmbedRequestBase
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={
                 "model": "cohere.embed-v4:0",
@@ -496,13 +526,13 @@ class TestCohereEmbedRoute:
         assert not embed_backend.calls
 
     def test_priority_is_ignored(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """The Cohere priority hint is accepted but not forwarded to AWS.
 
         Ref: stdapi/types/cohere_embed.py:EmbedRequest
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={
                 "model": "cohere.embed-v4:0",
@@ -517,7 +547,7 @@ class TestCohereEmbedRoute:
         assert call["extra_params"] == {"input_type": "search_document"}
 
     def test_null_inputs_is_treated_as_absent(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """An explicit `inputs: null` alongside `texts` is accepted and not forwarded.
 
@@ -526,7 +556,7 @@ class TestCohereEmbedRoute:
 
         Ref: stdapi/types/cohere_embed.py:_EmbedRequestBase
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={
                 "model": "cohere.embed-v4:0",
@@ -541,7 +571,7 @@ class TestCohereEmbedRoute:
 
     def test_request_params_override_operator_defaults(
         self,
-        client: TestClient,
+        app_client: TestClient,
         embed_backend: _StubEmbeddingModel,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -557,7 +587,7 @@ class TestCohereEmbedRoute:
             "cohere.embed-multilingual-v3",
             {"input_type": "clustering", "truncate": "NONE", "max_tokens": 64},
         )
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={
                 "model": "cohere.embed-multilingual-v3",
@@ -576,7 +606,7 @@ class TestCohereEmbedRoute:
         }
 
     def test_alias_resolution_drives_cohere_params(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """Cohere params follow the resolved model ID, not the requested alias.
 
@@ -585,7 +615,7 @@ class TestCohereEmbedRoute:
 
         Ref: stdapi/routes/cohere_embed.py:embed
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={
                 "model": "embed-multilingual",
@@ -598,7 +628,7 @@ class TestCohereEmbedRoute:
         assert call["extra_params"] == {"input_type": "search_document"}
 
     def test_unknown_model_returns_cohere_error_envelope(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """Model errors use the Cohere `{"message": ...}` envelope.
 
@@ -608,7 +638,7 @@ class TestCohereEmbedRoute:
         Ref: https://docs.cohere.com/reference/errors
              stdapi/api_providers/cohere.py:_format_error
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={
                 "model": "unknown-model",
@@ -624,13 +654,13 @@ class TestCohereEmbedRoute:
         assert not embed_backend.calls
 
     def test_images_metadata_is_echoed_in_wire_shape(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """Image metadata parsed by the model is echoed with the Cohere `images` shape."""
         embed_backend.images = [
             EmbeddingImageDescription(format="png", width=10, height=20, bit_depth=8)
         ]
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={
                 "model": "cohere.embed-v4:0",
@@ -646,10 +676,10 @@ class TestCohereEmbedRoute:
         assert body["meta"]["billed_units"]["images"] == 1
 
     def test_images_metadata_absent_when_not_reported(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """No `images` key is emitted when the model does not report image metadata."""
-        response = client.post(
+        response = app_client.post(
             "/cohere/v2/embed",
             json={
                 "model": "cohere.embed-multilingual-v3",
@@ -677,13 +707,13 @@ class TestCohereEmbedV1Route:
     """
 
     def test_embed_texts_floats_shape_by_default(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """Without embedding_types the legacy embeddings_floats shape is returned.
 
         Ref: stdapi/types/cohere_embed.py:EmbedV1FloatsResponse
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/embed",
             json={"model": "cohere.embed-multilingual-v3", "texts": ["hello", "world"]},
         )
@@ -709,13 +739,13 @@ class TestCohereEmbedV1Route:
         )
 
     def test_embedding_types_float_returns_by_type_shape(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """embedding_types=["float"] switches to the embeddings_by_type shape.
 
         Ref: stdapi/types/cohere_embed.py:resolve_embedding_types
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/embed",
             json={
                 "model": "cohere.embed-multilingual-v3",
@@ -735,14 +765,46 @@ class TestCohereEmbedV1Route:
         (call,) = embed_backend.calls
         assert call["extra_params"]["embedding_types"] == ["float"]
 
+    def test_binary_embedding_type_is_forwarded_for_titan_model(
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
+    ) -> None:
+        """v1 forwards Titan's native `embeddingTypes`, matching the v2 endpoint.
+
+        The v1 route carries its own copy of the Titan branch; without this the
+        two could drift and a v1 client asking for `binary` would silently get
+        float-only vectors.
+
+        Ref: https://docs.cohere.com/v1/reference/embed
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
+             stdapi/routes/cohere_embed_v1.py:embed_v1
+        """
+        embed_backend.embeddings_by_type = {"binary": [[1, 0]]}
+        response = app_client.post(
+            "/cohere/v1/embed",
+            json={
+                "model": "amazon.titan-embed-text-v2:0",
+                "texts": ["a"],
+                "embedding_types": ["binary"],
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["response_type"] == "embeddings_by_type"
+        assert body["embeddings"] == {"binary": [[1, 0]]}
+        (call,) = embed_backend.calls
+        assert call["extra_params"]["embeddingTypes"] == ["binary", "float"]
+        assert "embedding_types" not in call["extra_params"], (
+            "the Cohere spelling must not be sent to a Titan model"
+        )
+
     def test_non_float_embedding_types_are_rejected_for_unsupported_backends(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """embedding_types other than float/base64 are rejected for non-Cohere/Titan models.
 
         Ref: stdapi/types/cohere_embed.py:resolve_embedding_types
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/embed",
             json={
                 "model": "some-vendor.embed-v1",
@@ -758,7 +820,7 @@ class TestCohereEmbedV1Route:
         assert not embed_backend.calls
 
     def test_int8_embedding_type_is_forwarded_for_cohere_model(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """embedding_types=["int8"] is forwarded to Bedrock Cohere Embed and returned as-is.
 
@@ -766,7 +828,7 @@ class TestCohereEmbedV1Route:
              stdapi/types/cohere_embed.py:resolve_embedding_types
         """
         embed_backend.embeddings_by_type = {"int8": [[1, 2]]}
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/embed",
             json={
                 "model": "cohere.embed-multilingual-v3",
@@ -783,13 +845,13 @@ class TestCohereEmbedV1Route:
         assert call["extra_params"]["embedding_types"] == ["float", "int8"]
 
     def test_base64_embedding_type_is_computed_client_side(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """embedding_types=["base64"] is computed from `float`, not forwarded to Bedrock.
 
         Ref: stdapi/types/cohere_embed.py:_encode_base64
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/embed",
             json={
                 "model": "cohere.embed-multilingual-v3",
@@ -807,7 +869,7 @@ class TestCohereEmbedV1Route:
         assert call["extra_params"]["embedding_types"] == ["float"]
 
     def test_input_type_and_truncate_forwarded_for_cohere_models(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """input_type and truncate are forwarded to Cohere models when provided.
 
@@ -816,7 +878,7 @@ class TestCohereEmbedV1Route:
 
         Ref: https://docs.cohere.com/v1/reference/embed
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/embed",
             json={
                 "model": "cohere.embed-v4:0",
@@ -831,13 +893,13 @@ class TestCohereEmbedV1Route:
         assert call["dimensions"] is None
 
     def test_cohere_params_dropped_for_other_providers(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """Cohere-specific fields are not forwarded to non-Cohere models.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/embed",
             json={
                 "model": "amazon.titan-embed-text-v2:0",
@@ -851,14 +913,14 @@ class TestCohereEmbedV1Route:
         assert call["extra_params"] == {}
 
     def test_image_data_uri_input(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """Image data URIs are parsed into file inputs and billed as images.
 
         An image-only v1 request still uses the floats envelope and omits
         `texts` entirely.
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/embed",
             json={
                 "model": "cohere.embed-v4:0",
@@ -876,14 +938,14 @@ class TestCohereEmbedV1Route:
         assert isinstance(call["inputs"][0], InputFile)
 
     def test_no_input_is_rejected(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """A request without texts or images fails with the Cohere envelope.
 
         Ref: stdapi/types/cohere_embed.py:_EmbedRequestBase
              stdapi/api_providers/cohere.py:_format_error
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/embed", json={"model": "cohere.embed-multilingual-v3"}
         )
         assert response.status_code == 400
@@ -894,13 +956,13 @@ class TestCohereEmbedV1Route:
         assert not embed_backend.calls
 
     def test_fused_inputs_are_rejected(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """The v2-style fused multimodal `inputs` field is rejected with a clear error.
 
         Ref: stdapi/types/cohere_embed.py:_EmbedRequestBase
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/embed",
             json={
                 "model": "cohere.embed-v4:0",
@@ -914,13 +976,13 @@ class TestCohereEmbedV1Route:
         assert not embed_backend.calls
 
     def test_null_inputs_is_treated_as_absent(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """An explicit `inputs: null` alongside `texts` is accepted and not forwarded.
 
         Ref: stdapi/types/cohere_embed.py:_EmbedRequestBase
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/embed",
             json={"model": "cohere.embed-v4:0", "texts": ["a"], "inputs": None},
         )
@@ -929,14 +991,14 @@ class TestCohereEmbedV1Route:
         assert call["extra_params"] == {}
 
     def test_unknown_model_returns_cohere_error_envelope(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """Model errors use the Cohere `{"message": ...}` envelope.
 
         Ref: https://docs.cohere.com/reference/errors
              stdapi/api_providers/cohere.py:_format_error
         """
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/embed", json={"model": "unknown-model", "texts": ["a"]}
         )
         assert response.status_code == 404
@@ -947,7 +1009,7 @@ class TestCohereEmbedV1Route:
         assert not embed_backend.calls
 
     def test_images_metadata_is_echoed_in_wire_shape(
-        self, client: TestClient, embed_backend: _StubEmbeddingModel
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
         """Image metadata parsed by the model is echoed with the Cohere `images` shape.
 
@@ -957,7 +1019,7 @@ class TestCohereEmbedV1Route:
         embed_backend.images = [
             EmbeddingImageDescription(format="png", width=10, height=20, bit_depth=8)
         ]
-        response = client.post(
+        response = app_client.post(
             "/cohere/v1/embed",
             json={
                 "model": "cohere.embed-v4:0",

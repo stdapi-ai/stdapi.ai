@@ -33,6 +33,17 @@ if TYPE_CHECKING:
 _NOVA_2_LITE = "amazon.nova-2-lite-v1:0"
 
 
+@pytest.fixture(autouse=True)
+def _skip_on_official_api(use_official_api: bool) -> None:
+    """Skip the module when a remote Anthropic-compatible target is selected.
+
+    ``nova_code_interpreter`` and ``nova_grounding`` are Bedrock system tools with
+    no counterpart on the official Anthropic API.
+    """
+    if use_official_api:
+        pytest.skip("Nova 2 system tools are only available on AWS Bedrock")
+
+
 #: code_execution tool definition (Anthropic canonical format).
 _CODE_EXECUTION_TOOL: dict[str, object] = {
     "type": "code_execution_20250522",
@@ -71,7 +82,7 @@ class TestCodeExecutionTool:
 
     @pytest.mark.expensive
     def test_code_execution_surfaces_code_execution_tool_result(
-        self, anthropic_client: Anthropic, use_official_api: bool
+        self, anthropic_client: Anthropic
     ) -> None:
         """Successful code execution produces a ``CodeExecutionToolResultBlock``.
 
@@ -82,9 +93,6 @@ class TestCodeExecutionTool:
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
              stdapi/models/chat/amazon_nova_2.py:ChatModel._resp_map_tool_result
         """
-        if use_official_api:
-            pytest.skip("nova_code_interpreter is only available on AWS Bedrock")
-
         response = anthropic_client.messages.create(
             model=_NOVA_2_LITE,
             max_tokens=1024,
@@ -134,9 +142,7 @@ class TestCodeExecutionTool:
         assert response.usage.output_tokens > 0
 
     @pytest.mark.expensive
-    def test_code_execution_multi_turn(
-        self, anthropic_client: Anthropic, use_official_api: bool
-    ) -> None:
+    def test_code_execution_multi_turn(self, anthropic_client: Anthropic) -> None:
         """A ``code_execution_tool_result`` can be replayed as assistant history.
 
         Turn 2 echoes the turn-1 blocks back, which forces the reverse mapping:
@@ -147,9 +153,6 @@ class TestCodeExecutionTool:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
              stdapi/models/chat/amazon_nova_2.py:ChatModel._req_map_content_block
         """
-        if use_official_api:
-            pytest.skip("nova_code_interpreter is only available on AWS Bedrock")
-
         # ── Turn 1 ──────────────────────────────────────────────────────────
         resp1 = anthropic_client.messages.create(
             model=_NOVA_2_LITE,
@@ -217,7 +220,7 @@ class TestCodeExecutionTool:
 
     @pytest.mark.expensive
     def test_code_execution_stderr_and_nonzero_exit_preserved(
-        self, anthropic_client: Anthropic, use_official_api: bool
+        self, anthropic_client: Anthropic
     ) -> None:
         """A failing snippet still returns a result block reporting the failure.
 
@@ -229,9 +232,6 @@ class TestCodeExecutionTool:
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
              stdapi/models/chat/amazon_nova_2.py:ChatModel._build_code_execution_result
         """
-        if use_official_api:
-            pytest.skip("nova_code_interpreter is only available on AWS Bedrock")
-
         response = anthropic_client.messages.create(
             model=_NOVA_2_LITE,
             max_tokens=1024,
@@ -278,7 +278,7 @@ class TestCodeExecutionToolStreaming:
 
     @pytest.mark.expensive
     def test_streaming_surfaces_server_tool_use_and_result(
-        self, anthropic_client: Anthropic, use_official_api: bool
+        self, anthropic_client: Anthropic
     ) -> None:
         """Streaming response contains ``server_tool_use`` + ``code_execution_tool_result``.
 
@@ -289,9 +289,6 @@ class TestCodeExecutionToolStreaming:
         Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
              stdapi/models/chat/_adapters/_anthropic_message.py:_process_content_block_stop
         """
-        if use_official_api:
-            pytest.skip("nova_code_interpreter is only available on AWS Bedrock")
-
         with anthropic_client.messages.stream(
             model=_NOVA_2_LITE,
             max_tokens=1024,
@@ -337,9 +334,7 @@ class TestCodeExecutionToolStreaming:
         assert msg.usage.output_tokens > 0
 
     @pytest.mark.expensive
-    def test_streaming_no_empty_text_blocks(
-        self, anthropic_client: Anthropic, use_official_api: bool
-    ) -> None:
+    def test_streaming_no_empty_text_blocks(self, anthropic_client: Anthropic) -> None:
         """Streaming response does not surface Nova's empty preamble text block.
 
         Nova opens a system-tool turn with a text block whose only delta is ``{"text":
@@ -349,9 +344,6 @@ class TestCodeExecutionToolStreaming:
         Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
              stdapi/models/chat/_adapters/_anthropic_message.py:_process_content_block_delta
         """
-        if use_official_api:
-            pytest.skip("nova_code_interpreter is only available on AWS Bedrock")
-
         with anthropic_client.messages.stream(
             model=_NOVA_2_LITE,
             max_tokens=1024,
@@ -368,9 +360,7 @@ class TestCodeExecutionToolStreaming:
         assert msg.content, "Expected at least one content block in the final message"
 
     @pytest.mark.expensive
-    def test_streaming_multi_turn(
-        self, anthropic_client: Anthropic, use_official_api: bool
-    ) -> None:
+    def test_streaming_multi_turn(self, anthropic_client: Anthropic) -> None:
         """Streamed code-execution blocks are accepted back as assistant history.
 
         The blocks replayed in turn 2 are the ones rebuilt from buffered stream deltas, so
@@ -379,9 +369,6 @@ class TestCodeExecutionToolStreaming:
         Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
              stdapi/models/chat/amazon_nova_2.py:ChatModel._req_map_content_block
         """
-        if use_official_api:
-            pytest.skip("nova_code_interpreter is only available on AWS Bedrock")
-
         # ── Turn 1 ──────────────────────────────────────────────────────────
         with anthropic_client.messages.stream(
             model=_NOVA_2_LITE,
@@ -469,7 +456,7 @@ class TestWebSearchTool:
 
     @pytest.mark.expensive
     def test_web_search_surfaces_server_tool_use_block(
-        self, anthropic_client: Anthropic, use_official_api: bool
+        self, anthropic_client: Anthropic
     ) -> None:
         """Successful web search produces a ``server_tool_use`` block.
 
@@ -480,9 +467,6 @@ class TestWebSearchTool:
         Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/web-grounding.html
              stdapi/models/chat/_default.py:ChatModel._canonical_name_for
         """
-        if use_official_api:
-            pytest.skip("nova_grounding is only available on AWS Bedrock")
-
         response = anthropic_client.messages.create(
             model=_NOVA_2_LITE,
             max_tokens=1024,
@@ -526,7 +510,7 @@ class TestWebSearchTool:
 
     @pytest.mark.expensive
     def test_web_search_streaming_surfaces_server_tool_use_block(
-        self, anthropic_client: Anthropic, use_official_api: bool
+        self, anthropic_client: Anthropic
     ) -> None:
         """Streaming web search produces a ``server_tool_use`` block.
 
@@ -536,9 +520,6 @@ class TestWebSearchTool:
         Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
              stdapi/models/chat/_default.py:ChatModel._resp_stream_map_tool_use
         """
-        if use_official_api:
-            pytest.skip("nova_grounding is only available on AWS Bedrock")
-
         with anthropic_client.messages.stream(
             model=_NOVA_2_LITE,
             max_tokens=1024,
@@ -576,9 +557,7 @@ class TestWebSearchTool:
             )
 
     @pytest.mark.expensive
-    def test_web_search_multi_turn(
-        self, anthropic_client: Anthropic, use_official_api: bool
-    ) -> None:
+    def test_web_search_multi_turn(self, anthropic_client: Anthropic) -> None:
         """A ``server_tool_use`` block can be replayed as assistant history.
 
         ``_req_map_content_block`` turns the echoed block back into a Bedrock ``toolUse``
@@ -588,9 +567,6 @@ class TestWebSearchTool:
         Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/web-grounding.html
              stdapi/models/chat/_default.py:ChatModel._req_map_content_block
         """
-        if use_official_api:
-            pytest.skip("nova_grounding is only available on AWS Bedrock")
-
         # ── Turn 1 ──────────────────────────────────────────────────────────
         resp1 = anthropic_client.messages.create(
             model=_NOVA_2_LITE,
@@ -640,9 +616,7 @@ class TestWebSearchTool:
         )
         assert resp2.usage.output_tokens > 0
 
-    def test_web_search_filters_are_rejected(
-        self, anthropic_client: Anthropic, use_official_api: bool
-    ) -> None:
+    def test_web_search_filters_are_rejected(self, anthropic_client: Anthropic) -> None:
         """Search filters nova_grounding cannot honor are rejected, not dropped.
 
         Anthropic's ``web_search`` accepts ``allowed_domains`` / ``blocked_domains`` /
@@ -655,9 +629,6 @@ class TestWebSearchTool:
              stdapi/models/chat/_adapters/_anthropic_message.py:_handle_system_tool
              stdapi/api_providers/anthropic.py:_format_error
         """
-        if use_official_api:
-            pytest.skip("nova_grounding is only available on AWS Bedrock")
-
         with pytest.raises(BadRequestError) as exc_info:
             anthropic_client.messages.create(
                 model=_NOVA_2_LITE,

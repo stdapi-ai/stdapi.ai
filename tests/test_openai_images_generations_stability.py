@@ -18,14 +18,19 @@ STABILITY_ALL = (STABILITY_CORE, STABILITY_SD35, STABILITY_ULTRA)
 STABILITY_SAMPLE = (STABILITY_CORE,)
 
 
+@pytest.fixture(autouse=True)
+def _skip_on_official_api(use_official_api: bool) -> None:
+    """Skip every test here: the Stability models have no official OpenAI equivalent."""
+    if use_official_api:
+        pytest.skip("Stability AI is not available on the official OpenAI API")
+
+
 class TestStabilityImages:
     """Text-to-image generation with the Stability AI models on Bedrock."""
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", STABILITY_ALL)
-    def test_generate_b64_single(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
-    ) -> None:
+    def test_generate_b64_single(self, openai_client: OpenAI, model_id: str) -> None:
         """A prompt returns exactly one base64 JPEG when ``output_format="jpeg"``.
 
         The Stability request carries ``output_format`` verbatim for the three
@@ -35,9 +40,6 @@ class TestStabilityImages:
         Ref: stdapi/models/image/_stability.py:StabilityImageGenerationJobBase._finalize_request
              stdapi/routes/_images_common.py:build_images_response
         """
-        if use_official_api:
-            pytest.skip("Stability models are not available on the official OpenAI API")
-
         response = openai_client.images.generate(
             model=model_id,
             prompt="A charcoal sketch of a city skyline.",
@@ -58,7 +60,7 @@ class TestStabilityImages:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", STABILITY_SAMPLE)
     def test_extra_params_negative_prompt(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
+        self, openai_client: OpenAI, model_id: str
     ) -> None:
         """``negative_prompt`` is accepted as a provider extra and reaches the model.
 
@@ -70,9 +72,6 @@ class TestStabilityImages:
         Ref: stdapi/aws_bedrock.py:get_extra_model_parameters
              stdapi/models/image/_stability.py:StabilityImageGenerationJobBase._finalize_request
         """
-        if use_official_api:
-            pytest.skip("Stability models are not available on the official OpenAI API")
-
         response = openai_client.images.generate(
             model=model_id,
             prompt="A charcoal sketch of a city skyline.",
@@ -87,15 +86,12 @@ class TestStabilityImages:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", STABILITY_SAMPLE)
     def test_generate_and_convert_to_webp(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
+        self, openai_client: OpenAI, model_id: str
     ) -> None:
         """``output_format="webp"`` yields WebP bytes and is echoed on the response.
 
         Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._ensure_image_output_format
         """
-        if use_official_api:
-            pytest.skip("Stability models are not available on the official OpenAI API")
-
         response = openai_client.images.generate(
             model=model_id,
             prompt="A siamese cat.",
@@ -116,7 +112,7 @@ class TestStabilityImages:
 
     @pytest.mark.parametrize("model_id", STABILITY_SAMPLE)
     def test_quality_unsupported_raises(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
+        self, openai_client: OpenAI, model_id: str
     ) -> None:
         """``quality`` is rejected with a 400 naming the parameter.
 
@@ -127,9 +123,6 @@ class TestStabilityImages:
         Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._validate_no_quality
              stdapi/api_providers/openai.py:_format_error
         """
-        if use_official_api:
-            pytest.skip("Stability models are not available on the official OpenAI API")
-
         with pytest.raises(BadRequestError) as excinfo:
             openai_client.images.generate(
                 model=model_id,
@@ -147,16 +140,13 @@ class TestStabilityImages:
 
     @pytest.mark.parametrize("model_id", STABILITY_SAMPLE)
     def test_style_unsupported_raises(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
+        self, openai_client: OpenAI, model_id: str
     ) -> None:
         """``style`` is rejected with a 400 naming the parameter.
 
         Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._validate_no_style
              stdapi/api_providers/openai.py:_format_error
         """
-        if use_official_api:
-            pytest.skip("Stability models are not available on the official OpenAI API")
-
         with pytest.raises(BadRequestError) as excinfo:
             openai_client.images.generate(
                 model=model_id,

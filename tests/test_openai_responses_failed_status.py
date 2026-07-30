@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
-from starlette.testclient import TestClient
 
 from stdapi.models import ModelDetails
 from stdapi.routes import openai_responses
@@ -17,6 +16,7 @@ from stdapi.types.openai_responses import Response, ResponseCreateParams, Respon
 
 if TYPE_CHECKING:
     from sse_starlette import EventSourceResponse
+    from starlette.testclient import TestClient
 
 pytestmark = pytest.mark.local
 
@@ -54,14 +54,6 @@ class _StubFailedChatModel:
 
 
 @pytest.fixture
-def client(api_key: str) -> TestClient:
-    """Test client without lifespan (no AWS startup), pre-authenticated."""
-    from stdapi.main import app  # noqa: PLC0415
-
-    return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
-
-
-@pytest.fixture
 def failed_chat_backend(monkeypatch: pytest.MonkeyPatch) -> _StubFailedChatModel:
     """Stub model validation and the chat generation backend."""
 
@@ -84,7 +76,7 @@ def failed_chat_backend(monkeypatch: pytest.MonkeyPatch) -> _StubFailedChatModel
 
 
 @pytest.mark.usefixtures("failed_chat_backend")
-def test_synchronous_failed_response_returns_502(client: TestClient) -> None:
+def test_synchronous_failed_response_returns_502(app_client: TestClient) -> None:
     """A synchronous ``status="failed"`` Response is surfaced as a 502 error envelope.
 
     A failed Response carries the failure in ``error`` and no usable output, so
@@ -94,7 +86,7 @@ def test_synchronous_failed_response_returns_502(client: TestClient) -> None:
 
     Ref: stdapi/api_providers/openai.py:_format_error
     """
-    response = client.post(
+    response = app_client.post(
         "/v1/responses", json={"model": "amazon.nova-pro-v1:0", "input": "hi"}
     )
     assert response.status_code == 502
@@ -104,7 +96,7 @@ def test_synchronous_failed_response_returns_502(client: TestClient) -> None:
 
 
 @pytest.mark.usefixtures("failed_chat_backend")
-def test_background_failed_response_stays_200(client: TestClient) -> None:
+def test_background_failed_response_stays_200(app_client: TestClient) -> None:
     """A background request returns the failed terminal state as a 200 Response.
 
     ``background`` responses are polled, so the terminal ``failed`` state and
@@ -113,7 +105,7 @@ def test_background_failed_response_stays_200(client: TestClient) -> None:
 
     Ref: https://developers.openai.com/api/docs/guides/background
     """
-    response = client.post(
+    response = app_client.post(
         "/v1/responses",
         json={"model": "amazon.nova-pro-v1:0", "input": "hi", "background": True},
     )

@@ -35,9 +35,22 @@ from typing import TYPE_CHECKING
 import pytest
 from anthropic import BadRequestError
 
+from tests.conftest import REPO_ROOT
+
 if TYPE_CHECKING:
     from anthropic import Anthropic
     from anthropic.types import Message
+
+
+@pytest.fixture(autouse=True)
+def _skip_on_official_api(use_official_api: bool) -> None:
+    """Skip the whole module when a remote Anthropic-compatible target is selected.
+
+    The matrices name Bedrock model IDs, which only the local gateway serves.
+    """
+    if use_official_api:
+        pytest.skip("Multi-model tests only run against the local server")
+
 
 # ---------------------------------------------------------------------------
 # Model lists — one representative per family, prefer fast/cheap variants
@@ -66,81 +79,46 @@ _BASIC_MODELS = pytest.mark.parametrize(
     ],
 )
 
-#: Models confirmed to support non-streaming tool use.
-_TOOL_MODELS = pytest.mark.parametrize(
-    "model",
-    [
-        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
-        "amazon.nova-2-lite-v1:0",  # Amazon Nova 2
-        "amazon.nova-lite-v1:0",  # Amazon Nova
-        # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
-        # "ai21.jamba-1-5-large-v1:0",  # AI21 Jamba Large
-        "deepseek.v3-v1:0",  # DeepSeek V3
-        "deepseek.v3.2",  # DeepSeek V3.2 (newer revision)
-        "meta.llama3-1-70b-instruct-v1:0",  # Meta Llama 3.1 70B
-        "minimax.minimax-m2.5",  # MiniMax
-        "mistral.mistral-large-3-675b-instruct",  # Mistral Large 3
-        "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
-        "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock)
-        "openai.gpt-oss-120b-1:0",  # OpenAI GPT-OSS 120B (Bedrock)
-        "qwen.qwen3-32b-v1:0",  # Qwen3 32B
-        "writer.palmyra-x4-v1:0",  # Writer Palmyra X4
-        "writer.palmyra-x5-v1:0",  # Writer Palmyra X5
-        "zai.glm-5",  # Z.AI GLM-5
-    ],
+#: Models confirmed to support tool use, streaming and non-streaming alike.
+_TOOL_MODEL_IDS = (
+    "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
+    "amazon.nova-2-lite-v1:0",  # Amazon Nova 2
+    "amazon.nova-lite-v1:0",  # Amazon Nova
+    # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
+    # "ai21.jamba-1-5-large-v1:0",  # AI21 Jamba Large
+    "deepseek.v3-v1:0",  # DeepSeek V3
+    "deepseek.v3.2",  # DeepSeek V3.2 (newer revision)
+    "meta.llama3-1-70b-instruct-v1:0",  # Meta Llama 3.1 70B
+    "minimax.minimax-m2.5",  # MiniMax
+    "mistral.mistral-large-3-675b-instruct",  # Mistral Large 3
+    "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
+    "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock)
+    "openai.gpt-oss-120b-1:0",  # OpenAI GPT-OSS 120B (Bedrock)
+    "qwen.qwen3-32b-v1:0",  # Qwen3 32B
+    "writer.palmyra-x4-v1:0",  # Writer Palmyra X4
+    "writer.palmyra-x5-v1:0",  # Writer Palmyra X5
+    "zai.glm-5",  # Z.AI GLM-5
 )
 
+#: Model IDs excluded from the agentic loop for non-standard tool-output behaviour.
+_UNSTABLE_AGENTIC_MODEL_IDS = frozenset({"openai.gpt-oss-20b-1:0"})
+
+#: Models confirmed to support non-streaming tool use.
+_TOOL_MODELS = pytest.mark.parametrize("model", _TOOL_MODEL_IDS)
+
 #: Models confirmed to support tool use in streaming mode.
-#: Mistral 7B and Llama 3.3 70B are excluded — Bedrock returns 400 for
-#: streaming + tool use on those models specifically.
-_STREAMING_TOOL_MODELS = pytest.mark.parametrize(
-    "model",
-    [
-        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
-        "amazon.nova-2-lite-v1:0",  # Amazon Nova 2
-        "amazon.nova-lite-v1:0",  # Amazon Nova
-        # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
-        # "ai21.jamba-1-5-large-v1:0",  # AI21 Jamba Large
-        "deepseek.v3-v1:0",  # DeepSeek V3
-        "deepseek.v3.2",  # DeepSeek V3.2 (newer revision)
-        "meta.llama3-1-70b-instruct-v1:0",  # Meta Llama 3.1 70B
-        "minimax.minimax-m2.5",  # MiniMax
-        "mistral.mistral-large-3-675b-instruct",  # Mistral Large 3
-        "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
-        "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock)
-        "openai.gpt-oss-120b-1:0",  # OpenAI GPT-OSS 120B (Bedrock)
-        "qwen.qwen3-32b-v1:0",  # Qwen3 32B
-        "writer.palmyra-x4-v1:0",  # Writer Palmyra X4
-        "writer.palmyra-x5-v1:0",  # Writer Palmyra X5
-        "zai.glm-5",  # Z.AI GLM-5
-    ],
-)
+_STREAMING_TOOL_MODELS = pytest.mark.parametrize("model", _TOOL_MODEL_IDS)
 
 #: Models whose Bedrock stream drops the leading tool-input JSON fragment (upstream bug).
 _BROKEN_STREAMING_TOOL_INPUT_MODELS = frozenset({"qwen.qwen3-32b-v1:0"})
 
-#: Models to use for the full agentic loop (non-streaming; excludes models with
-#: known non-standard tool-output behaviour, e.g. llama3-3-70b outputs raw JSON).
+#: Models to use for the full agentic loop (non-streaming).
 _AGENTIC_MODELS = pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
-        "amazon.nova-2-lite-v1:0",  # Amazon Nova 2
-        "amazon.nova-lite-v1:0",  # Amazon Nova
-        # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
-        # "ai21.jamba-1-5-large-v1:0",  # AI21 Jamba Large
-        "deepseek.v3-v1:0",  # DeepSeek V3
-        "deepseek.v3.2",  # DeepSeek V3.2 (newer revision)
-        "meta.llama3-1-70b-instruct-v1:0",  # Meta Llama 3.1 70B
-        "minimax.minimax-m2.5",  # MiniMax
-        "mistral.mistral-large-3-675b-instruct",  # Mistral Large 3
-        "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
-        # "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock), disabled : unstable tool use
-        "openai.gpt-oss-120b-1:0",  # OpenAI GPT-OSS 120B (Bedrock)
-        "qwen.qwen3-32b-v1:0",  # Qwen3 32B
-        "writer.palmyra-x4-v1:0",  # Writer Palmyra X4
-        "writer.palmyra-x5-v1:0",  # Writer Palmyra X5
-        "zai.glm-5",  # Z.AI GLM-5
+        model_id
+        for model_id in _TOOL_MODEL_IDS
+        if model_id not in _UNSTABLE_AGENTIC_MODEL_IDS
     ],
 )
 
@@ -208,7 +186,8 @@ _STOP_REASONS = frozenset(
     }
 )
 
-_PROJECT_ROOT = "/var/opt/projects/stdapi.ai"
+#: Checkout root the model is asked to explore; must be a real readable path.
+_PROJECT_ROOT = str(REPO_ROOT)
 
 
 def _run_tool(name: str, tool_input: object) -> str:
@@ -263,7 +242,7 @@ class TestMultiModelBasics:
     @pytest.mark.slow
     @_BASIC_MODELS
     def test_basic_text_generation(
-        self, model: str, anthropic_client: Anthropic, use_official_api: bool
+        self, model: str, anthropic_client: Anthropic
     ) -> None:
         """Every family answers with the same ``message`` envelope and billed usage.
 
@@ -275,9 +254,6 @@ class TestMultiModelBasics:
         Ref: https://platform.claude.com/docs/en/api/messages
              stdapi/models/chat/_adapters/_anthropic_message.py:format_response
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         # Use generous max_tokens so native-reasoning models (DeepSeek R1,
         # MiniMax M2.5) can produce text after their thinking blocks.
         response = anthropic_client.messages.create(
@@ -311,7 +287,7 @@ class TestMultiModelBasics:
     @pytest.mark.slow
     @_BASIC_MODELS
     def test_streaming_event_sequence(
-        self, model: str, anthropic_client: Anthropic, use_official_api: bool
+        self, model: str, anthropic_client: Anthropic
     ) -> None:
         """Streaming response emits the required SSE event sequence.
 
@@ -324,9 +300,6 @@ class TestMultiModelBasics:
         Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
              stdapi/models/chat/_adapters/_anthropic_message.py:format_stream
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         event_types: list[str] = []
         with anthropic_client.messages.stream(
             model=model,
@@ -377,7 +350,7 @@ class TestMultiModelBasics:
     @pytest.mark.slow
     @_BASIC_MODELS
     def test_streaming_no_empty_text_blocks(
-        self, model: str, anthropic_client: Anthropic, use_official_api: bool
+        self, model: str, anthropic_client: Anthropic
     ) -> None:
         """Streaming response never surfaces a text block with empty content.
 
@@ -389,9 +362,6 @@ class TestMultiModelBasics:
         Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
              stdapi/models/chat/_adapters/_anthropic_message.py:_process_content_block_delta
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         with anthropic_client.messages.stream(
             model=model,
             max_tokens=256,
@@ -412,7 +382,7 @@ class TestMultiModelBasics:
     @pytest.mark.slow
     @_BASIC_MODELS
     def test_multi_turn_context_retention(
-        self, model: str, anthropic_client: Anthropic, use_official_api: bool
+        self, model: str, anthropic_client: Anthropic
     ) -> None:
         """Prior turns reach the model, so a first-turn identifier can be recalled.
 
@@ -423,9 +393,6 @@ class TestMultiModelBasics:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
              stdapi/models/chat/_adapters/_anthropic_message.py:translate_request
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         response = anthropic_client.messages.create(
             model=model,
             max_tokens=2048,
@@ -472,7 +439,7 @@ class TestMultiModelToolUse:
     @pytest.mark.expensive
     @_TOOL_MODELS
     def test_tool_call_single_turn(
-        self, model: str, anthropic_client: Anthropic, use_official_api: bool
+        self, model: str, anthropic_client: Anthropic
     ) -> None:
         """A Bedrock ``toolUse`` answer becomes a ``tool_use`` block and ``stop_reason``.
 
@@ -483,9 +450,6 @@ class TestMultiModelToolUse:
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
              stdapi/models/chat/_adapters/_anthropic_message.py:format_response
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         response = anthropic_client.messages.create(
             model=model,
             max_tokens=2048,
@@ -515,7 +479,7 @@ class TestMultiModelToolUse:
     @pytest.mark.expensive
     @_TOOL_MODELS
     def test_tool_result_continuation(
-        self, model: str, anthropic_client: Anthropic, use_official_api: bool
+        self, model: str, anthropic_client: Anthropic
     ) -> None:
         """A ``tool_result`` message closes the tool cycle and the model answers from it.
 
@@ -527,9 +491,6 @@ class TestMultiModelToolUse:
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
              stdapi/models/chat/_adapters/_anthropic_message.py:_map_tool_result_to_bedrock
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         tools = [_TOOLS[0]]  # list_directory only
 
         # Turn 1: model decides to call the tool.
@@ -597,9 +558,7 @@ class TestMultiModelToolUse:
 
     @pytest.mark.expensive
     @_STREAMING_TOOL_MODELS
-    def test_streaming_tool_call(
-        self, model: str, anthropic_client: Anthropic, use_official_api: bool
-    ) -> None:
+    def test_streaming_tool_call(self, model: str, anthropic_client: Anthropic) -> None:
         """Streaming a tool call emits a ``content_block_start`` carrying id and name.
 
         Bedrock puts the ``toolUseId`` and name in ``contentBlockStart`` and streams the
@@ -611,9 +570,6 @@ class TestMultiModelToolUse:
         Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
              stdapi/models/chat/_adapters/_anthropic_message.py:_process_content_block_start
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         try:
             with anthropic_client.messages.stream(
                 model=model,
@@ -667,9 +623,10 @@ class TestMultiModelToolUse:
         )
 
     @pytest.mark.expensive
+    @pytest.mark.agentic
     @_AGENTIC_MODELS
     def test_agentic_loop_directory_and_file(
-        self, model: str, anthropic_client: Anthropic, use_official_api: bool
+        self, model: str, anthropic_client: Anthropic
     ) -> None:
         """A multi-turn loop with two distinct tools reaches a grounded final answer.
 
@@ -682,9 +639,6 @@ class TestMultiModelToolUse:
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
              stdapi/models/chat/_adapters/_anthropic_message.py:translate_request
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         messages: list[dict[str, object]] = [
             {
                 "role": "user",
@@ -758,7 +712,7 @@ class TestNativeReasoning:
     @pytest.mark.expensive
     @_REASONING_MODELS
     def test_native_thinking_blocks_present(
-        self, model: str, anthropic_client: Anthropic, use_official_api: bool
+        self, model: str, anthropic_client: Anthropic
     ) -> None:
         """Native-reasoning models return at least one ``thinking`` block.
 
@@ -770,9 +724,6 @@ class TestNativeReasoning:
         Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
              stdapi/models/chat/_adapters/_anthropic_message.py:format_response
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         # Generous max_tokens: reasoning models spend many tokens on thinking.
         response = anthropic_client.messages.create(
             model=model,
@@ -799,7 +750,7 @@ class TestNativeReasoning:
     @pytest.mark.expensive
     @_REASONING_MODELS
     def test_streaming_native_thinking_blocks(
-        self, model: str, anthropic_client: Anthropic, use_official_api: bool
+        self, model: str, anthropic_client: Anthropic
     ) -> None:
         """Streaming a native-reasoning model emits ``thinking`` block start events.
 
@@ -810,9 +761,6 @@ class TestNativeReasoning:
         Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
              stdapi/models/chat/_adapters/_anthropic_message.py:_map_delta
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         with anthropic_client.messages.stream(
             model=model,
             max_tokens=1024,
@@ -861,7 +809,7 @@ class TestPromptCaching:
     @pytest.mark.slow
     @_CACHE_MODELS
     def test_cache_read_on_second_call(
-        self, model: str, anthropic_client: Anthropic, use_official_api: bool
+        self, model: str, anthropic_client: Anthropic
     ) -> None:
         """Repeating a cached system prompt is served from the cache on the second call.
 
@@ -871,9 +819,6 @@ class TestPromptCaching:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html
              stdapi/models/chat/_adapters/_anthropic_message.py:_map_system_blocks
         """
-        if use_official_api:
-            pytest.skip("Nova caching is only available on AWS Bedrock")
-
         long_context = "Detailed project context. " * 200  # ~800 tokens
         payload = {
             "model": model,
@@ -939,7 +884,7 @@ class TestStructuredOutput:
         ],
     )
     def test_json_output_parseable(
-        self, model: str, anthropic_client: Anthropic, use_official_api: bool
+        self, model: str, anthropic_client: Anthropic
     ) -> None:
         """Prompted JSON output round-trips through the gateway unaltered.
 
@@ -951,9 +896,6 @@ class TestStructuredOutput:
         Ref: https://platform.claude.com/docs/en/api/messages
              stdapi/models/chat/_adapters/_anthropic_message.py:_map_content_block_from_bedrock
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         response = anthropic_client.messages.create(
             model=model,
             max_tokens=256,
@@ -1037,7 +979,7 @@ class TestVision:
     @pytest.mark.slow
     @_VISION_MODELS
     def test_image_color_recognition(
-        self, model: str, anthropic_client: Anthropic, use_official_api: bool
+        self, model: str, anthropic_client: Anthropic
     ) -> None:
         """A base64 image source reaches vision models as a Bedrock ``image`` block.
 
@@ -1049,9 +991,6 @@ class TestVision:
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/modalities-image.html
              stdapi/models/chat/_adapters/_anthropic_message.py:_map_image_to_bedrock
         """
-        if use_official_api:
-            pytest.skip("Multi-model tests only run against the local server")
-
         response = anthropic_client.messages.create(
             model=model,
             max_tokens=64,

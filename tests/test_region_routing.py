@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 
 
 pytestmark = [
+    pytest.mark.local,
     pytest.mark.xdist_group("region_routing"),
     pytest.mark.asyncio(loop_scope="module"),
 ]
@@ -270,15 +271,6 @@ def _reset_router_state(request: pytest.FixtureRequest) -> Generator[None]:
             continue
         fx.reset(MODEL)
         break
-
-
-@pytest.fixture(autouse=True, scope="module")
-def _require_local_mode(request: pytest.FixtureRequest) -> None:
-    """Skip this module when running against a remote server."""
-    if request.config.getoption("--use-official-api") or request.config.getoption(
-        "--server-url"
-    ):
-        pytest.skip("Region routing tests require local mode")
 
 
 # ---------------------------------------------------------------------------
@@ -1289,8 +1281,13 @@ class TestMeasureRegionLatencies:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("request_log")
 class TestRouteAndExecute:
     """route_and_execute failover classification and retry budget, with ``fn`` mocked.
+
+    A request-log context is bound for the whole class: on a successful attempt the
+    router records the effective region into it, which raises ``LookupError`` outside
+    a request.
 
     The loop runs ``aws_bedrock_max_retries + 1`` attempts, marks the region for each
     retryable failure and re-raises the last error once the budget is spent.
@@ -1618,16 +1615,6 @@ def _require_s3_bucket() -> None:
         pytest.skip("aws_s3_bucket not configured — skipping S3 integration test")
 
 
-@pytest.fixture(autouse=True)
-def _request_log_context() -> Iterator[None]:
-    """Provide the request-log context required by logging outside request scope."""
-    from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
-
-    token = REQUEST_LOG.set({"level": "info"})  # type: ignore[typeddict-item]
-    yield
-    REQUEST_LOG.reset(token)
-
-
 @dataclass
 class S3FileFixture:
     """Test handle for a temporary S3 object created for testing."""
@@ -1658,13 +1645,15 @@ async def s3_file(sample_image_file: bytes) -> AsyncGenerator[S3FileFixture]:
     """
     _require_s3_bucket()
 
+    from uuid import uuid4  # noqa: PLC0415
+
     import stdapi.aws as _aws_mod  # noqa: PLC0415
     from stdapi.aws_s3 import BUCKET_TO_REGION  # noqa: PLC0415
     from stdapi.config import AWS_SESSION, SETTINGS  # noqa: PLC0415
 
     bucket: str = SETTINGS.aws_s3_bucket  # type: ignore[assignment]
     content_type = "image/png"
-    key = f"tmp/test_region_routing_{__import__('uuid').uuid4().hex}.png"
+    key = f"tmp/test_region_routing_{uuid4().hex}.png"
     region: RegionName = BUCKET_TO_REGION.get(bucket) or SETTINGS.aws_bedrock_regions[0]
 
     # Create a fresh S3 client on the current (module) event loop.
@@ -2159,7 +2148,6 @@ class TestFileSourceBaseMethodsS3:
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def s3_presigned_url(s3_file: S3FileFixture) -> str:
     """Generate a SigV4 presigned GET URL for the s3_file object."""
-    _require_s3_bucket()
     from aiobotocore.config import AioConfig  # noqa: PLC0415
 
     from stdapi.config import AWS_SESSION  # noqa: PLC0415

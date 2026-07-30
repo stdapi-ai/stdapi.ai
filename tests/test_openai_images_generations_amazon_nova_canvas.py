@@ -17,13 +17,24 @@ NOVA_CANVAS_ALL = (NOVA_CANVAS_V1,)
 NOVA_CANVAS_SAMPLE = (NOVA_CANVAS_V1,)
 
 
+#: Every test in this module is reported as skipped: the model is deprecated.
+pytestmark = pytest.mark.skip(reason="Amazon Nova Canvas is deprecated")
+
+
+@pytest.fixture(autouse=True)
+def _skip_on_official_api(use_official_api: bool) -> None:
+    """Skip every test here: Nova Canvas has no official OpenAI equivalent."""
+    if use_official_api:
+        pytest.skip("Amazon Nova Canvas is not available on the official OpenAI API")
+
+
 class TestAmazonNovaCanvas:
     """Text-to-image generation with Amazon Nova Canvas."""
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_extra_params_negative_text(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
+        self, openai_client: OpenAI, model_id: str
     ) -> None:
         """``textToImageParams.negativeText`` and a seed are accepted as provider extras.
 
@@ -35,10 +46,6 @@ class TestAmazonNovaCanvas:
         Ref: stdapi/aws_bedrock.py:get_extra_model_parameters
              stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._apply_extra_params
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova Canvas is not available on the official OpenAI API"
-            )
         response = openai_client.images.generate(
             model=model_id,
             prompt="A watercolor of a red fox in a forest, soft digital painting.",
@@ -57,9 +64,7 @@ class TestAmazonNovaCanvas:
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_ALL)
-    def test_generate_b64_single(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
-    ) -> None:
+    def test_generate_b64_single(self, openai_client: OpenAI, model_id: str) -> None:
         """A prompt returns one base64 PNG at the requested size with default quality.
 
         Nova Canvas always emits PNG and honors the requested width/height, so the
@@ -70,11 +75,6 @@ class TestAmazonNovaCanvas:
         Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._invoke_and_process_response
              stdapi/routes/_images_common.py:build_images_response
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova Canvas is not available on the official OpenAI API"
-            )
-
         response = openai_client.images.generate(
             model=model_id,
             prompt="A watercolor of a red fox in a forest, soft digital painting.",
@@ -94,7 +94,7 @@ class TestAmazonNovaCanvas:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_generate_url_multiple_images(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
+        self, openai_client: OpenAI, model_id: str
     ) -> None:
         """``n=2`` with ``response_format="url"`` returns two distinct presigned URLs.
 
@@ -104,11 +104,6 @@ class TestAmazonNovaCanvas:
         Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/ShareObjectPreSignedURL.html
              stdapi/models/image/__init__.py:ImageGenerationJobBase._get_image_url
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova Canvas is not available on the official OpenAI API"
-            )
-
         response = openai_client.images.generate(
             model=model_id,
             prompt="Logo concept of a lighthouse.",
@@ -128,9 +123,7 @@ class TestAmazonNovaCanvas:
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
-    def test_quality_is_accepted(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
-    ) -> None:
+    def test_quality_is_accepted(self, openai_client: OpenAI, model_id: str) -> None:
         """OpenAI ``quality="high"`` maps to Nova Canvas ``premium`` and echoes back ``high``.
 
         The gateway normalizes OpenAI's quality vocabulary to Nova Canvas'
@@ -140,11 +133,6 @@ class TestAmazonNovaCanvas:
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
              stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._apply_quality_and_style
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova Canvas is not available on the official OpenAI API"
-            )
-
         response = openai_client.images.generate(
             model=model_id,
             prompt="A photorealistic portrait of a golden retriever.",
@@ -158,9 +146,7 @@ class TestAmazonNovaCanvas:
         assert response.quality == "high"
 
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
-    def test_invalid_style_raises(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
-    ) -> None:
+    def test_invalid_style_raises(self, openai_client: OpenAI, model_id: str) -> None:
         """An OpenAI style value Nova Canvas does not define is rejected by Bedrock.
 
         The gateway does not validate ``style`` locally: it upper-cases the value
@@ -171,11 +157,6 @@ class TestAmazonNovaCanvas:
              stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._apply_quality_and_style
              stdapi/aws_bedrock.py:AWS_ERROR_MAP
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova Canvas is not available on the official OpenAI API"
-            )
-
         with pytest.raises(BadRequestError) as excinfo:
             openai_client.images.generate(
                 model=model_id,
@@ -196,7 +177,7 @@ class TestAmazonNovaCanvas:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_generate_with_color_guided_task_type(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
+        self, openai_client: OpenAI, model_id: str
     ) -> None:
         """``taskType=COLOR_GUIDED_GENERATION`` generates from a hex color palette.
 
@@ -207,11 +188,6 @@ class TestAmazonNovaCanvas:
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
              stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._get_request_color_guided_generation
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova Canvas is not available on the official OpenAI API"
-            )
-
         response = openai_client.images.generate(
             model=model_id,
             prompt="A beautiful landscape with sunset tones",
@@ -236,7 +212,7 @@ class TestAmazonNovaCanvas:
 
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_generate_with_invalid_task_type(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
+        self, openai_client: OpenAI, model_id: str
     ) -> None:
         """An unknown ``taskType`` is rejected with the list of legal values.
 
@@ -247,11 +223,6 @@ class TestAmazonNovaCanvas:
         Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._generate_images_from_text
              stdapi/api_providers/openai.py:_format_error
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova Canvas is not available on the official OpenAI API"
-            )
-
         with pytest.raises(BadRequestError) as excinfo:
             openai_client.images.generate(
                 model=model_id,
@@ -273,7 +244,7 @@ class TestAmazonNovaCanvas:
 
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_generate_color_guided_missing_colors(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
+        self, openai_client: OpenAI, model_id: str
     ) -> None:
         """``COLOR_GUIDED_GENERATION`` without ``colors`` is rejected before invoking Bedrock.
 
@@ -283,11 +254,6 @@ class TestAmazonNovaCanvas:
         Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._get_request_color_guided_generation
              stdapi/api_providers/openai.py:_format_error
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova Canvas is not available on the official OpenAI API"
-            )
-
         with pytest.raises(BadRequestError) as excinfo:
             openai_client.images.generate(
                 model=model_id,
@@ -306,6 +272,3 @@ class TestAmazonNovaCanvas:
             "Required parameter for COLOR_GUIDED_GENERATION: "
             "colorGuidedGenerationParams.colors"
         )
-
-
-pytest.skip("Amazon Nova Canvas is deprecated", allow_module_level=True)

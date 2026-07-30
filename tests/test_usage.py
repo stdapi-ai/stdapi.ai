@@ -66,7 +66,6 @@ class TestComputeCostsMultiCurrency:
     """
 
     def _record_mixed_currency_usage(self) -> None:
-        usage.init_usage()
         get_model_state("mixedmodel").region = "us-east-1"
         set_test_price(
             "mixedmodel", "us-east-1", Dimension.INPUT_TOKENS, "0.000003", "USD"
@@ -117,7 +116,6 @@ class TestComputeCostsMultiCurrency:
 
         1000 * 0.000003 + 1000 * 0.000015 = 0.018 in one currency.
         """
-        usage.init_usage()
         get_model_state("onemodel").region = "us-east-1"
         set_test_price(
             "onemodel", "us-east-1", Dimension.INPUT_TOKENS, "0.000003", "USD"
@@ -159,7 +157,6 @@ class TestRoutingTierPricing:
 
     def test_global_routing_used_prices_at_global_rate(self) -> None:
         """A global-routed call is billed at the global rate (0.003), not the regional one."""
-        usage.init_usage()
         state = get_model_state("routedmodel")
         state.region = "us-east-1"
         state.routing = "global"
@@ -172,7 +169,6 @@ class TestRoutingTierPricing:
 
     def test_no_effective_routing_uses_regional_rate(self) -> None:
         """With no routing profile tracked, the record is billed at the plain regional rate."""
-        usage.init_usage()
         get_model_state("routedmodel").region = "us-east-1"
         self._set_routed_prices()
         record_bedrock_usage("routedmodel", input_tokens=1000)
@@ -196,7 +192,6 @@ class TestImageSpecPricing:
 
     def test_mixed_spec_images_price_each_bucket_independently(self) -> None:
         """Two specs in one record bill per bucket: 2 * 0.008 + 3 * 0.012 = 0.052."""
-        usage.init_usage()
         get_model_state("imagemodel").region = "us-east-1"
         set_test_price(
             "imagemodel",
@@ -235,7 +230,6 @@ class TestImageSpecPricing:
 
         Ref: stdapi/usage.py:_reconcile_buckets
         """
-        usage.init_usage()
         get_model_state("mixedimagemodel").region = "us-east-1"
         set_test_price(
             "mixedimagemodel",
@@ -267,7 +261,6 @@ class TestImageSpecPricing:
 
     def test_no_spec_falls_back_to_flat_price(self) -> None:
         """With no IMAGE_SPEC set, images bill at the flat per-image rate: 2 * 0.0036."""
-        usage.init_usage()
         get_model_state("flatimagemodel").region = "us-east-1"
         set_test_price(
             "flatimagemodel", "us-east-1", Dimension.OUTPUT_IMAGES, "0.0036", "USD"
@@ -289,7 +282,6 @@ class TestImageSpecPricing:
 
         Ref: stdapi/models/image/__init__.py:ImageModelBase._record_invoke_usage
         """
-        usage.init_usage()
         get_model_state("titanimagegeneratorv2").region = "us-east-1"
         get_model_state("flatimagemodel").region = "us-east-1"
         set_test_price(
@@ -324,7 +316,6 @@ class TestOutputSecondsSpecPricing:
 
     def test_mixed_spec_seconds_price_each_bucket_independently(self) -> None:
         """A flat call and an "hd" call in one record bill 5 * 0.06 + 5 * 0.08 = 0.7."""
-        usage.init_usage()
         get_model_state("videomodel").region = "us-east-1"
         set_test_price(
             "videomodel", "us-east-1", Dimension.OUTPUT_SECONDS, "0.06", "USD"
@@ -350,7 +341,6 @@ class TestOutputSecondsSpecPricing:
 
     def test_no_spec_falls_back_to_flat_price(self) -> None:
         """With no spec bucket recorded, seconds bill at the flat rate: 6 * 0.05 = 0.3."""
-        usage.init_usage()
         get_model_state("flatvideomodel").region = "us-east-1"
         set_test_price(
             "flatvideomodel", "us-east-1", Dimension.OUTPUT_SECONDS, "0.05", "USD"
@@ -363,7 +353,6 @@ class TestOutputSecondsSpecPricing:
 
     def test_usage_log_entry_reports_output_seconds_by_spec(self) -> None:
         """The log entry carries both the flat output_seconds total and its per-spec breakdown."""
-        usage.init_usage()
         get_model_state("videomodel").region = "us-east-1"
         record_bedrock_usage("videomodel", output_seconds=5, output_seconds_spec="hd")
         entry = next(iter(usage.usage_log_entries()))
@@ -386,7 +375,6 @@ class TestCacheTtlPricing:
 
     def test_mixed_ttl_cache_writes_price_each_bucket_independently(self) -> None:
         """Two TTL buckets bill per bucket: 500 * 0.000004 + 1000 * 0.000008 = 0.01."""
-        usage.init_usage()
         get_model_state("cachemodel").region = "us-east-1"
         set_test_price(
             "cachemodel",
@@ -421,7 +409,6 @@ class TestCacheTtlPricing:
 
         Ref: stdapi/usage.py:_reconcile_buckets
         """
-        usage.init_usage()
         get_model_state("mixedcachemodel").region = "us-east-1"
         set_test_price(
             "mixedcachemodel",
@@ -460,7 +447,6 @@ class TestCacheTtlPricing:
 
         Ref: stdapi/usage.py:_add_cache_ttl_breakdown
         """
-        usage.init_usage()
         get_model_state("noflatcachemodel").region = "us-east-1"
         set_test_price(
             "noflatcachemodel",
@@ -487,7 +473,6 @@ class TestCacheTtlPricing:
         self, flat_call_first: bool
     ) -> None:
         """A flat-only and a breakdown-only call merge to 250 tokens and 0.001 in either order."""
-        usage.init_usage()
         get_model_state("ordercachemodel").region = "us-east-1"
         set_test_price(
             "ordercachemodel",
@@ -531,7 +516,6 @@ class TestRecordBedrockUsageTierResolution:
 
     def test_explicit_tier_overrides_context_var(self) -> None:
         """An explicit ``tier=`` argument wins over a conflicting model-state tier."""
-        usage.init_usage()
         state = get_model_state("tiermodel")
         state.region = "us-east-1"
         state.service_tier = "priority"
@@ -541,7 +525,6 @@ class TestRecordBedrockUsageTierResolution:
 
     def test_falls_back_to_service_tier_context_var_when_not_given(self) -> None:
         """With no explicit tier, the record picks up the model-state tier."""
-        usage.init_usage()
         state = get_model_state("tiermodel")
         state.region = "us-east-1"
         state.service_tier = "priority"
@@ -551,7 +534,6 @@ class TestRecordBedrockUsageTierResolution:
 
     def test_falls_back_to_standard_when_neither_is_set(self) -> None:
         """A never-overridden model-state tier ("default") is normalized to "standard"."""
-        usage.init_usage()
         get_model_state("tiermodel").region = "us-east-1"
         record_bedrock_usage("tiermodel", input_tokens=100)
         record = next(iter(usage.USAGE.get().values()))
@@ -591,7 +573,6 @@ class TestComputeCostsUnpricedDimension:
 
     def test_fully_unpriced_model_returns_a_warning_naming_the_dimension(self) -> None:
         """A model with no price entry at all is warned about and left at zero cost."""
-        usage.init_usage()
         # Seed an unrelated price so the catalog counts as ready -- the point
         # of this test is a genuine per-model miss, not an unloaded catalog.
         set_test_price(
@@ -612,7 +593,6 @@ class TestComputeCostsUnpricedDimension:
 
     def test_partially_priced_model_still_prices_the_resolvable_dimension(self) -> None:
         """With one dimension priced and one not, the cost covers only the priced one."""
-        usage.init_usage()
         get_model_state("partialpricemodel").region = "us-east-1"
         set_test_price(
             "partialpricemodel", "us-east-1", Dimension.INPUT_TOKENS, "0.000003", "USD"
@@ -641,7 +621,6 @@ class TestComputeCostsRegionSkip:
 
     def test_record_without_region_is_skipped(self) -> None:
         """An empty region leaves cost/currency untouched and emits no warning."""
-        usage.init_usage()
         key = UsageKey(Service.BEDROCK, "modelnoregion", "", "", "standard")
         usage.USAGE.get()[key] = UsageRecord(
             Service.BEDROCK,
@@ -673,7 +652,6 @@ class TestEmitUsageMetrics:
     ) -> None:
         """With cloudwatch_metrics off, a priced record emits no line at all."""
         monkeypatch.setattr(SETTINGS, "cloudwatch_metrics", False)
-        usage.init_usage()
         get_model_state("emfmodel").region = "us-east-1"
         record_bedrock_usage("emfmodel", input_tokens=1000)
         written: list[dict[str, Any]] = []
@@ -693,7 +671,6 @@ class TestEmitUsageMetrics:
         silently summing across currencies.
         """
         monkeypatch.setattr(SETTINGS, "cloudwatch_metrics", True)
-        usage.init_usage()
         get_model_state("emfmodel").region = "us-east-1"
         set_test_price(
             "emfmodel", "us-east-1", Dimension.INPUT_TOKENS, "0.000003", "USD"
@@ -730,7 +707,6 @@ class TestEmitUsageMetrics:
         Cost member is emitted.
         """
         monkeypatch.setattr(SETTINGS, "cloudwatch_metrics", True)
-        usage.init_usage()
         get_model_state("emfmodel").region = "us-east-1"
         record_bedrock_usage("emfmodel", input_tokens=1000)
         compute_costs()
@@ -756,7 +732,6 @@ class TestEmitUsageMetrics:
         them, since both lines carry the same ["Model"] dimension value.
         """
         monkeypatch.setattr(SETTINGS, "cloudwatch_metrics", True)
-        usage.init_usage()
         get_model_state("emfmodel").region = "us-east-1"
         set_test_price(
             "emfmodel", "us-east-1", Dimension.INPUT_TOKENS, "0.000003", "USD"
@@ -798,7 +773,6 @@ class TestEmitUsageMetrics:
         TypeError on the Decimal the cost is computed in.
         """
         monkeypatch.setattr(SETTINGS, "cloudwatch_metrics", True)
-        usage.init_usage()
         get_model_state("emfmodel").region = "us-east-1"
         set_test_price(
             "emfmodel", "us-east-1", Dimension.INPUT_TOKENS, "0.000003", "USD"
@@ -831,7 +805,6 @@ class TestLongContextDetection:
 
     def test_exactly_threshold_is_not_long(self) -> None:
         """A prompt of exactly 200_000 tokens stays in the standard bucket (boundary)."""
-        usage.init_usage()
         get_model_state("longmodel").region = "us-east-1"
         record_bedrock_usage("longmodel", input_tokens=200_000)
         record = next(iter(usage.USAGE.get().values()))
@@ -839,7 +812,6 @@ class TestLongContextDetection:
 
     def test_one_token_over_threshold_via_mixed_dimensions_is_long(self) -> None:
         """Fresh, cached and cache-write tokens sum to 200_001 and mark the record long."""
-        usage.init_usage()
         get_model_state("longmodel").region = "us-east-1"
         record_bedrock_usage(
             "longmodel",
@@ -852,7 +824,6 @@ class TestLongContextDetection:
 
     def test_small_and_large_calls_produce_separate_records(self) -> None:
         """A long-context call and a standard call for the same model stay separate records."""
-        usage.init_usage()
         get_model_state("longmodel").region = "us-east-1"
         record_bedrock_usage("longmodel", input_tokens=1_000)
         record_bedrock_usage("longmodel", input_tokens=200_001)
@@ -863,7 +834,6 @@ class TestLongContextDetection:
 
     def test_usage_log_entries_include_context_only_for_the_long_record(self) -> None:
         """Only the long-context entry carries "context": "long", with its own token total."""
-        usage.init_usage()
         get_model_state("longmodel").region = "us-east-1"
         record_bedrock_usage("longmodel", input_tokens=1_000)
         record_bedrock_usage("longmodel", input_tokens=200_001)
@@ -881,7 +851,6 @@ class TestLongContextDetection:
 
         Ref: stdapi/pricing.py:resolve_price
         """
-        usage.init_usage()
         get_model_state("longmodel").region = "us-east-1"
         set_test_price(
             "longmodel", "us-east-1", Dimension.INPUT_TOKENS, "0.000003", "USD"
@@ -918,7 +887,6 @@ class TestGroundingRequests:
 
     def test_zero_or_none_grounding_requests_omit_the_field(self) -> None:
         """Zero or None grounding calls add neither the dimension nor the log key."""
-        usage.init_usage()
         get_model_state("groundedmodel").region = "us-east-1"
         record_bedrock_usage("groundedmodel", input_tokens=100, grounding_requests=0)
         record_bedrock_usage("groundedmodel", input_tokens=100, grounding_requests=None)
@@ -929,7 +897,6 @@ class TestGroundingRequests:
 
     def test_usage_log_entries_reports_grounding_requests_count(self) -> None:
         """The log entry reports the accumulated grounding_requests count."""
-        usage.init_usage()
         get_model_state("groundedmodel").region = "us-east-1"
         record_bedrock_usage("groundedmodel", grounding_requests=2)
         entry = next(iter(usage.usage_log_entries()))
@@ -937,7 +904,6 @@ class TestGroundingRequests:
 
     def test_grounding_requests_are_priced_per_request(self) -> None:
         """Grounding calls bill per request: 2 * 0.03 = 0.06."""
-        usage.init_usage()
         get_model_state("groundedmodel").region = "us-east-1"
         set_test_price(
             "groundedmodel", "us-east-1", Dimension.GROUNDING_REQUESTS, "0.03", "USD"
@@ -959,7 +925,6 @@ class TestSearchUnitsUsage:
 
     def test_search_units_are_recorded_logged_and_priced(self) -> None:
         """search_units reach the record, the log entry and the cost: 3 * 0.001 = 0.003."""
-        usage.init_usage()
         get_model_state("searchmodel").region = "us-east-1"
         set_test_price(
             "searchmodel", "us-east-1", Dimension.SEARCH_UNITS, "0.001", "USD"
@@ -986,7 +951,6 @@ class TestInputMediaSpecUsage:
 
     def test_input_images_with_media_spec_price_and_log_by_spec(self) -> None:
         """input_images with media_spec="document" bills from the "document" bucket."""
-        usage.init_usage()
         get_model_state("mediaimagemodel").region = "us-east-1"
         set_test_price(
             "mediaimagemodel",
@@ -1007,7 +971,6 @@ class TestInputMediaSpecUsage:
 
     def test_input_seconds_with_media_spec_price_and_log_by_spec(self) -> None:
         """input_seconds with media_spec="audio" bills from the "audio" bucket: 45 * 0.0001."""
-        usage.init_usage()
         get_model_state("mediaaudiomodel").region = "us-east-1"
         set_test_price(
             "mediaaudiomodel",
@@ -1030,7 +993,6 @@ class TestInputMediaSpecUsage:
         self,
     ) -> None:
         """Audio and video seconds in one record bill 30 * 0.0001 + 10 * 0.0005 = 0.008."""
-        usage.init_usage()
         get_model_state("mixedaudiovideomodel").region = "us-east-1"
         set_test_price(
             "mixedaudiovideomodel",
@@ -1075,7 +1037,6 @@ class TestLatencyRoutingUsage:
 
     def test_latency_routing_state_produces_latency_key_log_and_price(self) -> None:
         """A "latency"-routed call keys and logs as "latency" and bills 1000 * 0.004."""
-        usage.init_usage()
         state = get_model_state("latencymodel")
         state.region = "us-east-1"
         state.routing = "latency"
@@ -1104,7 +1065,6 @@ class TestLatencyRoutingUsage:
         self,
     ) -> None:
         """With no latency price indexed, a "latency"-routed call bills the plain rate."""
-        usage.init_usage()
         state = get_model_state("latencyfallbackmodel")
         state.region = "us-east-1"
         state.routing = "latency"
@@ -1134,7 +1094,6 @@ class TestNonBedrockRecordUsageHelpers:
 
     def test_record_polly_usage_bills_exact_character_count(self) -> None:
         """Polly bills the exact character count, with no minimum, per engine."""
-        usage.init_usage()
         billed = record_polly_usage(42, "neural")
         assert billed == 42
         record = next(iter(usage.USAGE.get().values()))
@@ -1145,7 +1104,6 @@ class TestNonBedrockRecordUsageHelpers:
 
     def test_record_translate_usage_bills_exact_character_count(self) -> None:
         """Translate bills the exact character count, with no minimum."""
-        usage.init_usage()
         billed = record_translate_usage(100)
         assert billed == 100
         record = next(iter(usage.USAGE.get().values()))
@@ -1160,7 +1118,6 @@ class TestNonBedrockRecordUsageHelpers:
         self, duration: float, expected: int
     ) -> None:
         """Transcribe bills per second, rounded up, with a 15-second per-request minimum."""
-        usage.init_usage()
         billed = record_transcribe_usage(duration)
         assert billed == expected
         record = next(iter(usage.USAGE.get().values()))
@@ -1173,7 +1130,6 @@ class TestNonBedrockRecordUsageHelpers:
         self, text_length: int, expected: int
     ) -> None:
         """Comprehend bills in 100-character units, rounded up, with a 3-unit minimum."""
-        usage.init_usage()
         billed = record_comprehend_usage(text_length, "language-detection")
         assert billed == expected
         record = next(iter(usage.USAGE.get().values()))
@@ -1184,21 +1140,18 @@ class TestNonBedrockRecordUsageHelpers:
 
     def test_record_polly_usage_with_zero_characters_records_nothing(self) -> None:
         """Zero characters bill nothing and create no usage record."""
-        usage.init_usage()
         billed = record_polly_usage(0, "neural")
         assert billed == 0
         assert usage.USAGE.get() == {}
 
     def test_record_translate_usage_with_zero_characters_records_nothing(self) -> None:
         """Zero characters bill nothing and create no usage record."""
-        usage.init_usage()
         billed = record_translate_usage(0)
         assert billed == 0
         assert usage.USAGE.get() == {}
 
     def test_record_transcribe_usage_with_zero_duration_bills_the_minimum(self) -> None:
         """Zero duration still bills the 15-second minimum rather than recording nothing."""
-        usage.init_usage()
         billed = record_transcribe_usage(0)
         assert billed == 15
         record = next(iter(usage.USAGE.get().values()))
@@ -1206,7 +1159,6 @@ class TestNonBedrockRecordUsageHelpers:
 
     def test_record_comprehend_usage_with_zero_length_bills_the_minimum(self) -> None:
         """Zero text length still bills the 3-unit minimum rather than recording nothing."""
-        usage.init_usage()
         billed = record_comprehend_usage(0, "language-detection")
         assert billed == 3
         record = next(iter(usage.USAGE.get().values()))
@@ -1221,7 +1173,6 @@ class TestNonBedrockRecordUsageHelpers:
 
         Ref: stdapi/usage.py:_record_usage
         """
-        usage.init_usage()
         get_model_state(
             "priorbedrockmodel"
         ).region = "us-east-1"  # Simulates a prior Bedrock call in this context.
@@ -1324,7 +1275,6 @@ class TestConcurrentSameModelUsageAttribution:
         self,
     ) -> None:
         """Concurrent same-model calls passing region explicitly bill each Region separately."""
-        usage.init_usage()
 
         async def call(region: str, tokens: int) -> None:
             # Simulate a sibling call's write to the shared model state.
@@ -1347,15 +1297,27 @@ class TestConcurrentSameModelUsageAttribution:
 
         Documented, accepted behavior of the shared-state fallback: both calls
         merge into one record keyed to whichever Region was written last.
+
+        The interleaving is driven by explicit events rather than by ``gather``'s
+        scheduling order, so which write is "last" does not depend on how many
+        times ``record_bedrock_usage`` happens to await.
         """
-        usage.init_usage()
+        first_written = asyncio.Event()
+        second_written = asyncio.Event()
 
-        async def call(region: str, tokens: int) -> None:
-            get_model_state("fallbackmodel").region = region
-            await asyncio.sleep(0)
-            record_bedrock_usage("fallbackmodel", input_tokens=tokens)
+        async def early() -> None:
+            get_model_state("fallbackmodel").region = "us-east-1"
+            first_written.set()
+            await second_written.wait()
+            record_bedrock_usage("fallbackmodel", input_tokens=1000)
 
-        await asyncio.gather(call("us-east-1", 1000), call("us-west-2", 2000))
+        async def late() -> None:
+            await first_written.wait()
+            get_model_state("fallbackmodel").region = "us-west-2"
+            second_written.set()
+            record_bedrock_usage("fallbackmodel", input_tokens=2000)
+
+        await asyncio.gather(early(), late())
 
         records = usage.USAGE.get()
         assert len(records) == 1

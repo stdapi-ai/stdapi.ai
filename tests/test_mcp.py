@@ -16,26 +16,62 @@ import logging
 import sys
 from contextvars import Context
 from typing import TYPE_CHECKING
-from unittest.mock import MagicMock
 
 import pytest
 from starlette.requests import Request as StarletteRequest
 
 from stdapi import server
 from stdapi.config import SETTINGS
-from stdapi.monitoring import (
-    REQUEST_ID,
-    REQUEST_LOG,
-    EventLog,
-    log_error_details,
-    log_request_event,
-)
+from stdapi.monitoring import REQUEST_ID, log_error_details, log_request_event
 from stdapi.utils import webuuid
 
 if TYPE_CHECKING:
     from types import TracebackType
+    from typing import Any
 
     from starlette.testclient import TestClient
+
+#: Whether at least one MCP transport is enabled, which gates every /mcp test.
+_MCP_ENABLED = SETTINGS.enable_mcp_streamable_http or SETTINGS.enable_mcp_sse
+
+
+def _mcp_post(
+    client: TestClient,
+    api_key: str,
+    method: str,
+    params: dict[str, Any],
+    *,
+    request_id: int,
+    session_id: str | None = None,
+    authenticated: bool = True,
+) -> Any:  # noqa: ANN401
+    """POST one JSON-RPC envelope to the streamable-HTTP transport.
+
+    ``Accept`` must list both media types: the transport answers either JSON or
+    an SSE stream depending on the method.
+
+    Args:
+        client: Test client bound to the local server.
+        api_key: Bearer token for the gateway's own authentication.
+        method: JSON-RPC method name.
+        params: JSON-RPC params object.
+        request_id: JSON-RPC request id.
+        session_id: MCP session ID, for every call after ``initialize``.
+        authenticated: Send the ``Authorization`` header.
+
+    Returns:
+        The raw HTTP response.
+    """
+    headers = {"Accept": "application/json, text/event-stream"}
+    if authenticated:
+        headers["Authorization"] = f"Bearer {api_key}"
+    if session_id is not None:
+        headers["mcp-session-id"] = session_id
+    return client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
+        headers=headers,
+    )
 
 
 def _make_request(
@@ -158,6 +194,7 @@ class TestLogRequestEventIdPropagation:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(not _MCP_ENABLED, reason="MCP is not enabled")
 class TestMcpLogHandler:
     """_McpLogHandler routes fastapi_mcp errors into the structured JSON logger.
 
@@ -178,8 +215,6 @@ class TestMcpLogHandler:
 
     def _get_handler(self) -> logging.Handler:
         """Return the custom handler attached to the fastapi_mcp.server logger."""
-        if not (SETTINGS.enable_mcp_streamable_http or SETTINGS.enable_mcp_sse):
-            pytest.skip("MCP is not enabled")
         mcp_logger = logging.getLogger("fastapi_mcp.server")
         handlers = [
             h for h in mcp_logger.handlers if type(h).__name__ == "_McpLogHandler"
@@ -197,7 +232,9 @@ class TestMcpLogHandler:
         assert type(handler).__name__ == "_McpLogHandler"
         assert not logging.getLogger("fastapi_mcp.server").propagate
 
-    def test_emit_adds_error_detail_to_request_log(self) -> None:
+    def test_emit_adds_error_detail_to_request_log(
+        self, request_log: dict[str, Any]
+    ) -> None:
         """A record is appended to the active request's ``error_detail`` and raises its level.
 
         Promoting the entry to ``error`` is what makes the request show up as
@@ -205,66 +242,52 @@ class TestMcpLogHandler:
         result carrying an in-band tool error.
         """
         handler = self._get_handler()
-
-        log: EventLog = EventLog(
-            type="request",
-            level="info",
-            date=MagicMock(),
-            server_id="test-server",
-            server_version="0.0.0",
+        record = logging.LogRecord(
+            name="fastapi_mcp.server",
+            level=logging.ERROR,
+            pathname="",
+            lineno=0,
+            msg="Error calling test_tool",
+            args=(),
+            exc_info=None,
         )
-        log_token = REQUEST_LOG.set(log)
-        try:
-            record = logging.LogRecord(
-                name="fastapi_mcp.server",
-                level=logging.ERROR,
-                pathname="",
-                lineno=0,
-                msg="Error calling test_tool",
-                args=(),
-                exc_info=None,
-            )
-            handler.emit(record)
-            assert "error_detail" in log
-            assert any("Error calling test_tool" in str(d) for d in log["error_detail"])
-            assert log["level"] == "error"
-        finally:
-            REQUEST_LOG.reset(log_token)
 
-    def test_emit_includes_exception_traceback_in_error_detail(self) -> None:
+        handler.emit(record)
+
+        assert "error_detail" in request_log
+        assert any(
+            "Error calling test_tool" in str(detail)
+            for detail in request_log["error_detail"]
+        )
+        assert request_log["level"] == "error"
+
+    def test_emit_includes_exception_traceback_in_error_detail(
+        self, request_log: dict[str, Any]
+    ) -> None:
         """A record carrying ``exc_info`` contributes the formatted traceback as a second detail.
 
         The traceback is the only thing that makes a tool failure diagnosable, so
         it is captured into the structured log rather than dropped with the record.
         """
         handler = self._get_handler()
-
-        log: EventLog = EventLog(
-            type="request",
-            level="info",
-            date=MagicMock(),
-            server_id="test-server",
-            server_version="0.0.0",
+        record = logging.LogRecord(
+            name="fastapi_mcp.server",
+            level=logging.ERROR,
+            pathname="",
+            lineno=0,
+            msg="Error calling search_models",
+            args=(),
+            exc_info=_capture_exc_info("Underlying API returned 400"),
         )
-        log_token = REQUEST_LOG.set(log)
-        try:
-            exc_info = _capture_exc_info("Underlying API returned 400")
-            record = logging.LogRecord(
-                name="fastapi_mcp.server",
-                level=logging.ERROR,
-                pathname="",
-                lineno=0,
-                msg="Error calling search_models",
-                args=(),
-                exc_info=exc_info,
-            )
-            handler.emit(record)
-            combined = " ".join(str(d) for d in log.get("error_detail", []))
-            assert "Error calling search_models" in combined
-            assert "ValueError" in combined
-            assert "Underlying API returned 400" in combined
-        finally:
-            REQUEST_LOG.reset(log_token)
+
+        handler.emit(record)
+
+        combined = " ".join(
+            str(detail) for detail in request_log.get("error_detail", [])
+        )
+        assert "Error calling search_models" in combined
+        assert "ValueError" in combined
+        assert "Underlying API returned 400" in combined
 
     def test_emit_is_safe_outside_request_context(self) -> None:
         """Outside a request context the record is dropped instead of raising LookupError.
@@ -294,6 +317,7 @@ class TestMcpLogHandler:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(not _MCP_ENABLED, reason="MCP is not enabled")
 class TestMCPIntegration:
     """End-to-end MCP behaviour over the streamable-HTTP transport mounted at /mcp.
 
@@ -310,29 +334,23 @@ class TestMCPIntegration:
     @pytest.fixture(scope="class")
     def mcp_session_id(self, client: TestClient, api_key: str) -> str:
         """Initialize an MCP session and return the session ID."""
-        if not (SETTINGS.enable_mcp_streamable_http or SETTINGS.enable_mcp_sse):
-            pytest.skip("MCP is not enabled")
-        response = client.post(
-            "/mcp",
-            json={
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {},
-                    "clientInfo": {"name": "pytest", "version": "1.0"},
-                },
+        response = _mcp_post(
+            client,
+            api_key,
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "pytest", "version": "1.0"},
             },
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Accept": "application/json, text/event-stream",
-            },
+            request_id=1,
         )
         assert response.status_code == 200
         return response.headers["mcp-session-id"]  # type: ignore[no-any-return]
 
-    def test_mcp_initialize_requires_authentication(self, client: TestClient) -> None:
+    def test_mcp_initialize_requires_authentication(
+        self, client: TestClient, api_key: str
+    ) -> None:
         """An unauthenticated ``initialize`` is rejected with 401 and no session is created.
 
         The gateway's own ``authenticate`` dependency guards the transport, so the
@@ -341,21 +359,17 @@ class TestMCPIntegration:
 
         Ref: stdapi/auth.py:authenticate
         """
-        if not (SETTINGS.enable_mcp_streamable_http or SETTINGS.enable_mcp_sse):
-            pytest.skip("MCP is not enabled")
-        response = client.post(
-            "/mcp",
-            json={
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {},
-                    "clientInfo": {"name": "pytest", "version": "1.0"},
-                },
+        response = _mcp_post(
+            client,
+            api_key,
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "pytest", "version": "1.0"},
             },
-            headers={"Accept": "application/json, text/event-stream"},
+            request_id=1,
+            authenticated=False,
         )
         assert response.status_code == 401
         assert "mcp-session-id" not in response.headers
@@ -377,22 +391,13 @@ class TestMCPIntegration:
         """
         capsys.readouterr()
 
-        response = client.post(
-            "/mcp",
-            json={
-                "jsonrpc": "2.0",
-                "id": 20,
-                "method": "tools/call",
-                "params": {
-                    "name": "search_models",
-                    "arguments": {"route": "/nonexistent/route"},
-                },
-            },
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Accept": "application/json, text/event-stream",
-                "mcp-session-id": mcp_session_id,
-            },
+        response = _mcp_post(
+            client,
+            api_key,
+            "tools/call",
+            {"name": "search_models", "arguments": {"route": "/nonexistent/route"}},
+            request_id=20,
+            session_id=mcp_session_id,
         )
         captured = capsys.readouterr()
         assert response.status_code == 200
@@ -409,14 +414,8 @@ class TestMCPIntegration:
 
         Ref: stdapi/mcp.py:_strip_response_docs
         """
-        response = client.post(
-            "/mcp",
-            json={"jsonrpc": "2.0", "id": 40, "method": "tools/list", "params": {}},
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Accept": "application/json, text/event-stream",
-                "mcp-session-id": mcp_session_id,
-            },
+        response = _mcp_post(
+            client, api_key, "tools/list", {}, request_id=40, session_id=mcp_session_id
         )
         assert response.status_code == 200
         tools = response.json()["result"]["tools"]
@@ -435,19 +434,13 @@ class TestMCPIntegration:
 
         Ref: stdapi/api_providers/__init__.py:get_request_id_header
         """
-        response = client.post(
-            "/mcp",
-            json={
-                "jsonrpc": "2.0",
-                "id": 30,
-                "method": "tools/call",
-                "params": {"name": "openai_model_list", "arguments": {}},
-            },
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Accept": "application/json, text/event-stream",
-                "mcp-session-id": mcp_session_id,
-            },
+        response = _mcp_post(
+            client,
+            api_key,
+            "tools/call",
+            {"name": "openai_model_list", "arguments": {}},
+            request_id=30,
+            session_id=mcp_session_id,
         )
         assert response.status_code == 200
         assert "x-request-id" in response.headers

@@ -16,11 +16,9 @@ import pytest
 if TYPE_CHECKING:
     from openai import OpenAI
 
-DEEPSEEK_V3 = "deepseek.v3-v1:0"
-DEEPSEEK_V3_2 = "deepseek.v3.2"
-
-DEEPSEEK_ALL = (DEEPSEEK_V3, DEEPSEEK_V3_2)
-DEEPSEEK_SAMPLE = (DEEPSEEK_V3_2,)
+#: Newest DeepSeek V3 revision; the older ``deepseek.v3-v1:0`` shares its model class
+#: and is swept by the multi-model module, so the reasoning tests run on this one only.
+DEEPSEEK_SAMPLE = ("deepseek.v3.2",)
 
 #: finish_reason values the OpenAI Chat Completions reference defines.
 _FINISH_REASONS = frozenset({"stop", "length", "content_filter", "tool_calls"})
@@ -33,9 +31,15 @@ class TestDeepseekChatCompletions:
          stdapi/models/chat/deepseek_v3.py:ChatModel
     """
 
+    @pytest.fixture(autouse=True)
+    def _skip_official_api(self, use_official_api: bool) -> None:
+        """Skip the whole class: DeepSeek models are not served by the official OpenAI API."""
+        if use_official_api:
+            pytest.skip("Deepseek is not supported on the official API")
+
     @pytest.mark.parametrize("model", DEEPSEEK_SAMPLE)
     def test_reasoning_effort_parameter(
-        self, openai_client: OpenAI, use_official_api: bool, model: str
+        self, openai_client: OpenAI, model: str
     ) -> None:
         """``reasoning_effort="minimal"`` is accepted and answers normally.
 
@@ -47,8 +51,6 @@ class TestDeepseekChatCompletions:
         Ref: https://developers.openai.com/api/docs/guides/reasoning
              stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_reasoning
         """
-        if use_official_api:
-            pytest.skip("Deepseek is not supported on the official API")
         resp = openai_client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": "Reply with OK."}],
@@ -67,7 +69,7 @@ class TestDeepseekChatCompletions:
 
     @pytest.mark.parametrize("model", DEEPSEEK_SAMPLE)
     def test_reasoning_effort_none_explicit_disable(
-        self, openai_client: OpenAI, use_official_api: bool, model: str
+        self, openai_client: OpenAI, model: str
     ) -> None:
         """``reasoning_effort="none"`` is accepted and produces a plain answer.
 
@@ -80,8 +82,6 @@ class TestDeepseekChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-deepseek.html
              stdapi/models/chat/deepseek_v3.py:ChatModel._req_configure_reasoning
         """
-        if use_official_api:
-            pytest.skip("Deepseek is not supported on the official API")
         resp = openai_client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": "Reply with OK."}],

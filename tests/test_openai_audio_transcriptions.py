@@ -10,8 +10,19 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from openai import BadRequestError, NotFoundError, OpenAI
+from pydantic import ValidationError
+from starlette.responses import Response
 
+from stdapi import usage
+from stdapi.api_errors import ApiError, UnsupportedModelError, UnsupportedParameterError
+from stdapi.input_file import InputFile
 from stdapi.models.audio.amazon_transcribe import AudioModel
+from stdapi.routes import openai_audio_transcriptions
+from stdapi.types.openai_audio import (
+    TranscriptionCreateParams,
+    TranscriptionTextDeltaEvent,
+    TranscriptionTextDoneEvent,
+)
 from tests.conftest import logged_usage_entries
 
 if TYPE_CHECKING:
@@ -43,6 +54,20 @@ _STUB_TRANSCRIPT_DATA: dict[str, Any] = {
 
 #: Words spoken by the ``sample_audio_file`` fixture ("This is a test.").
 _SAMPLE_AUDIO_WORDS = ("test", "this")
+
+
+def _matches_sample_audio(transcript: str) -> bool:
+    """Return whether *transcript* is a plausible transcript of the sample audio.
+
+    Args:
+        transcript: The transcript returned by the endpoint.
+
+    Returns:
+        True when the transcript carries at least one of the spoken words.
+    """
+    text = transcript.strip()
+    assert text, "Transcription returned an empty transcript"
+    return any(word in text.lower() for word in _SAMPLE_AUDIO_WORDS)
 
 
 class TestAudioTranscriptions:
@@ -112,10 +137,10 @@ class TestAudioTranscriptions:
 
         if response_format == "json":
             assert isinstance(response.text, str)
-            assert response.text.strip()
+            assert _matches_sample_audio(response.text)
         elif response_format == "text":
             assert isinstance(response, str)
-            assert response.strip()
+            assert _matches_sample_audio(response)
         elif response_format in ("srt", "vtt"):
             assert isinstance(response, str)
             subtitles = response.strip()
@@ -131,7 +156,7 @@ class TestAudioTranscriptions:
                     f"SubRip cues must start at index 1: {subtitles[:32]!r}"
                 )
         elif response_format == "verbose_json":
-            assert response.text.strip()
+            assert _matches_sample_audio(response.text)
             assert response.language, "verbose_json must report the audio language"
             assert isinstance(response.duration, int | float)
             assert response.duration > 0
@@ -262,6 +287,19 @@ class TestAudioTranscriptions:
         assert len(delta_chunks) >= 1, (
             f"Expected multiple delta chunks, got {len(delta_chunks)}"
         )
+
+        # The stream terminates with a single done event carrying the full
+        # transcript; only assert it when the chunk cap did not truncate it.
+        if len(chunks) < 15:
+            done_chunks = [c for c in chunks if c.type == "transcript.text.done"]
+            assert len(done_chunks) == 1, (
+                f"Expected exactly one done event, got {len(done_chunks)}"
+            )
+            done_text = done_chunks[0].text
+            assert done_text.strip(), "the done event must carry the transcript"
+            assert _matches_sample_audio(done_text), (
+                f"Done event text does not match the sample audio: {done_text!r}"
+            )
 
     def test_empty_file_error(
         self, openai_client: OpenAI, transcription_model: str
@@ -459,37 +497,40 @@ class TestAudioTranscriptions:
         openai_client: OpenAI,
         speech_standard_model: str,
         transcription_model: str,
+        sample_audio_file: bytes,
+        sample_audio_mp3_file: bytes,
         audio_format: str,
     ) -> None:
         """mp3, wav and flac uploads are all transcribed.
 
-        The audio is synthesized here so that each container is genuinely encoded;
-        all three are in Transcribe's batch media-format set, and the spoken sentence
-        pins the transcript enough to check the audio was really decoded.
+        All three are in Transcribe's batch media-format set, and every sample
+        speaks the same sentence, so the transcript pins that the container was
+        really decoded. wav and mp3 reuse the session-cached samples; only flac
+        has no cached equivalent and is synthesized here.
 
         Ref: https://docs.aws.amazon.com/transcribe/latest/dg/how-input.html
              stdapi/models/audio/amazon_transcribe.py:AudioModel._transcribe
         """
-        # Generate audio in the specific format
-        audio_response = openai_client.audio.speech.create(
-            model=speech_standard_model,
-            voice="alloy",
-            input=f"Testing {audio_format} format transcription.",
-            response_format=audio_format,  # type: ignore[arg-type]
-        )
+        if audio_format == "wav":
+            audio = sample_audio_file
+        elif audio_format == "mp3":
+            audio = sample_audio_mp3_file
+        else:
+            audio = openai_client.audio.speech.create(
+                model=speech_standard_model,
+                voice="alloy",
+                input="This is a test.",
+                response_format=audio_format,  # type: ignore[arg-type]
+            ).content
 
-        # Test transcription of the generated audio
         response = openai_client.audio.transcriptions.create(
-            file=(f"test.{audio_format}", io.BytesIO(audio_response.content)),
-            model=transcription_model,
+            file=(f"test.{audio_format}", io.BytesIO(audio)), model=transcription_model
         )
 
         assert isinstance(response.text, str)
-        text = response.text.strip()
-        assert text, f"Empty transcript for {audio_format} input"
-        assert any(
-            word in text.lower() for word in ("testing", "format", "transcription")
-        ), f"Transcript does not match the {audio_format} audio: {text!r}"
+        assert _matches_sample_audio(response.text), (
+            f"Transcript does not match the {audio_format} audio: {response.text!r}"
+        )
 
     @pytest.mark.slow
     @pytest.mark.parametrize("language", ["en", "fr"])
@@ -570,53 +611,6 @@ class TestAudioTranscriptions:
             assert word.end >= word.start
         assert response.segments is None, (
             "segments returned without segment granularity"
-        )
-
-    @pytest.mark.slow
-    def test_response_format_consistency(
-        self, openai_client: OpenAI, sample_audio_file: bytes, transcription_model: str
-    ) -> None:
-        """``json``, ``text`` and ``verbose_json`` report the same transcript.
-
-        Each format runs its own transcription job on the same audio, so exact
-        equality is not guaranteed; the transcripts are compared on shared words.
-
-        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-             stdapi/models/audio/amazon_transcribe.py:AudioModel._format_transcription_response
-        """
-        formats = ["json", "text", "verbose_json"]
-        responses = {}
-
-        for format_name in formats:
-            response = openai_client.audio.transcriptions.create(
-                file=("test.wav", io.BytesIO(sample_audio_file)),
-                model=transcription_model,
-                response_format=format_name,  # type: ignore[call-overload]
-            )
-            responses[format_name] = response
-
-        # Validate all responses have content
-        transcripts: dict[str, str] = {}
-        for format_name, response in responses.items():
-            if format_name == "text":
-                assert isinstance(response, str)
-                assert len(response.strip()) > 0
-                transcripts[format_name] = response
-            else:
-                assert hasattr(response, "text")
-                assert isinstance(response.text, str)
-                assert len(response.text.strip()) > 0
-                transcripts[format_name] = response.text
-
-        words = {
-            format_name: set(transcript.lower().split())
-            for format_name, transcript in transcripts.items()
-        }
-        assert words["json"] & words["text"], (
-            f"json and text transcripts share no word: {transcripts}"
-        )
-        assert words["json"] & words["verbose_json"], (
-            f"json and verbose_json transcripts share no word: {transcripts}"
         )
 
     @pytest.mark.slow
@@ -727,9 +721,10 @@ class TestAudioTranscriptions:
         )
 
     @pytest.mark.slow
+    @pytest.mark.local
     def test_transcription_usage_logged(
         self,
-        test_client: TestClientType | None,
+        test_client: TestClientType,
         transcription_model: str,
         api_key: str,
         sample_audio_file: bytes,
@@ -743,9 +738,6 @@ class TestAudioTranscriptions:
         Ref: https://docs.aws.amazon.com/transcribe/latest/dg/what-is.html
              stdapi/usage.py:record_transcribe_usage
         """
-        if test_client is None:
-            pytest.skip("Requires local test server")
-
         capfd.readouterr()
 
         response = test_client.post(
@@ -932,10 +924,7 @@ class TestAudioTranscriptionsResponseFormatBugs:
         monkeypatch.setattr(AudioModel, "_transcribe", _fake_transcribe)
 
     def test_text_format_returns_raw_plain_text(
-        self,
-        test_client: TestClientType | None,
-        api_key: str,
-        monkeypatch: pytest.MonkeyPatch,
+        self, test_client: TestClientType, api_key: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``response_format=text`` returns raw ``text/plain``, not a JSON-quoted string.
 
@@ -944,8 +933,6 @@ class TestAudioTranscriptionsResponseFormatBugs:
 
         Ref: stdapi/models/audio/amazon_transcribe.py:AudioModel._format_transcription_response
         """
-        if test_client is None:
-            pytest.skip("Requires local test server")
         self._stub_transcribe(monkeypatch)
 
         response = test_client.post(
@@ -960,10 +947,7 @@ class TestAudioTranscriptionsResponseFormatBugs:
         assert response.text == "hello world"
 
     def test_verbose_json_without_granularities_defaults_to_segments(
-        self,
-        test_client: TestClientType | None,
-        api_key: str,
-        monkeypatch: pytest.MonkeyPatch,
+        self, test_client: TestClientType, api_key: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``verbose_json`` with no ``timestamp_granularities`` still populates segments.
 
@@ -973,8 +957,6 @@ class TestAudioTranscriptionsResponseFormatBugs:
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/models/audio/amazon_transcribe.py:_format_json_response
         """
-        if test_client is None:
-            pytest.skip("Requires local test server")
         self._stub_transcribe(monkeypatch)
 
         response = test_client.post(
@@ -997,3 +979,273 @@ class TestAudioTranscriptionsResponseFormatBugs:
         assert [segment["text"] for segment in body["segments"]] == ["hello", "world"]
         assert [segment["start"] for segment in body["segments"]] == [0.0, 1.0]
         assert [segment["end"] for segment in body["segments"]] == [1.0, 2.0]
+
+
+@pytest.mark.local
+class TestTranscriptionCreateParamsValidation:
+    """Request-level rules enforced before any Amazon Transcribe job is started.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/types/openai_audio.py:TranscriptionCreateParams._unsupported
+    """
+
+    def test_auto_chunking_strategy_is_the_default(self) -> None:
+        """``chunking_strategy`` defaults to ``auto`` and is accepted explicitly."""
+        assert TranscriptionCreateParams(model="m").chunking_strategy == "auto"
+        assert (
+            TranscriptionCreateParams(model="m", chunking_strategy="auto")
+        ).chunking_strategy == "auto"
+
+    def test_server_vad_literal_is_rejected(self) -> None:
+        """The bare ``server_vad`` literal is outside the accepted field union."""
+        with pytest.raises(ValidationError) as exc_info:
+            TranscriptionCreateParams.model_validate(
+                {"model": "m", "chunking_strategy": "server_vad"}
+            )
+
+        assert "chunking_strategy" in str(exc_info.value)
+
+    def test_vad_config_object_is_rejected(self) -> None:
+        """A full VAD config parses, then is refused as an unsupported parameter.
+
+        Transcribe segments the audio itself, so accepting the thresholds would
+        let a caller believe their voice-activity tuning was applied. The
+        refusal is an ``UnsupportedParameterError``: Pydantic passes it through
+        instead of wrapping it in a ``ValidationError``.
+        """
+        with pytest.raises(UnsupportedParameterError) as exc_info:
+            TranscriptionCreateParams.model_validate(
+                {
+                    "model": "m",
+                    "chunking_strategy": {
+                        "type": "server_vad",
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 200,
+                        "threshold": 0.5,
+                    },
+                }
+            )
+
+        assert exc_info.value.status == 400
+        assert "chunking_strategy" in str(exc_info.value)
+
+    def test_timestamp_granularities_require_verbose_json(self) -> None:
+        """Granularities outside ``verbose_json`` are rejected, not silently dropped.
+
+        Only ``verbose_json`` carries ``words``/``segments``, so any other
+        response format would discard the requested timings without a signal.
+        """
+        with pytest.raises(ValidationError) as exc_info:
+            TranscriptionCreateParams(
+                model="m", response_format="json", timestamp_granularities=["word"]
+            )
+
+        errors = exc_info.value.errors()
+        assert len(errors) == 1
+        assert errors[0]["type"] == "value_error"
+        assert (
+            "timestamp_granularities requires response_format='verbose_json'"
+            in errors[0]["msg"]
+        )
+
+    def test_timestamp_granularities_accepted_with_verbose_json(self) -> None:
+        """Both granularities are kept as requested for ``verbose_json``."""
+        params = TranscriptionCreateParams(
+            model="m",
+            response_format="verbose_json",
+            timestamp_granularities=["word", "segment"],
+        )
+
+        assert params.timestamp_granularities == ["word", "segment"]
+
+    def test_no_granularities_is_accepted_for_any_format(self) -> None:
+        """An empty granularity list leaves every response format valid."""
+        assert (
+            TranscriptionCreateParams(
+                model="m", response_format="text"
+            ).timestamp_granularities
+            == []
+        )
+
+
+@pytest.mark.local
+class TestTranscriptionMultipartFormParsing:
+    """Form-encoded fields the multipart path has to decode itself.
+
+    ``timestamp_granularities`` arrives as one comma-separated form value and is
+    split by the route before the request model sees it, an encoding that only
+    exists on this gateway.
+
+    Ref: https://stdapi.ai/api_openai_audio_transcriptions/
+         stdapi/routes/openai_audio_transcriptions.py:create_transcription
+    """
+
+    @pytest.mark.parametrize("granularities", ["word", "word,segment"])
+    def test_comma_separated_granularities_reach_the_request_model(
+        self, app_client: TestClientType, granularities: str
+    ) -> None:
+        """The comma-separated form value is parsed and cross-checked against the format.
+
+        The rejection can only come from the request model, so seeing it proves
+        the form string was split into a non-empty granularity list.
+        """
+        response = app_client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("test.wav", io.BytesIO(b"fake"), "audio/wav")},
+            data={
+                "model": "amazon.transcribe",
+                "response_format": "json",
+                "timestamp_granularities": granularities,
+            },
+        )
+
+        assert response.status_code == 400
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "timestamp_granularities" in error["message"]
+
+    def test_omitted_granularities_are_an_empty_list(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without the field the request passes validation and reaches model resolution."""
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> None:
+            raise UnsupportedModelError(model_id, status=400)
+
+        monkeypatch.setattr(
+            openai_audio_transcriptions, "validate_model", _validate_model
+        )
+        response = app_client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("test.wav", io.BytesIO(b"fake"), "audio/wav")},
+            data={"model": "probe-model-id", "response_format": "json"},
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "model_not_found"
+
+
+@pytest.mark.local
+class TestTranscribeUnsupportedParameters:
+    """Amazon Transcribe rejects the OpenAI parameters it has no equivalent for.
+
+    ``prompt``, ``temperature`` and ``logprobs`` are accepted by the request
+    model (they are valid OpenAI fields) and refused by the backend, so the
+    caller gets a 400 instead of a transcript produced while ignoring them.
+
+    Ref: https://stdapi.ai/api_openai_audio_transcriptions/
+         stdapi/models/audio/amazon_transcribe.py:AudioModel._transcribe
+         stdapi/models/audio/__init__.py:AudioModelBase._validate_no_prompt
+    """
+
+    @staticmethod
+    def _audio() -> InputFile:
+        """Return a tiny data-URI audio input; it is never read.
+
+        Returns:
+            An ``InputFile`` pointing at inline base64 audio.
+        """
+        return InputFile("data:audio/wav;base64,AAAA")
+
+    async def test_prompt_is_rejected(self) -> None:
+        """A ``prompt`` fails with 400 before the transcription job is started."""
+        with pytest.raises(ApiError) as exc_info:
+            await AudioModel("amazon.transcribe").stt(
+                self._audio(), "json", prompt="Transcribe carefully", logprobs=False
+            )
+
+        assert exc_info.value.status == 400
+        assert "prompt" in str(exc_info.value)
+
+    async def test_temperature_is_rejected(self) -> None:
+        """A non-zero ``temperature`` fails with 400: Transcribe has no sampling knob."""
+        with pytest.raises(ApiError) as exc_info:
+            await AudioModel("amazon.transcribe").stt(
+                self._audio(), "json", temperature=0.5, logprobs=False
+            )
+
+        assert exc_info.value.status == 400
+        assert "temperature" in str(exc_info.value)
+
+    async def test_logprobs_is_rejected(self) -> None:
+        """``include=["logprobs"]`` fails with 400: token confidences are not available."""
+        with pytest.raises(ApiError) as exc_info:
+            await AudioModel("amazon.transcribe").stt(
+                self._audio(), "json", logprobs=True
+            )
+
+        assert exc_info.value.status == 400
+        assert "logprobs" in str(exc_info.value)
+
+    @pytest.mark.usefixtures("request_log")
+    async def test_zero_temperature_is_accepted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``temperature=0`` is the only accepted value, being Transcribe's behaviour.
+
+        The response params are logged into the request context, which the
+        ``request_log`` fixture provides outside a real request.
+        """
+
+        async def _fake_transcribe(
+            _self: AudioModel, *_args: object, **_kwargs: object
+        ) -> dict[str, Any]:
+            return _STUB_TRANSCRIPT_DATA
+
+        monkeypatch.setattr(AudioModel, "_transcribe", _fake_transcribe)
+
+        response = await AudioModel("amazon.transcribe").stt(
+            self._audio(), "json", temperature=0.0, logprobs=False
+        )
+
+        assert not isinstance(response, str | Response)
+        assert response.text == "hello world"
+
+
+@pytest.mark.local
+class TestTranscribeStreamTermination:
+    """AudioModel.stt_stream ends with a done event carrying the whole transcript.
+
+    The batch job is finished before the first event is emitted, so the stream
+    is one delta per transcript followed by the terminating done event whose
+    ``text`` is those deltas joined by a space.
+
+    Ref: https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create
+         stdapi/models/audio/amazon_transcribe.py:AudioModel.stt_stream
+    """
+
+    async def test_done_event_concatenates_every_delta(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two transcripts produce two deltas and one done event holding both."""
+
+        async def _fake_transcribe(
+            _self: AudioModel, *_args: object, **_kwargs: object
+        ) -> dict[str, Any]:
+            return {
+                **_STUB_TRANSCRIPT_DATA,
+                "transcripts": [{"transcript": "hello"}, {"transcript": "world"}],
+            }
+
+        monkeypatch.setattr(AudioModel, "_transcribe", _fake_transcribe)
+        usage_token = usage.init_usage()
+        try:
+            events = [
+                event
+                async for event in AudioModel("amazon.transcribe").stt_stream(
+                    InputFile("data:audio/wav;base64,AAAA"), "json", logprobs=False
+                )
+            ]
+        finally:
+            usage.USAGE.reset(usage_token)
+
+        *deltas, done = events
+        assert all(
+            isinstance(event, TranscriptionTextDeltaEvent) for event in deltas
+        ), events
+        assert [event.delta for event in deltas] == ["hello", "world"]  # type: ignore[union-attr]
+        assert isinstance(done, TranscriptionTextDoneEvent)
+        assert done.type == "transcript.text.done"
+        assert done.text == "hello world"

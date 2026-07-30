@@ -17,6 +17,7 @@ import pytest
 
 import stdapi.routes.openai_responses  # noqa: F401  (registers the input-tokens route capability)
 from stdapi import models
+from stdapi.config import SETTINGS
 from stdapi.models import MANTLE_SERVICE, ModelDetails, _compute_model_capabilities
 from stdapi.models.capabilities import ROUTE_CAPABILITIES, Capability
 from stdapi.models.chat._default import ChatModel as ConverseChatModel
@@ -102,3 +103,74 @@ class TestCountTokensCapabilityGating:
         assert _RESPONSE_TOOL in tools, (
             "gating must drop only the COUNT_TOKENS route, not every TEXT route"
         )
+
+
+class TestOperatorModelAliases:
+    """MODEL_ALIASES rebuild: operator aliases are applied last and therefore win.
+
+    ``MODEL_ALIASES`` is rebuilt from the model classes on every catalog refresh, so
+    an operator alias only survives because ``SETTINGS.model_aliases`` is merged
+    after the class-provided ones.
+
+    Ref: stdapi/models/__init__.py:_populate_model_aliases
+         stdapi/models/__init__.py:resolve_model_alias
+    """
+
+    @staticmethod
+    def _rebuild(
+        monkeypatch: pytest.MonkeyPatch, operator_aliases: dict[str, str]
+    ) -> dict[str, ModelDetails]:
+        """Rebuild the alias table from one fake class plus *operator_aliases*.
+
+        Returns:
+            The catalog the aliases were rebuilt against.
+        """
+
+        class _AliasingModel:
+            @staticmethod
+            def get_aliases(_all_models: dict[str, ModelDetails]) -> dict[str, str]:
+                return {"fast": "other.model-v1:0"}
+
+        all_models = {
+            "test.model-v1:0": _text_model("AWS Bedrock Runtime"),
+            "other.model-v1:0": _text_model("AWS Bedrock Runtime"),
+        }
+        all_models["other.model-v1:0"].id = "other.model-v1:0"
+        monkeypatch.setattr(models, "MODEL_ALIASES", {})
+        monkeypatch.setattr(models, "_GLOBAL_MODEL_REGISTRY", [_AliasingModel])
+        monkeypatch.setattr(SETTINGS, "model_aliases", operator_aliases)
+        models._populate_model_aliases(all_models)  # noqa: SLF001
+        return all_models
+
+    def test_class_alias_applies_without_an_operator_entry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no operator alias configured, the model class' own alias is used."""
+        self._rebuild(monkeypatch, {})
+        assert models.resolve_model_alias("fast") == "other.model-v1:0"
+
+    def test_operator_alias_overrides_the_class_alias(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An operator alias reusing a built-in name redirects it to the operator target."""
+        self._rebuild(monkeypatch, {"fast": "test.model-v1:0"})
+        assert models.resolve_model_alias("fast") == "test.model-v1:0"
+
+    def test_operator_alias_is_advertised_on_the_target_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An operator alias pointing at a catalog model is listed in its ``aliases``.
+
+        The reverse index is built from the merged table, so ``GET /v1/models`` shows
+        the operator alias and no longer shows it on the built-in target.
+        """
+        all_models = self._rebuild(monkeypatch, {"fast": "test.model-v1:0"})
+        assert all_models["test.model-v1:0"].aliases == ["fast"]
+        assert not all_models["other.model-v1:0"].aliases
+
+    def test_unknown_alias_is_returned_unchanged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A name that is not an alias is passed through as a model ID."""
+        self._rebuild(monkeypatch, {})
+        assert models.resolve_model_alias("test.model-v1:0") == "test.model-v1:0"

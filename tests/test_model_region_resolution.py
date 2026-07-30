@@ -32,14 +32,13 @@ from stdapi.models import (
     _region_restriction_for,
     route_and_execute,
 )
-from stdapi.monitoring import REQUEST_LOG
 from stdapi.region_routing import RegionRouter
 
 if TYPE_CHECKING:
     from types_aiobotocore_bedrock.literals import RegionName
 
 #: All tests in this module exercise the local implementation in-process.
-pytestmark = pytest.mark.local
+pytestmark = [pytest.mark.local, pytest.mark.usefixtures("request_log")]
 
 
 def _model(
@@ -182,7 +181,6 @@ def routed(monkeypatch: pytest.MonkeyPatch) -> RegionRouter:
     router = RegionRouter()
     monkeypatch.setattr(models_module, "REGION_ROUTER", router)
     monkeypatch.setattr(SETTINGS, "aws_bedrock_max_retries", 3)
-    REQUEST_LOG.set({"level": "info"})  # type: ignore[typeddict-item]
     return router
 
 

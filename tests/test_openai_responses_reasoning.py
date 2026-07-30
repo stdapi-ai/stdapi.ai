@@ -24,7 +24,6 @@ from stdapi.models.chat._adapters._openai_responses import (
     format_stream,
     map_input,
 )
-from stdapi.monitoring import REQUEST_LOG
 from stdapi.types.openai_responses import (
     Reasoning,
     ReasoningItemContentInput,
@@ -38,7 +37,7 @@ from stdapi.types.openai_responses import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator
+    from collections.abc import AsyncGenerator
 
     from openai import OpenAI
     from sse_starlette import JSONServerSentEvent
@@ -51,11 +50,8 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture(autouse=True)
-def _request_log() -> Generator[None]:
-    """Provide the request log context required by response logging."""
-    token = REQUEST_LOG.set({"level": "info"})  # type: ignore[typeddict-item]
-    yield
-    REQUEST_LOG.reset(token)
+def _request_log(request_log: dict[str, Any]) -> None:
+    """Bind the shared request-log context required by response logging."""
 
 
 #: Bedrock usage payload shared by fabricated Converse responses.
@@ -667,13 +663,6 @@ class TestReasoningInputRoundTrip:
         assert "signature" not in content_block["reasoningContent"]["reasoningText"]
 
 
-#: Bedrock reasoning model used for live tests (Claude extended thinking).
-_LIVE_BEDROCK_MODEL = "anthropic.claude-haiku-4-5-20251001-v1:0"
-
-#: Official API reasoning model used for live tests.
-_LIVE_OFFICIAL_MODEL = "gpt-5-nano"
-
-
 class TestReasoningLive:
     """Reasoning content end-to-end against a real backend.
 
@@ -684,7 +673,7 @@ class TestReasoningLive:
 
     @pytest.mark.expensive
     def test_reasoning_item_and_round_trip(
-        self, openai_client: OpenAI, use_official_api: bool
+        self, openai_client: OpenAI, use_official_api: bool, chat_reasoning_model: str
     ) -> None:
         """A reasoning item is returned before the answer and replays as context.
 
@@ -693,9 +682,8 @@ class TestReasoningLive:
         ``input``.  The follow-up question is only answerable from that replayed
         context, which is what makes the round trip observable.
         """
-        model = _LIVE_OFFICIAL_MODEL if use_official_api else _LIVE_BEDROCK_MODEL
         response = openai_client.responses.create(
-            model=model,
+            model=chat_reasoning_model,
             input="What is 2+2? Think briefly, then answer with the number only.",
             reasoning={"effort": "low"},
             include=["reasoning.encrypted_content"],
@@ -731,7 +719,7 @@ class TestReasoningLive:
             assert item.encrypted_content
 
         follow_up = openai_client.responses.create(  # type: ignore[call-overload]
-            model=model,
+            model=chat_reasoning_model,
             input=[
                 *[
                     output.model_dump(mode="json", exclude_none=True)
@@ -752,7 +740,7 @@ class TestReasoningLive:
 
     @pytest.mark.expensive
     def test_reasoning_streaming_events(
-        self, openai_client: OpenAI, use_official_api: bool
+        self, openai_client: OpenAI, use_official_api: bool, chat_reasoning_model: str
     ) -> None:
         """A streamed reasoning item is announced, deltaed and repeated on completion.
 
@@ -764,12 +752,11 @@ class TestReasoningLive:
         Ref: https://developers.openai.com/api/docs/guides/streaming-responses
              https://developers.openai.com/api/reference/resources/responses/streaming-events
         """
-        model = _LIVE_OFFICIAL_MODEL if use_official_api else _LIVE_BEDROCK_MODEL
         event_types: list[str] = []
         added_item_types: list[str] = []
         sequence_numbers: list[int] = []
         with openai_client.responses.stream(
-            model=model,
+            model=chat_reasoning_model,
             input="What is 3+3? Think briefly, then answer with the number only.",
             reasoning={"effort": "low"},
             store=False,

@@ -11,16 +11,55 @@ Ref: https://developers.openai.com/api/reference/resources/responses/methods/cre
 """
 
 import json
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from openai import BadRequestError, OpenAI
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from openai import OpenAI, Stream
     from openai.types.responses import ResponseStreamEvent
 
 PEGASUS_MODEL = "twelvelabs.pegasus-1-2-v1:0"
+
+
+@pytest.fixture(autouse=True)
+def _skip_official_api(use_official_api: bool) -> None:
+    """Skip the module against the official API: Pegasus is Bedrock-only."""
+    if use_official_api:
+        pytest.skip("Pegasus is not supported on the official API")
+
+
+@pytest.fixture
+def pegasus_video_input(
+    sample_video_file_base64: str,
+) -> Callable[[str], list[dict[str, Any]]]:
+    """Build the video-plus-text input every Pegasus generation test sends.
+
+    The Responses input union has no video part, so the sample video rides an
+    ``input_image`` data URL. Skips when the sample video is unavailable.
+
+    Returns:
+        A factory taking the prompt text and returning the ``input`` list.
+    """
+    if not sample_video_file_base64:
+        pytest.skip("No sample video available")
+
+    def _build(prompt: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_image", "image_url": sample_video_file_base64},
+                    {"type": "input_text", "text": prompt},
+                ],
+            }
+        ]
+
+    return _build
 
 
 class TestTwelveLabsPegasusResponses:
@@ -31,8 +70,7 @@ class TestTwelveLabsPegasusResponses:
     def test_video_basic(
         self,
         openai_client: OpenAI,
-        use_official_api: bool,
-        sample_video_file_base64: str,
+        pegasus_video_input: Callable[[str], list[dict[str, Any]]],
     ) -> None:
         """A video part plus a text prompt returns one assistant message item.
 
@@ -44,27 +82,9 @@ class TestTwelveLabsPegasusResponses:
         Ref: https://developers.openai.com/api/docs/guides/file-inputs
              stdapi/models/chat/twelvelabs_pegasus.py:_video_to_media_source
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-        if not sample_video_file_base64:
-            pytest.skip("No sample video available")
-
-        video_url = sample_video_file_base64
         response = openai_client.responses.create(
             model=PEGASUS_MODEL,
-            input=[
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": [  # type: ignore[misc, list-item]
-                        {"type": "input_image", "image_url": video_url},
-                        {
-                            "type": "input_text",
-                            "text": "Describe what happens in this video.",
-                        },
-                    ],
-                }
-            ],
+            input=pegasus_video_input("Describe what happens in this video."),  # type: ignore[arg-type]
         )
         assert response.output_text
         assert response.error is None
@@ -89,8 +109,7 @@ class TestTwelveLabsPegasusResponses:
     def test_video_streaming(
         self,
         openai_client: OpenAI,
-        use_official_api: bool,
-        sample_video_file_base64: str,
+        pegasus_video_input: Callable[[str], list[dict[str, Any]]],
     ) -> None:
         """Streaming a video prompt emits the full lifecycle envelope with text deltas.
 
@@ -104,29 +123,11 @@ class TestTwelveLabsPegasusResponses:
              stdapi/models/chat/twelvelabs_pegasus.py:ChatModel._format_converse_stream
              stdapi/models/chat/_adapters/_openai_responses.py:format_stream
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-        if not sample_video_file_base64:
-            pytest.skip("No sample video available")
-
-        video_url = sample_video_file_base64
         stream = cast(
             "Stream[ResponseStreamEvent]",
             openai_client.responses.create(
                 model=PEGASUS_MODEL,
-                input=[
-                    {
-                        "type": "message",
-                        "role": "user",
-                        "content": [  # type: ignore[misc, list-item]
-                            {"type": "input_image", "image_url": video_url},
-                            {
-                                "type": "input_text",
-                                "text": "Describe what happens in this video.",
-                            },
-                        ],
-                    }
-                ],
+                input=pegasus_video_input("Describe what happens in this video."),  # type: ignore[arg-type]
                 stream=True,
             ),
         )
@@ -148,9 +149,7 @@ class TestTwelveLabsPegasusResponses:
         assert terminal.response.output_text == accumulated
         assert terminal.response.usage is not None
 
-    def test_no_video_returns_400(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_no_video_returns_400(self, openai_client: OpenAI) -> None:
         """A text-only request is rejected as an ``invalid_request_error``.
 
         Pegasus takes exactly one video per call, so the gateway scans the resolved
@@ -160,9 +159,6 @@ class TestTwelveLabsPegasusResponses:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus.html
              stdapi/models/chat/twelvelabs_pegasus.py:ChatModel._build_pegasus_body
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-
         with pytest.raises(BadRequestError) as excinfo:
             openai_client.responses.create(
                 model=PEGASUS_MODEL,
@@ -180,8 +176,7 @@ class TestTwelveLabsPegasusResponses:
     def test_response_format_json_schema(
         self,
         openai_client: OpenAI,
-        use_official_api: bool,
-        sample_video_file_base64: str,
+        pegasus_video_input: Callable[[str], list[dict[str, Any]]],
     ) -> None:
         """``text.format=json_schema`` makes Pegasus return an object matching the schema.
 
@@ -193,24 +188,9 @@ class TestTwelveLabsPegasusResponses:
         Ref: https://developers.openai.com/api/docs/guides/structured-outputs
              stdapi/models/chat/twelvelabs_pegasus.py:ChatModel._build_pegasus_body
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-        if not sample_video_file_base64:
-            pytest.skip("No sample video available")
-
-        video_url = sample_video_file_base64
         response = openai_client.responses.create(  # type: ignore[call-overload]
             model=PEGASUS_MODEL,
-            input=[
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": [
-                        {"type": "input_image", "image_url": video_url},
-                        {"type": "input_text", "text": "Describe this video."},
-                    ],
-                }
-            ],
+            input=pegasus_video_input("Describe this video."),
             text={
                 "format": {
                     "type": "json_schema",
@@ -236,8 +216,7 @@ class TestTwelveLabsPegasusResponses:
     def test_tools_silently_ignored(
         self,
         openai_client: OpenAI,
-        use_official_api: bool,
-        sample_video_file_base64: str,
+        pegasus_video_input: Callable[[str], list[dict[str, Any]]],
     ) -> None:
         """Function tools are dropped rather than rejected, and never called.
 
@@ -249,24 +228,9 @@ class TestTwelveLabsPegasusResponses:
         Ref: https://developers.openai.com/api/docs/guides/function-calling
              stdapi/models/chat/twelvelabs_pegasus.py:ChatModel._build_pegasus_body
         """
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
-        if not sample_video_file_base64:
-            pytest.skip("No sample video available")
-
-        video_url = sample_video_file_base64
         response = openai_client.responses.create(
             model=PEGASUS_MODEL,
-            input=[
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": [  # type: ignore[misc, list-item]
-                        {"type": "input_image", "image_url": video_url},
-                        {"type": "input_text", "text": "Describe this video."},
-                    ],
-                }
-            ],
+            input=pegasus_video_input("Describe this video."),  # type: ignore[arg-type]
             tools=[
                 {  # type: ignore[list-item]
                     "type": "function",

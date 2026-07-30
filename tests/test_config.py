@@ -15,6 +15,8 @@ from pydantic import ValidationError
 
 from stdapi.config import SETTINGS, _Settings
 
+pytestmark = pytest.mark.local
+
 
 def test_proxy_trusted_hosts_defaults_to_wildcard() -> None:
     """proxy_trusted_hosts defaults to '*' for backward compatibility."""
@@ -212,72 +214,35 @@ def test_videos_prefix_accepts_well_formed_values(value: str) -> None:
     assert settings.aws_s3_videos_prefix == value
 
 
-def test_videos_prefix_rejects_empty_value() -> None:
-    """An empty prefix is rejected: it would widen the ownership check to the whole bucket.
+@pytest.mark.parametrize(
+    ("value", "expected_fragment"),
+    [
+        pytest.param("", "must be non-empty", id="empty"),
+        pytest.param("/videos/", "", id="leading-slash"),
+        pytest.param("videos//nested/", "", id="double-slash"),
+        pytest.param("videos", 'must end with a trailing "/"', id="no-trailing-slash"),
+        pytest.param("videos with spaces/", "S3-safe", id="unsafe-characters"),
+    ],
+)
+def test_videos_prefix_rejects_malformed_values(
+    value: str, expected_fragment: str
+) -> None:
+    """A malformed videos prefix is rejected, and the message echoes the offending value.
 
-    Ref: stdapi/config.py:_validate_videos_prefix
-    """
-    with pytest.raises(ValidationError, match="aws_s3_videos_prefix") as excinfo:
-        _Settings(aws_s3_videos_prefix="")
-    (error,) = excinfo.value.errors()
-    assert error["loc"] == ("aws_s3_videos_prefix",)
-    assert 'Invalid aws_s3_videos_prefix ""' in error["msg"]
-    assert "must be non-empty" in error["msg"]
-
-
-def test_videos_prefix_rejects_leading_slash() -> None:
-    """A prefix starting with "/" is rejected.
-
-    Ref: stdapi/config.py:_validate_videos_prefix
-    """
-    with pytest.raises(ValidationError, match="aws_s3_videos_prefix") as excinfo:
-        _Settings(aws_s3_videos_prefix="/videos/")
-    (error,) = excinfo.value.errors()
-    assert error["loc"] == ("aws_s3_videos_prefix",)
-    assert 'Invalid aws_s3_videos_prefix "/videos/"' in error["msg"]
-
-
-def test_videos_prefix_rejects_double_slash() -> None:
-    """A prefix containing "//" is rejected.
-
-    Ref: stdapi/config.py:_validate_videos_prefix
-    """
-    with pytest.raises(ValidationError, match="aws_s3_videos_prefix") as excinfo:
-        _Settings(aws_s3_videos_prefix="videos//nested/")
-    (error,) = excinfo.value.errors()
-    assert error["loc"] == ("aws_s3_videos_prefix",)
-    assert 'Invalid aws_s3_videos_prefix "videos//nested/"' in error["msg"]
-
-
-def test_videos_prefix_rejects_missing_trailing_slash() -> None:
-    """A prefix without a trailing "/" is rejected.
-
-    Without it, the ownership check in ``_region_videos_uri_prefix`` (which
-    appends a "/" before comparing) would no longer match the literal prefix
-    used to build the Bedrock output ``s3Uri``.
+    An empty prefix would widen the video-ownership check to the whole bucket, and a
+    missing trailing "/" would stop ``_region_videos_uri_prefix`` (which appends one
+    before comparing) from matching the literal prefix used to build Bedrock's output
+    ``s3Uri``.
 
     Ref: stdapi/config.py:_validate_videos_prefix
          https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_StartAsyncInvoke.html
     """
     with pytest.raises(ValidationError, match="aws_s3_videos_prefix") as excinfo:
-        _Settings(aws_s3_videos_prefix="videos")
+        _Settings(aws_s3_videos_prefix=value)
     (error,) = excinfo.value.errors()
     assert error["loc"] == ("aws_s3_videos_prefix",)
-    assert 'Invalid aws_s3_videos_prefix "videos"' in error["msg"]
-    assert 'must end with a trailing "/"' in error["msg"]
-
-
-def test_videos_prefix_rejects_unsafe_characters() -> None:
-    """A prefix using characters outside S3's safe set is rejected.
-
-    Ref: stdapi/config.py:_validate_videos_prefix
-    """
-    with pytest.raises(ValidationError, match="aws_s3_videos_prefix") as excinfo:
-        _Settings(aws_s3_videos_prefix="videos with spaces/")
-    (error,) = excinfo.value.errors()
-    assert error["loc"] == ("aws_s3_videos_prefix",)
-    assert 'Invalid aws_s3_videos_prefix "videos with spaces/"' in error["msg"]
-    assert "S3-safe" in error["msg"]
+    assert f'Invalid aws_s3_videos_prefix "{value}"' in error["msg"]
+    assert expected_fragment in error["msg"]
 
 
 def test_session_encryption_key_arn_defaults_to_none() -> None:
@@ -397,3 +362,237 @@ def test_mantle_endpoint_url_rejects_malformed_placeholder(value: str) -> None:
     assert error["loc"] == ("aws_bedrock_mantle_endpoint_url",)
     assert f'Invalid aws_bedrock_mantle_endpoint_url "{value}"' in error["msg"]
     assert "malformed" in error["msg"]
+
+
+class TestBedrockModelArnMapping:
+    """aws_bedrock_model_arn_mapping: only inference-profile and prompt-router ARNs.
+
+    The mapping silently redirects every invocation of a model ID to another ARN, so
+    a typo has to fail at startup rather than once per request.
+
+    Ref: stdapi/config.py:_validate_arn_mapping
+         https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html
+    """
+
+    @pytest.mark.parametrize(
+        "arn",
+        [
+            pytest.param(
+                "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc",
+                id="application-inference-profile",
+            ),
+            pytest.param(
+                "arn:aws:bedrock:us-east-1:123456789012:inference-profile/abc",
+                id="inference-profile",
+            ),
+            pytest.param(
+                "arn:aws:bedrock:us-east-1:123456789012:prompt-router/abc",
+                id="prompt-router",
+            ),
+            pytest.param(
+                "arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:default-prompt-router/abc",
+                id="default-prompt-router-govcloud",
+            ),
+        ],
+    )
+    def test_profile_and_router_arns_are_accepted(self, arn: str) -> None:
+        """A profile or prompt-router ARN, in any AWS partition, is kept verbatim."""
+        settings = _Settings(aws_bedrock_model_arn_mapping={"my-model": arn})
+        assert settings.aws_bedrock_model_arn_mapping == {"my-model": arn}
+
+    @pytest.mark.parametrize(
+        "arn",
+        [
+            pytest.param(
+                "arn:aws:bedrock:us-east-1:123456789012:foundation-model/x",
+                id="foundation-model",
+            ),
+            pytest.param("not-an-arn", id="not-an-arn"),
+            pytest.param(
+                "arn:aws:bedrock:us-east-1:123456789012:inference-profile/abc extra",
+                id="trailing-data",
+            ),
+        ],
+    )
+    def test_other_arns_are_rejected_naming_the_model_id(self, arn: str) -> None:
+        """A non-profile, non-router ARN is rejected, naming both model ID and ARN."""
+        with pytest.raises(ValidationError, match="Invalid ARN format") as excinfo:
+            _Settings(aws_bedrock_model_arn_mapping={"my-model": arn})
+        (error,) = excinfo.value.errors()
+        assert error["loc"] == ("aws_bedrock_model_arn_mapping",)
+        assert f"my-model: {arn}" in error["msg"]
+
+    def test_default_mapping_is_empty(self) -> None:
+        """No mapping is configured by default, so model IDs reach Bedrock unchanged."""
+        assert _Settings().aws_bedrock_model_arn_mapping == {}
+
+
+class TestGuardrailSettingsCrossValidation:
+    """Guardrail identifier/version pairing and the override default it drives.
+
+    A guardrail configured without a version would be silently inert, and the
+    per-request override flag is forced on when there is no server guardrail to
+    protect, so both rules decide whether content filtering applies at all.
+
+    Ref: stdapi/config.py:_Settings._validate
+         https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html
+    """
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            pytest.param(
+                {"aws_bedrock_guardrail_identifier": "gr-123"}, id="identifier-only"
+            ),
+            pytest.param({"aws_bedrock_guardrail_version": "1"}, id="version-only"),
+        ],
+    )
+    def test_identifier_and_version_must_both_be_set(
+        self, kwargs: dict[str, str]
+    ) -> None:
+        """Half a guardrail pair fails startup with a message naming both settings."""
+        with pytest.raises(ValidationError, match="Both") as excinfo:
+            _Settings(**kwargs)  # type: ignore[arg-type]
+        (error,) = excinfo.value.errors()
+        assert error["loc"] == ()
+        assert "aws_bedrock_guardrail_identifier" in error["msg"]
+        assert "aws_bedrock_guardrail_version" in error["msg"]
+
+    def test_both_set_is_accepted(self) -> None:
+        """A complete identifier/version pair is accepted."""
+        settings = _Settings(
+            aws_bedrock_guardrail_identifier="gr-123", aws_bedrock_guardrail_version="1"
+        )
+        assert settings.aws_bedrock_guardrail_identifier == "gr-123"
+        assert settings.aws_bedrock_guardrail_version == "1"
+
+    def test_override_is_forced_on_without_a_server_guardrail(self) -> None:
+        """Disabling the per-request override does nothing when no guardrail is set.
+
+        With no server guardrail to protect, refusing a caller-supplied guardrail
+        would only remove a capability, so the flag is reset to True.
+        """
+        settings = _Settings(aws_bedrock_allow_guardrail_override=False)
+        assert settings.aws_bedrock_allow_guardrail_override is True
+
+    def test_override_stays_off_with_a_server_guardrail(self) -> None:
+        """With a server guardrail configured, an explicit False override is honoured."""
+        settings = _Settings(
+            aws_bedrock_allow_guardrail_override=False,
+            aws_bedrock_guardrail_identifier="gr-123",
+            aws_bedrock_guardrail_version="1",
+        )
+        assert settings.aws_bedrock_allow_guardrail_override is False
+
+
+class TestApiKeySourceExclusivity:
+    """API-key sources: the direct key and a fully-configured secret are exclusive.
+
+    Ambiguous configuration means the priority chain in ``initialize`` silently picks
+    a source and the operator's intended key is never read.
+
+    Ref: stdapi/config.py:_Settings._validate
+         stdapi/auth.py:AuthenticationHandler.initialize
+    """
+
+    def test_direct_key_with_a_full_secret_source_is_rejected(self) -> None:
+        """A direct key plus both secret settings fails startup naming all three."""
+        with pytest.raises(ValidationError, match="Only one of api_key") as excinfo:
+            _Settings(
+                api_key="direct",  # type: ignore[arg-type]
+                api_key_secretsmanager_secret="stdapi/api-key",  # noqa: S106
+                api_key_secretsmanager_key="api_key",
+            )
+        (error,) = excinfo.value.errors()
+        assert error["loc"] == ()
+        assert "api_key_secretsmanager_secret" in error["msg"]
+        assert "api_key_secretsmanager_key" in error["msg"]
+
+    def test_secret_field_selector_defaults_to_a_truthy_value(self) -> None:
+        """The secret-field selector defaults to ``api_key``, so the guard needs only two.
+
+        The rule reads as three settings but the third is never empty by default: naming
+        a secret alongside a direct key is therefore always ambiguous.
+        """
+        assert _Settings().api_key_secretsmanager_key == "api_key"
+        with pytest.raises(ValidationError, match="Only one of api_key"):
+            _Settings(
+                api_key="direct",  # type: ignore[arg-type]
+                api_key_secretsmanager_secret="stdapi/api-key",  # noqa: S106
+            )
+
+    def test_a_direct_key_alone_is_accepted(self) -> None:
+        """With no secret configured, the direct key is the single unambiguous source."""
+        settings = _Settings(api_key="direct")  # type: ignore[arg-type]
+        assert settings.api_key is not None
+        assert settings.api_key.get_secret_value() == "direct"
+
+
+class TestMcpToolFiltering:
+    """mcp_include_tools / mcp_exclude_tools parsing and reconciliation.
+
+    These two settings decide which gateway operations an MCP client may invoke, so
+    the reconciliation rule is an attack-surface control rather than a convenience.
+
+    Ref: stdapi/config.py:_parse_mcp_tools_list
+         stdapi/config.py:_Settings._validate
+    """
+
+    def test_comma_separated_string_becomes_a_list(self) -> None:
+        """A comma-separated env value is parsed into de-duplicated tool names.
+
+        The parser routes through ``set()``, so order is not preserved.
+        """
+        settings = _Settings(mcp_exclude_tools="a, b ,a")  # type: ignore[arg-type]
+        assert settings.mcp_exclude_tools is not None
+        assert set(settings.mcp_exclude_tools) == {"a", "b"}
+
+    def test_empty_value_becomes_none(self) -> None:
+        """An empty list collapses to None: no filtering, rather than "expose nothing"."""
+        settings = _Settings(mcp_include_tools="")  # type: ignore[arg-type]
+        assert settings.mcp_include_tools is None
+
+    def test_exclude_is_subtracted_from_include(self) -> None:
+        """With both set, exclude is subtracted from include and then dropped.
+
+        Leaving both populated would hand the MCP server an overlapping pair; folding
+        them into a single allow-list keeps the exposed set unambiguous.
+        """
+        settings = _Settings(mcp_include_tools="a,b", mcp_exclude_tools="b")  # type: ignore[arg-type]
+        assert settings.mcp_include_tools == ["a"]
+        assert settings.mcp_exclude_tools is None
+
+    def test_exclude_alone_is_left_untouched(self) -> None:
+        """Without an include list, the exclude list survives as a deny-list."""
+        settings = _Settings(mcp_exclude_tools="b")  # type: ignore[arg-type]
+        assert settings.mcp_exclude_tools == ["b"]
+        assert settings.mcp_include_tools is None
+
+
+class TestOpenApiJsonImplication:
+    """enable_openapi_json is implied by enable_docs and enable_redoc.
+
+    Swagger UI and ReDoc both fetch ``/openapi.json``; without the implication they
+    would render an empty page instead of failing visibly.
+
+    Ref: stdapi/config.py:_Settings._validate
+    """
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            pytest.param("enable_docs", id="docs"),
+            pytest.param("enable_redoc", id="redoc"),
+        ],
+    )
+    def test_docs_or_redoc_forces_openapi_json_on(self, field: str) -> None:
+        """Enabling either docs UI turns on the OpenAPI schema route it depends on."""
+        settings = _Settings(enable_openapi_json=False, **{field: True})  # type: ignore[arg-type]
+        assert settings.enable_openapi_json is True
+
+    def test_all_three_off_stays_off(self) -> None:
+        """With no docs UI enabled, an explicit False is honoured."""
+        settings = _Settings(
+            enable_openapi_json=False, enable_docs=False, enable_redoc=False
+        )
+        assert settings.enable_openapi_json is False

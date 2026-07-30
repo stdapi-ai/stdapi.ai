@@ -65,7 +65,7 @@ from stdapi.models.chat._mantle.open_weight import ChatModel as OpenWeightChatMo
 from stdapi.models.chat._mantle.openai_gpt5 import ChatModel as GptChatModel
 from stdapi.models.chat._mantle.openai_gpt_oss import ChatModel as GptOssChatModel
 from stdapi.models.chat.openai_gpt import ChatModel as OpenAiGptChatModel
-from stdapi.monitoring import REQUEST, REQUEST_ID, REQUEST_LOG, EventLog
+from stdapi.monitoring import REQUEST, REQUEST_ID, EventLog
 from stdapi.pricing import Service
 from stdapi.routes.openai_responses import _decode_mantle_id, _require_local_response_id
 from stdapi.types.anthropic_messages import Message, MessageCreateParams, MessageParam
@@ -86,15 +86,18 @@ if TYPE_CHECKING:
 
     from stdapi.aws_bedrock_mantle import SseEvent
 
-pytestmark = pytest.mark.local
+pytestmark = [pytest.mark.local, pytest.mark.usefixtures("request_log")]
 
 
 @pytest.fixture(autouse=True)
-def _request_log_context() -> Iterator[None]:
-    """Provide the request log context required by ``set_effective_region`` et al."""
-    token = REQUEST_LOG.set({"level": "info"})  # type: ignore[typeddict-item]
-    yield
-    REQUEST_LOG.reset(token)
+def _isolated_learned_routing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give each test its own learned API/surface routing caches.
+
+    Both dicts are process-global: a binding learned by one test would otherwise
+    decide which API or surface the next test probes first.
+    """
+    monkeypatch.setattr(mantle_default, "_LEARNED_APIS", {})
+    monkeypatch.setattr(mantle_default, "_LEARNED_SURFACE", {})
 
 
 def _mantle_region() -> RegionName:
@@ -1552,17 +1555,14 @@ class TestServeStoreFallbackWarning:
         )
         model = mantle_default.ChatModel("test.store-fallback-model")
         payload: dict[str, Any] = {"model": "m", "input": "x", "store": True}
-        try:
-            api, _region, _result = await model._serve(  # noqa: SLF001
-                "responses", payload, stream=False
-            )
-            assert api == "chat_completions"
-            assert "store" not in payload
-            assert len(warnings) == 1
-            assert "store" in warnings[0]["args"][0]
-            assert warnings[0]["kwargs"]["level"] == "warning"
-        finally:
-            mantle_default._LEARNED_APIS.pop("test.store-fallback-model", None)  # noqa: SLF001
+        api, _region, _result = await model._serve(  # noqa: SLF001
+            "responses", payload, stream=False
+        )
+        assert api == "chat_completions"
+        assert "store" not in payload
+        assert len(warnings) == 1
+        assert "store" in warnings[0]["args"][0]
+        assert warnings[0]["kwargs"]["level"] == "warning"
 
     async def test_store_absent_no_warning_no_pop(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1579,17 +1579,12 @@ class TestServeStoreFallbackWarning:
         )
         model = mantle_default.ChatModel("test.store-fallback-model-nostore")
         payload: dict[str, Any] = {"model": "m", "input": "x"}
-        try:
-            api, _region, _result = await model._serve(  # noqa: SLF001
-                "responses", payload, stream=False
-            )
-            assert api == "chat_completions"
-            assert "store" not in payload
-            assert warnings == []
-        finally:
-            mantle_default._LEARNED_APIS.pop(  # noqa: SLF001
-                "test.store-fallback-model-nostore", None
-            )
+        api, _region, _result = await model._serve(  # noqa: SLF001
+            "responses", payload, stream=False
+        )
+        assert api == "chat_completions"
+        assert "store" not in payload
+        assert warnings == []
 
 
 class TestResponsesRouteGuards:
@@ -2373,15 +2368,10 @@ class TestPreviousResponseIdFallback:
             "input": "hi",
             "previous_response_id": "resp_abc",
         }
-        try:
-            with pytest.raises(ApiError) as exc_info:
-                await model._serve("responses", payload, stream=False)  # noqa: SLF001
-            assert exc_info.value.status == 400
-            assert "previous_response_id cannot be honored" in str(exc_info.value)
-        finally:
-            mantle_default._LEARNED_APIS.pop(  # noqa: SLF001
-                "test.previous-response-fallback-model", None
-            )
+        with pytest.raises(ApiError) as exc_info:
+            await model._serve("responses", payload, stream=False)  # noqa: SLF001
+        assert exc_info.value.status == 400
+        assert "previous_response_id cannot be honored" in str(exc_info.value)
 
 
 class TestLearnedBindingSkipsSecondProbe:
@@ -2414,24 +2404,21 @@ class TestLearnedBindingSkipsSecondProbe:
         monkeypatch.setattr(mantle_default.ChatModel, "_invoke_api", fake_invoke_api)
         model_id = "test.learned-binding-probe-model"
         model = mantle_default.ChatModel(model_id)
-        try:
-            api, _region, _raw = await model._serve(  # noqa: SLF001
-                "responses", {"model": model_id, "input": "hi"}, stream=False
-            )
-            assert api == "chat_completions"
-            assert calls == ["responses", "chat_completions"]
-            assert mantle_default._LEARNED_APIS[model_id] == frozenset(  # noqa: SLF001
-                {"chat_completions"}
-            )
+        api, _region, _raw = await model._serve(  # noqa: SLF001
+            "responses", {"model": model_id, "input": "hi"}, stream=False
+        )
+        assert api == "chat_completions"
+        assert calls == ["responses", "chat_completions"]
+        assert mantle_default._LEARNED_APIS[model_id] == frozenset(  # noqa: SLF001
+            {"chat_completions"}
+        )
 
-            calls.clear()
-            api2, _region2, _raw2 = await model._serve(  # noqa: SLF001
-                "responses", {"model": model_id, "input": "hi"}, stream=False
-            )
-            assert api2 == "chat_completions"
-            assert calls == ["chat_completions"]
-        finally:
-            mantle_default._LEARNED_APIS.pop(model_id, None)  # noqa: SLF001
+        calls.clear()
+        api2, _region2, _raw2 = await model._serve(  # noqa: SLF001
+            "responses", {"model": model_id, "input": "hi"}, stream=False
+        )
+        assert api2 == "chat_completions"
+        assert calls == ["chat_completions"]
 
 
 class TestMantleDisabled:
@@ -2603,24 +2590,21 @@ class TestInvokeApiSurfaceLearningWritePath:
 
         monkeypatch.setattr(mantle_default, "invoke", fake_invoke)
         model = mantle_default.ChatModel(model_id)
-        try:
-            _region, result = await model._invoke_api(  # noqa: SLF001
-                "chat_completions", {"model": model_id, "messages": []}, stream=False
-            )
-            assert result == {"id": "chatcmpl-1", "choices": [], "usage": None}
-            assert calls == ["/openai/v1/chat/completions", "/v1/chat/completions"]
-            assert mantle_default._LEARNED_SURFACE[model_id] == "/v1"  # noqa: SLF001
+        _region, result = await model._invoke_api(  # noqa: SLF001
+            "chat_completions", {"model": model_id, "messages": []}, stream=False
+        )
+        assert result == {"id": "chatcmpl-1", "choices": [], "usage": None}
+        assert calls == ["/openai/v1/chat/completions", "/v1/chat/completions"]
+        assert mantle_default._LEARNED_SURFACE[model_id] == "/v1"  # noqa: SLF001
 
-            # The learned surface is tried first on the next call and
-            # succeeds immediately: the previously-failing surface is
-            # skipped rather than probed again.
-            calls.clear()
-            await model._invoke_api(  # noqa: SLF001
-                "chat_completions", {"model": model_id, "messages": []}, stream=False
-            )
-            assert calls == ["/v1/chat/completions"]
-        finally:
-            mantle_default._LEARNED_SURFACE.pop(model_id, None)  # noqa: SLF001
+        # The learned surface is tried first on the next call and succeeds
+        # immediately: the previously-failing surface is skipped rather than
+        # probed again.
+        calls.clear()
+        await model._invoke_api(  # noqa: SLF001
+            "chat_completions", {"model": model_id, "messages": []}, stream=False
+        )
+        assert calls == ["/v1/chat/completions"]
 
 
 class TestInvokeApiRetriesWhenRouterDisabled:

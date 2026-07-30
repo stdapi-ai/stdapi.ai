@@ -13,11 +13,11 @@ Model output stays in OpenAI shape: Anthropic ``tool_use`` blocks surface as
 ``tool_calls`` with the tool name unchanged, and results are returned with
 ``role: "tool"`` messages rather than Anthropic ``tool_result`` blocks.
 
-``code_execution`` and ``web_fetch`` are Anthropic server-side tools that Bedrock
-does not host, so their inference tests never run on this route.  Tests are also
-skipped when ``--use-official-api`` is set, since Claude models are not served by
-the official OpenAI API.  ``@pytest.mark.expensive`` marks the tests that sweep
-the whole ``CLAUDE_ALL`` matrix instead of the cheap Haiku 4.5 model.
+``code_execution`` and ``web_fetch`` are Anthropic server-side tools Bedrock does
+not host and the official OpenAI API does not serve, so they have no coverage
+here.  Tests are skipped when ``--use-official-api`` is set, since Claude models
+are not served by the official OpenAI API.  ``@pytest.mark.expensive`` marks the
+tests that sweep the ``CLAUDE_ALL`` matrix instead of the cheap Haiku 4.5 model.
 
 Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
      https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
@@ -41,6 +41,7 @@ from stdapi.types.openai_chat_completions import CompletionCreateParams
 
 if TYPE_CHECKING:
     from openai import OpenAI
+    from openai.types.chat import ChatCompletion
     from types_aiobotocore_bedrock_runtime.type_defs import ToolConfigurationTypeDef
 
 # ---------------------------------------------------------------------------
@@ -58,20 +59,6 @@ _BASH_TOOL: dict[str, object] = {"type": "function", "function": {"name": "bash"
 
 #: Memory tool — name ``memory``, type ``memory_20250818``.
 _MEMORY_TOOL: dict[str, object] = {"type": "function", "function": {"name": "memory"}}
-
-#: Code execution tool — name ``code_execution``, type ``code_execution_20250522``.
-#: Not supported on AWS Bedrock; all tests using it will be skipped via the OpenAI route.
-_CODE_EXECUTION_TOOL: dict[str, object] = {
-    "type": "function",
-    "function": {"name": "code_execution"},
-}
-
-#: Web fetch tool — name ``web_fetch``, type ``web_fetch_20250910``.
-#: Not supported on AWS Bedrock; tests only run against the official Anthropic API.
-_WEB_FETCH_TOOL: dict[str, object] = {
-    "type": "function",
-    "function": {"name": "web_fetch"},
-}
 
 # ---------------------------------------------------------------------------
 # Model constants
@@ -96,6 +83,9 @@ CLAUDE_ALL = (
 #: A single cheap Claude model for non-parametrized integration tests.
 _CLAUDE_CHEAP = "anthropic.claude-haiku-4-5-20251001-v1:0"
 
+#: ``CLAUDE_ALL`` without the cheap model, which the dedicated tests already cover.
+CLAUDE_SWEEP = tuple(model for model in CLAUDE_ALL if model != _CLAUDE_CHEAP)
+
 #: A non-Claude model for negative tests.
 _NON_CLAUDE_MODEL = "amazon.nova-micro-v1:0"
 
@@ -103,6 +93,27 @@ _NON_CLAUDE_MODEL = "amazon.nova-micro-v1:0"
 # ===========================================================================
 # Helpers
 # ===========================================================================
+
+
+@pytest.fixture(scope="module")
+def envelope_completion(
+    openai_client: OpenAI, use_official_api: bool
+) -> ChatCompletion:
+    """One cheap completion shared by the request-independent envelope assertions.
+
+    ``id``, ``object`` and ``created`` are minted by the gateway rather than by the
+    model, so a single billable call is enough to assert all of them.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat.md
+         stdapi/routes/openai_chat_completions.py:create_chat_completion
+    """
+    if use_official_api:
+        pytest.skip("Anthropic Claude is not supported on the official API")
+    return openai_client.chat.completions.create(
+        model=_CLAUDE_CHEAP,
+        messages=[{"role": "user", "content": "Hi."}],
+        max_completion_tokens=50,
+    )
 
 
 def _tool_call_args(tool_call: object) -> dict[str, object]:
@@ -1374,367 +1385,6 @@ class TestMemoryTool:
 
 
 # ===========================================================================
-# Code execution tool
-# ===========================================================================
-
-
-class TestCodeExecutionTool:
-    """The Anthropic ``code_execution`` server tool, unreachable on this route.
-
-    ``code_execution`` runs on Anthropic's own infrastructure and is one of the server
-    tools Anthropic lists as unsupported on Amazon Bedrock; it is also absent from the
-    gateway's ``SERVER_TOOL_NAME_TO_TYPE``, so the name would reach Bedrock as an ordinary
-    custom function tool.  Every test here is therefore skipped unconditionally, and the
-    bodies document the expected first-party behavior only.
-
-    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
-         https://platform.claude.com/docs/en/build-with-claude/claude-on-amazon-bedrock-legacy
-         stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel
-    """
-
-    @pytest.fixture(autouse=True)
-    def _skip(self, use_official_api: bool) -> None:
-        """Skip every test in the class: ``code_execution`` needs Anthropic's own backend.
-
-        On this route the backend is always Bedrock when ``--use-official-api`` is off, and
-        Claude models do not exist on the official OpenAI API when it is on.
-        """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
-        pytest.skip(
-            "code_execution_20250522 is not supported on Bedrock; "
-            "not reachable via the OpenAI route"
-        )
-
-    @pytest.mark.expensive
-    def test_accepted(self, openai_client: OpenAI) -> None:
-        """A ``code_execution`` tool entry yields a normal completion.
-
-        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
-        """
-        tools: list[dict[str, object]] = [_CODE_EXECUTION_TOOL]
-        resp = openai_client.chat.completions.create(
-            model=_CLAUDE_CHEAP,
-            messages=[{"role": "user", "content": "Say hello."}],
-            tools=tools,  # type: ignore[arg-type]
-            max_completion_tokens=4096,
-        )
-        assert resp.object == "chat.completion"
-        assert len(resp.choices) == 1
-        assert resp.choices[0].message.role == "assistant"
-        assert resp.usage is not None
-        assert (
-            resp.usage.total_tokens
-            == resp.usage.prompt_tokens + resp.usage.completion_tokens
-        )
-
-    @pytest.mark.expensive
-    def test_triggers_tool_use(self, openai_client: OpenAI) -> None:
-        """A forced ``code_execution`` call carries Python source under a ``code`` key.
-
-        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
-        """
-        tools: list[dict[str, object]] = [_CODE_EXECUTION_TOOL]
-        resp = openai_client.chat.completions.create(  # type: ignore[call-overload]
-            model=_CLAUDE_CHEAP,
-            messages=[{"role": "user", "content": "Compute 2 + 2 using code."}],
-            tools=tools,
-            tool_choice="required",
-            max_completion_tokens=4096,
-        )
-        tool_calls = resp.choices[0].message.tool_calls
-        assert tool_calls
-        tc = tool_calls[0]
-        assert tc.type == "function"
-        assert tc.id
-        assert resp.choices[0].finish_reason == "tool_calls"
-        assert tc.function.name == "code_execution"
-        assert _tool_call_args(tc).get("code")
-
-    @pytest.mark.expensive
-    def test_multiturn_with_result(self, openai_client: OpenAI) -> None:
-        """An execution result fed back as tool text is quoted in the closing answer.
-
-        ``2 ** 10`` is used because its result, ``1024``, is unambiguous enough to assert on
-        the final text: the model can only produce it from the tool result it was given.
-
-        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
-        """
-        tools: list[dict[str, object]] = [_CODE_EXECUTION_TOOL]
-        user_prompt = "Compute 2 ** 10 using code."
-
-        resp1 = openai_client.chat.completions.create(  # type: ignore[call-overload]
-            model=_CLAUDE_CHEAP,
-            messages=[{"role": "user", "content": user_prompt}],
-            tools=tools,
-            tool_choice="required",
-            max_completion_tokens=4096,
-        )
-        tool_calls = resp1.choices[0].message.tool_calls
-        assert tool_calls
-        tc = tool_calls[0]
-        assert tc.type == "function"
-        assert tc.id
-
-        assistant_msg = resp1.choices[0].message
-        resp2 = openai_client.chat.completions.create(
-            model=_CLAUDE_CHEAP,
-            messages=[
-                {"role": "user", "content": user_prompt},
-                {
-                    "role": "assistant",
-                    "content": assistant_msg.content,
-                    "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments,
-                            },
-                        }
-                    ],
-                },
-                {"role": "tool", "tool_call_id": tc.id, "content": "1024\n"},
-            ],
-            tools=tools,  # type: ignore[arg-type]
-            max_completion_tokens=4096,
-        )
-        assert resp2.choices[0].finish_reason == "stop"
-        content = resp2.choices[0].message.content
-        assert content
-        assert "1024" in content
-        assert resp1.usage is not None
-        assert resp2.usage is not None
-        assert resp2.usage.prompt_tokens > resp1.usage.prompt_tokens, (
-            "Turn 2 must re-send the execution result to the model"
-        )
-
-    @pytest.mark.expensive
-    def test_runtime_error_result_accepted(self, openai_client: OpenAI) -> None:
-        """A Python traceback returned as tool text is accepted in the next turn.
-
-        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
-        """
-        tools: list[dict[str, object]] = [_CODE_EXECUTION_TOOL]
-        user_prompt = "Divide 1 by 0 using code."
-
-        resp1 = openai_client.chat.completions.create(  # type: ignore[call-overload]
-            model=_CLAUDE_CHEAP,
-            messages=[{"role": "user", "content": user_prompt}],
-            tools=tools,
-            tool_choice="required",
-            max_completion_tokens=4096,
-        )
-        tool_calls = resp1.choices[0].message.tool_calls
-        assert tool_calls
-        tc = tool_calls[0]
-        assert tc.type == "function"
-        assert tc.id
-
-        assistant_msg = resp1.choices[0].message
-        resp2 = openai_client.chat.completions.create(
-            model=_CLAUDE_CHEAP,
-            messages=[
-                {"role": "user", "content": user_prompt},
-                {
-                    "role": "assistant",
-                    "content": assistant_msg.content,
-                    "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments,
-                            },
-                        }
-                    ],
-                },
-                {
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": "ZeroDivisionError: division by zero",
-                },
-            ],
-            tools=tools,  # type: ignore[arg-type]
-            max_completion_tokens=4096,
-        )
-        assert resp2.choices[0].message.role == "assistant"
-        assert resp2.choices[0].finish_reason in {"stop", "tool_calls"}
-        assert resp2.choices[0].message.content or resp2.choices[0].message.tool_calls
-        assert resp1.usage is not None
-        assert resp2.usage is not None
-        assert resp2.usage.prompt_tokens > resp1.usage.prompt_tokens, (
-            "Turn 2 must re-send the traceback to the model"
-        )
-
-
-# ===========================================================================
-# Web fetch tool
-# ===========================================================================
-
-
-class TestWebFetchTool:
-    """The Anthropic ``web_fetch`` server tool, unreachable on this route.
-
-    ``web_fetch`` is fulfilled by Anthropic's infrastructure and is not offered on Bedrock,
-    where the gateway would forward the name as a plain ``toolSpec`` and Claude would treat
-    it as a client tool with no real fetching.  The class-level fixture skips the inference
-    tests on the Bedrock path, and each test skips itself on the official OpenAI API, so
-    none of them execute in either configuration.
-
-    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
-         https://platform.claude.com/docs/en/build-with-claude/claude-on-amazon-bedrock-legacy
-         stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel
-    """
-
-    @pytest.fixture(autouse=True)
-    def _skip_inference(
-        self, request: pytest.FixtureRequest, use_official_api: bool
-    ) -> None:
-        """Skip the inference tests when the backend is Bedrock.
-
-        ``web_fetch`` is not supported on Bedrock: it is passed as a regular ``toolSpec``
-        and Claude treats it as a client tool, so no URL is ever fetched.
-        """
-        inference_tests = {
-            "test_accepted",
-            "test_triggers_tool_use",
-            "test_multiturn_with_page_content",
-        }
-        if not use_official_api and request.node.name in inference_tests:
-            pytest.skip(
-                "web_fetch is not supported on Bedrock; "
-                "inference tests require the official Anthropic API"
-            )
-
-    @pytest.mark.expensive
-    def test_accepted(self, openai_client: OpenAI, use_official_api: bool) -> None:
-        """A ``web_fetch`` tool entry yields a normal completion.
-
-        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
-        """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
-        tools: list[dict[str, object]] = [_WEB_FETCH_TOOL]
-        resp = openai_client.chat.completions.create(
-            model=_CLAUDE_CHEAP,
-            messages=[{"role": "user", "content": "Say hello."}],
-            tools=tools,  # type: ignore[arg-type]
-            max_completion_tokens=1024,
-        )
-        assert resp.object == "chat.completion"
-        assert len(resp.choices) == 1
-        assert resp.choices[0].message.role == "assistant"
-        assert resp.usage is not None
-        assert (
-            resp.usage.total_tokens
-            == resp.usage.prompt_tokens + resp.usage.completion_tokens
-        )
-
-    @pytest.mark.expensive
-    def test_triggers_tool_use(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
-        """A forced ``web_fetch`` call carries the requested URL under a ``url`` key.
-
-        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
-        """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
-        tools: list[dict[str, object]] = [_WEB_FETCH_TOOL]
-        resp = openai_client.chat.completions.create(  # type: ignore[call-overload]
-            model=_CLAUDE_CHEAP,
-            messages=[
-                {
-                    "role": "user",
-                    "content": "Fetch https://example.com and tell me the title.",
-                }
-            ],
-            tools=tools,
-            tool_choice="required",
-            max_completion_tokens=1024,
-        )
-        tool_calls = resp.choices[0].message.tool_calls
-        assert tool_calls
-        tc = tool_calls[0]
-        assert tc.type == "function"
-        assert tc.id
-        assert resp.choices[0].finish_reason == "tool_calls"
-        assert tc.function.name == "web_fetch"
-        url = _tool_call_args(tc).get("url")
-        assert isinstance(url, str)
-        assert "example.com" in url
-
-    @pytest.mark.expensive
-    def test_multiturn_with_page_content(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
-        """Page HTML fed back as tool text ends the ``web_fetch`` turn with a summary.
-
-        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
-        """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
-        tools: list[dict[str, object]] = [_WEB_FETCH_TOOL]
-        user_prompt = "Fetch https://example.com and summarize it."
-
-        resp1 = openai_client.chat.completions.create(  # type: ignore[call-overload]
-            model=_CLAUDE_CHEAP,
-            messages=[{"role": "user", "content": user_prompt}],
-            tools=tools,
-            tool_choice="required",
-            max_completion_tokens=1024,
-        )
-        tool_calls = resp1.choices[0].message.tool_calls
-        assert tool_calls
-        tc = tool_calls[0]
-        assert tc.type == "function"
-        assert tc.id
-
-        page_html = (
-            "<html><head><title>Example Domain</title></head>"
-            "<body><h1>Example Domain</h1>"
-            "<p>This domain is for illustrative examples.</p>"
-            "</body></html>"
-        )
-        assistant_msg = resp1.choices[0].message
-        resp2 = openai_client.chat.completions.create(
-            model=_CLAUDE_CHEAP,
-            messages=[
-                {"role": "user", "content": user_prompt},
-                {
-                    "role": "assistant",
-                    "content": assistant_msg.content,
-                    "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments,
-                            },
-                        }
-                    ],
-                },
-                {"role": "tool", "tool_call_id": tc.id, "content": page_html},
-            ],
-            tools=tools,  # type: ignore[arg-type]
-            max_completion_tokens=1024,
-        )
-        assert resp2.choices[0].finish_reason == "stop"
-        content = resp2.choices[0].message.content
-        assert content
-        assert "example domain" in content.lower()
-        assert resp1.usage is not None
-        assert resp2.usage is not None
-        assert resp2.usage.prompt_tokens > resp1.usage.prompt_tokens, (
-            "Turn 2 must re-send the fetched page to the model"
-        )
-
-
-# ===========================================================================
 # Mixed server tools + custom tools
 # ===========================================================================
 
@@ -1928,10 +1578,13 @@ class TestAnthropicClaudeChatCompletions:
         """A reasoning stream is a ``chat.completion.chunk`` sequence led by a role-only delta.
 
         The gateway opens every stream with a synthetic ``delta={"role": "assistant"}`` chunk
-        before any content, and all chunks share the completion id.  Only the first 30
-        chunks are read: this test covers the envelope, not the end of the stream.
+        before any content, and all chunks share the completion id.  The response is bounded
+        by ``max_completion_tokens`` rather than by a chunk counter, so the whole stream is
+        consumed and the terminal chunk is observable.  That bound must stay above the
+        thinking budget ``reasoning_effort`` maps to, which Bedrock rejects otherwise.
 
         Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
+             https://platform.claude.com/docs/en/build-with-claude/extended-thinking
              stdapi/models/chat/_adapters/_openai_chat_completion.py:format_stream
         """
         if use_official_api:
@@ -1940,22 +1593,23 @@ class TestAnthropicClaudeChatCompletions:
             model=_CLAUDE_CHEAP,
             messages=[{"role": "user", "content": "Reply with OK."}],
             reasoning_effort="minimal",
-            max_completion_tokens=4096,
+            max_completion_tokens=2048,
             stream=True,
         )
 
         chunks = []
         accumulated_content = ""
+        finish_reasons = []
         for chunk in response:
             if isinstance(chunk, str) and chunk == "[DONE]":
                 break
             chunks.append(chunk)
-            if chunk.choices and len(chunk.choices) > 0:
+            if chunk.choices:
                 delta = chunk.choices[0].delta
-                if hasattr(delta, "content") and delta.content:
+                if delta.content:
                     accumulated_content += delta.content
-            if len(chunks) >= 30:
-                break
+                if chunk.choices[0].finish_reason is not None:
+                    finish_reasons.append(chunk.choices[0].finish_reason)
 
         assert len(chunks) > 0
         assert len(accumulated_content) > 0
@@ -1967,6 +1621,10 @@ class TestAnthropicClaudeChatCompletions:
         first_delta = chunks[0].choices[0].delta
         assert first_delta.role == "assistant"
         assert not first_delta.content, "the leading chunk carries the role only"
+        assert len(finish_reasons) == 1, (
+            f"exactly one terminal chunk is expected, got {finish_reasons}"
+        )
+        assert finish_reasons[0] in {"stop", "length"}
 
     def test_reasoning_effort_none_explicit_disable(
         self, openai_client: OpenAI, use_official_api: bool
@@ -2004,15 +1662,18 @@ class TestAnthropicClaudeChatCompletions:
         )
 
     @pytest.mark.expensive
-    @pytest.mark.parametrize("model", CLAUDE_ALL)
+    @pytest.mark.parametrize("model", CLAUDE_SWEEP)
     def test_reasoning_effort_none_explicit_disable_all_models(
         self, openai_client: OpenAI, use_official_api: bool, model: str
     ) -> None:
         """``reasoning_effort="none"`` is accepted by every Claude model, reasoner or not.
 
-        Absence of thinking is deliberately not asserted here: the Fable and Mythos
-        families always reason, so the gateway logs a warning and falls back to their
-        adaptive default instead of sending a disabled ``reasoning_config``.
+        The cheap Haiku model is excluded because
+        ``test_reasoning_effort_none_explicit_disable`` already issues that exact
+        request with a stricter assertion.  Absence of thinking is deliberately not
+        asserted here: the Fable and Mythos families always reason, so the gateway logs
+        a warning and falls back to their adaptive default instead of sending a disabled
+        ``reasoning_config``.
 
         Ref: stdapi/models/chat/anthropic_claude_fable_mythos.py:ChatModel
              https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html
@@ -2045,9 +1706,7 @@ class TestAnthropicClaudeChatCompletions:
 
     # --- Response structure fields ---
 
-    def test_response_id_format(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_response_id_format(self, envelope_completion: ChatCompletion) -> None:
         """The completion id is ``chatcmpl-`` followed by the gateway request id.
 
         Bedrock has no completion id of its own, so the gateway mints one: ``store`` is off
@@ -2056,18 +1715,12 @@ class TestAnthropicClaudeChatCompletions:
         Ref: https://developers.openai.com/api/reference/resources/chat.md
              stdapi/routes/openai_chat_completions.py:create_chat_completion
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
-        resp = openai_client.chat.completions.create(
-            model=_CLAUDE_CHEAP,
-            messages=[{"role": "user", "content": "Hi."}],
-            max_completion_tokens=50,
-        )
+        resp = envelope_completion
         assert resp.id.startswith("chatcmpl-")
         assert resp.id != "chatcmpl-", "the request id suffix must not be empty"
 
     def test_response_object_and_created_fields(
-        self, openai_client: OpenAI, use_official_api: bool
+        self, envelope_completion: ChatCompletion
     ) -> None:
         """``object`` is ``chat.completion`` and ``created`` is a Unix-seconds timestamp.
 
@@ -2077,13 +1730,7 @@ class TestAnthropicClaudeChatCompletions:
         Ref: https://developers.openai.com/api/reference/resources/chat.md
              stdapi/routes/openai_chat_completions.py:create_chat_completion
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
-        resp = openai_client.chat.completions.create(
-            model=_CLAUDE_CHEAP,
-            messages=[{"role": "user", "content": "Hi."}],
-            max_completion_tokens=50,
-        )
+        resp = envelope_completion
         assert resp.object == "chat.completion"
         assert isinstance(resp.created, int)
         assert 1_700_000_000 < resp.created < 4_000_000_000, (

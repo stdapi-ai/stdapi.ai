@@ -39,9 +39,17 @@ class TestAmazonTitanEmbeddings:
          stdapi/models/embedding/amazon_titan_embed.py:EmbeddingModel.embed_text
     """
 
+    @pytest.fixture(autouse=True)
+    def _skip_on_official_api(self, use_official_api: bool) -> None:
+        """Skip the whole class when the target is the official OpenAI API."""
+        if use_official_api:
+            pytest.skip(
+                "Amazon Titan models are not available on the official OpenAI API"
+            )
+
     @pytest.mark.parametrize("model_id", TITAN_TEXT_SAMPLE)
     def test_text_extra_params_normalize(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
+        self, openai_client: OpenAI, model_id: str
     ) -> None:
         """The Titan-only ``normalize`` body field is accepted and yields a unit vector.
 
@@ -52,10 +60,6 @@ class TestAmazonTitanEmbeddings:
         Ref: https://stdapi.ai/api_openai_embeddings/
              stdapi/aws_bedrock.py:get_extra_model_parameters
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Titan models are not available on the official OpenAI API"
-            )
         response = openai_client.embeddings.create(
             model=model_id,
             input="Hello from Titan text embeddings.",
@@ -73,9 +77,7 @@ class TestAmazonTitanEmbeddings:
         )
 
     @pytest.mark.parametrize("model_id", TITAN_TEXT_ALL)
-    def test_text_single(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
-    ) -> None:
+    def test_text_single(self, openai_client: OpenAI, model_id: str) -> None:
         """Titan text models return their native vector width and bill input tokens.
 
         The width is per family and not negotiable without ``dimensions``: Titan Text
@@ -85,10 +87,6 @@ class TestAmazonTitanEmbeddings:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
              stdapi/models/embedding/amazon_titan_embed.py:EmbeddingModel.embed_text
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Titan models are not available on the official OpenAI API"
-            )
         response = openai_client.embeddings.create(
             model=model_id, input="Hello from Titan text embeddings."
         )
@@ -103,9 +101,7 @@ class TestAmazonTitanEmbeddings:
         assert response.usage.prompt_tokens > 0, "no input tokens billed for text input"
 
     @pytest.mark.parametrize("model_id", TITAN_TEXT_SAMPLE)
-    def test_text_dimensions(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
-    ) -> None:
+    def test_text_dimensions(self, openai_client: OpenAI, model_id: str) -> None:
         """``dimensions=256`` is forwarded to Titan Text V2 and shortens the vector.
 
         Titan Text Embeddings V2 accepts only 1024 (default), 512 and 256; the
@@ -115,11 +111,6 @@ class TestAmazonTitanEmbeddings:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
              stdapi/models/embedding/amazon_titan_embed.py:EmbeddingModel.embed_text
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Titan models are not available on the official OpenAI API"
-            )
-
         dimensions = 256
         response = openai_client.embeddings.create(
             model=model_id, input="Dimensions parameter test.", dimensions=dimensions
@@ -134,11 +125,7 @@ class TestAmazonTitanEmbeddings:
 
     @pytest.mark.parametrize("model_id", TITAN_IMAGE_SAMPLE)
     def test_image_single(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file_base64: str,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file_base64: str, model_id: str
     ) -> None:
         """A PNG data URI embeds on Titan Multimodal G1 as a 1024-dimension vector.
 
@@ -149,10 +136,6 @@ class TestAmazonTitanEmbeddings:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/titan-multiemb-models.html
              stdapi/models/embedding/amazon_titan_embed.py:EmbeddingModel._invoke
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Titan models are not available on the official OpenAI API"
-            )
         response = openai_client.embeddings.create(
             model=model_id, input=sample_image_file_base64
         )

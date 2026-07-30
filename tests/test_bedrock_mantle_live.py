@@ -31,6 +31,10 @@ from openai import BadRequestError, NotFoundError, OpenAI
 
 from tests.conftest import logged_usage_entries
 
+#: The learned-routing caches are process-global, so these tests must not be split
+#: across xdist workers that would each learn a different routing surface.
+pytestmark = pytest.mark.xdist_group("mantle_live")
+
 if TYPE_CHECKING:
     from anthropic import Anthropic
     from starlette.testclient import TestClient as TestClientType
@@ -318,15 +322,25 @@ class TestMantleChatCompletions:
         assert call.type == "function"
         assert call.function.name == "get_weather"
 
-    def test_luna_converted_to_responses(self, openai_client: OpenAI) -> None:
-        """A chat completion on a Responses-only model is served via Responses.
+    @pytest.mark.slow
+    def test_luna_converted_to_responses(
+        self,
+        openai_client: OpenAI,
+        test_client: TestClientType | None,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """A chat completion on a Responses-only model is served via Responses, and billed once.
 
         Luna serves the Responses API only, so the request is translated and the
         Responses usage object (``input_tokens``/``output_tokens``) is mapped
-        back onto Chat Completions' ``prompt_tokens``/``completion_tokens``.
+        back onto Chat Completions' ``prompt_tokens``/``completion_tokens``. The
+        server-side billing assertions ride on this same request: Luna is the most
+        expensive model in the suite, so the conversion is paid for exactly once.
 
         Ref: stdapi/models/chat/_mantle/_convert.py:_chat_usage_from_responses
+             stdapi/aws_bedrock_mantle.py:usage_from_response
         """
+        capfd.readouterr()
         response = openai_client.chat.completions.create(
             model=_LUNA,
             messages=[{"role": "user", "content": "Reply with the single word: hi"}],
@@ -340,7 +354,18 @@ class TestMantleChatCompletions:
         assert response.usage.total_tokens >= (
             response.usage.prompt_tokens + response.usage.completion_tokens
         )
+        if test_client is None:
+            return
+        # OpenAI-shaped input counts include cached tokens, so the extraction
+        # subtracts them before billing.
+        entries = logged_usage_entries(
+            capfd.readouterr().out, service=_MANTLE_USAGE_SERVICE, model=_LUNA
+        )
+        assert len(entries) == 1, "Usage must be recorded exactly once"
+        assert entries[0]["input_tokens"] > 0
+        assert entries[0]["output_tokens"] > 0
 
+    @pytest.mark.slow
     def test_luna_converted_streaming(self, openai_client: OpenAI) -> None:
         """A streamed chat completion on a Responses-only model converts back.
 
@@ -421,35 +446,6 @@ class TestMantleRecordedBilling:
     Ref: stdapi/aws_bedrock_mantle.py:usage_from_response
          stdapi/aws_bedrock_mantle.py:usage_from_chat_completion
     """
-
-    @pytest.mark.slow
-    def test_luna_conversion_records_usage(
-        self,
-        openai_client: OpenAI,
-        test_client: TestClientType | None,
-        capfd: pytest.CaptureFixture[str],
-    ) -> None:
-        """A non-streaming chat-to-responses conversion records billed usage once.
-
-        OpenAI-shaped input counts include cached tokens, so the extraction
-        subtracts them before billing; a single entry with non-zero counts is the
-        observable result.
-        """
-        if test_client is None:
-            pytest.skip("Requires local test server")
-        capfd.readouterr()
-        response = openai_client.chat.completions.create(
-            model=_LUNA,
-            messages=[{"role": "user", "content": "Reply with the single word: hi"}],
-            max_completion_tokens=_LUNA_MAX_TOKENS,
-        )
-        assert response.usage is not None
-        entries = logged_usage_entries(
-            capfd.readouterr().out, service=_MANTLE_USAGE_SERVICE, model=_LUNA
-        )
-        assert len(entries) == 1, "Usage must be recorded exactly once"
-        assert entries[0]["input_tokens"] > 0
-        assert entries[0]["output_tokens"] > 0
 
     def test_gemma3_streamed_conversion_records_usage(
         self,
@@ -694,7 +690,10 @@ class TestMantleResponses:
         assert ids.pop().startswith("resp-")
 
     def test_gemma3_store_dropped_on_api_fallback(
-        self, openai_client: OpenAI, test_client: TestClientType | None
+        self,
+        openai_client: OpenAI,
+        test_client: TestClientType | None,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """store=True on a Responses-to-chat fallback is served without storage.
 
@@ -710,8 +709,9 @@ class TestMantleResponses:
         from stdapi.aws_bedrock_mantle import decode_mantle_response_id  # noqa: PLC0415
         from stdapi.models.chat._mantle import _default  # noqa: PLC0415
 
-        # Force the optimistic Responses probe so the fallback happens live.
-        _default._LEARNED_APIS.pop(_GEMMA3, None)  # noqa: SLF001
+        # Force the optimistic Responses probe so the fallback happens live; the
+        # cache is process-global, so the deletion is undone after the test.
+        monkeypatch.delitem(_default._LEARNED_APIS, _GEMMA3, raising=False)  # noqa: SLF001
         response = openai_client.responses.create(
             model=_GEMMA3, input="Say OK.", store=True, max_output_tokens=64
         )
@@ -741,7 +741,10 @@ class TestMantleResponses:
             openai_client.responses.delete(first.id)
 
     def test_gemma4_surface_self_heal(
-        self, openai_client: OpenAI, test_client: TestClientType | None
+        self,
+        openai_client: OpenAI,
+        test_client: TestClientType | None,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A stale learned routing surface self-heals on the next request.
 
@@ -757,7 +760,7 @@ class TestMantleResponses:
             pytest.skip("Requires local test server")
         from stdapi.models.chat._mantle import _default  # noqa: PLC0415
 
-        _default._LEARNED_SURFACE[_GEMMA4] = "/v1"  # noqa: SLF001 (poisoned)
+        monkeypatch.setitem(_default._LEARNED_SURFACE, _GEMMA4, "/v1")  # noqa: SLF001
         response = openai_client.chat.completions.create(
             model=_GEMMA4,
             messages=[{"role": "user", "content": "Say OK."}],

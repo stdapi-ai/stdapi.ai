@@ -24,7 +24,6 @@ import pytest
 from openai import APIStatusError, BadRequestError, OpenAI
 from openai import NotFoundError as OpenAINotFoundError
 from openai.types import FileObject
-from starlette.testclient import TestClient
 
 from stdapi.api_errors import ApiError
 from stdapi.config import SETTINGS
@@ -33,6 +32,7 @@ from stdapi.routes import openai_files as openai_files_routes
 
 if TYPE_CHECKING:
     import httpx
+    from starlette.testclient import TestClient
 
 #: Minimal valid PDF bytes for testing document endpoints.
 _MINIMAL_PDF: bytes = (
@@ -854,14 +854,7 @@ class TestOpenAIFilesMalformedJsonBody:
          stdapi/utils.py:validation_error_handler
     """
 
-    @pytest.fixture
-    def client(self, api_key: str) -> TestClient:
-        """Test client without lifespan (no AWS startup), pre-authenticated."""
-        from stdapi.main import app  # noqa: PLC0415
-
-        return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
-
-    def test_malformed_json_body_is_rejected(self, client: TestClient) -> None:
+    def test_malformed_json_body_is_rejected(self, app_client: TestClient) -> None:
         """A malformed JSON body is rejected with 400 and a JSON decode error, not a 500.
 
         The body is read with ``Request.json()``, so the ``JSONDecodeError`` has
@@ -870,7 +863,7 @@ class TestOpenAIFilesMalformedJsonBody:
 
         Ref: stdapi/utils.py:validation_error_handler
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/files", content=b"{", headers={"content-type": "application/json"}
         )
         assert response.status_code == 400, response.text
@@ -892,60 +885,57 @@ class TestOpenAIFilesExpiresAfterBracketNotation:
          stdapi/routes/openai_files.py:upload
     """
 
-    @pytest.fixture
-    def client(self, api_key: str) -> TestClient:
-        """Test client without lifespan (no AWS startup), pre-authenticated."""
-        from stdapi.main import app  # noqa: PLC0415
-
-        return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
-
     @staticmethod
-    def _upload(client: TestClient, seconds_value: str) -> httpx.Response:
+    def _upload(app_client: TestClient, seconds_value: str) -> httpx.Response:
         """POST a minimal file with a bracket-notation ``expires_after[seconds]`` field."""
         return cast(
             "httpx.Response",
-            client.post(
+            app_client.post(
                 "/v1/files",
                 files={"file": ("t.txt", b"hello", "text/plain")},
                 data={"purpose": "assistants", "expires_after[seconds]": seconds_value},
             ),
         )
 
-    def test_bracket_seconds_below_minimum_rejected(self, client: TestClient) -> None:
+    def test_bracket_seconds_below_minimum_rejected(
+        self, app_client: TestClient
+    ) -> None:
         """59 seconds (below the 3600s minimum) is rejected with 400, not accepted.
 
         Ref: stdapi/routes/openai_files.py:upload
         """
-        response = self._upload(client, "59")
+        response = self._upload(app_client, "59")
         assert response.status_code == 400, response.text
         error = response.json()["error"]
         assert error["type"] == "invalid_request_error"
         assert "3600" in error["message"], error
 
-    def test_bracket_seconds_above_maximum_rejected(self, client: TestClient) -> None:
+    def test_bracket_seconds_above_maximum_rejected(
+        self, app_client: TestClient
+    ) -> None:
         """99999999 seconds (above the 2592000s maximum) is rejected with 400.
 
         Ref: stdapi/routes/openai_files.py:upload
         """
-        response = self._upload(client, "99999999")
+        response = self._upload(app_client, "99999999")
         assert response.status_code == 400, response.text
         error = response.json()["error"]
         assert error["type"] == "invalid_request_error"
         assert "2592000" in error["message"], error
 
-    def test_bracket_seconds_non_numeric_rejected(self, client: TestClient) -> None:
+    def test_bracket_seconds_non_numeric_rejected(self, app_client: TestClient) -> None:
         """A non-numeric value is rejected with 400 and a JSON error envelope, not a bare 500.
 
         Ref: stdapi/routes/openai_files.py:upload
         """
-        response = self._upload(client, "not_a_number")
+        response = self._upload(app_client, "not_a_number")
         assert response.status_code == 400, response.text
         error = response.json()["error"]
         assert error["type"] == "invalid_request_error"
         assert "integer" in error["message"].lower(), error
 
     def test_bracket_seconds_valid_value_accepted(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A valid bracket-notation value (7200s) is still accepted (regression guard).
 
@@ -969,7 +959,7 @@ class TestOpenAIFilesExpiresAfterBracketNotation:
             )
 
         monkeypatch.setattr(openai_files_routes, "upload_file", fake_upload_file)
-        response = self._upload(client, "7200")
+        response = self._upload(app_client, "7200")
         assert response.status_code == 200, response.text
         assert captured["expires_after"] == 7200
         assert response.json()["expires_at"] is not None
@@ -1024,13 +1014,6 @@ class TestOpenAIFilesBatchDefaultExpiry:
          stdapi/routes/openai_files.py:upload
     """
 
-    @pytest.fixture
-    def client(self, api_key: str) -> TestClient:
-        """Test client without lifespan (no AWS startup), pre-authenticated."""
-        from stdapi.main import app  # noqa: PLC0415
-
-        return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
-
     @staticmethod
     def _fake_upload_file(captured: dict[str, Any]) -> Any:  # noqa: ANN401
         """Build a fake ``upload_file`` that records the ``expires_after`` it receives."""
@@ -1053,7 +1036,7 @@ class TestOpenAIFilesBatchDefaultExpiry:
         return fake_upload_file
 
     def test_multipart_batch_purpose_gets_default_expiry(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A multipart upload with purpose=batch and no expires_after gets a 30-day TTL.
 
@@ -1063,7 +1046,7 @@ class TestOpenAIFilesBatchDefaultExpiry:
         monkeypatch.setattr(
             openai_files_routes, "upload_file", self._fake_upload_file(captured)
         )
-        response = client.post(
+        response = app_client.post(
             "/v1/files",
             files={"file": ("t.txt", b"hello", "text/plain")},
             data={"purpose": "batch"},
@@ -1075,7 +1058,7 @@ class TestOpenAIFilesBatchDefaultExpiry:
         assert response.json()["expires_at"] is not None
 
     def test_multipart_non_batch_purpose_has_no_default_expiry(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A multipart upload with purpose=assistants and no expires_after never expires.
 
@@ -1088,7 +1071,7 @@ class TestOpenAIFilesBatchDefaultExpiry:
         monkeypatch.setattr(
             openai_files_routes, "upload_file", self._fake_upload_file(captured)
         )
-        response = client.post(
+        response = app_client.post(
             "/v1/files",
             files={"file": ("t.txt", b"hello", "text/plain")},
             data={"purpose": "assistants"},
@@ -1098,7 +1081,7 @@ class TestOpenAIFilesBatchDefaultExpiry:
         assert "expires_at" not in response.json()
 
     def test_json_body_batch_purpose_gets_default_expiry(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A JSON-body upload with purpose=batch and no expires_after gets a 30-day TTL.
 
@@ -1108,7 +1091,7 @@ class TestOpenAIFilesBatchDefaultExpiry:
         monkeypatch.setattr(
             openai_files_routes, "upload_file", self._fake_upload_file(captured)
         )
-        response = client.post(
+        response = app_client.post(
             "/v1/files",
             json={"file": "data:text/plain;base64,aGVsbG8=", "purpose": "batch"},
         )
@@ -1381,15 +1364,19 @@ class TestOpenAIUploads:
             mime_type="application/octet-stream",
             purpose="assistants",
         )
-        part = openai_client.uploads.parts.create(
-            upload_id=upload.id, data=io.BytesIO(_PART_A)
-        )
-        with pytest.raises(BadRequestError) as exc_info:
-            openai_client.uploads.complete(upload_id=upload.id, part_ids=[part.id])
-        message = str(_error_envelope(exc_info.value, 400)["message"])
-        assert "999999" in message, message
-        assert str(len(_PART_A)) in message, message
-        openai_client.uploads.cancel(upload.id)
+        try:
+            part = openai_client.uploads.parts.create(
+                upload_id=upload.id, data=io.BytesIO(_PART_A)
+            )
+            with pytest.raises(BadRequestError) as exc_info:
+                openai_client.uploads.complete(upload_id=upload.id, part_ids=[part.id])
+            message = str(_error_envelope(exc_info.value, 400)["message"])
+            assert "999999" in message, message
+            assert str(len(_PART_A)) in message, message
+        finally:
+            # AWS bills the uploaded parts until the multipart upload is aborted.
+            with suppress(OpenAINotFoundError, BadRequestError):
+                openai_client.uploads.cancel(upload.id)
 
     def test_complete_unknown_part_id_rejected(self, openai_client: OpenAI) -> None:
         """Completing with a part ID that was never added is rejected with 400.
@@ -1558,6 +1545,7 @@ class TestOpenAIUploadsJsonBody:
             mime_type="application/octet-stream",
             purpose="assistants",
         )
+        file_id: str | None = None
         try:
             response = http_client.post(
                 f"{openai_client.base_url}uploads/{upload.id}/parts",
@@ -1578,9 +1566,14 @@ class TestOpenAIUploadsJsonBody:
             assert completed.file.bytes == len(_PART_A), (
                 "the base64 payload must be decoded before it reaches S3"
             )
+            file_id = completed.file.id
         finally:
             with suppress(OpenAINotFoundError, BadRequestError):
                 openai_client.uploads.cancel(upload.id)
+            # A completed upload leaves a 5 MiB S3 object behind; delete it too.
+            if file_id is not None:
+                with suppress(OpenAINotFoundError):
+                    openai_client.files.delete(file_id)
 
 
 class TestOpenAIFilesJsonBody:

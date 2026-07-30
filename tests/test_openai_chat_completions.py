@@ -8,14 +8,16 @@ Ref: https://developers.openai.com/api/reference/resources/chat/subresources/com
 import base64
 import json as _json
 from asyncio import sleep
+from contextlib import contextmanager
 from secrets import token_hex
-from time import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
+import httpx
 import pytest
 from aiobotocore.session import get_session
-from openai import APIError, BadRequestError, InternalServerError, NotFoundError, OpenAI
+from openai import APIError, BadRequestError, NotFoundError, OpenAI
 from pybase64 import b64encode
+from pydantic import ValidationError
 
 from stdapi.config import SETTINGS
 from stdapi.models.chat._adapters._openai_chat_completion import (
@@ -29,19 +31,84 @@ from stdapi.types.openai_chat_completions import CompletionCreateParams
 from tests.conftest import logged_usage_entries
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterable
+    from collections.abc import AsyncIterator, Iterable, Iterator
 
+    from openai.types.chat import ChatCompletion
     from starlette.testclient import TestClient as TestClientType
 
 
-@pytest.fixture(scope="session")
-def _png_data_url(sample_image_file: bytes) -> str:
-    """Return the sample image as a ``data:image/png;base64,`` URL.
+#: Tool declaration reused verbatim so a repeated request can hit the prompt cache.
+_CACHE_TOOLS: list[Any] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_database",
+            "description": "Search a database for information",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"},
+                    "limit": {"type": "integer", "description": "Maximum results"},
+                },
+                "required": ["query"],
+            },
+        },
+    }
+]
 
-    Returns:
-        The data URL of the sample PNG image.
+#: System-plus-user prompt reused verbatim so a repeated request can hit the cache.
+_CACHE_MESSAGES: list[Any] = [
+    {
+        "role": "system",
+        "content": (
+            "You are an AI assistant. You are a highly capable, thoughtful, "
+            "and nuanced conversational AI with strong reasoning abilities. "
+            "Your purpose is to be helpful, harmless, and honest in all interactions."
+        ),
+    },
+    {"role": "user", "content": "What is 2 + 2?"},
+]
+
+#: Third-party HTTPS image used to exercise the gateway's own image downloader.
+_REMOTE_IMAGE_URL = (
+    "https://raw.githubusercontent.com/JGoutin/asus-s14na-u12-uefi/"
+    "refs/heads/master/data/block_diagram.png"
+)
+
+
+@contextmanager
+def _xfail_on_invalid_tool_use() -> Iterator[None]:
+    """Xfail instead of erroring when the model emits a malformed ``toolUse`` block.
+
+    Bedrock surfaces that model-side failure as a 500 (or, mid-stream, as a relayed
+    ``APIError``), which is not something the gateway can prevent or the test can
+    retry away.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
     """
-    return f"data:image/png;base64,{b64encode(sample_image_file).decode('utf-8')}"
+    try:
+        yield
+    except APIError as exc:
+        if "Model produced invalid sequence as part of ToolUse" in str(exc):
+            pytest.xfail(str(exc))
+        raise
+
+
+@pytest.fixture(scope="module")
+def envelope_completion(openai_client: OpenAI, chat_model: str) -> ChatCompletion:
+    """One cheap completion shared by the request-independent envelope assertions.
+
+    ``id``, ``object`` and ``created`` are minted by the gateway rather than by the
+    model, so a single billable call is enough to assert all of them.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat.md
+         stdapi/routes/openai_chat_completions.py:create_chat_completion
+    """
+    return openai_client.chat.completions.create(
+        model=chat_model,
+        messages=[{"role": "user", "content": "Say OK."}],
+        max_completion_tokens=16,
+    )
 
 
 def _gather_legacy_stream_info(
@@ -60,7 +127,7 @@ def _gather_legacy_stream_info(
     args_fragments: list[str] = []
     has_finish = False
 
-    for idx, chunk in enumerate(response):
+    for chunk in response:
         if isinstance(chunk, str) and chunk == "[DONE]":
             break
         chunks.append(chunk)
@@ -75,8 +142,6 @@ def _gather_legacy_stream_info(
                     args_fragments.append(fc.arguments)
             if c0.finish_reason is not None:
                 has_finish = True
-        if idx >= 24:
-            break
 
     return chunks, saw_function_delta, args_fragments, has_finish
 
@@ -208,7 +273,9 @@ class TestChatCompletions:
         The gateway emits a synthetic first chunk carrying
         ``delta={"role": "assistant"}`` before relaying any Bedrock event; every
         chunk repeats the same completion id and the ``chat.completion.chunk``
-        object type.
+        object type.  The answer is bounded with ``max_completion_tokens`` rather
+        than a chunk counter, so the whole stream is consumed and the single
+        terminal chunk is observable.
 
         Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
              stdapi/models/chat/_adapters/_openai_chat_completion.py:format_stream
@@ -216,25 +283,25 @@ class TestChatCompletions:
         response = openai_client.chat.completions.create(
             model=chat_model,
             messages=[{"role": "user", "content": "Count to 5 slowly."}],
+            max_completion_tokens=64,
             stream=True,
         )
 
         chunks = []
         accumulated_content = ""
+        finish_reasons = []
 
         for chunk in response:
             # Skip the final "[DONE]" string message
             if isinstance(chunk, str) and chunk == "[DONE]":
                 break
             chunks.append(chunk)
-            if chunk.choices and len(chunk.choices) > 0:
+            if chunk.choices:
                 delta = chunk.choices[0].delta
-                if hasattr(delta, "content") and delta.content:
+                if delta.content:
                     accumulated_content += delta.content
-
-            # Limit chunks for efficiency
-            if len(chunks) >= 20:
-                break
+                if chunk.choices[0].finish_reason is not None:
+                    finish_reasons.append(chunk.choices[0].finish_reason)
 
         # Validate streaming behavior
         assert len(chunks) > 0, "No streaming chunks received"
@@ -246,6 +313,10 @@ class TestChatCompletions:
         for chunk in chunks:
             assert chunk.object == "chat.completion.chunk"
             assert chunk.id == chunks[0].id, "All chunks share the completion id"
+        assert len(finish_reasons) == 1, (
+            f"exactly one terminal chunk is expected, got {finish_reasons}"
+        )
+        assert finish_reasons[0] in {"stop", "length"}
 
     def test_stop_sequences_functionality(
         self, openai_client: OpenAI, chat_legacy_model: str
@@ -570,9 +641,7 @@ class TestChatCompletions:
             "A forced legacy function must stream function_call deltas"
         )
         assert getattr(chunks[0], "object", None) == "chat.completion.chunk"
-        # The collector stops after 25 chunks, so a finish chunk is only
-        # guaranteed when the stream ended before that cap.
-        assert has_finish or len(chunks) == 25
+        assert has_finish, "the stream must be consumed to its terminal chunk"
 
         if args_fragments:
             args_joined = "".join(args_fragments)
@@ -667,20 +736,44 @@ class TestChatCompletions:
         assert error_body["type"] == "invalid_request_error"
         assert "temperature" in error_body["message"].lower()
 
-    def test_invalid_top_p_error(self, openai_client: OpenAI, chat_model: str) -> None:
-        """``top_p`` above 1 is rejected with a 400.
+    @pytest.mark.parametrize(
+        ("kwargs", "message_token"),
+        [
+            pytest.param({"top_p": 1.5}, "top", id="top_p"),
+            pytest.param({"max_completion_tokens": 0}, "max_", id="max_tokens"),
+            pytest.param(
+                {"frequency_penalty": 2.5}, "frequency_penalty", id="frequency_penalty"
+            ),
+            pytest.param(
+                {"presence_penalty": -2.5}, "presence_penalty", id="presence_penalty"
+            ),
+            pytest.param({"logit_bias": {"100": 105}}, "bias", id="logit_bias"),
+        ],
+    )
+    def test_out_of_range_parameter_error(
+        self,
+        openai_client: OpenAI,
+        chat_model: str,
+        kwargs: dict[str, Any],
+        message_token: str,
+    ) -> None:
+        """An out-of-range sampling parameter comes back as a 400 naming the field.
 
-        Bedrock's ``inferenceConfig.topP`` caps at 1, so the rejection comes from
-        Bedrock rather than from the gateway's own field constraints.
+        Only ``max_completion_tokens`` is bounded by the gateway itself (declared
+        ``ge=1``).  ``top_p`` is clamped by Bedrock's ``inferenceConfig``, while the
+        penalties and ``logit_bias`` travel in ``additionalModelRequestFields`` and
+        are rejected by the model provider — all three paths must surface as the
+        same OpenAI 400 envelope.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters.html
              stdapi/aws_bedrock.py:set_inference_configuration
         """
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.chat.completions.create(
                 model=chat_model,
                 messages=[{"role": "user", "content": "Hello"}],
-                top_p=1.5,
+                **kwargs,
             )
 
         error = exc_info.value
@@ -688,111 +781,7 @@ class TestChatCompletions:
         error_body = error.body
         assert isinstance(error_body, dict)
         assert error_body["type"] == "invalid_request_error"
-        assert "top" in error_body["message"].lower()
-
-    def test_invalid_max_tokens_error(
-        self, openai_client: OpenAI, chat_model: str
-    ) -> None:
-        """``max_completion_tokens=0`` is rejected with a 400.
-
-        The field is declared ``ge=1``, so the request never reaches Bedrock and
-        the error names the offending field.
-
-        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
-             stdapi/types/openai_chat_completions.py:CompletionCreateParams
-        """
-        with pytest.raises(BadRequestError) as exc_info:
-            openai_client.chat.completions.create(
-                model=chat_model,
-                messages=[{"role": "user", "content": "Hello"}],
-                max_completion_tokens=0,
-            )
-
-        error = exc_info.value
-        assert error.status_code == 400
-        error_body = error.body
-        assert isinstance(error_body, dict)
-        assert error_body["type"] == "invalid_request_error"
-        assert "max_" in error_body["message"].lower()
-
-    def test_invalid_frequency_penalty_error(
-        self, openai_client: OpenAI, chat_model: str
-    ) -> None:
-        """An out-of-range ``frequency_penalty`` is rejected with a 400.
-
-        ``frequency_penalty`` has no Bedrock ``inferenceConfig`` equivalent: it is
-        forwarded as an ``additionalModelRequestFields`` entry, so the range is
-        enforced by the model provider and reported back as a 400 naming the field.
-
-        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters.html
-             stdapi/aws_bedrock.py:set_inference_configuration
-        """
-        with pytest.raises(BadRequestError) as exc_info:
-            openai_client.chat.completions.create(
-                model=chat_model,
-                messages=[{"role": "user", "content": "Hello"}],
-                frequency_penalty=2.5,
-            )
-
-        error = exc_info.value
-        assert error.status_code == 400
-        error_body = error.body
-        assert isinstance(error_body, dict)
-        assert error_body["type"] == "invalid_request_error"
-        assert "frequency_penalty" in error_body["message"].lower()
-
-    def test_invalid_presence_penalty_error(
-        self, openai_client: OpenAI, chat_model: str
-    ) -> None:
-        """An out-of-range ``presence_penalty`` is rejected with a 400.
-
-        Like ``frequency_penalty`` it travels in
-        ``additionalModelRequestFields``, so the model provider rejects the value
-        and the gateway reports it as a 400 naming the field.
-
-        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters.html
-             stdapi/aws_bedrock.py:set_inference_configuration
-        """
-        with pytest.raises(BadRequestError) as exc_info:
-            openai_client.chat.completions.create(
-                model=chat_model,
-                messages=[{"role": "user", "content": "Hello"}],
-                presence_penalty=-2.5,
-            )
-
-        error = exc_info.value
-        assert error.status_code == 400
-        error_body = error.body
-        assert isinstance(error_body, dict)
-        assert error_body["type"] == "invalid_request_error"
-        assert "presence_penalty" in error_body["message"].lower()
-
-    def test_invalid_logit_bias_error(
-        self, openai_client: OpenAI, chat_model: str
-    ) -> None:
-        """An out-of-range ``logit_bias`` weight is rejected with a 400.
-
-        ``logit_bias`` is forwarded verbatim in
-        ``additionalModelRequestFields``; only the model provider knows the legal
-        bias range, so the rejection comes from the model and the gateway turns it
-        into a 400 mentioning the bias.
-
-        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters.html
-             stdapi/aws_bedrock.py:set_inference_configuration
-        """
-        with pytest.raises(BadRequestError) as exc_info:
-            openai_client.chat.completions.create(
-                model=chat_model,
-                messages=[{"role": "user", "content": "Hello"}],
-                logit_bias={"100": 105},
-            )
-
-        error = exc_info.value
-        assert error.status_code == 400
-        error_body = error.body
-        assert isinstance(error_body, dict)
-        assert error_body["type"] == "invalid_request_error"
-        assert "bias" in error_body["message"].lower()
+        assert message_token in error_body["message"].lower()
 
     def test_streaming_with_tool_calls(
         self, openai_client: OpenAI, chat_vision_model: str
@@ -1379,10 +1368,22 @@ class TestChatCompletions:
         inline bytes or S3, so the gateway downloads the image itself and converts
         it into a Bedrock ``image`` content block.
 
+        The URL is fetched here first: a third-party outage or a repository rename
+        must skip rather than report a gateway failure.
+
         Ref: https://developers.openai.com/api/reference/resources/chat.md
              https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlock.html
              stdapi/input_file.py:InputFile.to_bedrock_content_block
         """
+        try:
+            probe = httpx.get(_REMOTE_IMAGE_URL, timeout=15, follow_redirects=True)
+            probe.raise_for_status()
+        except httpx.HTTPError as exc:
+            pytest.skip(f"Remote image is unreachable: {exc}")
+        assert probe.headers["content-type"].startswith("image/"), (
+            "the fixture URL must still serve an image"
+        )
+
         response = openai_client.chat.completions.create(
             model=chat_vision_model,
             messages=[
@@ -1390,12 +1391,7 @@ class TestChatCompletions:
                     "role": "user",
                     "content": [
                         {"type": "text", "text": "What is in this image?"},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "https://raw.githubusercontent.com/JGoutin/asus-s14na-u12-uefi/refs/heads/master/data/block_diagram.png"
-                            },
-                        },
+                        {"type": "image_url", "image_url": {"url": _REMOTE_IMAGE_URL}},
                     ],
                 }
             ],
@@ -1825,95 +1821,63 @@ class TestChatCompletions:
             "The rejection must come from the model, not from request validation"
         )
 
-    def test_unsupported_verbosity_error(
-        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
-    ) -> None:
-        """``verbosity`` is refused up front as an unsupported parameter.
-
-        It is one of the five upstream-documented parameters the gateway rejects
-        outright, so the 400 carries the ``unsupported_parameter`` code and names
-        the offending field in ``param``.
-
-        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
-             stdapi/types/openai_chat_completions.py:CompletionCreateParams._UNSUPPORTED
-        """
-        if use_official_api:
-            pytest.skip("Unsupported fields are project-specific here")
-        with pytest.raises(BadRequestError) as exc_info:
-            openai_client.chat.completions.create(
-                model=chat_model,
-                messages=[{"role": "user", "content": "Hi"}],
-                verbosity="high",
-            )
-        assert exc_info.value.status_code == 400
-        body = exc_info.value.body
-        assert isinstance(body, dict)
-        assert body["type"] == "invalid_request_error"
-        assert body["code"] == "unsupported_parameter"
-        assert body["param"] == "verbosity"
-        assert "unsupported parameter" in body["message"].lower()
-        assert body.keys() >= {"message", "type", "param", "code"}, (
-            "The gateway envelope always carries all four keys"
-        )
-
-    def test_unsupported_web_search_options_error(
-        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
-    ) -> None:
-        """``web_search_options`` is refused up front as an unsupported parameter.
-
-        Chat Completions has no server-side web-search tool on this backend, so the
-        whole option object is rejected instead of being ignored.
-
-        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
-             stdapi/types/openai_chat_completions.py:CompletionCreateParams._UNSUPPORTED
-        """
-        if use_official_api:
-            pytest.skip("Unsupported fields are project-specific here")
-        with pytest.raises(BadRequestError) as exc_info:
-            openai_client.chat.completions.create(
-                model=chat_model,
-                messages=[{"role": "user", "content": "Hi"}],
-                web_search_options={
+    @pytest.mark.parametrize(
+        ("param", "value"),
+        [
+            pytest.param("verbosity", "high", id="verbosity"),
+            pytest.param(
+                "web_search_options",
+                {
                     "search_context_size": "low",
                     "user_location": {
                         "type": "approximate",
                         "approximate": {"city": "x", "country": "US"},
                     },
                 },
-            )
-        assert exc_info.value.status_code == 400
-        body = exc_info.value.body
-        assert isinstance(body, dict)
-        assert body["type"] == "invalid_request_error"
-        assert body["code"] == "unsupported_parameter"
-        assert body["param"] == "web_search_options"
-
-    def test_unsupported_prediction_error(
-        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
+                id="web_search_options",
+            ),
+            pytest.param(
+                "prediction", {"type": "content", "content": "abc"}, id="prediction"
+            ),
+        ],
+    )
+    def test_unsupported_parameter_error(
+        self,
+        openai_client: OpenAI,
+        chat_model: str,
+        use_official_api: bool,
+        param: str,
+        value: object,
     ) -> None:
-        """``prediction`` is refused up front as an unsupported parameter.
+        """Blocklisted upstream parameters are refused up front, naming the field.
 
-        Predicted Outputs is a latency optimization with no Bedrock counterpart, so
-        the gateway rejects it rather than dropping it and silently billing the
-        rejected prediction tokens.
+        ``verbosity``, ``web_search_options`` and ``prediction`` are documented by
+        OpenAI but have no Bedrock counterpart, so the gateway rejects them rather
+        than ignoring them — dropping ``prediction`` in particular would still bill
+        the rejected prediction tokens.
 
-        Ref: https://developers.openai.com/api/docs/guides/predicted-outputs
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+             https://developers.openai.com/api/docs/guides/predicted-outputs
              stdapi/types/openai_chat_completions.py:CompletionCreateParams._UNSUPPORTED
         """
         if use_official_api:
             pytest.skip("Unsupported fields are project-specific here")
         with pytest.raises(BadRequestError) as exc_info:
-            openai_client.chat.completions.create(
+            openai_client.chat.completions.create(  # type: ignore[call-overload]
                 model=chat_model,
                 messages=[{"role": "user", "content": "Hi"}],
-                prediction={"type": "content", "content": "abc"},
+                **{param: value},
             )
         assert exc_info.value.status_code == 400
         body = exc_info.value.body
         assert isinstance(body, dict)
         assert body["type"] == "invalid_request_error"
         assert body["code"] == "unsupported_parameter"
-        assert body["param"] == "prediction"
+        assert body["param"] == param
+        assert "unsupported parameter" in body["message"].lower()
+        assert body.keys() >= {"message", "type", "param", "code"}, (
+            "The gateway envelope always carries all four keys"
+        )
 
     def test_unsupported_top_logprobs_error(
         self, openai_client: OpenAI, chat_model: str, use_official_api: bool
@@ -1959,51 +1923,15 @@ class TestChatCompletions:
              https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html
              stdapi/models/chat/_adapters/_openai_common.py:parse_prompt_cache_key
         """
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "search_database",
-                    "description": "Search a database for information",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "description": "Search query"},
-                            "limit": {
-                                "type": "integer",
-                                "description": "Maximum results",
-                            },
-                        },
-                        "required": ["query"],
-                    },
-                },
-            }
-        ]
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are an AI assistant. You are a highly capable, thoughtful, "
-                    "and nuanced conversational AI with strong reasoning abilities. "
-                    "Your purpose is to be helpful, harmless, and honest in all interactions."
-                ),
-            },
-            {"role": "user", "content": "What is 2 + 2?"},
-        ]
-
         # First request - should cache the prompt
-        try:
+        with _xfail_on_invalid_tool_use():
             response1 = openai_client.chat.completions.create(
                 model=chat_model,
-                messages=messages,  # type: ignore[arg-type]
-                tools=tools,  # type: ignore[arg-type]
+                messages=_CACHE_MESSAGES,
+                tools=_CACHE_TOOLS,
                 prompt_cache_key="default",
                 max_completion_tokens=2048,
             )
-        except InternalServerError as exc:
-            if "Model produced invalid sequence as part of ToolUse" in str(exc):
-                pytest.xfail(str(exc))
-            raise
 
         assert len(response1.choices) == 1
         assert response1.choices[0].message.role == "assistant"
@@ -2011,18 +1939,14 @@ class TestChatCompletions:
         assert response1.usage.prompt_tokens > 0
 
         # Second request - should use cached prompt
-        try:
+        with _xfail_on_invalid_tool_use():
             response2 = openai_client.chat.completions.create(
                 model=chat_model,
-                messages=messages,  # type: ignore[arg-type]
-                tools=tools,  # type: ignore[arg-type]
+                messages=_CACHE_MESSAGES,
+                tools=_CACHE_TOOLS,
                 prompt_cache_key="default",
                 max_completion_tokens=2048,
             )
-        except InternalServerError as exc:
-            if "Model produced invalid sequence as part of ToolUse" in str(exc):
-                pytest.xfail(str(exc))
-            raise
 
         assert len(response2.choices) == 1
         assert response2.usage is not None
@@ -2050,88 +1974,47 @@ class TestChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStreamMetadataEvent.html
              stdapi/models/chat/_adapters/_openai_common.py:extract_stream_usage
         """
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "search_database",
-                    "description": "Search a database for information",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "description": "Search query"},
-                            "limit": {
-                                "type": "integer",
-                                "description": "Maximum results",
-                            },
-                        },
-                        "required": ["query"],
-                    },
-                },
-            }
-        ]
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are an AI assistant. You are a highly capable, thoughtful, "
-                    "and nuanced conversational AI with strong reasoning abilities. "
-                    "Your purpose is to be helpful, harmless, and honest in all interactions."
-                ),
-            },
-            {"role": "user", "content": "What is 2 + 2?"},
-        ]
-
         # First streaming request - should cache the prompt
-        try:
-            stream1 = openai_client.chat.completions.create(  # type: ignore[call-overload]
+        with _xfail_on_invalid_tool_use():
+            stream1 = openai_client.chat.completions.create(
                 model=chat_model,
-                messages=messages,
-                tools=tools,
+                messages=_CACHE_MESSAGES,
+                tools=_CACHE_TOOLS,
                 prompt_cache_key="default",
                 stream=True,
                 stream_options={"include_usage": True},
                 max_completion_tokens=50,
             )
 
-            # Consume the first stream and get the last chunk with usage
+            # Consume the stream and keep the last chunk, which carries usage
             last_chunk1 = None
             for chunk in stream1:
                 if isinstance(chunk, str) and chunk == "[DONE]":
                     break
                 last_chunk1 = chunk
-        except (InternalServerError, APIError) as exc:
-            if "Model produced invalid sequence as part of ToolUse" in str(exc):
-                pytest.xfail(str(exc))
-            raise
 
         # Validate first stream was successful
         assert last_chunk1 is not None
         assert last_chunk1.object == "chat.completion.chunk"
 
         # Second streaming request - should use cached prompt
-        try:
-            stream2 = openai_client.chat.completions.create(  # type: ignore[call-overload]
+        with _xfail_on_invalid_tool_use():
+            stream2 = openai_client.chat.completions.create(
                 model=chat_model,
-                messages=messages,
-                tools=tools,
+                messages=_CACHE_MESSAGES,
+                tools=_CACHE_TOOLS,
                 prompt_cache_key="default",
                 stream=True,
                 stream_options={"include_usage": True},
                 max_completion_tokens=50,
             )
 
-            # Consume the second stream and get the last chunk with usage
+            # Consume the stream and keep the last chunk, which carries usage
             last_chunk2 = None
             for chunk in stream2:
                 if isinstance(chunk, str) and chunk == "[DONE]":
                     break
                 last_chunk2 = chunk
-
-        except (InternalServerError, APIError) as exc:
-            if "Model produced invalid sequence as part of ToolUse" in str(exc):
-                pytest.xfail(str(exc))
-            raise
 
         # Validate second stream uses cache
         assert last_chunk2 is not None
@@ -2289,33 +2172,6 @@ class TestChatCompletions:
         assert response.choices[0].message.role == "assistant"
         assert response.choices[0].message.content
         assert response.choices[0].logprobs is None
-
-    def test_unsupported_modalities_audio_error(
-        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
-    ) -> None:
-        """Requesting audio output without an ``audio`` config is a 400.
-
-        ``modalities=["text", "audio"]`` is itself supported — the gateway
-        synthesizes speech even for text-only models — but the voice and format
-        have no defaults, so the ``audio`` object is mandatory.
-
-        Ref: https://developers.openai.com/api/docs/guides/audio
-             stdapi/types/openai_chat_completions.py:CompletionCreateParams._validate_audio_modalities
-        """
-        if use_official_api:
-            pytest.skip("Unsupported fields are project-specific here")
-        with pytest.raises(BadRequestError) as exc_info:
-            openai_client.chat.completions.create(
-                model=chat_model,
-                messages=[{"role": "user", "content": "Hi"}],
-                modalities=["text", "audio"],
-            )
-        assert exc_info.value.status_code == 400
-        body = exc_info.value.body
-        assert isinstance(body, dict)
-        assert body["type"] == "invalid_request_error"
-        assert "audio" in body["message"].lower()
-        assert body["code"] is None
 
     def test_custom_tools_in_tools_unsupported(
         self, openai_client: OpenAI, chat_model: str, use_official_api: bool
@@ -3089,7 +2945,7 @@ class TestChatCompletions:
 
     # --- Response metadata fields ---
 
-    def test_response_id_format(self, openai_client: OpenAI, chat_model: str) -> None:
+    def test_response_id_format(self, envelope_completion: ChatCompletion) -> None:
         """The completion id is the ``chatcmpl-`` prefix plus a per-request identifier.
 
         An unstored completion is identified by ``chatcmpl-{request id}``; a stored
@@ -3099,34 +2955,29 @@ class TestChatCompletions:
         Ref: https://developers.openai.com/api/reference/resources/chat.md
              stdapi/routes/openai_chat_completions.py:create_chat_completion
         """
-        response = openai_client.chat.completions.create(
-            model=chat_model,
-            messages=[{"role": "user", "content": "Say OK."}],
-            max_completion_tokens=16,
-        )
+        response = envelope_completion
         assert response.id.startswith("chatcmpl-")
         assert len(response.id) > len("chatcmpl-"), "The id carries a request suffix"
 
     def test_response_object_and_created_fields(
-        self, openai_client: OpenAI, chat_model: str
+        self, envelope_completion: ChatCompletion
     ) -> None:
-        """``object`` is ``chat.completion`` and ``created`` is the request's Unix time.
+        """``object`` is ``chat.completion`` and ``created`` is a Unix-seconds timestamp.
 
-        ``created`` comes from the gateway's own request timestamp, so it tracks
-        wall-clock time at request start rather than any Bedrock value.
+        ``created`` comes from the gateway's own request timestamp, so it must be in
+        seconds — a millisecond value would be roughly a thousand times too large.
+        The range is asserted instead of a delta against the local clock, which would
+        make the test fail on a slow or clock-skewed runner.
 
         Ref: https://developers.openai.com/api/reference/resources/chat.md
              stdapi/routes/openai_chat_completions.py:create_chat_completion
         """
-        response = openai_client.chat.completions.create(
-            model=chat_model,
-            messages=[{"role": "user", "content": "Say OK."}],
-            max_completion_tokens=16,
-        )
+        response = envelope_completion
         assert response.object == "chat.completion"
         assert isinstance(response.created, int)
-        # Timestamp should be within 60 seconds of now
-        assert abs(response.created - int(time())) < 60
+        assert 1_700_000_000 < response.created < 4_000_000_000, (
+            "created must be a Unix timestamp in seconds"
+        )
 
     def test_streaming_finish_reason_stop(
         self, openai_client: OpenAI, chat_model: str
@@ -3519,11 +3370,28 @@ class TestPromptTokensDetailsGate:
     ``inputTokens``, while OpenAI's ``prompt_tokens`` includes cached tokens, so
     the adapter has to add them back on both the buffered and the streaming path.
 
+    The zero-cache case is owned by
+    ``tests/test_openai_chat_completion_adapter.py:TestFormatResponseCacheWriteTokens``,
+    which covers both cache buckets through the same ``format_response`` call.
+
     Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html
          https://developers.openai.com/api/reference/resources/chat.md
     """
 
     pytestmark = pytest.mark.local
+
+    @pytest.fixture(autouse=True)
+    def _adapter_call_context(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+        """Bind the per-request state ``format_response`` reads outside a request.
+
+        Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:_LEGACY_FUNCTION
+        """
+        monkeypatch.setattr(SETTINGS, "log_request_params", False)
+        token = _LEGACY_FUNCTION.set(False)
+        try:
+            yield
+        finally:
+            _LEGACY_FUNCTION.reset(token)
 
     @staticmethod
     def _converse_response(cache_read_input_tokens: int) -> dict[str, Any]:
@@ -3538,54 +3406,22 @@ class TestPromptTokensDetailsGate:
             },
         }
 
-    async def test_format_response_omits_details_when_cache_read_is_zero(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A zero ``cacheReadInputTokens`` omits ``prompt_tokens_details`` entirely.
-
-        Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:format_response
-        """
-        monkeypatch.setattr(SETTINGS, "log_request_params", False)
-        token = _LEGACY_FUNCTION.set(False)
-        try:
-            completion = await format_response(
-                completion_id="chatcmpl-1",
-                created=0,
-                model_id="model",
-                responses=[self._converse_response(0)],  # type: ignore[list-item]
-                service_tier=None,
-                audio_params=None,
-                modalities=["text"],
-            )
-        finally:
-            _LEGACY_FUNCTION.reset(token)
-        assert completion.usage is not None
-        assert completion.usage.prompt_tokens_details is None
-        assert completion.usage.prompt_tokens == 10
-        assert completion.usage.completion_tokens == 5
-        assert completion.usage.total_tokens == 15
-
     async def test_format_response_sets_details_when_cache_read_is_positive(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
     ) -> None:
         """A positive ``cacheReadInputTokens`` is reported and folded into ``prompt_tokens``.
 
         Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:format_response
         """
-        monkeypatch.setattr(SETTINGS, "log_request_params", False)
-        token = _LEGACY_FUNCTION.set(False)
-        try:
-            completion = await format_response(
-                completion_id="chatcmpl-1",
-                created=0,
-                model_id="model",
-                responses=[self._converse_response(3)],  # type: ignore[list-item]
-                service_tier=None,
-                audio_params=None,
-                modalities=["text"],
-            )
-        finally:
-            _LEGACY_FUNCTION.reset(token)
+        completion = await format_response(
+            completion_id="chatcmpl-1",
+            created=0,
+            model_id="model",
+            responses=[self._converse_response(3)],  # type: ignore[list-item]
+            service_tier=None,
+            audio_params=None,
+            modalities=["text"],
+        )
         assert completion.usage is not None
         assert completion.usage.prompt_tokens_details is not None
         assert completion.usage.prompt_tokens_details.cached_tokens == 3
@@ -3693,51 +3529,52 @@ class TestFormatStreamSentinelAndUsage:
 
     pytestmark = pytest.mark.local
 
+    @pytest.fixture(autouse=True)
+    def _adapter_call_context(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+        """Bind the per-request state ``format_stream`` reads outside a request.
+
+        Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:_LEGACY_FUNCTION
+        """
+        monkeypatch.setattr(SETTINGS, "log_request_params", False)
+        token = _LEGACY_FUNCTION.set(False)
+        try:
+            yield
+        finally:
+            _LEGACY_FUNCTION.reset(token)
+
     @staticmethod
-    async def _run(
-        monkeypatch: pytest.MonkeyPatch, *, include_usage: bool
-    ) -> list[Any]:
+    async def _run(*, include_usage: bool) -> list[Any]:
         """Drive format_stream over the stub events and collect every SSE event.
 
         Args:
-            monkeypatch: Pytest monkeypatch fixture.
             include_usage: Value forwarded to format_stream's include_usage.
 
         Returns:
             All SSE events yielded by format_stream, in order.
         """
-        monkeypatch.setattr(SETTINGS, "log_request_params", False)
-        token = _LEGACY_FUNCTION.set(False)
-        try:
-            return [
-                event
-                async for event in format_stream(
-                    completion_id="chatcmpl-1",
-                    created=0,
-                    model_id="model",
-                    stream=_stub_converse_stream(_STUB_STREAM_EVENTS),  # type: ignore[arg-type]
-                    service_tier=None,
-                    include_usage=include_usage,
-                )
-            ]
-        finally:
-            _LEGACY_FUNCTION.reset(token)
+        return [
+            event
+            async for event in format_stream(
+                completion_id="chatcmpl-1",
+                created=0,
+                model_id="model",
+                stream=_stub_converse_stream(_STUB_STREAM_EVENTS),  # type: ignore[arg-type]
+                service_tier=None,
+                include_usage=include_usage,
+            )
+        ]
 
-    async def test_stream_ends_with_done_sentinel(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_stream_ends_with_done_sentinel(self) -> None:
         """The raw SSE body has exactly one ``data: [DONE]`` event, positioned last.
 
         Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
         """
-        events = await self._run(monkeypatch, include_usage=False)
+        events = await self._run(include_usage=False)
         raw = "".join(event.encode().decode() for event in events)
         assert raw.count("data: [DONE]") == 1
         assert raw.rstrip("\r\n").endswith("data: [DONE]")
 
-    async def test_stream_usage_in_separate_final_chunk(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_stream_usage_in_separate_final_chunk(self) -> None:
         """With ``include_usage``, usage arrives in its own empty-choices chunk after the finish chunk.
 
         The stub stream reports 10 input and 5 output tokens, so the trailing chunk
@@ -3745,7 +3582,7 @@ class TestFormatStreamSentinelAndUsage:
 
         Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
         """
-        events = await self._run(monkeypatch, include_usage=True)
+        events = await self._run(include_usage=True)
         assert events[-1].data == "[DONE]"
 
         first_chunk = _json.loads(events[0].data)
@@ -3764,14 +3601,30 @@ class TestFormatStreamSentinelAndUsage:
         assert finish_chunk["choices"][0]["finish_reason"] == "stop"
         assert "usage" not in finish_chunk
 
-    async def test_stream_without_include_usage_omits_usage(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_no_chunk_carries_stream_obfuscation(self) -> None:
+        """No emitted chunk carries an obfuscation field.
+
+        ``stream_options.include_obfuscation`` is accepted for upstream
+        compatibility but never read by ``format_stream``, so the padding upstream
+        adds by default is simply absent here.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+             stdapi/types/openai_chat_completions.py:ChatCompletionStreamOptionsParam
+        """
+        events = await self._run(include_usage=True)
+        for event in events[:-1]:
+            chunk = _json.loads(event.data)
+            assert "obfuscation" not in chunk
+            for choice in chunk["choices"]:
+                assert "obfuscation" not in choice
+                assert "obfuscation" not in choice["delta"]
+
+    async def test_stream_without_include_usage_omits_usage(self) -> None:
         """Without ``include_usage`` no chunk carries usage and the stream still ends with ``[DONE]``.
 
         Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
         """
-        events = await self._run(monkeypatch, include_usage=False)
+        events = await self._run(include_usage=False)
         assert events[-1].data == "[DONE]"
         for event in events[:-1]:
             assert "usage" not in _json.loads(event.data)
@@ -3792,17 +3645,8 @@ class TestStopSequenceValidation:
 
     pytestmark = pytest.mark.local
 
-    @pytest.fixture
-    def client(self, api_key: str) -> TestClientType:
-        """Test client without lifespan (no AWS startup), pre-authenticated."""
-        from starlette.testclient import TestClient  # noqa: PLC0415
-
-        from stdapi.main import app  # noqa: PLC0415
-
-        return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
-
     def test_whitespace_only_stop_sequence_is_rejected(
-        self, client: TestClientType
+        self, app_client: TestClientType
     ) -> None:
         r"""``stop=["\n"]`` is rejected with a clean 400 naming the whitespace rule.
 
@@ -3811,7 +3655,7 @@ class TestStopSequenceValidation:
 
         Ref: stdapi/types/openai_chat_completions.py:CompletionCreateParams._validate_stop_sequences
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/chat/completions",
             json={
                 "model": "test-model",
@@ -3840,3 +3684,203 @@ class TestStopSequenceValidation:
             }
         )
         assert request.stop == ["5"]
+
+
+class TestOpenAIResponseHeaders:
+    """Every OpenAI-tagged route echoes the OpenAI-compatible response headers.
+
+    ``openai-version`` is a fixed REST API version string, ``openai-processing-ms``
+    is the gateway's own timing, and ``openai-organization`` is echoed back only
+    when the client sent it.  They are attached by the response middleware, so a
+    request rejected during validation carries them too.
+
+    Ref: https://developers.openai.com/api/reference/overview
+         stdapi/api_providers/openai.py:set_openai_headers
+    """
+
+    pytestmark = pytest.mark.local
+
+    #: Request body rejected before any AWS call, so the headers can be read for free.
+    _REJECTED_BODY: ClassVar[dict[str, Any]] = {
+        "model": "test-model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stop": ["\n"],
+    }
+
+    def test_headers_are_attached_and_organization_is_echoed(
+        self, app_client: TestClientType
+    ) -> None:
+        """``openai-version`` is ``2020-10-01`` and the sent organization comes back."""
+        response = app_client.post(
+            "/v1/chat/completions",
+            json=self._REJECTED_BODY,
+            headers={"OpenAI-Organization": "org-test"},
+        )
+        assert response.status_code == 400, response.text
+        assert response.headers["openai-version"] == "2020-10-01"
+        assert response.headers["openai-organization"] == "org-test"
+        assert int(response.headers["openai-processing-ms"]) >= 0
+        assert response.headers["x-request-id"], (
+            "clients correlate a failed call by its request id"
+        )
+
+    def test_organization_header_is_omitted_when_not_sent(
+        self, app_client: TestClientType
+    ) -> None:
+        """``openai-organization`` is absent rather than empty when unset."""
+        response = app_client.post("/v1/chat/completions", json=self._REJECTED_BODY)
+        assert response.status_code == 400, response.text
+        assert "openai-organization" not in response.headers
+        assert response.headers["openai-version"] == "2020-10-01"
+
+    def test_legacy_completions_route_carries_the_same_headers(
+        self, app_client: TestClientType
+    ) -> None:
+        """The legacy ``/v1/completions`` route shares the OpenAI header handler."""
+        response = app_client.post(
+            "/v1/completions",
+            json={"model": "test-model", "prompt": "hi", "stop": ["\n"]},
+            headers={"OpenAI-Organization": "org-test"},
+        )
+        assert response.status_code == 400, response.text
+        assert response.headers["openai-version"] == "2020-10-01"
+        assert response.headers["openai-organization"] == "org-test"
+
+
+class TestBedrockRequestFieldAliases:
+    """Bedrock/vendor-shaped request keys populate the declared OpenAI fields.
+
+    ``BaseModelRequestWithExtra`` accepts unknown keys, so a dropped alias would
+    not error: the value would land in ``model_extra`` and be forwarded as an
+    ``additionalModelRequestFields`` entry instead of an inference-config field,
+    silently not applying the limit.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+         stdapi/types/openai_chat_completions.py:CompletionCreateParams
+    """
+
+    pytestmark = pytest.mark.local
+
+    def test_bedrock_field_aliases_populate_the_declared_fields(self) -> None:
+        """``maxTokens``/``topP``/``stopSequences`` land on the declared fields."""
+        request = CompletionCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "maxTokens": 16,
+                "topP": 0.5,
+                "stopSequences": ["X"],
+            }
+        )
+        assert request.max_tokens == 16
+        assert request.top_p == 0.5
+        assert request.stop == ["X"]
+        assert request.model_extra == {}, (
+            "an alias that stopped being declared would leak into model_extra"
+        )
+
+    def test_snake_case_stop_sequences_alias(self) -> None:
+        """``stop_sequences`` is accepted as a third spelling of ``stop``."""
+        request = CompletionCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stop_sequences": ["Y"],
+            }
+        )
+        assert request.stop == ["Y"]
+        assert request.model_extra == {}
+
+
+class TestIdentifierFieldLengthBounds:
+    """``prompt_cache_key``/``safety_identifier``/``user`` are bounded to 1..255 chars.
+
+    These values flow into Bedrock ``requestMetadata`` and into the request log, so
+    the gateway bounds them itself; the ceiling is deliberately higher than
+    upstream's 64-character ``safety_identifier`` limit.
+
+    Ref: https://developers.openai.com/api/docs/guides/safety-best-practices#implement-safety-identifiers
+         stdapi/types/openai_chat_completions.py:CompletionCreateParams
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    def _validate(field: str, value: str) -> CompletionCreateParams:
+        """Validate a minimal request carrying *field* set to *value*.
+
+        Args:
+            field: Identifier field name.
+            value: Value to assign to it.
+
+        Returns:
+            The validated request.
+        """
+        return CompletionCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                field: value,
+            }
+        )
+
+    @pytest.mark.parametrize("field", ["prompt_cache_key", "safety_identifier", "user"])
+    def test_empty_identifier_is_rejected(self, field: str) -> None:
+        """An empty identifier fails validation instead of reaching Bedrock."""
+        with pytest.raises(ValidationError) as exc_info:
+            self._validate(field, "")
+        assert exc_info.value.errors()[0]["type"] == "string_too_short"
+
+    @pytest.mark.parametrize("field", ["prompt_cache_key", "safety_identifier", "user"])
+    def test_over_long_identifier_is_rejected(self, field: str) -> None:
+        """256 characters exceeds the bound, so the value never reaches metadata."""
+        with pytest.raises(ValidationError) as exc_info:
+            self._validate(field, "x" * 256)
+        assert exc_info.value.errors()[0]["type"] == "string_too_long"
+
+    @pytest.mark.parametrize("field", ["prompt_cache_key", "safety_identifier", "user"])
+    def test_maximum_length_identifier_is_accepted(self, field: str) -> None:
+        """255 characters is the largest accepted value."""
+        request = self._validate(field, "x" * 255)
+        assert getattr(request, field) == "x" * 255
+
+
+class TestStreamObfuscationOption:
+    """``stream_options.include_obfuscation`` is accepted for upstream compatibility.
+
+    Upstream includes obfuscation padding by default and lets clients turn it off;
+    this gateway never emits it, but must keep accepting the flag so unmodified
+    OpenAI SDK clients are not rejected.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+         stdapi/types/openai_chat_completions.py:ChatCompletionStreamOptionsParam
+    """
+
+    pytestmark = pytest.mark.local
+
+    def test_include_obfuscation_is_accepted(self) -> None:
+        """The flag validates alongside ``include_usage`` instead of 400-ing."""
+        request = CompletionCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+                "stream_options": {"include_usage": True, "include_obfuscation": True},
+            }
+        )
+        assert request.stream_options is not None
+        assert request.stream_options.include_obfuscation is True
+        assert request.stream_options.include_usage is True
+
+    def test_include_obfuscation_defaults_to_false(self) -> None:
+        """Omitting the flag leaves it false, matching the gateway's behaviour."""
+        request = CompletionCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            }
+        )
+        assert request.stream_options is not None
+        assert request.stream_options.include_obfuscation is False

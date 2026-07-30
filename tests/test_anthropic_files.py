@@ -7,12 +7,17 @@ implements ``/v1/files`` itself on S3. Only the payload field names
 including files being downloadable, which upstream refuses for uploaded files — are
 gateway behavior.
 
+File expiry has no coverage here: Anthropic's upload accepts no ``expires_after``,
+so the shared enforcement is exercised through
+``TestOpenAIFiles.test_expired_file_returns_404`` instead.
+
 Ref: https://platform.claude.com/docs/en/build-with-claude/files
      stdapi/routes/anthropic_files.py:upload
      stdapi/routes/anthropic_files.py:_to_file_metadata
 """
 
 import io
+from contextlib import suppress
 from typing import TYPE_CHECKING
 
 import pytest
@@ -20,20 +25,39 @@ from anthropic import Anthropic
 from anthropic import NotFoundError as AnthropicNotFoundError
 
 if TYPE_CHECKING:
-    from openai import OpenAI
+    from collections.abc import Callable, Iterator
 
-#: Minimal valid PDF bytes for testing document endpoints.
-_MINIMAL_PDF: bytes = (
-    b"%PDF-1.0\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj "
-    b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj "
-    b"3 0 obj<</Type/Page/MediaBox[0 0 3 3]>>endobj\n"
-    b"xref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n"
-    b"0000000058 00000 n \n0000000115 00000 n \n"
-    b"trailer<</Size 4/Root 1 0 R>>\nstartxref\n190\n%%EOF"
-)
+    from anthropic.types.beta import FileMetadata
+    from openai import OpenAI
 
 #: Simple plain-text file bytes for general tests.
 _TEXT_FILE: bytes = b"The capital of France is Paris."
+
+
+@pytest.fixture
+def upload_file(
+    anthropic_client: Anthropic,
+) -> Iterator[Callable[[str, bytes, str], FileMetadata]]:
+    """Upload files through the Anthropic Files API, deleting them at teardown.
+
+    Every upload creates a real S3 object, so the teardown runs even when the test
+    body fails; a delete of an already-deleted file is ignored.
+    """
+    uploaded: list[FileMetadata] = []
+
+    def _upload(filename: str, content: bytes, mime_type: str) -> FileMetadata:
+        metadata = anthropic_client.beta.files.upload(
+            file=(filename, io.BytesIO(content), mime_type)
+        )
+        uploaded.append(metadata)
+        return metadata
+
+    yield _upload
+
+    for metadata in uploaded:
+        # A test may have deleted the file itself.
+        with suppress(AnthropicNotFoundError):
+            anthropic_client.beta.files.delete(metadata.id)
 
 
 class TestAnthropicFiles:
@@ -54,7 +78,11 @@ class TestAnthropicFiles:
 
     # --- Upload ---
 
-    def test_upload_returns_file_object(self, anthropic_client: Anthropic) -> None:
+    def test_upload_returns_file_object(
+        self,
+        upload_file: Callable[[str, bytes, str], FileMetadata],
+        sample_pdf_file: bytes,
+    ) -> None:
         """A multipart upload returns ``FileMetadata`` echoing the filename, MIME type and byte size.
 
         ``size_bytes`` equal to the posted byte count is what proves the body was stored
@@ -63,46 +91,44 @@ class TestAnthropicFiles:
 
         Ref: stdapi/routes/anthropic_files.py:_to_file_metadata
         """
-        content = _MINIMAL_PDF
-        result = anthropic_client.beta.files.upload(
-            file=("test.pdf", io.BytesIO(content), "application/pdf")
+        result = upload_file("test.pdf", sample_pdf_file, "application/pdf")
+        assert result.id.startswith("file_")
+        assert result.id != "file_"
+        assert result.type == "file"
+        assert result.size_bytes == len(sample_pdf_file)
+        assert result.created_at.tzinfo is not None, (
+            f"created_at is not an RFC 3339 instant: {result.created_at!r}"
         )
-        try:
-            assert result.id.startswith("file_")
-            assert result.id != "file_"
-            assert result.type == "file"
-            assert result.size_bytes == len(content)
-            assert result.created_at.tzinfo is not None, (
-                f"created_at is not an RFC 3339 instant: {result.created_at!r}"
-            )
-            assert result.mime_type == "application/pdf"
-            assert result.filename == "test.pdf"
-        finally:
-            anthropic_client.beta.files.delete(result.id)
+        assert result.mime_type == "application/pdf"
+        assert result.filename == "test.pdf"
 
-    def test_get_metadata(self, anthropic_client: Anthropic) -> None:
+    def test_get_metadata(
+        self,
+        anthropic_client: Anthropic,
+        upload_file: Callable[[str, bytes, str], FileMetadata],
+        sample_pdf_file: bytes,
+    ) -> None:
         """Retrieving an uploaded file by ID returns the same metadata the upload reported.
 
         Ref: stdapi/routes/anthropic_files.py:retrieve_file
         """
-        uploaded = anthropic_client.beta.files.upload(
-            file=("meta.pdf", io.BytesIO(_MINIMAL_PDF), "application/pdf")
-        )
-        try:
-            retrieved = anthropic_client.beta.files.retrieve_metadata(uploaded.id)
-            assert retrieved.id == uploaded.id
-            assert retrieved.type == "file"
-            assert retrieved.size_bytes == uploaded.size_bytes
-            assert retrieved.size_bytes == len(_MINIMAL_PDF)
-            assert retrieved.filename == uploaded.filename
-            assert retrieved.mime_type == uploaded.mime_type
-            assert retrieved.created_at == uploaded.created_at
-        finally:
-            anthropic_client.beta.files.delete(uploaded.id)
+        uploaded = upload_file("meta.pdf", sample_pdf_file, "application/pdf")
+        retrieved = anthropic_client.beta.files.retrieve_metadata(uploaded.id)
+        assert retrieved.id == uploaded.id
+        assert retrieved.type == "file"
+        assert retrieved.size_bytes == uploaded.size_bytes
+        assert retrieved.size_bytes == len(sample_pdf_file)
+        assert retrieved.filename == uploaded.filename
+        assert retrieved.mime_type == uploaded.mime_type
+        assert retrieved.created_at == uploaded.created_at
 
     # --- List ---
 
-    def test_list_files(self, anthropic_client: Anthropic) -> None:
+    def test_list_files(
+        self,
+        anthropic_client: Anthropic,
+        upload_file: Callable[[str, bytes, str], FileMetadata],
+    ) -> None:
         """Listed entries carry each file's own metadata and the page's edge IDs as cursors.
 
         The listed metadata is rebuilt from the S3 objects rather than replayed from the
@@ -110,29 +136,25 @@ class TestAnthropicFiles:
 
         Ref: stdapi/routes/anthropic_files.py:list_files_endpoint
         """
-        f1 = anthropic_client.beta.files.upload(
-            file=("lst1.txt", io.BytesIO(_TEXT_FILE), "text/plain")
-        )
-        f2 = anthropic_client.beta.files.upload(
-            file=("lst2.txt", io.BytesIO(_TEXT_FILE), "text/plain")
-        )
-        try:
-            page = anthropic_client.beta.files.list()
-            by_id = {f.id: f for f in page.data}
-            assert f1.id in by_id
-            assert f2.id in by_id
-            for uploaded in (f1, f2):
-                listed = by_id[uploaded.id]
-                assert listed.filename == uploaded.filename
-                assert listed.size_bytes == len(_TEXT_FILE)
-                assert listed.type == "file"
-            assert page.first_id == page.data[0].id
-            assert page.last_id == page.data[-1].id
-        finally:
-            anthropic_client.beta.files.delete(f1.id)
-            anthropic_client.beta.files.delete(f2.id)
+        f1 = upload_file("lst1.txt", _TEXT_FILE, "text/plain")
+        f2 = upload_file("lst2.txt", _TEXT_FILE, "text/plain")
+        page = anthropic_client.beta.files.list()
+        by_id = {f.id: f for f in page.data}
+        assert f1.id in by_id
+        assert f2.id in by_id
+        for uploaded in (f1, f2):
+            listed = by_id[uploaded.id]
+            assert listed.filename == uploaded.filename
+            assert listed.size_bytes == len(_TEXT_FILE)
+            assert listed.type == "file"
+        assert page.first_id == page.data[0].id
+        assert page.last_id == page.data[-1].id
 
-    def test_anthropic_list_after_id(self, anthropic_client: Anthropic) -> None:
+    def test_anthropic_list_after_id(
+        self,
+        anthropic_client: Anthropic,
+        upload_file: Callable[[str, bytes, str], FileMetadata],
+    ) -> None:
         """``after_id`` excludes the cursor file and keeps the files created after it.
 
         The gateway lists files in ascending creation order (S3 keys are UUIDv7, so
@@ -141,37 +163,28 @@ class TestAnthropicFiles:
 
         Ref: stdapi/files/_core.py:list_files
         """
-        files = [
-            anthropic_client.beta.files.upload(
-                file=(f"aft{i}.txt", io.BytesIO(_TEXT_FILE), "text/plain")
-            )
-            for i in range(3)
-        ]
-        try:
-            # The oldest file overall is a cursor that must exclude itself.
-            page1 = anthropic_client.beta.files.list(limit=1)
-            assert len(page1.data) == 1
-            assert page1.has_more is True, (
-                "the three uploads should not fit in one page"
-            )
-            cursor_id = page1.data[0].id
-            page2 = anthropic_client.beta.files.list(after_id=cursor_id)
-            ids2 = {f.id for f in page2.data}
-            assert cursor_id not in ids2
+        files = [upload_file(f"aft{i}.txt", _TEXT_FILE, "text/plain") for i in range(3)]
+        # The oldest file overall is a cursor that must exclude itself.
+        page1 = anthropic_client.beta.files.list(limit=1)
+        assert len(page1.data) == 1
+        assert page1.has_more is True, "the three uploads should not fit in one page"
+        cursor_id = page1.data[0].id
+        page2 = anthropic_client.beta.files.list(after_id=cursor_id)
+        ids2 = {f.id for f in page2.data}
+        assert cursor_id not in ids2
 
-            # A cursor on our own first upload must retain the two later ones.
-            after_own = anthropic_client.beta.files.list(
-                after_id=files[0].id, limit=1000
-            )
-            ids_after_own = {f.id for f in after_own.data}
-            assert files[0].id not in ids_after_own
-            assert files[1].id in ids_after_own
-            assert files[2].id in ids_after_own
-        finally:
-            for f in files:
-                anthropic_client.beta.files.delete(f.id)
+        # A cursor on our own first upload must retain the two later ones.
+        after_own = anthropic_client.beta.files.list(after_id=files[0].id, limit=1000)
+        ids_after_own = {f.id for f in after_own.data}
+        assert files[0].id not in ids_after_own
+        assert files[1].id in ids_after_own
+        assert files[2].id in ids_after_own
 
-    def test_anthropic_list_before_id(self, anthropic_client: Anthropic) -> None:
+    def test_anthropic_list_before_id(
+        self,
+        anthropic_client: Anthropic,
+        upload_file: Callable[[str, bytes, str], FileMetadata],
+    ) -> None:
         """``before_id`` excludes the cursor file and keeps the files created before it.
 
         Reverse of the ``after_id`` case: a cursor set on the newest of three uploads must
@@ -179,43 +192,34 @@ class TestAnthropicFiles:
 
         Ref: stdapi/files/_core.py:list_files
         """
-        files = [
-            anthropic_client.beta.files.upload(
-                file=(f"bef{i}.txt", io.BytesIO(_TEXT_FILE), "text/plain")
-            )
-            for i in range(3)
-        ]
-        try:
-            all_files = anthropic_client.beta.files.list(limit=100)
-            assert all_files.data, "the three uploads must be listed"
-            cursor_id = all_files.data[-1].id
-            before_page = anthropic_client.beta.files.list(before_id=cursor_id)
-            ids_before = {f.id for f in before_page.data}
-            assert cursor_id not in ids_before
+        files = [upload_file(f"bef{i}.txt", _TEXT_FILE, "text/plain") for i in range(3)]
+        all_files = anthropic_client.beta.files.list(limit=100)
+        assert all_files.data, "the three uploads must be listed"
+        cursor_id = all_files.data[-1].id
+        before_page = anthropic_client.beta.files.list(before_id=cursor_id)
+        ids_before = {f.id for f in before_page.data}
+        assert cursor_id not in ids_before
 
-            # A cursor on our own newest upload must retain the two earlier ones.
-            before_own = anthropic_client.beta.files.list(
-                before_id=files[2].id, limit=1000
-            )
-            ids_before_own = {f.id for f in before_own.data}
-            assert files[2].id not in ids_before_own
-            assert files[0].id in ids_before_own
-            assert files[1].id in ids_before_own
-        finally:
-            for f in files:
-                anthropic_client.beta.files.delete(f.id)
+        # A cursor on our own newest upload must retain the two earlier ones.
+        before_own = anthropic_client.beta.files.list(before_id=files[2].id, limit=1000)
+        ids_before_own = {f.id for f in before_own.data}
+        assert files[2].id not in ids_before_own
+        assert files[0].id in ids_before_own
+        assert files[1].id in ids_before_own
 
     # --- Delete ---
 
-    def test_delete(self, anthropic_client: Anthropic) -> None:
+    def test_delete(
+        self,
+        anthropic_client: Anthropic,
+        upload_file: Callable[[str, bytes, str], FileMetadata],
+    ) -> None:
         """Deleting a file confirms the ID and makes later retrievals 404.
 
         Ref: https://platform.claude.com/docs/en/api/errors
              stdapi/routes/anthropic_files.py:delete_file_endpoint
         """
-        f = anthropic_client.beta.files.upload(
-            file=("delme.txt", io.BytesIO(_TEXT_FILE), "text/plain")
-        )
+        f = upload_file("delme.txt", _TEXT_FILE, "text/plain")
         result = anthropic_client.beta.files.delete(f.id)
         assert result.type == "file_deleted"
         assert result.id == f.id
@@ -227,7 +231,10 @@ class TestAnthropicFiles:
     # --- Content ---
 
     def test_download_content(
-        self, anthropic_client: Anthropic, use_official_api: bool
+        self,
+        anthropic_client: Anthropic,
+        upload_file: Callable[[str, bytes, str], FileMetadata],
+        use_official_api: bool,
     ) -> None:
         """Uploaded bytes are served back byte-for-byte by ``/v1/files/{id}/content``.
 
@@ -241,16 +248,11 @@ class TestAnthropicFiles:
         if use_official_api:
             pytest.skip("the official API only allows downloading API-created files")
         content = b"Anthropic Files API content test!"
-        f = anthropic_client.beta.files.upload(
-            file=("dl.txt", io.BytesIO(content), "text/plain")
-        )
-        try:
-            assert f.downloadable is True
-            assert f.size_bytes == len(content)
-            downloaded = anthropic_client.beta.files.download(f.id).read()
-            assert downloaded == content
-        finally:
-            anthropic_client.beta.files.delete(f.id)
+        f = upload_file("dl.txt", content, "text/plain")
+        assert f.downloadable is True
+        assert f.size_bytes == len(content)
+        downloaded = anthropic_client.beta.files.download(f.id).read()
+        assert downloaded == content
 
     # --- Error cases ---
 
@@ -274,29 +276,14 @@ class TestAnthropicFiles:
         assert delete_exc.value.status_code == 404
         assert delete_exc.value.type == "not_found_error"
 
-    def test_expired_file_returns_404(
-        self, anthropic_client: Anthropic, use_official_api: bool
-    ) -> None:
-        """File expiry is not reachable through the Anthropic client, so this test only skips.
-
-        Anthropic's upload accepts no ``expires_after``, leaving no way to age a file out
-        from this surface. The gateway's shared expiry enforcement is covered by
-        ``TestOpenAIFiles.test_expired_file_returns_404``, which advances the clock with
-        ``patch("stdapi.files._core.now_utc_timestamp")``.
-
-        Ref: https://platform.claude.com/docs/en/build-with-claude/files
-             stdapi/files/_core.py:get_file
-        """
-        pytest.skip(
-            "Anthropic upload has no expires_after; expiry tested via OpenAI client"
-        )
-
     # --- Chat integration ---
 
     def test_file_in_anthropic_message(
         self,
         anthropic_client: Anthropic,
         anthropic_chat_model: str,
+        upload_file: Callable[[str, bytes, str], FileMetadata],
+        sample_pdf_file: bytes,
         use_official_api: bool,
     ) -> None:
         """A ``document`` block sourced from ``{"type": "file", "file_id": ...}`` is resolved and answered.
@@ -310,39 +297,81 @@ class TestAnthropicFiles:
         """
         if use_official_api:
             pytest.skip("this endpoint does not accept `file` document sources")
-        f = anthropic_client.beta.files.upload(
-            file=("doc.pdf", io.BytesIO(_MINIMAL_PDF), "application/pdf")
+        f = upload_file("doc.pdf", sample_pdf_file, "application/pdf")
+        response = anthropic_client.beta.messages.create(
+            model=anthropic_chat_model,
+            max_tokens=50,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {"type": "file", "file_id": f.id},
+                        },
+                        {
+                            "type": "text",
+                            "text": "Describe this document in one sentence.",
+                        },
+                    ],
+                }
+            ],
         )
-        try:
-            response = anthropic_client.beta.messages.create(
-                model=anthropic_chat_model,
-                max_tokens=50,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "document",
-                                "source": {"type": "file", "file_id": f.id},
-                            },
-                            {
-                                "type": "text",
-                                "text": "Describe this document in one sentence.",
-                            },
-                        ],
-                    }
-                ],
-            )
-            assert response.type == "message"
-            assert response.role == "assistant"
-            assert len(response.content) > 0
-            assert response.content[0].type == "text"
-            assert len(response.content[0].text) > 0
-            assert response.stop_reason in {"end_turn", "max_tokens"}
-            assert response.usage.input_tokens > 0
-            assert response.usage.output_tokens > 0
-        finally:
-            anthropic_client.beta.files.delete(f.id)
+        assert response.type == "message"
+        assert response.role == "assistant"
+        assert len(response.content) > 0
+        assert response.content[0].type == "text"
+        assert len(response.content[0].text) > 0
+        assert response.stop_reason in {"end_turn", "max_tokens"}
+        assert response.usage.input_tokens > 0
+        assert response.usage.output_tokens > 0
+
+    def test_image_file_id_source_reaches_model(
+        self,
+        anthropic_client: Anthropic,
+        anthropic_chat_vision_model: str,
+        upload_file: Callable[[str, bytes, str], FileMetadata],
+        sample_image_file: bytes,
+        use_official_api: bool,
+    ) -> None:
+        """A ``file`` source inside an ``image`` block is resolved into a Bedrock image block.
+
+        The image branch of the source union is a different code path from the
+        document one: it infers the Bedrock image format from the stored MIME type
+        instead of building a document block.  A 512x512 PNG costs far more input
+        tokens than the one-sentence prompt, so the token count is what shows the
+        image reached the model rather than being silently dropped.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/files
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_image_to_bedrock
+        """
+        if use_official_api:
+            pytest.skip("this endpoint does not accept `file` image sources")
+        f = upload_file("pic.png", sample_image_file, "image/png")
+        response = anthropic_client.beta.messages.create(
+            model=anthropic_chat_vision_model,
+            max_tokens=50,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "file", "file_id": f.id}},
+                        {
+                            "type": "text",
+                            "text": "Describe this image in one sentence.",
+                        },
+                    ],
+                }
+            ],
+        )
+        assert response.type == "message"
+        assert response.content
+        assert response.content[0].type == "text"
+        assert response.content[0].text
+        assert response.usage.input_tokens > 100, (
+            f"a 512x512 image must dominate the prompt cost, got "
+            f"{response.usage.input_tokens} input tokens"
+        )
 
 
 class TestAnthropicFilesJsonBody:

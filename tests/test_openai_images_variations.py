@@ -9,9 +9,10 @@ Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
      stdapi/routes/openai_images_variations.py:create_image_variations
 """
 
+from typing import TYPE_CHECKING
+
 import pytest
 from openai import BadRequestError, NotFoundError, OpenAI
-from starlette.testclient import TestClient
 
 from stdapi.api_errors import UnsupportedModelError
 from stdapi.routes import openai_images_variations
@@ -23,6 +24,9 @@ from .test_openai_images_generations import (
     validate_timestamp,
     validate_url_format,
 )
+
+if TYPE_CHECKING:
+    from starlette.testclient import TestClient
 
 
 class TestImagesVariationsBasic:
@@ -413,6 +417,23 @@ class TestImagesVariationsJsonBody:
         assert error.get("message", "").startswith("Validation error at image:")
 
 
+@pytest.fixture
+def probed_model_ids(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Stub validate_model to record the requested model id and fail fast.
+
+    Returns:
+        The list the stub appends every requested model id to.
+    """
+    calls: list[str] = []
+
+    async def _validate_model(model_id: str, *_args: object, **_kwargs: object) -> None:
+        calls.append(model_id)
+        raise UnsupportedModelError(model_id, status=400)
+
+    monkeypatch.setattr(openai_images_variations, "validate_model", _validate_model)
+    return calls
+
+
 @pytest.mark.local
 class TestImagesVariationsModelField:
     """Model-field plumbing for both request encodings, with model resolution stubbed.
@@ -420,29 +441,8 @@ class TestImagesVariationsModelField:
     Ref: stdapi/routes/openai_images_variations.py:create_image_variations
     """
 
-    @pytest.fixture
-    def client(self, api_key: str) -> TestClient:
-        """Test client without lifespan (no AWS startup), pre-authenticated."""
-        from stdapi.main import app  # noqa: PLC0415
-
-        return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
-
-    @pytest.fixture
-    def probed_model_ids(self, monkeypatch: pytest.MonkeyPatch) -> list[str]:
-        """Stub validate_model to record the requested model id and fail fast."""
-        calls: list[str] = []
-
-        async def _validate_model(
-            model_id: str, *_args: object, **_kwargs: object
-        ) -> None:
-            calls.append(model_id)
-            raise UnsupportedModelError(model_id, status=400)
-
-        monkeypatch.setattr(openai_images_variations, "validate_model", _validate_model)
-        return calls
-
     def test_json_body_model_field_reaches_model_resolution(
-        self, client: TestClient, probed_model_ids: list[str]
+        self, app_client: TestClient, probed_model_ids: list[str]
     ) -> None:
         """A model supplied only in the JSON body reaches model resolution.
 
@@ -450,7 +450,7 @@ class TestImagesVariationsModelField:
         'min_length=1' with an empty-string default, which rejected every
         JSON-body request with a 422 before the JSON 'model' field was read.
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/images/variations",
             json={
                 "model": "probe-model-id",
@@ -462,10 +462,10 @@ class TestImagesVariationsModelField:
         assert probed_model_ids == ["probe-model-id"]
 
     def test_multipart_form_model_field_still_works(
-        self, client: TestClient, probed_model_ids: list[str]
+        self, app_client: TestClient, probed_model_ids: list[str]
     ) -> None:
         """A model supplied via multipart form data still reaches model resolution unchanged."""
-        response = client.post(
+        response = app_client.post(
             "/v1/images/variations",
             data={"model": "probe-model-id"},
             files={"image": ("image.png", b"fake-bytes", "image/png")},
@@ -474,7 +474,7 @@ class TestImagesVariationsModelField:
         assert response.json()["error"]["code"] == "model_not_found"
         assert probed_model_ids == ["probe-model-id"]
 
-    def test_multipart_missing_image_returns_400(self, client: TestClient) -> None:
+    def test_multipart_missing_image_returns_400(self, app_client: TestClient) -> None:
         """A multipart request without an 'image' file returns 400, not an unhandled error.
 
         Regression: the ValidationError for the missing 'image' file was raised
@@ -484,7 +484,7 @@ class TestImagesVariationsModelField:
         Ref: stdapi/utils.py:validation_error_handler
              stdapi/main.py:handle_validation_exception
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/images/variations", data={"model": "stability.sd3-5-large-v1:0"}
         )
         assert response.status_code == 400
@@ -492,3 +492,74 @@ class TestImagesVariationsModelField:
         assert response.json()["error"]["message"].startswith(
             "Validation error at body.image:"
         )
+
+
+@pytest.mark.local
+class TestImagesVariationsSizeAuto:
+    """``size="auto"``: accepted by the JSON body, rejected by the multipart form.
+
+    The two encodings of this one route disagree. ``_ImageBaseParams`` resolves
+    ``auto`` to the default size for the JSON body, while the multipart ``size``
+    form field only matches ``WIDTHxHEIGHT`` -- unlike generations and edits,
+    which accept ``auto`` on both encodings.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/routes/openai_images_variations.py:create_image_variations
+         stdapi/types/openai_images.py:_ImageBaseParams._resolve_auto_size
+    """
+
+    def test_json_body_auto_size_reaches_model_resolution(
+        self, app_client: TestClient, probed_model_ids: list[str]
+    ) -> None:
+        """A JSON body ``size="auto"`` is resolved and the request reaches the model."""
+        response = app_client.post(
+            "/v1/images/variations",
+            json={
+                "model": "probe-model-id",
+                "image": {"image_url": "data:image/png;base64,AA=="},
+                "size": "auto",
+                "response_format": "b64_json",
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "model_not_found"
+        assert probed_model_ids == ["probe-model-id"]
+
+    def test_multipart_form_auto_size_is_rejected(
+        self, app_client: TestClient, probed_model_ids: list[str]
+    ) -> None:
+        """A multipart ``size="auto"`` fails the form pattern before model resolution."""
+        response = app_client.post(
+            "/v1/images/variations",
+            data={
+                "model": "probe-model-id",
+                "size": "auto",
+                "response_format": "b64_json",
+            },
+            files={"image": ("image.png", b"fake-bytes", "image/png")},
+        )
+
+        assert response.status_code == 400
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "size" in error["message"]
+        assert probed_model_ids == [], "the model must not be resolved"
+
+    def test_multipart_form_explicit_size_is_accepted(
+        self, app_client: TestClient, probed_model_ids: list[str]
+    ) -> None:
+        """An explicit ``WIDTHxHEIGHT`` multipart size passes the pattern."""
+        response = app_client.post(
+            "/v1/images/variations",
+            data={
+                "model": "probe-model-id",
+                "size": "512x512",
+                "response_format": "b64_json",
+            },
+            files={"image": ("image.png", b"fake-bytes", "image/png")},
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "model_not_found"
+        assert probed_model_ids == ["probe-model-id"]

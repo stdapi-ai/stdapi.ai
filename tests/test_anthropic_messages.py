@@ -13,6 +13,7 @@ Ref: https://platform.claude.com/docs/en/api/messages
 import base64
 import json as _json
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
 import pytest
@@ -24,15 +25,85 @@ from anthropic import (
     BadRequestError,
     NotFoundError,
 )
-from starlette.testclient import TestClient
 
 import stdapi.models as _models_mod
+from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR
+from stdapi.aws_bedrock_mantle import mantle_request_headers
+from stdapi.config import SETTINGS
 from stdapi.models import ModelDetails
+from stdapi.models.chat._adapters._anthropic_message import translate_request
 from stdapi.routes import anthropic_messages
-from stdapi.types.anthropic_messages import MessageCountTokensParams, MessageParam
+from stdapi.types.anthropic_messages import (
+    MessageCountTokensParams,
+    MessageCreateParams,
+    MessageParam,
+)
+
+if TYPE_CHECKING:
+    from starlette.testclient import TestClient
 
 #: Non-Anthropic model used to validate that extended thinking is rejected for non-Claude models.
 NON_ANTHROPIC_THINKING = "amazon.nova-2-lite-v1:0"
+
+#: Single-parameter custom tool used by every tool-calling test on this route.
+_WEATHER_TOOL: dict[str, object] = {
+    "name": "get_weather",
+    "description": "Get weather for a location",
+    "input_schema": {
+        "type": "object",
+        "properties": {"location": {"type": "string"}},
+        "required": ["location"],
+    },
+}
+
+
+@pytest.fixture
+def _skip_system_role_on_official_api(use_official_api: bool) -> None:
+    """Skip when the target is the official API, which has no system-role messages.
+
+    Upstream carries the system prompt only in the top-level ``system`` field; a
+    ``system`` role inside ``messages`` is a stdapi extension.
+    """
+    if use_official_api:
+        pytest.skip("system-role messages in `messages` are a stdapi extension")
+
+
+@pytest.fixture
+def _skip_non_claude_on_official_api(use_official_api: bool) -> None:
+    """Skip when the target is the official API, which only serves Claude models."""
+    if use_official_api:
+        pytest.skip("Only Claude models are supported by official API")
+
+
+def _register_test_model(
+    monkeypatch: pytest.MonkeyPatch, model_id: str, name: str, **extra: object
+) -> ModelDetails:
+    """Register a fake TEXT-in/TEXT-out model in the in-process model registry.
+
+    Both registry dicts are seeded because the routes read the per-region
+    ``_MODELS`` map while model resolution falls back to ``_ALL_MODELS``.
+
+    Args:
+        monkeypatch: Fixture used to undo the registry mutation after the test.
+        model_id: Identifier the test sends as ``model``.
+        name: Human-readable model name.
+        **extra: Extra ``ModelDetails`` fields, e.g. ``service``.
+
+    Returns:
+        The registered model details.
+    """
+    details = ModelDetails(
+        id=model_id,
+        name=name,
+        provider="Vendor",
+        input_modalities=["TEXT"],
+        output_modalities=["TEXT"],
+        regions=["us-east-1"],
+        **extra,  # type: ignore[arg-type]
+    )
+    monkeypatch.setitem(_models_mod._MODELS, details.id, details)  # noqa: SLF001
+    monkeypatch.setitem(_models_mod._ALL_MODELS, details.id, details)  # noqa: SLF001
+    return details
 
 
 class TestAnthropicMessages:
@@ -194,11 +265,9 @@ class TestAnthropicMessages:
         assert response.content[0].type == "text"
         assert "teal" in response.content[0].text.lower()
 
+    @pytest.mark.usefixtures("_skip_system_role_on_official_api")
     def test_system_role_in_messages(
-        self,
-        anthropic_client: Anthropic,
-        anthropic_chat_basic_model: str,
-        use_official_api: bool,
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """A leading ``role: "system"`` message is hoisted into the system prompt.
 
@@ -209,8 +278,6 @@ class TestAnthropicMessages:
         Ref: https://platform.claude.com/docs/en/api/messages
              stdapi/models/chat/_adapters/_anthropic_message.py:_extract_system_messages
         """
-        if use_official_api:
-            pytest.skip("system-role messages in `messages` are a stdapi extension")
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
             max_tokens=100,
@@ -228,11 +295,9 @@ class TestAnthropicMessages:
         assert response.content[0].type == "text"
         assert "teal" in response.content[0].text.lower()
 
+    @pytest.mark.usefixtures("_skip_system_role_on_official_api")
     def test_system_role_merged_with_system_field(
-        self,
-        anthropic_client: Anthropic,
-        anthropic_chat_basic_model: str,
-        use_official_api: bool,
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """A system-role message is appended after the top-level ``system`` field.
 
@@ -243,8 +308,6 @@ class TestAnthropicMessages:
         Ref: https://platform.claude.com/docs/en/api/messages
              stdapi/models/chat/_adapters/_anthropic_message.py:_merge_system_content
         """
-        if use_official_api:
-            pytest.skip("system-role messages in `messages` are a stdapi extension")
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
             max_tokens=100,
@@ -260,11 +323,9 @@ class TestAnthropicMessages:
         assert response.content[0].type == "text"
         assert "teal" in response.content[0].text.lower()
 
+    @pytest.mark.usefixtures("_skip_system_role_on_official_api")
     def test_system_role_list_content_in_messages(
-        self,
-        anthropic_client: Anthropic,
-        anthropic_chat_basic_model: str,
-        use_official_api: bool,
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """A system-role message whose ``content`` is a block list is hoisted block by block.
 
@@ -274,8 +335,6 @@ class TestAnthropicMessages:
         Ref: https://platform.claude.com/docs/en/api/messages
              stdapi/models/chat/_adapters/_anthropic_message.py:_extract_system_messages
         """
-        if use_official_api:
-            pytest.skip("system-role messages in `messages` are a stdapi extension")
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
             max_tokens=100,
@@ -299,11 +358,9 @@ class TestAnthropicMessages:
         assert response.content[0].type == "text"
         assert "teal" in response.content[0].text.lower()
 
+    @pytest.mark.usefixtures("_skip_system_role_on_official_api")
     def test_system_role_passthrough_as_message(
-        self,
-        anthropic_client: Anthropic,
-        anthropic_system_as_messages_model: str,
-        use_official_api: bool,
+        self, anthropic_client: Anthropic, anthropic_system_as_messages_model: str
     ) -> None:
         """A system-role message not followed by an assistant turn is folded into ``system``.
 
@@ -316,8 +373,6 @@ class TestAnthropicMessages:
              https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
              stdapi/models/chat/_adapters/_anthropic_message.py:_is_historical_directive
         """
-        if use_official_api:
-            pytest.skip("system-role messages in `messages` are a stdapi extension")
         response = anthropic_client.messages.create(
             model=anthropic_system_as_messages_model,
             # Room for reasoning models to think AND answer with text.
@@ -339,11 +394,9 @@ class TestAnthropicMessages:
         )
         assert response.stop_reason in {"end_turn", "max_tokens"}
 
+    @pytest.mark.usefixtures("_skip_system_role_on_official_api")
     def test_system_role_forwarded_between_user_and_assistant_turns(
-        self,
-        anthropic_client: Anthropic,
-        anthropic_system_as_messages_model: str,
-        use_official_api: bool,
+        self, anthropic_client: Anthropic, anthropic_system_as_messages_model: str
     ) -> None:
         """A user -> system -> assistant placement is forwarded to Bedrock as a system turn.
 
@@ -357,8 +410,6 @@ class TestAnthropicMessages:
              https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
              stdapi/models/chat/_adapters/_anthropic_message.py:_prepare_messages_and_system
         """
-        if use_official_api:
-            pytest.skip("system-role messages in `messages` are a stdapi extension")
         response = anthropic_client.messages.create(
             model=anthropic_system_as_messages_model,
             max_tokens=100,
@@ -631,17 +682,7 @@ class TestAnthropicMessages:
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
              stdapi/models/chat/_adapters/_anthropic_message.py:_map_tool_result_to_bedrock
         """
-        tools = [
-            {
-                "name": "get_weather",
-                "description": "Get current weather information",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"location": {"type": "string"}},
-                    "required": ["location"],
-                },
-            }
-        ]
+        tools = [_WEATHER_TOOL]
 
         # First call: get tool use
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
@@ -746,15 +787,7 @@ class TestAnthropicMessages:
              stdapi/models/chat/_adapters/_anthropic_message.py:_is_suppressed_tool
         """
         tools = [
-            {
-                "name": "get_weather",
-                "description": "Get weather",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"location": {"type": "string"}},
-                    "required": ["location"],
-                },
-            },
+            _WEATHER_TOOL,
             {
                 "name": "get_time",
                 "description": "Get current time",
@@ -798,17 +831,7 @@ class TestAnthropicMessages:
         Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
              stdapi/models/chat/_adapters/_anthropic_message.py:_handle_block_start
         """
-        tools = [
-            {
-                "name": "get_weather",
-                "description": "Get weather",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"location": {"type": "string"}},
-                    "required": ["location"],
-                },
-            }
-        ]
+        tools = [_WEATHER_TOOL]
 
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_vision_model,
@@ -869,8 +892,9 @@ class TestAnthropicMessages:
         assert len(text_blocks) >= 1
         assert "405" in text_blocks[0].text
 
+    @pytest.mark.usefixtures("_skip_non_claude_on_official_api")
     def test_extended_thinking_non_claude_enabled(
-        self, anthropic_client: Anthropic, use_official_api: bool
+        self, anthropic_client: Anthropic
     ) -> None:
         """``thinking`` adaptive works on a non-Claude Bedrock model too.
 
@@ -882,9 +906,6 @@ class TestAnthropicMessages:
              https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ReasoningContentBlock.html
              stdapi/models/chat/_adapters/_anthropic_message.py:extract_reasoning
         """
-        if use_official_api:
-            pytest.skip("Only Claude models are supported by official API")
-
         response = anthropic_client.messages.create(
             model=NON_ANTHROPIC_THINKING,
             max_tokens=2048,
@@ -902,8 +923,9 @@ class TestAnthropicMessages:
         assert len(text_blocks) >= 1
         assert "405" in text_blocks[0].text
 
+    @pytest.mark.usefixtures("_skip_non_claude_on_official_api")
     def test_output_config_effort_without_thinking(
-        self, anthropic_client: Anthropic, use_official_api: bool
+        self, anthropic_client: Anthropic
     ) -> None:
         """``output_config.effort`` alone enables reasoning, with no ``thinking`` field.
 
@@ -915,9 +937,6 @@ class TestAnthropicMessages:
              stdapi/types/anthropic_messages.py:OutputConfigParam
              stdapi/models/chat/_adapters/_anthropic_message.py:extract_reasoning
         """
-        if use_official_api:
-            pytest.skip("Only Claude models are supported by official API")
-
         response = anthropic_client.messages.create(
             model=NON_ANTHROPIC_THINKING,
             max_tokens=4000,
@@ -966,8 +985,9 @@ class TestAnthropicMessages:
             "thinking must be streamed before the answer text"
         )
 
+    @pytest.mark.usefixtures("_skip_non_claude_on_official_api")
     def test_extended_thinking_non_claude_streaming(
-        self, anthropic_client: Anthropic, use_official_api: bool
+        self, anthropic_client: Anthropic
     ) -> None:
         """Adaptive thinking streams ``thinking_delta`` and ``text_delta`` on a non-Claude model.
 
@@ -975,9 +995,6 @@ class TestAnthropicMessages:
              https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStream.html
              stdapi/models/chat/_adapters/_anthropic_message.py:_map_delta
         """
-        if use_official_api:
-            pytest.skip("Only Claude models are supported by official API")
-
         events = list(
             anthropic_client.messages.create(
                 model=NON_ANTHROPIC_THINKING,
@@ -1374,15 +1391,7 @@ class TestAnthropicMessages:
              stdapi/models/chat/_adapters/_anthropic_message.py:_build_tool_config
         """
         tools = [
-            {
-                "name": "get_weather",
-                "description": "Get weather for a location",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"location": {"type": "string"}},
-                    "required": ["location"],
-                },
-            },
+            _WEATHER_TOOL,
             {
                 "name": "get_stock_price",
                 "description": "Get stock price for a ticker symbol",
@@ -1425,17 +1434,7 @@ class TestAnthropicMessages:
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
              stdapi/models/chat/_adapters/_anthropic_message.py:_map_tool_result_to_bedrock
         """
-        tools = [
-            {
-                "name": "get_weather",
-                "description": "Get weather",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"location": {"type": "string"}},
-                    "required": ["location"],
-                },
-            }
-        ]
+        tools = [_WEATHER_TOOL]
 
         # First get a tool call
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
@@ -2312,21 +2311,11 @@ class TestAnthropicMessages:
              stdapi/models/chat/_adapters/_anthropic_message.py:_map_delta
         """
         events = list(
-            anthropic_client.messages.create(
+            anthropic_client.messages.create(  # type: ignore[call-overload]
                 model=anthropic_chat_vision_model,
                 max_tokens=300,
                 messages=[{"role": "user", "content": "What's the weather in Paris?"}],
-                tools=[
-                    {
-                        "name": "get_weather",
-                        "description": "Get weather for a location",
-                        "input_schema": {
-                            "type": "object",
-                            "properties": {"location": {"type": "string"}},
-                            "required": ["location"],
-                        },
-                    }
-                ],
+                tools=[_WEATHER_TOOL],
                 tool_choice={"type": "any"},
                 stream=True,
             )
@@ -2978,13 +2967,23 @@ class TestAnthropicCountTokens:
     gateway serves it from the Bedrock Runtime ``CountTokens`` operation (or the
     Mantle count_tokens path), building the same Converse input that
     ``create_message`` would send. The ``AnthropicBedrock`` client refuses the
-    route client-side, hence the xfail guards.
+    route client-side, hence the class-wide xfail on that lane.
 
     Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
          https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
          stdapi/routes/anthropic_messages.py:count_tokens
          stdapi/models/chat/_adapters/_anthropic_message.py:count_tokens_via_bedrock
     """
+
+    @pytest.fixture(autouse=True)
+    def _xfail_on_bedrock(self, is_bedrock_direct: bool) -> None:
+        """Xfail the whole class when the client talks to Bedrock directly.
+
+        ``AnthropicBedrock`` raises client-side for ``/v1/messages/count_tokens``,
+        so the route is unreachable rather than broken.
+        """
+        if is_bedrock_direct:
+            pytest.xfail("Token counting is not supported in Bedrock yet")
 
     def test_count_tokens_basic(
         self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
@@ -2998,17 +2997,10 @@ class TestAnthropicCountTokens:
         Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
              stdapi/types/anthropic_messages.py:MessageTokensCount
         """
-        try:
-            response = anthropic_client.messages.count_tokens(
-                model=anthropic_count_tokens_model,
-                messages=[{"role": "user", "content": "Hello, how are you?"}],
-            )
-        except AnthropicError as exc:
-            if isinstance(
-                anthropic_client, AnthropicBedrock
-            ) and "not supported" in str(exc):
-                pytest.xfail("Token counting is not supported in Bedrock yet")
-            raise
+        response = anthropic_client.messages.count_tokens(
+            model=anthropic_count_tokens_model,
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+        )
 
         assert response.input_tokens > 0
         assert response.input_tokens < 100, (
@@ -3026,17 +3018,10 @@ class TestAnthropicCountTokens:
         Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
              stdapi/models/chat/_adapters/_anthropic_message.py:_map_system_blocks
         """
-        try:
-            response_without = anthropic_client.messages.count_tokens(
-                model=anthropic_count_tokens_model,
-                messages=[{"role": "user", "content": "Hello"}],
-            )
-        except AnthropicError as exc:
-            if isinstance(
-                anthropic_client, AnthropicBedrock
-            ) and "not supported" in str(exc):
-                pytest.xfail("Token counting is not supported in Bedrock yet")
-            raise
+        response_without = anthropic_client.messages.count_tokens(
+            model=anthropic_count_tokens_model,
+            messages=[{"role": "user", "content": "Hello"}],
+        )
 
         response_with = anthropic_client.messages.count_tokens(
             model=anthropic_count_tokens_model,
@@ -3058,17 +3043,10 @@ class TestAnthropicCountTokens:
         Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
              stdapi/models/chat/_adapters/_anthropic_message.py:_build_tool_config
         """
-        try:
-            response_without = anthropic_client.messages.count_tokens(
-                model=anthropic_count_tokens_model,
-                messages=[{"role": "user", "content": "What is the weather?"}],
-            )
-        except AnthropicError as exc:
-            if isinstance(
-                anthropic_client, AnthropicBedrock
-            ) and "not supported" in str(exc):
-                pytest.xfail("Token counting is not supported in Bedrock yet")
-            raise
+        response_without = anthropic_client.messages.count_tokens(
+            model=anthropic_count_tokens_model,
+            messages=[{"role": "user", "content": "What is the weather?"}],
+        )
 
         response_with = anthropic_client.messages.count_tokens(
             model=anthropic_count_tokens_model,
@@ -3097,17 +3075,10 @@ class TestAnthropicCountTokens:
         Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
              stdapi/models/chat/_adapters/_anthropic_message.py:_map_messages
         """
-        try:
-            response_single = anthropic_client.messages.count_tokens(
-                model=anthropic_count_tokens_model,
-                messages=[{"role": "user", "content": "Hello"}],
-            )
-        except AnthropicError as exc:
-            if isinstance(
-                anthropic_client, AnthropicBedrock
-            ) and "not supported" in str(exc):
-                pytest.xfail("Token counting is not supported in Bedrock yet")
-            raise
+        response_single = anthropic_client.messages.count_tokens(
+            model=anthropic_count_tokens_model,
+            messages=[{"role": "user", "content": "Hello"}],
+        )
 
         response_multi = anthropic_client.messages.count_tokens(
             model=anthropic_count_tokens_model,
@@ -3129,17 +3100,10 @@ class TestAnthropicCountTokens:
         Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
              https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
         """
-        try:
-            response_short = anthropic_client.messages.count_tokens(
-                model=anthropic_count_tokens_model,
-                messages=[{"role": "user", "content": "Hi"}],
-            )
-        except AnthropicError as exc:
-            if isinstance(
-                anthropic_client, AnthropicBedrock
-            ) and "not supported" in str(exc):
-                pytest.xfail("Token counting is not supported in Bedrock yet")
-            raise
+        response_short = anthropic_client.messages.count_tokens(
+            model=anthropic_count_tokens_model,
+            messages=[{"role": "user", "content": "Hi"}],
+        )
 
         response_long = anthropic_client.messages.count_tokens(
             model=anthropic_count_tokens_model,
@@ -3167,21 +3131,14 @@ class TestAnthropicCountTokens:
              stdapi/routes/anthropic_messages.py:count_tokens
              stdapi/api_errors.py:UnsupportedModelError
         """
-        try:
-            with pytest.raises(NotFoundError) as excinfo:
-                anthropic_client.messages.count_tokens(
-                    model="nonexistent-model-xyz",
-                    messages=[{"role": "user", "content": "Hello"}],
-                )
-            assert excinfo.value.status_code == 404
-            assert excinfo.value.type == "not_found_error"
-            assert "nonexistent-model-xyz" in str(excinfo.value)
-        except AnthropicError as exc:
-            if isinstance(
-                anthropic_client, AnthropicBedrock
-            ) and "not supported" in str(exc):
-                pytest.xfail("Token counting is not supported in Bedrock yet")
-            raise
+        with pytest.raises(NotFoundError) as excinfo:
+            anthropic_client.messages.count_tokens(
+                model="nonexistent-model-xyz",
+                messages=[{"role": "user", "content": "Hello"}],
+            )
+        assert excinfo.value.status_code == 404
+        assert excinfo.value.type == "not_found_error"
+        assert "nonexistent-model-xyz" in str(excinfo.value)
 
     def test_count_tokens_content_blocks(
         self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
@@ -3191,24 +3148,17 @@ class TestAnthropicCountTokens:
         Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
              stdapi/models/chat/_adapters/_anthropic_message.py:_map_messages
         """
-        try:
-            response = anthropic_client.messages.count_tokens(
-                model=anthropic_count_tokens_model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "What is the meaning of life?"}
-                        ],
-                    }
-                ],
-            )
-        except AnthropicError as exc:
-            if isinstance(
-                anthropic_client, AnthropicBedrock
-            ) and "not supported" in str(exc):
-                pytest.xfail("Token counting is not supported in Bedrock yet")
-            raise
+        response = anthropic_client.messages.count_tokens(
+            model=anthropic_count_tokens_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What is the meaning of life?"}
+                    ],
+                }
+            ],
+        )
 
         assert response.input_tokens > 0
         assert response.input_tokens < 100, (
@@ -3228,21 +3178,14 @@ class TestAnthropicCountTokens:
              https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
              stdapi/models/chat/_adapters/_anthropic_message.py:count_tokens_via_bedrock
         """
-        try:
-            with pytest.raises(BadRequestError) as excinfo:
-                anthropic_client.messages.count_tokens(
-                    model=anthropic_count_tokens_model,
-                    messages=[{"role": "user", "content": "Hello"}],
-                    tools=[{"type": "web_search_20250305", "name": "web_search"}],
-                )
-            assert excinfo.value.status_code == 400
-            assert excinfo.value.type == "invalid_request_error"
-        except AnthropicError as exc:
-            if isinstance(
-                anthropic_client, AnthropicBedrock
-            ) and "not supported" in str(exc):
-                pytest.xfail("Token counting is not supported in Bedrock yet")
-            raise
+        with pytest.raises(BadRequestError) as excinfo:
+            anthropic_client.messages.count_tokens(
+                model=anthropic_count_tokens_model,
+                messages=[{"role": "user", "content": "Hello"}],
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+            )
+        assert excinfo.value.status_code == 400
+        assert excinfo.value.type == "invalid_request_error"
 
     def test_count_tokens_with_system_blocks(
         self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
@@ -3252,29 +3195,20 @@ class TestAnthropicCountTokens:
         Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
              stdapi/models/chat/_adapters/_anthropic_message.py:_map_system_blocks
         """
-        try:
-            response = anthropic_client.messages.count_tokens(
-                model=anthropic_count_tokens_model,
-                messages=[{"role": "user", "content": "Hello"}],
-                system=[{"type": "text", "text": "You are a helpful assistant."}],
-            )
-        except AnthropicError as exc:
-            if isinstance(
-                anthropic_client, AnthropicBedrock
-            ) and "not supported" in str(exc):
-                pytest.xfail("Token counting is not supported in Bedrock yet")
-            raise
+        response = anthropic_client.messages.count_tokens(
+            model=anthropic_count_tokens_model,
+            messages=[{"role": "user", "content": "Hello"}],
+            system=[{"type": "text", "text": "You are a helpful assistant."}],
+        )
 
         assert response.input_tokens > 0
         assert response.input_tokens < 100, (
             f"a one-sentence system prompt cannot cost {response.input_tokens} tokens"
         )
 
+    @pytest.mark.usefixtures("_skip_system_role_on_official_api")
     def test_count_tokens_system_role_in_messages(
-        self,
-        anthropic_client: Anthropic,
-        anthropic_count_tokens_model: str,
-        use_official_api: bool,
+        self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
     ) -> None:
         """A system-role message inside ``messages`` is counted, not dropped.
 
@@ -3284,19 +3218,10 @@ class TestAnthropicCountTokens:
         Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
              stdapi/models/chat/_adapters/_anthropic_message.py:_prepare_messages_and_system
         """
-        if use_official_api:
-            pytest.skip("system-role messages in `messages` are a stdapi extension")
-        try:
-            response_without = anthropic_client.messages.count_tokens(
-                model=anthropic_count_tokens_model,
-                messages=[{"role": "user", "content": "Hello"}],
-            )
-        except AnthropicError as exc:
-            if isinstance(
-                anthropic_client, AnthropicBedrock
-            ) and "not supported" in str(exc):
-                pytest.xfail("Token counting is not supported in Bedrock yet")
-            raise
+        response_without = anthropic_client.messages.count_tokens(
+            model=anthropic_count_tokens_model,
+            messages=[{"role": "user", "content": "Hello"}],
+        )
 
         response_with = anthropic_client.messages.count_tokens(
             model=anthropic_count_tokens_model,
@@ -3312,11 +3237,9 @@ class TestAnthropicCountTokens:
         assert response_without.input_tokens > 0
         assert response_with.input_tokens > response_without.input_tokens
 
+    @pytest.mark.usefixtures("_skip_system_role_on_official_api")
     def test_count_tokens_system_role_equivalent_to_system_field(
-        self,
-        anthropic_client: Anthropic,
-        anthropic_count_tokens_model: str,
-        use_official_api: bool,
+        self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
     ) -> None:
         """The two ways of giving a system prompt produce the same token count.
 
@@ -3326,21 +3249,12 @@ class TestAnthropicCountTokens:
         Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
              stdapi/models/chat/_adapters/_anthropic_message.py:_merge_system_content
         """
-        if use_official_api:
-            pytest.skip("system-role messages in `messages` are a stdapi extension")
         system_text = "You are a helpful assistant."
-        try:
-            response_field = anthropic_client.messages.count_tokens(
-                model=anthropic_count_tokens_model,
-                messages=[{"role": "user", "content": "Hello"}],
-                system=system_text,
-            )
-        except AnthropicError as exc:
-            if isinstance(
-                anthropic_client, AnthropicBedrock
-            ) and "not supported" in str(exc):
-                pytest.xfail("Token counting is not supported in Bedrock yet")
-            raise
+        response_field = anthropic_client.messages.count_tokens(
+            model=anthropic_count_tokens_model,
+            messages=[{"role": "user", "content": "Hello"}],
+            system=system_text,
+        )
 
         response_role = anthropic_client.messages.count_tokens(
             model=anthropic_count_tokens_model,
@@ -3366,49 +3280,28 @@ class TestAnthropicCountTokensDispatch:
          stdapi/routes/anthropic_messages.py:count_tokens
     """
 
-    @pytest.fixture
-    def client(self, api_key: str) -> TestClient:
-        """Test client without lifespan (no AWS startup), pre-authenticated."""
-        from stdapi.main import app  # noqa: PLC0415
-
-        return TestClient(
-            app, headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"}
-        )
+    pytestmark = pytest.mark.local
 
     @pytest.fixture
     def runtime_model(self, monkeypatch: pytest.MonkeyPatch) -> ModelDetails:
         """Register a fake Bedrock Runtime model in the model registry."""
-        details = ModelDetails(
-            id="test.count-tokens-runtime-model",
-            name="Runtime Count Tokens Test",
-            provider="Vendor",
-            input_modalities=["TEXT"],
-            output_modalities=["TEXT"],
-            regions=["us-east-1"],
+        return _register_test_model(
+            monkeypatch, "test.count-tokens-runtime-model", "Runtime Count Tokens Test"
         )
-        monkeypatch.setitem(_models_mod._MODELS, details.id, details)  # noqa: SLF001
-        monkeypatch.setitem(_models_mod._ALL_MODELS, details.id, details)  # noqa: SLF001
-        return details
 
     @pytest.fixture
     def mantle_model(self, monkeypatch: pytest.MonkeyPatch) -> ModelDetails:
         """Register a fake Bedrock Mantle model in the model registry."""
-        details = ModelDetails(
-            id="test.count-tokens-mantle-model",
-            name="Mantle Count Tokens Test",
-            provider="Vendor",
+        return _register_test_model(
+            monkeypatch,
+            "test.count-tokens-mantle-model",
+            "Mantle Count Tokens Test",
             service="AWS Bedrock Mantle",
-            input_modalities=["TEXT"],
-            output_modalities=["TEXT"],
-            regions=["us-east-1"],
         )
-        monkeypatch.setitem(_models_mod._MODELS, details.id, details)  # noqa: SLF001
-        monkeypatch.setitem(_models_mod._ALL_MODELS, details.id, details)  # noqa: SLF001
-        return details
 
     def test_runtime_model_uses_classic_bedrock_counter(
         self,
-        client: TestClient,
+        anthropic_app_client: TestClient,
         runtime_model: ModelDetails,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -3422,7 +3315,7 @@ class TestAnthropicCountTokensDispatch:
         monkeypatch.setattr(anthropic_messages, "count_tokens_via_bedrock", classic)
         monkeypatch.setattr(anthropic_messages, "_count_tokens_via_mantle", mantle)
 
-        response = client.post(
+        response = anthropic_app_client.post(
             "/anthropic/v1/messages/count_tokens",
             json={
                 "model": runtime_model.id,
@@ -3438,7 +3331,7 @@ class TestAnthropicCountTokensDispatch:
 
     def test_mantle_served_model_uses_mantle_counter(
         self,
-        client: TestClient,
+        anthropic_app_client: TestClient,
         mantle_model: ModelDetails,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -3455,7 +3348,7 @@ class TestAnthropicCountTokensDispatch:
         monkeypatch.setattr(anthropic_messages, "count_tokens_via_bedrock", classic)
         monkeypatch.setattr(anthropic_messages, "_count_tokens_via_mantle", mantle)
 
-        response = client.post(
+        response = anthropic_app_client.post(
             "/anthropic/v1/messages/count_tokens",
             json={
                 "model": mantle_model.id,
@@ -3480,39 +3373,25 @@ class TestAnthropicMessagesUnknownModel:
     pytestmark = pytest.mark.local
 
     @pytest.fixture
-    def client(self, api_key: str) -> TestClient:
-        """Test client without lifespan (no AWS startup), pre-authenticated."""
-        from stdapi.main import app  # noqa: PLC0415
-
-        return TestClient(
-            app, headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"}
-        )
-
-    @pytest.fixture
     def _offline_registry(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Seed one model and disable the AWS registry refresh on cache miss."""
-        details = ModelDetails(
-            id="test.some-registered-model",
-            name="Registered Test Model",
-            provider="Vendor",
-            input_modalities=["TEXT"],
-            output_modalities=["TEXT"],
-            regions=["us-east-1"],
+        _register_test_model(
+            monkeypatch, "test.some-registered-model", "Registered Test Model"
         )
-        monkeypatch.setitem(_models_mod._MODELS, details.id, details)  # noqa: SLF001
-        monkeypatch.setitem(_models_mod._ALL_MODELS, details.id, details)  # noqa: SLF001
         monkeypatch.setattr(
             _models_mod, "initialize_bedrock_models", AsyncMock(return_value=None)
         )
 
     @pytest.mark.usefixtures("_offline_registry")
-    def test_messages_unknown_model_returns_404(self, client: TestClient) -> None:
+    def test_messages_unknown_model_returns_404(
+        self, anthropic_app_client: TestClient
+    ) -> None:
         """An unknown model returns 404 not_found_error like the official API.
 
         Ref: https://platform.claude.com/docs/en/api/errors
              stdapi/api_errors.py:UnsupportedModelError
         """
-        response = client.post(
+        response = anthropic_app_client.post(
             "/anthropic/v1/messages",
             json={
                 "model": "nonexistent-model-xyz",
@@ -3529,13 +3408,15 @@ class TestAnthropicMessagesUnknownModel:
         assert response.headers["request-id"] == body["request_id"]
 
     @pytest.mark.usefixtures("_offline_registry")
-    def test_count_tokens_unknown_model_returns_404(self, client: TestClient) -> None:
+    def test_count_tokens_unknown_model_returns_404(
+        self, anthropic_app_client: TestClient
+    ) -> None:
         """count_tokens with an unknown model returns 404 not_found_error.
 
         Ref: https://platform.claude.com/docs/en/api/errors
              stdapi/routes/anthropic_messages.py:count_tokens
         """
-        response = client.post(
+        response = anthropic_app_client.post(
             "/anthropic/v1/messages/count_tokens",
             json={
                 "model": "nonexistent-model-xyz",
@@ -3564,33 +3445,17 @@ class TestAnthropicMessagesMaxTokensOptional:
 
     pytestmark = pytest.mark.local
 
-    @pytest.fixture
-    def client(self, api_key: str) -> TestClient:
-        """Test client without lifespan (no AWS startup), pre-authenticated."""
-        from stdapi.main import app  # noqa: PLC0415
-
-        return TestClient(
-            app, headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"}
-        )
-
     def test_missing_max_tokens_is_accepted(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, anthropic_app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A /v1/messages request without ``max_tokens`` is accepted and forwards it unset.
 
         Ref: https://platform.claude.com/docs/en/api/messages
              stdapi/types/anthropic_messages.py:MessageCreateParams
         """
-        details = ModelDetails(
-            id="test.max-tokens-optional-model",
-            name="Max Tokens Optional Test",
-            provider="Vendor",
-            input_modalities=["TEXT"],
-            output_modalities=["TEXT"],
-            regions=["us-east-1"],
+        details = _register_test_model(
+            monkeypatch, "test.max-tokens-optional-model", "Max Tokens Optional Test"
         )
-        monkeypatch.setitem(_models_mod._MODELS, details.id, details)  # noqa: SLF001
-        monkeypatch.setitem(_models_mod._ALL_MODELS, details.id, details)  # noqa: SLF001
         fake_message = {
             "id": "msg_1",
             "type": "message",
@@ -3605,7 +3470,7 @@ class TestAnthropicMessagesMaxTokensOptional:
         )
         monkeypatch.setattr(anthropic_messages, "get_chat_model", lambda _: fake_model)
 
-        response = client.post(
+        response = anthropic_app_client.post(
             "/anthropic/v1/messages",
             json={"model": details.id, "messages": [{"role": "user", "content": "hi"}]},
         )
@@ -3637,9 +3502,7 @@ class TestCountTokensViaMantleSingleRegion:
         """Invoke ``_count_tokens_via_mantle`` and return the ``single_region`` it used."""
         monkeypatch.setattr(anthropic_messages, "REGION_ROUTER", region_router)
         monkeypatch.setattr(
-            anthropic_messages.SETTINGS,
-            "aws_bedrock_mantle_regions",
-            ["us-east-1", "eu-west-1"],
+            SETTINGS, "aws_bedrock_mantle_regions", ["us-east-1", "eu-west-1"]
         )
         monkeypatch.setattr(
             anthropic_messages, "messages_payload", AsyncMock(return_value={})
@@ -3699,3 +3562,427 @@ class TestCountTokensViaMantleSingleRegion:
              stdapi/routes/anthropic_messages.py:_count_tokens_via_mantle
         """
         assert await self._run(monkeypatch, region_router=object()) is False
+
+
+class TestTranslateRequestParameters:
+    """Offline unit tests for the request parameters ``translate_request`` maps to Bedrock.
+
+    Converse's ``inferenceConfig`` only carries temperature / topP / maxTokens /
+    stopSequences, so every other generation knob — including ``top_k`` and any
+    caller-supplied model extra — has to travel in
+    ``additionalModelRequestFields``.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html
+         stdapi/models/chat/_adapters/_anthropic_message.py:translate_request
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    async def _translate(
+        **fields: object,
+    ) -> tuple[dict[str, object], dict[str, object], str | None]:
+        """Translate a minimal request and return (inference config, extras, tier)."""
+        request = MessageCreateParams.model_validate(
+            {
+                "model": "test.translate-model",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+                **fields,
+            }
+        )
+        (
+            _messages,
+            _system,
+            inference_config,
+            additional_request_fields,
+            _tool_config,
+            service_tier,
+            *_rest,
+        ) = await translate_request(
+            request,
+            "test.translate-model",
+            prompt_caching_supported=False,
+            prompt_caching_tool_supported=False,
+        )
+        return dict(inference_config), dict(additional_request_fields), service_tier
+
+    @pytest.mark.parametrize(
+        ("requested", "expected"),
+        [
+            ("standard_only", "default"),
+            ("priority", "priority"),
+            ("flex", "flex"),
+            ("reserved", "reserved"),
+        ],
+    )
+    async def test_service_tier_maps_to_a_bedrock_tier(
+        self, requested: str, expected: str
+    ) -> None:
+        """Each accepted ``service_tier`` resolves to its Bedrock service tier.
+
+        Anthropic's baseline value is ``standard_only`` while Converse spells the
+        same tier ``default``; ``priority`` / ``flex`` / ``reserved`` are
+        Bedrock-only extensions the gateway forwards unchanged.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_SERVICES_TIERS
+        """
+        _config, _extras, tier = await self._translate(service_tier=requested)
+        assert tier == expected
+
+    async def test_service_tier_auto_selects_no_bedrock_tier(self) -> None:
+        """``auto`` is deliberately unmapped so Bedrock applies the account default.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/models/chat/_adapters/_anthropic_message.py:_SERVICES_TIERS
+        """
+        _config, _extras, tier = await self._translate(service_tier="auto")
+        assert tier is None
+
+    async def test_top_k_goes_to_additional_model_request_fields(self) -> None:
+        """``top_k`` is forwarded as a model extra, not as an inference-config field.
+
+        Converse's ``inferenceConfig`` has no ``top_k``, so putting it there would
+        make Bedrock reject the request.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:translate_request
+        """
+        config, extras, _tier = await self._translate(top_k=40)
+        assert extras["top_k"] == 40
+        assert "top_k" not in config
+        assert config["maxTokens"] == 16
+
+    async def test_unknown_body_field_reaches_additional_model_request_fields(
+        self,
+    ) -> None:
+        """An unmodelled body field is forwarded verbatim as a model-specific extra.
+
+        Accepting extra keys is a documented gateway extension: they are collected
+        in ``model_extra`` and merged into ``additionalModelRequestFields`` so a
+        caller can reach a parameter the Anthropic schema does not model.
+
+        Ref: stdapi/types/anthropic_messages.py:MessageCreateParams
+             stdapi/aws_bedrock.py:set_inference_configuration
+        """
+        config, extras, _tier = await self._translate(vendor_specific_knob=7)
+        assert extras["vendor_specific_knob"] == 7
+        assert "vendor_specific_knob" not in config
+
+    def test_camelcase_aliases_are_accepted(self) -> None:
+        """``maxTokens`` / ``topP`` / ``stopSequences`` validate as their snake_case fields.
+
+        These aliases are a gateway extension; if one were dropped the camelCase
+        spelling would land in ``model_extra`` and be forwarded to Bedrock as an
+        unknown extra instead of configuring generation.
+
+        Ref: stdapi/types/anthropic_messages.py:MessageCreateParams
+        """
+        request = MessageCreateParams.model_validate(
+            {
+                "model": "test.translate-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "maxTokens": 10,
+                "topP": 0.5,
+                "stopSequences": ["x"],
+            }
+        )
+        assert request.max_tokens == 10
+        assert request.top_p == 0.5
+        assert request.stop_sequences == ["x"]
+        assert not request.model_extra, (
+            f"an alias leaked into model_extra: {request.model_extra}"
+        )
+
+    async def test_inference_geo_and_container_are_accepted_and_unused(self) -> None:
+        """``inference_geo`` and ``container`` validate but reach no Converse field.
+
+        Both are declared so an SDK client sending them is not rejected with a 422;
+        the Converse path has nowhere to put them, and forwarding them as model
+        extras would make Bedrock reject the request.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/types/anthropic_messages.py:MessageCreateParams
+        """
+        request = MessageCreateParams.model_validate(
+            {
+                "model": "test.translate-model",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+                "inference_geo": "us",
+                "container": "container_123",
+            }
+        )
+        assert request.inference_geo == "us"
+        assert request.container == "container_123"
+        config, extras, _tier = await self._translate(
+            inference_geo="us", container="container_123"
+        )
+        assert "inference_geo" not in extras
+        assert "container" not in extras
+        assert "inference_geo" not in config
+        assert "container" not in config
+
+
+class TestCountTokensViaMantlePayload:
+    """Offline unit tests for the payload ``_count_tokens_via_mantle`` sends.
+
+    ``messages_payload`` injects the generation-only ``max_tokens`` default that
+    the Messages API needs, so the count_tokens caller has to strip it again: the
+    count_tokens body is the Messages body *minus* ``max_tokens``.
+
+    Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
+         https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
+         stdapi/routes/anthropic_messages.py:_count_tokens_via_mantle
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    async def _capture(
+        monkeypatch: pytest.MonkeyPatch, **fields: object
+    ) -> dict[str, object]:
+        """Run the Mantle counter with ``invoke`` stubbed and return what it received."""
+        captured: dict[str, object] = {}
+
+        async def _fake_invoke(
+            region: object, path: str, payload: dict[str, object], **kwargs: object
+        ) -> dict[str, int]:
+            captured.update(
+                region=region, path=path, payload=payload, headers=kwargs.get("headers")
+            )
+            return {"input_tokens": 3}
+
+        async def _fake_route_and_execute(
+            _model_id: object, regions: list[object], fn: object
+        ) -> object:
+            return await fn(regions[0])  # type: ignore[operator]
+
+        monkeypatch.setattr(anthropic_messages, "invoke", _fake_invoke)
+        monkeypatch.setattr(
+            anthropic_messages, "route_and_execute", _fake_route_and_execute
+        )
+        monkeypatch.setattr(
+            anthropic_messages, "set_effective_region", lambda *_a, **_k: None
+        )
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_regions", ["us-east-1"])
+
+        request = MessageCountTokensParams.model_validate(
+            {
+                "model": "test.fake-mantle-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                **fields,
+            }
+        )
+        tokens = await anthropic_messages._count_tokens_via_mantle(  # noqa: SLF001
+            request, "test.fake-mantle-model"
+        )
+        assert tokens == 3
+        return captured
+
+    async def test_payload_drops_max_tokens(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The forwarded body carries no ``max_tokens``, which count_tokens does not accept.
+
+        ``messages_payload`` defaults ``max_tokens`` when unset, so the pop is
+        load-bearing even for a request that never mentioned the field.
+        """
+        captured = await self._capture(monkeypatch)
+        payload = captured["payload"]
+        assert isinstance(payload, dict)
+        assert "max_tokens" not in payload
+        assert payload["model"] == "test.fake-mantle-model"
+        assert payload["messages"] == [{"role": "user", "content": "hi"}]
+
+    async def test_payload_targets_the_count_tokens_path_with_messages_headers(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The call goes to the Messages count_tokens path with the Messages Mantle headers.
+
+        Mantle serves the Anthropic-native surface under its own path prefix, and
+        the ``anthropic-version`` header replaces the body field the Bedrock
+        InvokeModel surface expects.
+        """
+        captured = await self._capture(monkeypatch)
+        assert isinstance(captured["path"], str)
+        assert captured["path"].endswith("/messages/count_tokens")
+        headers = captured["headers"]
+        assert isinstance(headers, dict)
+        assert headers == mantle_request_headers("messages")
+
+
+class TestMessagesRequestLogging:
+    """Offline unit tests for what the Messages route records in the request log.
+
+    ``metadata.user_id`` has no Converse equivalent, so the documented behavior on
+    this path is exactly "it is logged" — per-user cost attribution reads it from
+    the structured request log.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         stdapi/routes/anthropic_messages.py:create_message
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    def _stub_model(monkeypatch: pytest.MonkeyPatch) -> None:
+        """Replace model resolution and invocation with offline stubs."""
+        details = SimpleNamespace(id="test.logging-model")
+        monkeypatch.setattr(
+            anthropic_messages, "REQUEST_ID", SimpleNamespace(get=lambda: "req-1")
+        )
+        monkeypatch.setattr(
+            anthropic_messages, "validate_model", AsyncMock(return_value=details)
+        )
+        monkeypatch.setattr(
+            anthropic_messages,
+            "get_chat_model",
+            lambda _: SimpleNamespace(create_message=AsyncMock(return_value={})),
+        )
+
+    async def test_metadata_user_id_is_logged(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, object]
+    ) -> None:
+        """``metadata.user_id`` is recorded as ``request_user_id`` in the request log."""
+        self._stub_model(monkeypatch)
+        request = MessageCreateParams.model_validate(
+            {
+                "model": "test.logging-model",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+                "metadata": {"user_id": "user-42"},
+            }
+        )
+        await anthropic_messages.create_message(request)
+        assert request_log["request_user_id"] == "user-42"
+
+    async def test_no_metadata_leaves_the_user_id_unset(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, object]
+    ) -> None:
+        """A request without ``metadata`` records no ``request_user_id`` key."""
+        self._stub_model(monkeypatch)
+        request = MessageCreateParams.model_validate(
+            {
+                "model": "test.logging-model",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        )
+        await anthropic_messages.create_message(request)
+        assert "request_user_id" not in request_log
+
+
+class TestMessagesBedrockHeaders:
+    """Offline unit tests for the Bedrock passthrough headers on ``POST /v1/messages``.
+
+    The headers are documented as a feature of this route but are applied by the
+    shared app middleware, so only an end-to-end request through the Anthropic
+    route proves they are honored here and not just on the OpenAI surfaces.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html
+         stdapi/main.py:_middleware
+         stdapi/aws_bedrock.py:set_guardrail_configuration
+    """
+
+    pytestmark = pytest.mark.local
+
+    def test_guardrail_headers_reach_the_bedrock_call(
+        self, anthropic_app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The three guardrail headers become the request's Bedrock guardrail config.
+
+        The override is opt-in: without ``aws_bedrock_allow_guardrail_override`` the
+        headers are ignored in favor of the server-wide configuration, so the
+        setting is enabled here to exercise the header branch.
+        """
+        details = _register_test_model(
+            monkeypatch, "test.guardrail-headers-model", "Guardrail Headers Test"
+        )
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_guardrail_override", True)
+        captured: dict[str, object] = {}
+
+        async def _create_message(
+            *_args: object, **_kwargs: object
+        ) -> dict[str, object]:
+            captured["guardrail"] = GUARDRAIL_CONFIG_VAR.get(None)
+            return {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "hi"}],
+                "model": details.id,
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }
+
+        monkeypatch.setattr(
+            anthropic_messages,
+            "get_chat_model",
+            lambda _: SimpleNamespace(create_message=_create_message),
+        )
+
+        response = anthropic_app_client.post(
+            "/anthropic/v1/messages",
+            json={"model": details.id, "messages": [{"role": "user", "content": "hi"}]},
+            headers={
+                "X-Amzn-Bedrock-GuardrailIdentifier": "gr-123",
+                "X-Amzn-Bedrock-GuardrailVersion": "2",
+                "X-Amzn-Bedrock-Trace": "enabled",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert captured["guardrail"] == {
+            "guardrailIdentifier": "gr-123",
+            "guardrailVersion": "2",
+            "trace": "enabled",
+        }
+
+    def test_guardrail_headers_are_ignored_without_the_override_setting(
+        self, anthropic_app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Caller-supplied guardrail headers are dropped when the override is disabled.
+
+        Letting any caller pick the guardrail would defeat a server-enforced one,
+        so the header branch is gated behind an explicit opt-in.
+        """
+        details = _register_test_model(
+            monkeypatch, "test.guardrail-headers-off-model", "Guardrail Headers Off"
+        )
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_guardrail_override", False)
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", None)
+        captured: dict[str, object] = {}
+
+        async def _create_message(
+            *_args: object, **_kwargs: object
+        ) -> dict[str, object]:
+            captured["guardrail"] = GUARDRAIL_CONFIG_VAR.get(None)
+            return {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "hi"}],
+                "model": details.id,
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }
+
+        monkeypatch.setattr(
+            anthropic_messages,
+            "get_chat_model",
+            lambda _: SimpleNamespace(create_message=_create_message),
+        )
+
+        response = anthropic_app_client.post(
+            "/anthropic/v1/messages",
+            json={"model": details.id, "messages": [{"role": "user", "content": "hi"}]},
+            headers={
+                "X-Amzn-Bedrock-GuardrailIdentifier": "gr-123",
+                "X-Amzn-Bedrock-GuardrailVersion": "2",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert captured["guardrail"] is None

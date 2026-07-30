@@ -13,81 +13,12 @@ Ref: https://platform.claude.com/docs/en/api/models/list
 """
 
 from datetime import UTC, datetime
-from os import getenv
-from typing import TYPE_CHECKING
 
 import pytest
-from anthropic import Anthropic, AnthropicBedrock, NotFoundError
+from anthropic import Anthropic, NotFoundError
 
 from stdapi.routes.anthropic_models import paginate_models
 from stdapi.types.anthropic_messages import ModelInfo
-
-if TYPE_CHECKING:
-    from starlette.testclient import TestClient
-
-# Model mappings for different test contexts
-ANTHROPIC_MODEL_MAPPINGS = {
-    "local": {"chat": "anthropic.claude-haiku-4-5-20251001-v1:0"},
-    "anthropic": {"chat": "claude-haiku-4-5-20251001"},
-}
-ANTHROPIC_MODEL_MAPPINGS["bedrock"] = {
-    key: f"global.{value}" for key, value in ANTHROPIC_MODEL_MAPPINGS["local"].items()
-}
-
-
-@pytest.fixture(scope="session")
-def use_anthropic_api(request: pytest.FixtureRequest) -> bool:
-    """Determine if we should use the official Anthropic API."""
-    return request.config.getoption("--use-official-api")  # type: ignore[no-any-return]
-
-
-@pytest.fixture(scope="session")
-def anthropic_models(use_anthropic_api: bool) -> dict[str, str]:
-    """Get model mappings based on test target."""
-    return (
-        (
-            ANTHROPIC_MODEL_MAPPINGS["anthropic"]
-            if getenv("ANTHROPIC_API_KEY")
-            else ANTHROPIC_MODEL_MAPPINGS["bedrock"]
-        )
-        if use_anthropic_api
-        else ANTHROPIC_MODEL_MAPPINGS["local"]
-    )
-
-
-@pytest.fixture(scope="session")
-def anthropic_chat_model(anthropic_models: dict[str, str]) -> str:
-    """Provide the appropriate chat model."""
-    return anthropic_models["chat"]
-
-
-@pytest.fixture(scope="session")
-def anthropic_client(
-    request: pytest.FixtureRequest, test_client: TestClient | None, api_key: str
-) -> Anthropic:
-    """Create an Anthropic client for either local or official API testing."""
-    # Local test
-    if test_client:
-        return Anthropic(
-            base_url="http://testserver/anthropic/",
-            api_key=api_key,
-            max_retries=5,
-            http_client=test_client,
-        )
-
-    # Official API test
-    if request.config.getoption("--use-official-api"):
-        if getenv("ANTHROPIC_API_KEY"):
-            return Anthropic(max_retries=5)
-        # If no API key, try using official Anthropic client through Bedrock
-        return AnthropicBedrock(max_retries=5)  # type: ignore[return-value]
-
-    # Remote server test
-    return Anthropic(
-        base_url=f"{request.config.getoption('--server-url').rstrip('/')}/anthropic/",
-        max_retries=5,
-        api_key=getenv("OPENAI_API_KEY"),
-    )
 
 
 class TestAnthropicModels:
@@ -99,9 +30,9 @@ class TestAnthropicModels:
     """
 
     @pytest.fixture(autouse=True)
-    def _skip_bedrock(self, anthropic_client: Anthropic) -> None:
+    def _skip_bedrock(self, is_bedrock_direct: bool) -> None:
         """Skip all tests in this class when using AnthropicBedrock."""
-        if isinstance(anthropic_client, AnthropicBedrock):
+        if is_bedrock_direct:
             pytest.skip("AnthropicBedrock client does not support the models API")
 
     def test_list_models_basic_functionality(self, anthropic_client: Anthropic) -> None:
@@ -337,6 +268,30 @@ class TestAnthropicModels:
         assert entries[0].type == "model"
         assert entries[0].display_name
 
+    def test_list_models_excludes_non_text_models(
+        self, anthropic_client: Anthropic, anthropic_chat_model: str
+    ) -> None:
+        """Models that are not TEXT-in and TEXT-out are absent from the catalog.
+
+        Clients feed the returned IDs straight back into ``/v1/messages``, so the
+        route keeps only models declaring both TEXT input and TEXT output: an
+        image generator (IMAGE output) and an embedding model (EMBEDDING output)
+        must not appear even though both are served by the same backend.
+
+        Ref: https://platform.claude.com/docs/en/api/models/list
+             stdapi/routes/anthropic_models.py:list_models
+        """
+        ids = {m.id for m in anthropic_client.models.list(limit=1000).data}
+
+        assert anthropic_chat_model in ids, "the text model must still be listed"
+        assert not {
+            model_id
+            for model_id in ids
+            if "image-generator" in model_id
+            or "embed" in model_id
+            or model_id.startswith("stability.")
+        }, "an image-only or embedding model leaked into the Anthropic catalog"
+
     # --- Pagination edge cases ---
 
     def test_list_models_after_id_last_model(self, anthropic_client: Anthropic) -> None:
@@ -449,6 +404,8 @@ class TestPaginateModelsOffline:
     Ref: https://platform.claude.com/docs/en/api/models/list
          stdapi/routes/anthropic_models.py:paginate_models
     """
+
+    pytestmark = pytest.mark.local
 
     @staticmethod
     def _models(count: int) -> list[ModelInfo]:

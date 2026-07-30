@@ -13,7 +13,7 @@ Ref: https://developers.openai.com/api/reference/resources/responses/streaming-e
 
 import json
 from functools import partial
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast, get_args
 
 import pytest
 from openai.types.responses.response_completed_event import (
@@ -41,7 +41,7 @@ from stdapi.models.chat._adapters._openai_responses import (
     format_response,
     format_stream,
 )
-from stdapi.monitoring import REQUEST_ID, REQUEST_LOG, SseHandledStreamError
+from stdapi.monitoring import REQUEST_ID, SseHandledStreamError
 from stdapi.routes._moderation import build_response_moderation
 from stdapi.types.openai import ModerationResult, RequestModeration, ResponseModeration
 from stdapi.types.openai_responses import (
@@ -51,13 +51,14 @@ from stdapi.types.openai_responses import (
     ResponseCreateParams,
     ResponseFunctionToolCall,
     ResponseFunctionWebSearch,
+    ResponseIncludable,
     ResponseOutputMessage,
     ResponseOutputText,
     WebSearchActionSearch,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator, Sequence
+    from collections.abc import AsyncGenerator, Sequence
 
     from types_aiobotocore_bedrock_runtime.type_defs import (
         ConverseResponseTypeDef,
@@ -71,11 +72,8 @@ pytestmark = pytest.mark.local
 
 
 @pytest.fixture(autouse=True)
-def _request_log() -> Generator[None]:
-    """Provide the request log context required by response logging."""
-    token = REQUEST_LOG.set({"level": "info"})  # type: ignore[typeddict-item]
-    yield
-    REQUEST_LOG.reset(token)
+def _request_log(request_log: dict[str, Any]) -> None:
+    """Bind the shared request-log context required by response logging."""
 
 
 def _request(**kwargs: object) -> ResponseCreateParams:
@@ -240,8 +238,15 @@ class TestTerminalEvents:
         sdk_event = SDKResponseIncompleteEvent.model_validate(payload)
         assert sdk_event.sequence_number == payload["sequence_number"]
 
-    async def test_incomplete_on_guardrail(self) -> None:
-        """A guardrail stop maps to incomplete_details.reason content_filter.
+    @pytest.mark.parametrize(
+        "stop_reason", ["guardrail_intervened", "content_filtered"]
+    )
+    async def test_incomplete_on_filtered_content(self, stop_reason: str) -> None:
+        """Both filtering stop reasons map to incomplete_details.reason content_filter.
+
+        Bedrock reports guardrail interventions and model-side content filtering
+        as two distinct stop reasons; OpenAI has a single ``content_filter``
+        reason for both.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html
         """
@@ -250,26 +255,7 @@ class TestTerminalEvents:
                 "resp-1",
                 1.0,
                 "model",
-                _stream(_text_stream_events(stop_reason="guardrail_intervened")),
-                _request(),
-            )
-        )
-        assert _event_names(events) == [
-            *_TEXT_STREAM_EVENT_NAMES,
-            "response.incomplete",
-        ]
-        payload = _payload(events[-1])
-        assert payload["response"]["status"] == "incomplete"
-        assert payload["response"]["incomplete_details"] == {"reason": "content_filter"}
-
-    async def test_incomplete_on_content_filtered(self) -> None:
-        """A content_filtered stop maps to incomplete_details.reason content_filter."""
-        events = await _collect(
-            format_stream(
-                "resp-1",
-                1.0,
-                "model",
-                _stream(_text_stream_events(stop_reason="content_filtered")),
+                _stream(_text_stream_events(stop_reason=stop_reason)),
                 _request(),
             )
         )
@@ -387,6 +373,89 @@ class TestFailedResponseError:
         assert response.error is None
         assert response.incomplete_details is None
         assert isinstance(response.completed_at, int)
+
+
+class TestAcceptedButUnsupportedRequestFields:
+    """Fields Converse cannot honor are echoed on the response and change nothing else.
+
+    ``top_logprobs``, ``text.verbosity`` and every ``include`` value other than
+    ``reasoning.encrypted_content`` are accepted for client compatibility —
+    notably Codex, which always sends ``text.verbosity``. Bedrock Converse
+    exposes no equivalent, so they must round-trip on the response object
+    without fabricating data the backend never produced.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         stdapi/models/chat/_adapters/_openai_responses.py:_build_response_object
+    """
+
+    async def test_top_logprobs_is_echoed_and_no_logprobs_are_fabricated(self) -> None:
+        """``top_logprobs`` is echoed while output parts stay free of ``logprobs``.
+
+        Bedrock Converse returns no token log probabilities, so the only correct
+        behavior is echoing the request value and leaving ``logprobs`` unset
+        rather than inventing entries.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+        """
+        response = await format_response(
+            "resp-1",
+            1.0,
+            "model",
+            _bedrock_response([{"text": "hi"}]),
+            _request(top_logprobs=3),
+        )
+        assert response.top_logprobs == 3
+        message = response.output[0]
+        assert isinstance(message, ResponseOutputMessage)
+        part = message.content[0]
+        assert isinstance(part, ResponseOutputText)
+        assert getattr(part, "logprobs", None) is None
+
+    async def test_text_verbosity_is_echoed_and_ignored(self) -> None:
+        """``text.verbosity`` round-trips on the response and reaches no Bedrock field.
+
+        The Chat Completions surface rejects ``verbosity`` with a 400; the
+        Responses surface deliberately accepts it, and only ``text.format`` is
+        translated into the Converse output configuration.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:_build_output_config
+        """
+        request = _request(text={"verbosity": "low", "format": {"type": "text"}})
+        response = await format_response(
+            "resp-1", 1.0, "model", _bedrock_response([{"text": "hi"}]), request
+        )
+        assert response.text is not None
+        assert response.text.verbosity == "low"
+        assert responses_adapter.translate_request(request, "model")[3] is None, (
+            "verbosity must not produce a Converse output configuration"
+        )
+
+    async def test_every_include_value_is_accepted_and_ignored(self) -> None:
+        """The whole ``include`` enum is accepted and changes nothing on a text answer.
+
+        Clients routinely ask for values such as
+        ``web_search_call.action.sources``; only
+        ``reasoning.encrypted_content`` has an effect here, and only on a
+        response that carries a reasoning item.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:_includes_encrypted_reasoning
+             stdapi/types/openai_responses.py:ResponseIncludable
+        """
+        includes = list(get_args(ResponseIncludable))
+        assert len(includes) == 8, "the upstream include enum has eight values"
+        baseline = await format_response(
+            "resp-1", 1.0, "model", _bedrock_response([{"text": "hi"}]), _request()
+        )
+        response = await format_response(
+            "resp-1",
+            1.0,
+            "model",
+            _bedrock_response([{"text": "hi"}]),
+            _request(include=includes),
+        )
+        assert response.model_dump(exclude={"completed_at"}) == baseline.model_dump(
+            exclude={"completed_at"}
+        )
 
 
 class TestMidStreamErrors:

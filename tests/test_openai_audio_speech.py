@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 import magic
 import pytest
 from openai import BadRequestError, NotFoundError, OpenAI
+from pydantic import ValidationError
 from starlette.requests import Request
 
 from stdapi.api_errors import ApiError
@@ -174,7 +175,7 @@ class TestAudioSpeech:
         assert default_len > 0
         assert native_len > 0
         # 24 kHz output carries ~1.5x the samples of Polly's native 16 kHz output.
-        assert 1.3 < default_len / native_len < 1.7
+        assert default_len / native_len == pytest.approx(1.5, rel=0.15)
         assert default_response.response.headers.get("content-type") == "audio/pcm"
 
     def test_speech_marks_returns_json_lines(
@@ -262,9 +263,10 @@ class TestAudioSpeech:
             "unknown extra parameters must be rejected, not ignored"
         )
 
+    # "alloy" is covered by test_basic_speech_generation; each extra voice is a
+    # billed Polly synthesis plus a Comprehend language detection.
     @pytest.mark.parametrize(
-        "voice",
-        ["alloy", "echo", "fable", "onyx", "nova", "shimmer", "ash", "sage", "coral"],
+        "voice", ["echo", "fable", "onyx", "nova", "shimmer", "ash", "sage", "coral"]
     )
     def test_all_voices_compatibility(
         self, openai_client: OpenAI, speech_standard_model: str, voice: str
@@ -318,7 +320,8 @@ class TestAudioSpeech:
         assert response.response.headers.get("content-type") == "audio/mpeg"
         _assert_is_mp3(response.content)
 
-    @pytest.mark.parametrize("speed", [0.25, 1.0, 2.0])
+    # 1.0 is the no-op default, already covered by test_basic_speech_generation.
+    @pytest.mark.parametrize("speed", [0.25, 2.0])
     def test_speed_parameter_validation(
         self, openai_client: OpenAI, speech_standard_model: str, speed: float
     ) -> None:
@@ -346,7 +349,7 @@ class TestAudioSpeech:
     @pytest.mark.parametrize(
         ("format_name", "content_type", "signature_check"),
         [
-            ("mp3", "audio/mpeg", "MPEG ADTS, layer III"),
+            # mp3 is the default format, covered by test_basic_speech_generation.
             ("opus", "audio/opus", "Opus audio"),
             ("aac", "audio/aac", "ADTS, AAC"),
             ("flac", "audio/flac", "FLAC"),
@@ -679,9 +682,10 @@ class TestAudioSpeech:
         assert usage["input_tokens"] > 0
         assert usage["total_tokens"] == usage["input_tokens"] + usage["output_tokens"]
 
+    @pytest.mark.local
     def test_speech_usage_logged(
         self,
-        test_client: TestClient | None,
+        test_client: TestClient,
         speech_standard_model: str,
         api_key: str,
         capfd: pytest.CaptureFixture[str],
@@ -695,9 +699,6 @@ class TestAudioSpeech:
         Ref: stdapi/models/audio/amazon_polly.py:_detect_language
              stdapi/usage.py:record_polly_usage
         """
-        if test_client is None:
-            pytest.skip("Requires local test server")
-
         text = "Hello world, this is a test."
 
         capfd.readouterr()
@@ -740,6 +741,7 @@ class TestAudioSpeechMCP:
          stdapi/routes/openai_audio_speech.py:create_speech
     """
 
+    @pytest.mark.local
     def test_mcp_default_uses_sse(
         self, test_client: TestClient, api_key: str, speech_standard_model: str
     ) -> None:
@@ -752,9 +754,6 @@ class TestAudioSpeechMCP:
         Ref: stdapi/routes/openai_audio_speech.py:create_speech
              stdapi/mcp.py:is_mcp
         """
-        if test_client is None:
-            pytest.skip("Local only")
-
         # Initialize MCP session
         init_response = test_client.post(
             "/mcp",
@@ -987,3 +986,145 @@ class TestAudioSpeechContentType:
             "attachment; filename=speech.mp3"
         )
         assert body == b"audio"
+
+
+@pytest.mark.local
+class TestSpeechCreateParamsSsml:
+    """``input`` starting with ``<speak>`` is treated as an SSML document.
+
+    Polly is told ``TextType=ssml`` for such an input, and the gateway applies
+    ``speed`` by wrapping the text in its own ``<speak><prosody>`` envelope --
+    which would nest a second ``<speak>`` root -- so the two are incompatible.
+
+    Ref: https://docs.aws.amazon.com/polly/latest/dg/ssml.html
+         stdapi/types/openai_audio.py:SpeechCreateParams._unsupported
+    """
+
+    def test_ssml_input_without_speed_is_accepted(self) -> None:
+        """An SSML document alone is accepted and left untouched."""
+        params = SpeechCreateParams(
+            model="amazon.polly-neural", voice="Joanna", input="<speak>Hello</speak>"
+        )
+
+        assert params.input == "<speak>Hello</speak>"
+        assert params.speed == 1.0
+
+    @pytest.mark.parametrize("speed", [1.0, 1.5])
+    def test_ssml_input_with_an_explicit_speed_is_rejected(self, speed: float) -> None:
+        """Any explicitly set ``speed`` is rejected, including the default 1.0.
+
+        The check keys off ``model_fields_set``, not off the value, so sending
+        ``speed=1.0`` next to SSML fails even though it would have been a no-op.
+        """
+        with pytest.raises(ValidationError) as exc_info:
+            SpeechCreateParams(
+                model="amazon.polly-neural",
+                voice="Joanna",
+                input="<speak>Hello</speak>",
+                speed=speed,
+            )
+
+        errors = exc_info.value.errors()
+        assert len(errors) == 1
+        assert errors[0]["type"] == "value_error"
+        assert "speed is not supported for SSML input" in errors[0]["msg"]
+
+    def test_plain_text_input_still_accepts_speed(self) -> None:
+        """Plain text keeps the documented ``speed`` support."""
+        params = SpeechCreateParams(
+            model="amazon.polly-neural", voice="Joanna", input="Hello", speed=1.5
+        )
+
+        assert params.speed == 1.5
+
+
+@pytest.mark.local
+class TestSpeechCreateParamsCompatibility:
+    """Fields kept for OpenAI compatibility: accepted, and never forwarded to Polly.
+
+    Only the declared fields are read by the route; anything else lands in
+    ``model_extra`` and is forwarded to SynthesizeSpeech, where an unknown
+    parameter is rejected. A field that is dropped from the request model would
+    therefore turn a working request into a 400.
+
+    Ref: https://stdapi.ai/api_openai_audio_speech/
+         stdapi/types/openai_audio.py:SpeechCreateParams
+         stdapi/routes/openai_audio_speech.py:create_speech
+    """
+
+    def test_instructions_is_accepted_and_not_forwarded(self) -> None:
+        """``instructions`` is parsed as a known field, so Polly never sees it.
+
+        Polly has no equivalent of OpenAI's voice instructions, so the value is
+        accepted and ignored rather than rejected.
+        """
+        params = SpeechCreateParams(
+            model="amazon.polly-neural",
+            voice="Joanna",
+            input="Hello",
+            instructions="Speak in a cheerful tone",
+        )
+
+        assert params.instructions == "Speak in a cheerful tone"
+        assert params.model_extra == {}
+
+    def test_unknown_fields_are_kept_as_polly_extras(self) -> None:
+        """An undeclared field is collected as a Polly SynthesizeSpeech extra."""
+        params = SpeechCreateParams.model_validate(
+            {
+                "model": "amazon.polly-neural",
+                "voice": "Joanna",
+                "input": "Hello",
+                "LexiconNames": ["MyLexicon"],
+            }
+        )
+
+        assert params.model_extra == {"LexiconNames": ["MyLexicon"]}
+
+
+@pytest.mark.local
+class TestSpeechCreateParamsPollyAliases:
+    """A raw Polly SynthesizeSpeech body is accepted through the field aliases.
+
+    ``Text``/``Engine``/``VoiceId``/``OutputFormat`` are validation aliases for
+    the OpenAI field names. A broken alias would not fail loudly: the key would
+    fall through to ``model_extra`` and be forwarded to Polly as a duplicate
+    parameter.
+
+    Ref: https://docs.aws.amazon.com/polly/latest/APIReference/API_SynthesizeSpeech.html
+         stdapi/types/openai_audio.py:SpeechCreateParams
+    """
+
+    def test_polly_field_names_populate_the_openai_fields(self) -> None:
+        """Every Polly alias maps onto its OpenAI counterpart, leaving no extras."""
+        params = SpeechCreateParams.model_validate(
+            {
+                "Text": "Hello",
+                "Engine": "amazon.polly-neural",
+                "VoiceId": "Joanna",
+                "OutputFormat": "wav",
+            }
+        )
+
+        assert params.input == "Hello"
+        assert params.model == "amazon.polly-neural"
+        assert params.voice == "Joanna"
+        assert params.response_format == "wav"
+        assert params.model_extra == {}
+
+    def test_openai_field_names_are_still_accepted(self) -> None:
+        """The OpenAI names keep working alongside the aliases."""
+        params = SpeechCreateParams.model_validate(
+            {
+                "input": "Hello",
+                "model": "amazon.polly-neural",
+                "voice": "Joanna",
+                "response_format": "wav",
+            }
+        )
+
+        assert params.input == "Hello"
+        assert params.model == "amazon.polly-neural"
+        assert params.voice == "Joanna"
+        assert params.response_format == "wav"
+        assert params.model_extra == {}

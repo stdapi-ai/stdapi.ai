@@ -40,6 +40,9 @@ _PNG = (
     b"\xff?\x00\x05\xfe\x02\xfe\xa75\x81\x84\x00\x00\x00\x00IEND\xaeB`\x82"
 )
 
+#: The 1x1 PNG as the ``data:`` URI form the moderations route accepts.
+_PNG_DATA_URI = f"data:image/png;base64,{b64encode(_PNG).decode()}"
+
 #: A guardrail response with one flagged and one clean content filter.
 _FLAGGED_RESPONSE: dict[str, Any] = {
     "action": "GUARDRAIL_INTERVENED",
@@ -73,14 +76,6 @@ class _StubGuardrailClient:
 
 
 @pytest.fixture
-def client(api_key: str) -> TestClient:
-    """Test client without lifespan (no AWS startup), pre-authenticated."""
-    from stdapi.main import app  # noqa: PLC0415
-
-    return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
-
-
-@pytest.fixture
 def configured_guardrail(monkeypatch: pytest.MonkeyPatch) -> None:
     """Configure a default server guardrail."""
     monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", "gr123")
@@ -90,7 +85,7 @@ def configured_guardrail(monkeypatch: pytest.MonkeyPatch) -> None:
 def _stub_client(
     monkeypatch: pytest.MonkeyPatch, response: dict[str, Any]
 ) -> tuple[_StubGuardrailClient, list[str]]:
-    """Stub the bedrock-runtime client, recording the requested regions."""
+    """Stub the bedrock-runtime app_client, recording the requested regions."""
     stub = _StubGuardrailClient(response)
     regions: list[str] = []
 
@@ -103,6 +98,7 @@ def _stub_client(
 
 
 @pytest.mark.local
+@pytest.mark.usefixtures("configured_guardrail")
 class TestModerationsRoute:
     """POST /v1/moderations: guardrail resolution and category mapping.
 
@@ -112,10 +108,7 @@ class TestModerationsRoute:
     """
 
     def test_flags_mapped_categories(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        configured_guardrail: None,
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Guardrail content filters map to OpenAI categories and scores.
 
@@ -130,7 +123,7 @@ class TestModerationsRoute:
         """
         stub, _ = _stub_client(monkeypatch, _FLAGGED_RESPONSE)
 
-        response = client.post("/v1/moderations", json={"input": "some text"})
+        response = app_client.post("/v1/moderations", json={"input": "some text"})
 
         assert response.status_code == 200, response.text
         body = response.json()
@@ -157,10 +150,7 @@ class TestModerationsRoute:
         assert request["content"] == [{"text": {"text": "some text"}}]
 
     def test_response_round_trips_through_the_openai_sdk(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        configured_guardrail: None,
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A full response body validates against the installed openai SDK's response type.
 
@@ -177,7 +167,7 @@ class TestModerationsRoute:
 
         _stub_client(monkeypatch, _FLAGGED_RESPONSE)
 
-        response = client.post("/v1/moderations", json={"input": "some text"})
+        response = app_client.post("/v1/moderations", json={"input": "some text"})
 
         assert response.status_code == 200, response.text
         parsed = SdkModerationCreateResponse.model_validate(response.json())
@@ -191,10 +181,7 @@ class TestModerationsRoute:
         assert result.category_applied_input_types.hate == ["text"]
 
     def test_multiple_inputs_yield_one_result_each(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        configured_guardrail: None,
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Each input element is classified independently.
 
@@ -207,7 +194,7 @@ class TestModerationsRoute:
         """
         stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
 
-        response = client.post("/v1/moderations", json={"input": ["a", "b"]})
+        response = app_client.post("/v1/moderations", json={"input": ["a", "b"]})
 
         assert response.status_code == 200, response.text
         results = response.json()["results"]
@@ -221,10 +208,7 @@ class TestModerationsRoute:
         ) == ["a", "b"]
 
     def test_openai_model_name_uses_configured_guardrail(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        configured_guardrail: None,
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """OpenAI moderation model names resolve to the configured guardrail.
 
@@ -237,7 +221,7 @@ class TestModerationsRoute:
         """
         stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
 
-        response = client.post(
+        response = app_client.post(
             "/v1/moderations", json={"input": "x", "model": "omni-moderation-latest"}
         )
 
@@ -248,10 +232,7 @@ class TestModerationsRoute:
         assert request["guardrailVersion"] == "1"
 
     def test_default_guardrail_model_id(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        configured_guardrail: None,
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """amazon.bedrock-runtime-guardrail selects the configured guardrail.
 
@@ -263,7 +244,7 @@ class TestModerationsRoute:
         """
         stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
 
-        response = client.post(
+        response = app_client.post(
             "/v1/moderations",
             json={"input": "x", "model": "amazon.bedrock-runtime-guardrail"},
         )
@@ -275,10 +256,7 @@ class TestModerationsRoute:
         assert request["guardrailVersion"] == "1"
 
     def test_text_moderation_name_uses_comprehend(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        configured_guardrail: None,
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """text-moderation-* aliases Comprehend even when a guardrail is set.
 
@@ -291,7 +269,7 @@ class TestModerationsRoute:
         stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
         batches = _stub_toxicity(monkeypatch, [[_CLEAN_RESULT]])
 
-        response = client.post(
+        response = app_client.post(
             "/v1/moderations", json={"input": "x", "model": "text-moderation-latest"}
         )
 
@@ -303,10 +281,7 @@ class TestModerationsRoute:
         assert batches == [["x"]]
 
     def test_explicit_guardrail_requires_override(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        configured_guardrail: None,
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """An explicit guardrail is rejected unless overrides are allowed.
 
@@ -319,7 +294,7 @@ class TestModerationsRoute:
         stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
         monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_guardrail_override", False)
 
-        response = client.post(
+        response = app_client.post(
             "/v1/moderations", json={"input": "x", "model": "other456:2"}
         )
 
@@ -330,10 +305,7 @@ class TestModerationsRoute:
         assert not stub.requests, "the rejected guardrail must not be called"
 
     def test_explicit_guardrail_with_override_allowed(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        configured_guardrail: None,
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """An explicit id:version guardrail is used when overrides are allowed.
 
@@ -346,7 +318,7 @@ class TestModerationsRoute:
         stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
         monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_guardrail_override", True)
 
-        response = client.post(
+        response = app_client.post(
             "/v1/moderations", json={"input": "x", "model": "other456:2"}
         )
 
@@ -357,10 +329,7 @@ class TestModerationsRoute:
         assert request["guardrailVersion"] == "2"
 
     def test_guardrail_arn_selects_its_region(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        configured_guardrail: None,
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A guardrail ARN is applied in the region embedded in the ARN.
 
@@ -375,7 +344,7 @@ class TestModerationsRoute:
         monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_guardrail_override", True)
         arn = "arn:aws:bedrock:eu-west-1:000000000000:guardrail/abc123"
 
-        response = client.post("/v1/moderations", json={"input": "x", "model": arn})
+        response = app_client.post("/v1/moderations", json={"input": "x", "model": arn})
 
         assert response.status_code == 200, response.text
         assert regions == ["eu-west-1"]
@@ -384,10 +353,7 @@ class TestModerationsRoute:
         assert request["guardrailVersion"] == "DRAFT"
 
     def test_image_input_data_uri(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        configured_guardrail: None,
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A PNG data URI image becomes a guardrail image content block.
 
@@ -401,11 +367,12 @@ class TestModerationsRoute:
              stdapi/models/moderation/__init__.py:applied_input_types
         """
         stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
-        data_uri = f"data:image/png;base64,{b64encode(_PNG).decode()}"
 
-        response = client.post(
+        response = app_client.post(
             "/v1/moderations",
-            json={"input": [{"type": "image_url", "image_url": {"url": data_uri}}]},
+            json={
+                "input": [{"type": "image_url", "image_url": {"url": _PNG_DATA_URI}}]
+            },
         )
 
         assert response.status_code == 200, response.text
@@ -430,11 +397,172 @@ class TestModerationsRoute:
             if category not in IMAGE_CATEGORIES
         )
 
+    def test_jpeg_data_uri_maps_to_the_jpeg_guardrail_format(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A JPEG data URI becomes an ``image`` block whose ``format`` is ``jpeg``.
+
+        ``_IMAGE_FORMATS`` maps the two MIME types ApplyGuardrail accepts onto
+        its own format enum; ``image/jpeg`` must become ``jpeg`` and not the
+        MIME string, which the API would reject.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html
+             stdapi/models/moderation/amazon_bedrock_guardrail.py:_IMAGE_FORMATS
+        """
+        from io import BytesIO  # noqa: PLC0415
+
+        from PIL import Image  # noqa: PLC0415
+
+        buffer = BytesIO()
+        Image.new("RGB", (1, 1)).save(buffer, "JPEG")
+        jpeg = buffer.getvalue()
+        stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
+
+        response = app_client.post(
+            "/v1/moderations",
+            json={
+                "input": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{b64encode(jpeg).decode()}"
+                        },
+                    }
+                ]
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        (request,) = stub.requests
+        (block,) = request["content"]
+        assert block["image"]["format"] == "jpeg"
+        assert block["image"]["source"]["bytes"] == jpeg
+
+    def test_https_image_url_is_fetched_and_forwarded_as_bytes(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An ``https://`` image URL is downloaded and sent to the guardrail as raw bytes.
+
+        ApplyGuardrail takes no URL locator, so the gateway resolves the
+        content type from the response metadata and inlines the body itself.
+        Only the transport is stubbed here; the sniffing and inlining under
+        test are the gateway's.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html
+             stdapi/models/moderation/amazon_bedrock_guardrail.py:_to_content_block
+             stdapi/input_file.py:_HttpSource
+        """
+        from stdapi import input_file  # noqa: PLC0415
+
+        async def _resolve_metadata(source: Any) -> None:  # noqa: ANN401
+            source._content_type = "image/png"  # noqa: SLF001
+            source._size = len(_PNG)  # noqa: SLF001
+            source._filename = "image.png"  # noqa: SLF001
+
+        async def _read(_source: Any) -> bytes:  # noqa: ANN401
+            return _PNG
+
+        monkeypatch.setattr(
+            input_file._HttpSource,  # noqa: SLF001
+            "_resolve_metadata",
+            _resolve_metadata,
+        )
+        monkeypatch.setattr(input_file._HttpSource, "_read", _read)  # noqa: SLF001
+        stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
+
+        response = app_client.post(
+            "/v1/moderations",
+            json={
+                "input": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.invalid/image.png"},
+                    }
+                ]
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        (request,) = stub.requests
+        (block,) = request["content"]
+        assert block["image"]["format"] == "png"
+        assert block["image"]["source"]["bytes"] == _PNG
+
+    def test_whitespace_only_input_still_calls_the_guardrail(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only an exactly-empty string short-circuits; ``"   "`` is classified and billed.
+
+        The shortcut is ``text == ""``, not ``text.strip() == ""``: a
+        whitespace-only input reaches ApplyGuardrail and is metered as one
+        1000-character text unit.
+
+        Ref: https://stdapi.ai/api_openai_moderations/
+             stdapi/models/moderation/amazon_bedrock_guardrail.py:ModerationModel.moderate
+        """
+        from stdapi import monitoring  # noqa: PLC0415
+
+        stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
+        written: list[dict[str, Any]] = []
+        monkeypatch.setattr(monitoring, "write_log_event", written.append)
+
+        response = app_client.post("/v1/moderations", json={"input": "   "})
+
+        assert response.status_code == 200, response.text
+        assert stub.requests == [
+            {
+                "guardrailIdentifier": "gr123",
+                "guardrailVersion": "1",
+                "source": "INPUT",
+                "content": [{"text": {"text": "   "}}],
+                "outputScope": "FULL",
+            }
+        ]
+        (request_log,) = [entry for entry in written if entry.get("type") == "request"]
+        (usage,) = request_log["usage"]
+        assert usage["model"] == "gr123:1"
+        assert usage["text_units"] == 1
+
+    def test_batches_preserve_input_order(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Guardrail verdicts stay positionally aligned with the inputs across batches.
+
+        Results are matched to inputs by position only, so a reordering in the
+        batched ``gather`` would mis-attribute verdicts. The stub derives each
+        verdict from the text it receives, making any reordering visible.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/routes/openai_moderations.py:_INPUT_BATCH_SIZE
+        """
+        count = 2 * openai_moderations._INPUT_BATCH_SIZE + 5  # noqa: SLF001
+        texts = [f"text-{index}" for index in range(count)]
+        flagged_indices = {0, 3, 11, count - 1}
+
+        class _PerTextGuardrailClient:
+            async def apply_guardrail(self, **params: Any) -> dict[str, Any]:  # noqa: ANN401
+                (block,) = params["content"]
+                index = int(block["text"]["text"].removeprefix("text-"))
+                if index not in flagged_indices:
+                    return _CLEAN_RESPONSE
+                return _FLAGGED_RESPONSE
+
+        monkeypatch.setattr(
+            amazon_bedrock_guardrail,
+            "get_client",
+            lambda _service, _region: _PerTextGuardrailClient(),
+        )
+
+        response = app_client.post("/v1/moderations", json={"input": texts})
+
+        assert response.status_code == 200, response.text
+        results = response.json()["results"]
+        assert len(results) == count
+        for index, result in enumerate(results):
+            assert result["flagged"] is (index in flagged_indices), index
+
     def test_inputs_exceeding_batch_size_are_all_classified(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        configured_guardrail: None,
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """More inputs than the concurrency batch size still yield one result each.
 
@@ -448,7 +576,7 @@ class TestModerationsRoute:
         count = 2 * openai_moderations._INPUT_BATCH_SIZE + 5  # noqa: SLF001
         texts = [f"text-{index}" for index in range(count)]
 
-        response = client.post("/v1/moderations", json={"input": texts})
+        response = app_client.post("/v1/moderations", json={"input": texts})
 
         assert response.status_code == 200, response.text
         assert len(response.json()["results"]) == count
@@ -460,10 +588,7 @@ class TestModerationsRoute:
         ) == sorted(texts), "every input must be classified exactly once"
 
     def test_unsupported_image_format_rejected(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        configured_guardrail: None,
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Non PNG/JPEG images are rejected with 400.
 
@@ -474,11 +599,11 @@ class TestModerationsRoute:
              stdapi/models/moderation/amazon_bedrock_guardrail.py:_IMAGE_FORMATS
         """
         stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
-        data_uri = f"data:image/webp;base64,{b64encode(_PNG).decode()}"
+        webp_uri = f"data:image/webp;base64,{b64encode(_PNG).decode()}"
 
-        response = client.post(
+        response = app_client.post(
             "/v1/moderations",
-            json={"input": [{"type": "image_url", "image_url": {"url": data_uri}}]},
+            json={"input": [{"type": "image_url", "image_url": {"url": webp_uri}}]},
         )
 
         assert response.status_code == 400
@@ -488,10 +613,7 @@ class TestModerationsRoute:
         assert not stub.requests, "the unsupported image must not reach AWS"
 
     def test_empty_input_list_rejected(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        configured_guardrail: None,
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """An empty `input` list is rejected with 400, not classified as zero results.
 
@@ -504,7 +626,7 @@ class TestModerationsRoute:
         """
         stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
 
-        response = client.post("/v1/moderations", json={"input": []})
+        response = app_client.post("/v1/moderations", json={"input": []})
 
         assert response.status_code == 400
         error = response.json()["error"]
@@ -513,10 +635,7 @@ class TestModerationsRoute:
         assert not stub.requests
 
     def test_non_content_policy_hits_flag_without_categories(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        configured_guardrail: None,
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Topic/word policy hits flag the input with all categories false.
 
@@ -545,7 +664,7 @@ class TestModerationsRoute:
             },
         )
 
-        response = client.post("/v1/moderations", json={"input": "some text"})
+        response = app_client.post("/v1/moderations", json={"input": "some text"})
 
         assert response.status_code == 200, response.text
         (result,) = response.json()["results"]
@@ -554,10 +673,7 @@ class TestModerationsRoute:
         assert all(score == 0.0 for score in result["category_scores"].values())
 
     def test_requests_full_output_scope(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        configured_guardrail: None,
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """apply_guardrail is called with outputScope=FULL to surface non-flagged confidences.
 
@@ -570,17 +686,14 @@ class TestModerationsRoute:
         """
         stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
 
-        response = client.post("/v1/moderations", json={"input": "some text"})
+        response = app_client.post("/v1/moderations", json={"input": "some text"})
 
         assert response.status_code == 200, response.text
         (request,) = stub.requests
         assert request["outputScope"] == "FULL"
 
     def test_non_detected_filter_confidence_is_surfaced(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        configured_guardrail: None,
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A non-detected filter entry (only returned under FULL scope) reports its real confidence.
 
@@ -612,7 +725,7 @@ class TestModerationsRoute:
             },
         )
 
-        response = client.post("/v1/moderations", json={"input": "some text"})
+        response = app_client.post("/v1/moderations", json={"input": "some text"})
 
         assert response.status_code == 200, response.text
         (result,) = response.json()["results"]
@@ -622,10 +735,7 @@ class TestModerationsRoute:
         assert result["category_scores"]["harassment"] == 0.5
 
     def test_empty_string_input_is_clean_without_aws_call(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        configured_guardrail: None,
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """An exactly-empty string yields an unflagged result and no AWS call.
 
@@ -638,7 +748,7 @@ class TestModerationsRoute:
         """
         stub, _ = _stub_client(monkeypatch, _FLAGGED_RESPONSE)
 
-        response = client.post("/v1/moderations", json={"input": ""})
+        response = app_client.post("/v1/moderations", json={"input": ""})
 
         assert response.status_code == 200, response.text
         (result,) = response.json()["results"]
@@ -651,10 +761,7 @@ class TestModerationsRoute:
         assert not stub.requests
 
     def test_empty_string_among_inputs_only_skips_itself(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        configured_guardrail: None,
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Non-empty siblings of an empty string are still classified.
 
@@ -667,7 +774,7 @@ class TestModerationsRoute:
         """
         stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
 
-        response = client.post("/v1/moderations", json={"input": ["", "hello"]})
+        response = app_client.post("/v1/moderations", json={"input": ["", "hello"]})
 
         assert response.status_code == 200, response.text
         results = response.json()["results"]
@@ -677,10 +784,7 @@ class TestModerationsRoute:
         assert request["content"] == [{"text": {"text": "hello"}}]
 
     def test_empty_text_part_is_clean_without_aws_call(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        configured_guardrail: None,
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """An empty {"type": "text"} part short-circuits like a plain string.
 
@@ -693,7 +797,7 @@ class TestModerationsRoute:
         """
         stub, _ = _stub_client(monkeypatch, _FLAGGED_RESPONSE)
 
-        response = client.post(
+        response = app_client.post(
             "/v1/moderations", json={"input": [{"type": "text", "text": ""}]}
         )
 
@@ -704,7 +808,7 @@ class TestModerationsRoute:
         assert not stub.requests
 
     def test_missing_or_wrong_bearer_returns_401_envelope(
-        self, monkeypatch: pytest.MonkeyPatch, configured_guardrail: None
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Unauthenticated requests get the OpenAI 401 error envelope.
 
@@ -742,10 +846,7 @@ class TestModerationsRoute:
         assert not stub.requests
 
     def test_usage_records_text_units_and_model(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        configured_guardrail: None,
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Guardrail moderation records billed text units per input, summed.
 
@@ -762,7 +863,7 @@ class TestModerationsRoute:
         written: list[dict[str, Any]] = []
         monkeypatch.setattr(monitoring, "write_log_event", written.append)
 
-        response = client.post(
+        response = app_client.post(
             "/v1/moderations", json={"input": ["a" * 1_500, "short"]}
         )
 
@@ -777,10 +878,7 @@ class TestModerationsRoute:
         assert "input_images" not in entry
 
     def test_usage_records_images_per_image(
-        self,
-        client: TestClient,
-        monkeypatch: pytest.MonkeyPatch,
-        configured_guardrail: None,
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Guardrail image moderation records one input image per input.
 
@@ -795,11 +893,12 @@ class TestModerationsRoute:
         _stub_client(monkeypatch, _CLEAN_RESPONSE)
         written: list[dict[str, Any]] = []
         monkeypatch.setattr(monitoring, "write_log_event", written.append)
-        data_uri = f"data:image/png;base64,{b64encode(_PNG).decode()}"
 
-        response = client.post(
+        response = app_client.post(
             "/v1/moderations",
-            json={"input": [{"type": "image_url", "image_url": {"url": data_uri}}]},
+            json={
+                "input": [{"type": "image_url", "image_url": {"url": _PNG_DATA_URI}}]
+            },
         )
 
         assert response.status_code == 200, response.text
@@ -987,7 +1086,7 @@ class TestComprehendModerationsRoute:
         monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_version", None)
 
     def test_default_backend_without_guardrail(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Without a configured guardrail, moderation runs on Comprehend.
 
@@ -1000,7 +1099,9 @@ class TestComprehendModerationsRoute:
         """
         batches = _stub_toxicity(monkeypatch, [[_TOXIC_RESULT]])
 
-        response = client.post("/v1/moderations", json={"input": "threatening text"})
+        response = app_client.post(
+            "/v1/moderations", json={"input": "threatening text"}
+        )
 
         assert response.status_code == 200, response.text
         body = response.json()
@@ -1024,7 +1125,7 @@ class TestComprehendModerationsRoute:
         assert batches == [["threatening text"]]
 
     def test_inputs_exceeding_batch_size_are_all_classified_in_order(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """More inputs than the concurrency batch size yield one correctly-mapped result each.
 
@@ -1064,7 +1165,7 @@ class TestComprehendModerationsRoute:
 
         monkeypatch.setattr(amazon_comprehend, "call_with_region_failover", _call)
 
-        response = client.post("/v1/moderations", json={"input": texts})
+        response = app_client.post("/v1/moderations", json={"input": texts})
 
         assert response.status_code == 200, response.text
         results = response.json()["results"]
@@ -1073,7 +1174,7 @@ class TestComprehendModerationsRoute:
             assert result["flagged"] is (index in toxic_indices), index
 
     def test_usage_records_comprehend_units_and_region(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Comprehend moderation records character-count units with the per-call minimum.
 
@@ -1091,7 +1192,7 @@ class TestComprehendModerationsRoute:
         written: list[dict[str, Any]] = []
         monkeypatch.setattr(monitoring, "write_log_event", written.append)
 
-        response = client.post("/v1/moderations", json={"input": "hi"})
+        response = app_client.post("/v1/moderations", json={"input": "hi"})
 
         assert response.status_code == 200, response.text
         (request_log,) = [w for w in written if w.get("type") == "request"]
@@ -1106,8 +1207,61 @@ class TestComprehendModerationsRoute:
         assert language_entry["service"] == "comprehend"
         assert language_entry["comprehend_units"] == 3
 
+    def test_language_detection_samples_only_the_first_500_characters(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """DetectDominantLanguage receives at most a 500-character sample of the input.
+
+        The sample caps a per-request billable Comprehend call: without it, a
+        long moderation input would be billed twice at full length. 500
+        characters bill as ceil(500 / 100) = 5 units, above the 3-unit minimum.
+
+        Ref: https://docs.aws.amazon.com/comprehend/latest/APIReference/API_DetectDominantLanguage.html
+             stdapi/models/moderation/amazon_comprehend.py:_LANG_DETECT_SAMPLE_SIZE
+             stdapi/usage.py:record_comprehend_usage
+        """
+        from stdapi import monitoring  # noqa: PLC0415
+
+        text = "a" * 5_000
+        detected: list[str] = []
+
+        class _StubComprehendClient:
+            async def detect_dominant_language(self, *, Text: str) -> dict[str, Any]:  # noqa: N803
+                detected.append(Text)
+                return {"Languages": [{"LanguageCode": "en", "Score": 0.99}]}
+
+            async def detect_toxic_content(
+                self,
+                *,
+                TextSegments: list[dict[str, str]],  # noqa: N803
+                LanguageCode: str,  # noqa: N803
+            ) -> dict[str, Any]:
+                return {
+                    "ResultList": [{"Labels": [], "Toxicity": 0.0}] * len(TextSegments)
+                }
+
+        async def _call(
+            service: str,
+            regions: list[str],
+            call: Any,  # noqa: ANN401
+        ) -> tuple[dict[str, Any], str]:
+            assert service == "comprehend"
+            return await call(_StubComprehendClient(), regions[0]), regions[0]
+
+        monkeypatch.setattr(amazon_comprehend, "call_with_region_failover", _call)
+        written: list[dict[str, Any]] = []
+        monkeypatch.setattr(monitoring, "write_log_event", written.append)
+
+        response = app_client.post("/v1/moderations", json={"input": text})
+
+        assert response.status_code == 200, response.text
+        assert detected == [text[:500]]
+        (request_log,) = [w for w in written if w.get("type") == "request"]
+        entries = {entry["model"]: entry for entry in request_log["usage"]}
+        assert entries["amazon.comprehend-language-detection"]["comprehend_units"] == 5
+
     def test_mixed_text_and_image_input_rejected_as_a_whole(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Pinned current behavior: an image sibling fails the whole batch with 400.
 
@@ -1120,14 +1274,13 @@ class TestComprehendModerationsRoute:
              stdapi/models/moderation/amazon_comprehend.py:ModerationModel.moderate
         """
         _stub_toxicity(monkeypatch, [[_CLEAN_RESULT]])
-        data_uri = f"data:image/png;base64,{b64encode(_PNG).decode()}"
 
-        response = client.post(
+        response = app_client.post(
             "/v1/moderations",
             json={
                 "input": [
                     {"type": "text", "text": "hello"},
-                    {"type": "image_url", "image_url": {"url": data_uri}},
+                    {"type": "image_url", "image_url": {"url": _PNG_DATA_URI}},
                 ]
             },
         )
@@ -1142,7 +1295,7 @@ class TestComprehendModerationsRoute:
         "model", ["omni-moderation-latest", "text-moderation-latest"]
     )
     def test_openai_model_name_falls_back_to_comprehend(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, model: str
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch, model: str
     ) -> None:
         """OpenAI moderation names use Comprehend when no guardrail is set.
 
@@ -1155,7 +1308,9 @@ class TestComprehendModerationsRoute:
         """
         batches = _stub_toxicity(monkeypatch, [[_CLEAN_RESULT]])
 
-        response = client.post("/v1/moderations", json={"input": "x", "model": model})
+        response = app_client.post(
+            "/v1/moderations", json={"input": "x", "model": model}
+        )
 
         assert response.status_code == 200, response.text
         body = response.json()
@@ -1164,7 +1319,7 @@ class TestComprehendModerationsRoute:
         assert batches == [["x"]], "Comprehend must have classified the input"
 
     def test_default_guardrail_model_requires_guardrail(
-        self, client: TestClient
+        self, app_client: TestClient
     ) -> None:
         """amazon.bedrock-runtime-guardrail errors when no guardrail is set.
 
@@ -1175,7 +1330,7 @@ class TestComprehendModerationsRoute:
         Ref: https://stdapi.ai/api_openai_moderations/
              stdapi/aws_bedrock.py:resolve_moderation_model
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/moderations",
             json={"input": "x", "model": "amazon.bedrock-runtime-guardrail"},
         )
@@ -1188,7 +1343,7 @@ class TestComprehendModerationsRoute:
         assert "aws_bedrock_guardrail_identifier" not in message.lower()
 
     def test_graphic_label_maps_to_violence_graphic(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A GRAPHIC hit serializes under the violence/graphic JSON key.
 
@@ -1204,7 +1359,7 @@ class TestComprehendModerationsRoute:
             [[{"Labels": [{"Name": "GRAPHIC", "Score": 0.8}], "Toxicity": 0.4}]],
         )
 
-        response = client.post("/v1/moderations", json={"input": "x"})
+        response = app_client.post("/v1/moderations", json={"input": "x"})
 
         assert response.status_code == 200, response.text
         (result,) = response.json()["results"]
@@ -1215,7 +1370,7 @@ class TestComprehendModerationsRoute:
 
     @pytest.mark.parametrize("label", ["HARASSMENT_OR_ABUSE", "INSULT"])
     def test_harassment_labels_map_to_harassment_category(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, label: str
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch, label: str
     ) -> None:
         """HARASSMENT_OR_ABUSE and INSULT both map to harassment, at the threshold.
 
@@ -1230,7 +1385,7 @@ class TestComprehendModerationsRoute:
             [[{"Labels": [{"Name": label, "Score": 0.5}], "Toxicity": 0.1}]],
         )
 
-        response = client.post("/v1/moderations", json={"input": "x"})
+        response = app_client.post("/v1/moderations", json={"input": "x"})
 
         assert response.status_code == 200, response.text
         (result,) = response.json()["results"]
@@ -1239,7 +1394,7 @@ class TestComprehendModerationsRoute:
         assert result["category_scores"]["harassment"] == 0.5
 
     def test_text_object_input(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A {"type": "text"} input part is classified like a plain string.
 
@@ -1251,7 +1406,7 @@ class TestComprehendModerationsRoute:
         """
         batches = _stub_toxicity(monkeypatch, [[_CLEAN_RESULT]])
 
-        response = client.post(
+        response = app_client.post(
             "/v1/moderations", json={"input": [{"type": "text", "text": "hello"}]}
         )
 
@@ -1265,7 +1420,7 @@ class TestComprehendModerationsRoute:
         assert batches == [["hello"]]
 
     def test_each_input_gets_own_result(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Two inputs in one request yield two independent, correctly-mapped results.
 
@@ -1302,7 +1457,7 @@ class TestComprehendModerationsRoute:
 
         monkeypatch.setattr(amazon_comprehend, "call_with_region_failover", _call)
 
-        response = client.post("/v1/moderations", json={"input": ["bad", "ok"]})
+        response = app_client.post("/v1/moderations", json={"input": ["bad", "ok"]})
 
         assert response.status_code == 200, response.text
         toxic, clean = response.json()["results"]
@@ -1313,7 +1468,7 @@ class TestComprehendModerationsRoute:
         assert not any(clean["categories"].values())
 
     def test_score_at_threshold_flags(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A label score of exactly 0.5 flags the input (threshold is inclusive).
 
@@ -1328,7 +1483,7 @@ class TestComprehendModerationsRoute:
             [[{"Labels": [{"Name": "SEXUAL", "Score": 0.5}], "Toxicity": 0.1}]],
         )
 
-        response = client.post("/v1/moderations", json={"input": "x"})
+        response = app_client.post("/v1/moderations", json={"input": "x"})
 
         assert response.status_code == 200, response.text
         (result,) = response.json()["results"]
@@ -1338,7 +1493,7 @@ class TestComprehendModerationsRoute:
 
     def test_explicit_comprehend_model_bypasses_guardrail(
         self,
-        client: TestClient,
+        app_client: TestClient,
         monkeypatch: pytest.MonkeyPatch,
         configured_guardrail: None,
     ) -> None:
@@ -1353,7 +1508,7 @@ class TestComprehendModerationsRoute:
         stub, _ = _stub_client(monkeypatch, _FLAGGED_RESPONSE)
         batches = _stub_toxicity(monkeypatch, [[_CLEAN_RESULT]])
 
-        response = client.post(
+        response = app_client.post(
             "/v1/moderations",
             json={"input": "x", "model": "amazon.comprehend-toxicity"},
         )
@@ -1366,7 +1521,7 @@ class TestComprehendModerationsRoute:
         assert batches == [["x"]]
 
     def test_unmapped_label_contributes_to_flagged_only(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A PROFANITY hit flags the input without setting any category.
 
@@ -1382,7 +1537,7 @@ class TestComprehendModerationsRoute:
             [[{"Labels": [{"Name": "PROFANITY", "Score": 0.75}], "Toxicity": 0.3}]],
         )
 
-        response = client.post("/v1/moderations", json={"input": "x"})
+        response = app_client.post("/v1/moderations", json={"input": "x"})
 
         assert response.status_code == 200, response.text
         (result,) = response.json()["results"]
@@ -1391,7 +1546,7 @@ class TestComprehendModerationsRoute:
         assert all(score == 0.0 for score in result["category_scores"].values())
 
     def test_long_text_is_chunked_and_scores_aggregated(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Long inputs split into 1 KB segments, 10 per call, keeping max scores.
 
@@ -1406,7 +1561,7 @@ class TestComprehendModerationsRoute:
         batches = _stub_toxicity(monkeypatch, [[_CLEAN_RESULT], [hate]])
         text = "a" * 10_500
 
-        response = client.post("/v1/moderations", json={"input": text})
+        response = app_client.post("/v1/moderations", json={"input": text})
 
         assert response.status_code == 200, response.text
         assert [len(batch) for batch in batches] == [10, 1]
@@ -1442,7 +1597,7 @@ class TestComprehendModerationsRoute:
         assert all(len(segment.encode()) <= 1_000 for segment in segments)
 
     def test_overall_toxicity_score_alone_flags(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A high overall toxicity flags the input even with low label scores.
 
@@ -1458,7 +1613,7 @@ class TestComprehendModerationsRoute:
             [[{"Labels": [{"Name": "INSULT", "Score": 0.2}], "Toxicity": 0.9}]],
         )
 
-        response = client.post("/v1/moderations", json={"input": "x"})
+        response = app_client.post("/v1/moderations", json={"input": "x"})
 
         assert response.status_code == 200, response.text
         (result,) = response.json()["results"]
@@ -1467,7 +1622,7 @@ class TestComprehendModerationsRoute:
         assert result["category_scores"]["harassment"] == 0.2
 
     def test_empty_text_is_clean_without_api_call(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """An empty input yields a clean result without calling Comprehend.
 
@@ -1480,7 +1635,7 @@ class TestComprehendModerationsRoute:
         """
         batches = _stub_toxicity(monkeypatch, [[_TOXIC_RESULT]])
 
-        response = client.post("/v1/moderations", json={"input": ""})
+        response = app_client.post("/v1/moderations", json={"input": ""})
 
         assert response.status_code == 200, response.text
         (result,) = response.json()["results"]
@@ -1489,7 +1644,7 @@ class TestComprehendModerationsRoute:
         assert batches == []
 
     def test_detected_language_is_used_for_toxicity_detection(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A non-English dominant language is forwarded to DetectToxicContent.
 
@@ -1526,7 +1681,7 @@ class TestComprehendModerationsRoute:
 
         monkeypatch.setattr(amazon_comprehend, "call_with_region_failover", _call)
 
-        response = client.post(
+        response = app_client.post(
             "/v1/moderations", json={"input": "un texte en français"}
         )
 
@@ -1534,7 +1689,7 @@ class TestComprehendModerationsRoute:
         assert language_codes == ["fr"]
 
     def test_unsupported_detected_language_falls_back_to_english(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A dominant language DetectToxicContent doesn't support falls back to `en`.
 
@@ -1571,13 +1726,13 @@ class TestComprehendModerationsRoute:
 
         monkeypatch.setattr(amazon_comprehend, "call_with_region_failover", _call)
 
-        response = client.post("/v1/moderations", json={"input": "een tekst"})
+        response = app_client.post("/v1/moderations", json={"input": "een tekst"})
 
         assert response.status_code == 200, response.text
         assert language_codes == ["en"]
 
     def test_image_input_requires_guardrail(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Image moderation is rejected on the Comprehend backend.
 
@@ -1589,11 +1744,12 @@ class TestComprehendModerationsRoute:
              stdapi/models/moderation/amazon_comprehend.py:ModerationModel.moderate
         """
         batches = _stub_toxicity(monkeypatch, [[_CLEAN_RESULT]])
-        data_uri = f"data:image/png;base64,{b64encode(_PNG).decode()}"
 
-        response = client.post(
+        response = app_client.post(
             "/v1/moderations",
-            json={"input": [{"type": "image_url", "image_url": {"url": data_uri}}]},
+            json={
+                "input": [{"type": "image_url", "image_url": {"url": _PNG_DATA_URI}}]
+            },
         )
 
         assert response.status_code == 400
@@ -1639,15 +1795,19 @@ def live_guardrail(use_official_api: bool) -> Iterator[str]:
         },
     )
     guardrail_id = created["guardrailId"]
-    for _ in range(30):
-        if bedrock.get_guardrail(guardrailIdentifier=guardrail_id)["status"] == "READY":
-            break
-        time.sleep(1)
-    else:
+    try:
+        for _ in range(30):
+            status = bedrock.get_guardrail(guardrailIdentifier=guardrail_id)["status"]
+            if status == "READY":
+                break
+            time.sleep(1)
+        else:
+            pytest.fail("Test guardrail never reached READY status.")
+        yield created["guardrailArn"]
+    finally:
+        # A guardrail is a billable account resource: delete it on every path,
+        # including a polling error or an interrupted session.
         bedrock.delete_guardrail(guardrailIdentifier=guardrail_id)
-        pytest.fail("Test guardrail never reached READY status.")
-    yield created["guardrailArn"]
-    bedrock.delete_guardrail(guardrailIdentifier=guardrail_id)
 
 
 @pytest.mark.slow

@@ -47,9 +47,15 @@ class TestCohereEmbeddings:
          stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
     """
 
+    @pytest.fixture(autouse=True)
+    def _skip_on_official_api(self, use_official_api: bool) -> None:
+        """Skip the whole class when the target is the official OpenAI API."""
+        if use_official_api:
+            pytest.skip("Cohere models are not available on the official OpenAI API")
+
     @pytest.mark.parametrize("model_id", COHERE_SAMPLE)
     def test_text_extra_params_truncate(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
+        self, openai_client: OpenAI, model_id: str
     ) -> None:
         """The Cohere-only ``truncate`` body field is accepted alongside OpenAI fields.
 
@@ -60,9 +66,6 @@ class TestCohereEmbeddings:
         Ref: https://stdapi.ai/api_openai_embeddings/
              stdapi/models/embedding/cohere_embed.py:_Request
         """
-        if use_official_api:
-            pytest.skip("Cohere models are not available on the official OpenAI API")
-
         truncate_value = "START" if model_id.endswith("v3") else "LEFT"
         response = openai_client.embeddings.create(
             model=model_id,
@@ -79,17 +82,12 @@ class TestCohereEmbeddings:
         assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
 
     @pytest.mark.parametrize("model_id", COHERE_ALL)
-    def test_text_single(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
-    ) -> None:
+    def test_text_single(self, openai_client: OpenAI, model_id: str) -> None:
         """A text input is sent as ``texts`` and returns one vector of the model's width.
 
         Ref: https://docs.cohere.com/reference/embed
              stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
         """
-        if use_official_api:
-            pytest.skip("Cohere models are not available on the official OpenAI API")
-
         response = openai_client.embeddings.create(
             model=model_id, input="The quick brown fox jumps over the lazy dog."
         )
@@ -104,11 +102,7 @@ class TestCohereEmbeddings:
 
     @pytest.mark.parametrize("model_id", COHERE_ALL)
     def test_image_single(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file_base64: str,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file_base64: str, model_id: str
     ) -> None:
         """A PNG data URI is embedded through the ``images`` request field.
 
@@ -119,9 +113,6 @@ class TestCohereEmbeddings:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v3.html
              stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
         """
-        if use_official_api:
-            pytest.skip("Cohere models are not available on the official OpenAI API")
-
         response = openai_client.embeddings.create(
             model=model_id, input=sample_image_file_base64
         )
@@ -135,9 +126,7 @@ class TestCohereEmbeddings:
         assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
 
     @pytest.mark.parametrize("model_id", COHERE_ALL)
-    def test_text_batch(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
-    ) -> None:
+    def test_text_batch(self, openai_client: OpenAI, model_id: str) -> None:
         """A text batch is one Cohere call returning one vector per input, in order.
 
         Unlike Titan, Cohere embeds the whole ``texts`` array in a single
@@ -146,9 +135,6 @@ class TestCohereEmbeddings:
         Ref: https://docs.cohere.com/reference/embed
              stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
         """
-        if use_official_api:
-            pytest.skip("Cohere models are not available on the official OpenAI API")
-
         inputs = [
             "First text input for embedding.",
             "Second different sentence.",
@@ -170,11 +156,7 @@ class TestCohereEmbeddings:
 
     @pytest.mark.parametrize("model_id", COHERE_SAMPLE)
     def test_image_batch(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file_base64: str,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file_base64: str, model_id: str
     ) -> None:
         """Several images in one call return one vector per image on Embed v4.
 
@@ -184,9 +166,6 @@ class TestCohereEmbeddings:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v4.html
              stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
         """
-        if use_official_api:
-            pytest.skip("Cohere models are not available on the official OpenAI API")
-
         inputs = [
             sample_image_file_base64,
             sample_image_file_base64,
@@ -204,11 +183,7 @@ class TestCohereEmbeddings:
 
     @pytest.mark.parametrize("model_id", COHERE_SAMPLE)
     def test_mixed_text_image_batch(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file_base64: str,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file_base64: str, model_id: str
     ) -> None:
         """A text+image batch on v4 is fused into ``inputs`` and stays one vector per item.
 
@@ -219,9 +194,6 @@ class TestCohereEmbeddings:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v4.html
              stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
         """
-        if use_official_api:
-            pytest.skip("Cohere models are not available on the official OpenAI API")
-
         inputs = ["A sample image.", sample_image_file_base64]
         response = openai_client.embeddings.create(model=model_id, input=inputs)
         assert response.object == "list"
@@ -239,7 +211,7 @@ class TestCohereEmbeddings:
 
     @pytest.mark.parametrize("model_id", COHERE_SAMPLE)
     def test_dimensions_supported_when_valid(
-        self, openai_client: OpenAI, use_official_api: bool, model_id: str
+        self, openai_client: OpenAI, model_id: str
     ) -> None:
         """``dimensions`` maps to Cohere's ``output_dimension`` and is honored exactly.
 
@@ -249,9 +221,6 @@ class TestCohereEmbeddings:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v4.html
              stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
         """
-        if use_official_api:
-            pytest.skip("Cohere models are not available on the official OpenAI API")
-
         dimensions = 512
         response = openai_client.embeddings.create(
             model=model_id,

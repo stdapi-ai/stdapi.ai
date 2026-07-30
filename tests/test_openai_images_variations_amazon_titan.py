@@ -12,14 +12,25 @@ from typing import TYPE_CHECKING
 import pytest
 from openai import BadRequestError
 
+#: Every test in this module is reported as skipped: the model is deprecated.
+pytestmark = pytest.mark.skip(reason="Amazon Titan Image Generator is deprecated")
+
 if TYPE_CHECKING:
     from openai import OpenAI
 
-TITAN_V1 = "amazon.titan-image-generator-v1"  # No more available as serverless model
 TITAN_V2 = "amazon.titan-image-generator-v2:0"
 
 TITAN_ALL = (TITAN_V2,)
 TITAN_SAMPLE = (TITAN_V2,)
+
+
+@pytest.fixture(autouse=True)
+def _skip_on_official_api(use_official_api: bool) -> None:
+    """Skip every test here: Titan Image Generator has no official OpenAI equivalent."""
+    if use_official_api:
+        pytest.skip(
+            "Amazon Titan Image Generator is not available on the official OpenAI API"
+        )
 
 
 class TestAmazonTitanVariations:
@@ -33,11 +44,7 @@ class TestAmazonTitanVariations:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_ALL)
     def test_variation_b64_single(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file: bytes, model_id: str
     ) -> None:
         """The default ``IMAGE_VARIATION`` task returns one inline image and image-only usage.
 
@@ -47,9 +54,6 @@ class TestAmazonTitanVariations:
         Ref: stdapi/models/image/amazon_titan_image_generator.py:_get_request_image_variation
              stdapi/routes/_images_common.py:build_images_response
         """
-        if use_official_api:
-            pytest.skip("Amazon Titan is not available on the official OpenAI API")
-
         response = openai_client.images.create_variation(
             image=sample_image_file,
             model=model_id,
@@ -78,19 +82,12 @@ class TestAmazonTitanVariations:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_variation_with_text_image_task_type(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file: bytes, model_id: str
     ) -> None:
         """``taskType=TEXT_IMAGE`` uses the upload as a conditioning image.
 
         Ref: stdapi/models/image/amazon_titan_image_generator.py:_get_request_text_image
         """
-        if use_official_api:
-            pytest.skip("Amazon Titan is not available on the official OpenAI API")
-
         response = openai_client.images.create_variation(
             image=sample_image_file,
             model=model_id,
@@ -109,11 +106,7 @@ class TestAmazonTitanVariations:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_variation_with_color_guided_task_type(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file: bytes, model_id: str
     ) -> None:
         """``taskType=COLOR_GUIDED_GENERATION`` uses the upload as the reference image.
 
@@ -123,9 +116,6 @@ class TestAmazonTitanVariations:
 
         Ref: stdapi/models/image/amazon_titan_image_generator.py:_get_request_color_guided_generation
         """
-        if use_official_api:
-            pytest.skip("Amazon Titan is not available on the official OpenAI API")
-
         response = openai_client.images.create_variation(
             image=sample_image_file,
             model=model_id,
@@ -148,19 +138,12 @@ class TestAmazonTitanVariations:
 
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_variation_with_invalid_task_type(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file: bytes, model_id: str
     ) -> None:
         """A ``taskType`` outside the route's allow-list is a 400 listing the legal values.
 
         Ref: stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._create_image_variations
         """
-        if use_official_api:
-            pytest.skip("Amazon Titan is not available on the official OpenAI API")
-
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.create_variation(
                 image=sample_image_file,
@@ -180,11 +163,7 @@ class TestAmazonTitanVariations:
 
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_variation_color_guided_missing_colors(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file: bytes, model_id: str
     ) -> None:
         """``COLOR_GUIDED_GENERATION`` without ``colors`` is a 400 naming the missing key.
 
@@ -193,9 +172,6 @@ class TestAmazonTitanVariations:
 
         Ref: stdapi/models/image/amazon_titan_image_generator.py:_get_request_color_guided_generation
         """
-        if use_official_api:
-            pytest.skip("Amazon Titan is not available on the official OpenAI API")
-
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.create_variation(
                 image=sample_image_file,
@@ -211,6 +187,3 @@ class TestAmazonTitanVariations:
         assert isinstance(body, dict)
         assert exc_info.value.status_code == 400
         assert "colorGuidedGenerationParams.colors" in body["message"]
-
-
-pytest.skip("Amazon Titan Image Generator is deprecated", allow_module_level=True)

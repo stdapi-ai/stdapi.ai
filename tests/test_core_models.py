@@ -25,6 +25,7 @@ from stdapi.config import SETTINGS
 from stdapi.models import MANTLE_SERVICE, ModelDetails
 from stdapi.pricing import Dimension, Price, PriceKey, Service
 from stdapi.routes import core_models
+from tests.conftest import set_test_price
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -656,38 +657,27 @@ def priced_catalog(api_key: str, monkeypatch: pytest.MonkeyPatch) -> dict[str, s
     """Enable cost tracking, seed a small price card, and return auth headers."""
     monkeypatch.setattr(SETTINGS, "cost_tracking", True)
     monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1"])
-    rows = {
-        PriceKey(
-            Service.BEDROCK,
-            "pricedmodel",
-            "us-east-1",
-            Dimension.INPUT_TOKENS,
-            "standard",
-        ): Price(Decimal("0.000003"), "USD"),
-        PriceKey(
-            Service.BEDROCK,
-            "pricedmodel",
-            "us-east-1",
-            Dimension.OUTPUT_TOKENS,
-            "standard",
-        ): Price(Decimal("0.000015"), "USD"),
-        PriceKey(
-            Service.BEDROCK, "pricedmodel", "us-east-1", Dimension.INPUT_TOKENS, "flex"
-        ): Price(Decimal("0.0000015"), "USD"),
-        PriceKey(
-            Service.BEDROCK,
-            "pricedmodel",
-            "us-east-1",
-            Dimension.CACHE_WRITE_TOKENS,
-            "standard",
-            "5m",
-        ): Price(Decimal("0.00000375"), "USD"),
-    }
-    # Swap (don't mutate): model_prices caches a per-index grouping by identity.
-    monkeypatch.setattr(
-        pricing._state,  # noqa: SLF001
-        "price_index",
-        {**pricing._state.price_index, **rows},  # noqa: SLF001
+    set_test_price(
+        "pricedmodel", "us-east-1", Dimension.INPUT_TOKENS, "0.000003", "USD"
+    )
+    set_test_price(
+        "pricedmodel", "us-east-1", Dimension.OUTPUT_TOKENS, "0.000015", "USD"
+    )
+    set_test_price(
+        "pricedmodel",
+        "us-east-1",
+        Dimension.INPUT_TOKENS,
+        "0.0000015",
+        "USD",
+        tier="flex",
+    )
+    set_test_price(
+        "pricedmodel",
+        "us-east-1",
+        Dimension.CACHE_WRITE_TOKENS,
+        "0.00000375",
+        "USD",
+        cache_ttl="5m",
     )
     return {"Authorization": f"Bearer {api_key}"}
 

@@ -4,8 +4,8 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html
      stdapi/responses_store.py
 """
 
-from datetime import UTC, datetime
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from botocore.exceptions import ClientError
@@ -14,6 +14,9 @@ from pydantic_core import to_json
 from stdapi import responses_store
 from stdapi.api_errors import ApiError
 from stdapi.config import SETTINGS
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
@@ -125,10 +128,101 @@ class _StubSessionClient:
         return {}
 
 
+class _InvocationDocumentsClient:
+    """Stub client serving one stored document per invocation.
+
+    Covers the read-side edge cases of ``load_stored_response``: several
+    invocations, paginated listings, a stepless invocation and an invocation
+    holding truncated JSON.
+    """
+
+    def __init__(
+        self,
+        documents: Mapping[str, Mapping[str, Any] | None],
+        *,
+        empty: frozenset[str] = frozenset(),
+        corrupt: frozenset[str] = frozenset(),
+        paginate: bool = False,
+    ) -> None:
+        """Configure the invocations served by the stub.
+
+        Args:
+            documents: Document per invocation ID, oldest invocation first.
+            empty: Invocation IDs whose ListInvocationSteps returns no step.
+            corrupt: Invocation IDs whose stored payload is truncated JSON.
+            paginate: Whether ListInvocations returns one invocation per page.
+        """
+        self._documents = documents
+        self._empty = empty
+        self._corrupt = corrupt
+        self._paginate = paginate
+        self._summaries = [
+            {
+                "invocationId": invocation_id,
+                "createdAt": datetime(2024, 1, 1, tzinfo=UTC) + timedelta(days=index),
+            }
+            for index, invocation_id in enumerate(documents)
+        ]
+
+    async def list_invocations(self, **params: Any) -> dict[str, Any]:  # noqa: ANN401
+        if not self._paginate:
+            return {"invocationSummaries": self._summaries}
+        start = int(params.get("nextToken", 0))
+        page: dict[str, Any] = {
+            "invocationSummaries": self._summaries[start : start + 1]
+        }
+        if start + 1 < len(self._summaries):
+            page["nextToken"] = str(start + 1)
+        return page
+
+    async def list_invocation_steps(
+        self,
+        *,
+        invocationIdentifier: str = "",  # noqa: N803
+        **_params: Any,  # noqa: ANN401
+    ) -> dict[str, Any]:
+        if invocationIdentifier in self._empty:
+            return {"invocationStepSummaries": []}
+        return {
+            "invocationStepSummaries": [
+                {
+                    "invocationStepId": "step-1",
+                    "invocationStepTime": datetime.fromtimestamp(0, tz=UTC),
+                }
+            ]
+        }
+
+    async def get_invocation_step(
+        self,
+        *,
+        invocationIdentifier: str,  # noqa: N803
+        **_params: Any,  # noqa: ANN401
+    ) -> dict[str, Any]:
+        text = (
+            '{"response": {"id": "fresh"'  # truncated: invalid JSON
+            if invocationIdentifier in self._corrupt
+            else to_json(self._documents[invocationIdentifier]).decode()
+        )
+        return {"invocationStep": {"payload": {"contentBlocks": [{"text": text}]}}}
+
+
 @pytest.fixture
 def stub(monkeypatch: pytest.MonkeyPatch) -> _StubSessionClient:
     """Stub the AWS client and request metadata."""
     client = _StubSessionClient()
+    monkeypatch.setattr(responses_store, "get_client", lambda *_: client)
+    monkeypatch.setattr(
+        responses_store, "build_metadata", lambda **_: {"aws-apn-id": "apn"}
+    )
+    # Isolate the kind-tag cache from other tests reusing the same session IDs.
+    monkeypatch.setattr(responses_store, "_KIND_CACHE", {})
+    return client
+
+
+@pytest.fixture
+def missing_stub(monkeypatch: pytest.MonkeyPatch) -> _StubSessionClient:
+    """``stub`` for a session AWS reports as missing (ResourceNotFoundException)."""
+    client = _StubSessionClient(missing=True)
     monkeypatch.setattr(responses_store, "get_client", lambda *_: client)
     monkeypatch.setattr(
         responses_store, "build_metadata", lambda **_: {"aws-apn-id": "apn"}
@@ -407,15 +501,12 @@ class TestStoredResponseSessions:
         assert exc_info.value.status == 404
         assert str(exc_info.value) == "Response with id 'resp-sess-1' not found."
 
-    async def test_load_unknown_session_is_not_found(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    @pytest.mark.usefixtures("missing_stub")
+    async def test_load_unknown_session_is_not_found(self) -> None:
         """An unknown session surfaces as a 404 naming the requested response ID.
 
         Ref: stdapi/responses_store.py:load_stored_response
         """
-        client = _StubSessionClient(missing=True)
-        monkeypatch.setattr(responses_store, "get_client", lambda *_: client)
         with pytest.raises(ApiError) as exc_info:
             await responses_store.load_stored_response("resp-zzz", "response")
         assert exc_info.value.status == 404
@@ -580,23 +671,20 @@ class TestStoredResponseSessions:
             "get_invocation_step",
         }
 
-    async def test_delete_unknown_session_is_not_found(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    @pytest.mark.usefixtures("missing_stub")
+    async def test_delete_unknown_session_is_not_found(self) -> None:
         """Deleting an unknown session surfaces as a 404 naming the response ID.
 
         Ref: https://developers.openai.com/api/reference/resources/responses/methods/delete
              stdapi/responses_store.py:delete_stored_response
         """
-        client = _StubSessionClient(missing=True)
-        monkeypatch.setattr(responses_store, "get_client", lambda *_: client)
         with pytest.raises(ApiError) as exc_info:
             await responses_store.delete_stored_response("resp-zzz", "response")
         assert exc_info.value.status == 404
         assert str(exc_info.value) == "Response with id 'resp-zzz' not found."
 
     async def test_discard_suppresses_errors(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, missing_stub: _StubSessionClient
     ) -> None:
         """Best-effort cleanup attempts the delete and swallows its 404.
 
@@ -607,10 +695,11 @@ class TestStoredResponseSessions:
 
         Ref: stdapi/responses_store.py:discard_stored_response_session
         """
-        client = _StubSessionClient(missing=True)
-        monkeypatch.setattr(responses_store, "get_client", lambda *_: client)
         await responses_store.discard_stored_response_session("resp-zzz", "response")
-        assert [name for name, _ in client.requests] == ["get_session", "end_session"]
+        assert [name for name, _ in missing_stub.requests] == [
+            "get_session",
+            "end_session",
+        ]
 
     async def test_load_reads_latest_invocation(
         self, monkeypatch: pytest.MonkeyPatch
@@ -627,44 +716,10 @@ class TestStoredResponseSessions:
             "inv-new": {"response": {"id": "fresh", "object": "response"}},
         }
 
-        class _MultiInvocationClient:
-            async def list_invocations(self, **_params: Any) -> dict[str, Any]:  # noqa: ANN401
-                return {
-                    "invocationSummaries": [
-                        {
-                            "invocationId": "inv-old",
-                            "createdAt": datetime(2024, 1, 1, tzinfo=UTC),
-                        },
-                        {
-                            "invocationId": "inv-new",
-                            "createdAt": datetime(2024, 6, 1, tzinfo=UTC),
-                        },
-                    ]
-                }
-
-            async def list_invocation_steps(self, **_params: Any) -> dict[str, Any]:  # noqa: ANN401
-                return {
-                    "invocationStepSummaries": [
-                        {
-                            "invocationStepId": "step-1",
-                            "invocationStepTime": datetime.fromtimestamp(0, tz=UTC),
-                        }
-                    ]
-                }
-
-            async def get_invocation_step(
-                self,
-                *,
-                invocationIdentifier: str,  # noqa: N803
-                **_params: Any,  # noqa: ANN401
-            ) -> dict[str, Any]:
-                text = to_json(documents[invocationIdentifier]).decode()
-                return {
-                    "invocationStep": {"payload": {"contentBlocks": [{"text": text}]}}
-                }
-
         monkeypatch.setattr(
-            responses_store, "get_client", lambda *_: _MultiInvocationClient()
+            responses_store,
+            "get_client",
+            lambda *_: _InvocationDocumentsClient(documents),
         )
         loaded = await responses_store.load_stored_response("resp-sess-1", "response")
         assert loaded == documents["inv-new"]
@@ -684,50 +739,10 @@ class TestStoredResponseSessions:
             "inv-new": {"response": {"id": "fresh", "object": "response"}},
         }
 
-        class _PaginatedInvocationsClient:
-            async def list_invocations(self, **params: Any) -> dict[str, Any]:  # noqa: ANN401
-                if "nextToken" not in params:
-                    return {
-                        "invocationSummaries": [
-                            {
-                                "invocationId": "inv-old",
-                                "createdAt": datetime(2024, 1, 1, tzinfo=UTC),
-                            }
-                        ],
-                        "nextToken": "page-2",
-                    }
-                return {
-                    "invocationSummaries": [
-                        {
-                            "invocationId": "inv-new",
-                            "createdAt": datetime(2024, 6, 1, tzinfo=UTC),
-                        }
-                    ]
-                }
-
-            async def list_invocation_steps(self, **_params: Any) -> dict[str, Any]:  # noqa: ANN401
-                return {
-                    "invocationStepSummaries": [
-                        {
-                            "invocationStepId": "step-1",
-                            "invocationStepTime": datetime.fromtimestamp(0, tz=UTC),
-                        }
-                    ]
-                }
-
-            async def get_invocation_step(
-                self,
-                *,
-                invocationIdentifier: str,  # noqa: N803
-                **_params: Any,  # noqa: ANN401
-            ) -> dict[str, Any]:
-                text = to_json(documents[invocationIdentifier]).decode()
-                return {
-                    "invocationStep": {"payload": {"contentBlocks": [{"text": text}]}}
-                }
-
         monkeypatch.setattr(
-            responses_store, "get_client", lambda *_: _PaginatedInvocationsClient()
+            responses_store,
+            "get_client",
+            lambda *_: _InvocationDocumentsClient(documents, paginate=True),
         )
         loaded = await responses_store.load_stored_response("resp-sess-1", "response")
         assert loaded == documents["inv-new"]
@@ -744,51 +759,12 @@ class TestStoredResponseSessions:
         """
         documents = {"inv-old": {"response": {"id": "stale", "object": "response"}}}
 
-        class _EmptyLatestClient:
-            async def list_invocations(self, **_params: Any) -> dict[str, Any]:  # noqa: ANN401
-                return {
-                    "invocationSummaries": [
-                        {
-                            "invocationId": "inv-old",
-                            "createdAt": datetime(2024, 1, 1, tzinfo=UTC),
-                        },
-                        {
-                            "invocationId": "inv-new",
-                            "createdAt": datetime(2024, 6, 1, tzinfo=UTC),
-                        },
-                    ]
-                }
-
-            async def list_invocation_steps(
-                self,
-                *,
-                invocationIdentifier: str,  # noqa: N803
-                **_params: Any,  # noqa: ANN401
-            ) -> dict[str, Any]:
-                if invocationIdentifier == "inv-new":
-                    return {"invocationStepSummaries": []}
-                return {
-                    "invocationStepSummaries": [
-                        {
-                            "invocationStepId": "step-1",
-                            "invocationStepTime": datetime.fromtimestamp(0, tz=UTC),
-                        }
-                    ]
-                }
-
-            async def get_invocation_step(
-                self,
-                *,
-                invocationIdentifier: str,  # noqa: N803
-                **_params: Any,  # noqa: ANN401
-            ) -> dict[str, Any]:
-                text = to_json(documents[invocationIdentifier]).decode()
-                return {
-                    "invocationStep": {"payload": {"contentBlocks": [{"text": text}]}}
-                }
-
         monkeypatch.setattr(
-            responses_store, "get_client", lambda *_: _EmptyLatestClient()
+            responses_store,
+            "get_client",
+            lambda *_: _InvocationDocumentsClient(
+                {**documents, "inv-new": None}, empty=frozenset({"inv-new"})
+            ),
         )
         loaded = await responses_store.load_stored_response("resp-sess-1", "response")
         assert loaded == documents["inv-old"]
@@ -805,48 +781,12 @@ class TestStoredResponseSessions:
         """
         documents = {"inv-old": {"response": {"id": "stale", "object": "response"}}}
 
-        class _CorruptLatestClient:
-            async def list_invocations(self, **_params: Any) -> dict[str, Any]:  # noqa: ANN401
-                return {
-                    "invocationSummaries": [
-                        {
-                            "invocationId": "inv-old",
-                            "createdAt": datetime(2024, 1, 1, tzinfo=UTC),
-                        },
-                        {
-                            "invocationId": "inv-new",
-                            "createdAt": datetime(2024, 6, 1, tzinfo=UTC),
-                        },
-                    ]
-                }
-
-            async def list_invocation_steps(self, **_params: Any) -> dict[str, Any]:  # noqa: ANN401
-                return {
-                    "invocationStepSummaries": [
-                        {
-                            "invocationStepId": "step-1",
-                            "invocationStepTime": datetime.fromtimestamp(0, tz=UTC),
-                        }
-                    ]
-                }
-
-            async def get_invocation_step(
-                self,
-                *,
-                invocationIdentifier: str,  # noqa: N803
-                **_params: Any,  # noqa: ANN401
-            ) -> dict[str, Any]:
-                text = (
-                    '{"response": {"id": "fresh"'  # truncated: invalid JSON
-                    if invocationIdentifier == "inv-new"
-                    else to_json(documents[invocationIdentifier]).decode()
-                )
-                return {
-                    "invocationStep": {"payload": {"contentBlocks": [{"text": text}]}}
-                }
-
         monkeypatch.setattr(
-            responses_store, "get_client", lambda *_: _CorruptLatestClient()
+            responses_store,
+            "get_client",
+            lambda *_: _InvocationDocumentsClient(
+                {**documents, "inv-new": None}, corrupt=frozenset({"inv-new"})
+            ),
         )
         loaded = await responses_store.load_stored_response("resp-sess-1", "response")
         assert loaded == documents["inv-old"]

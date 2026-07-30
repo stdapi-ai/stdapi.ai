@@ -19,7 +19,10 @@ from stdapi.config import SETTINGS
 from stdapi.usage import record_bedrock_usage
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
     from openai import APIStatusError
+    from openai.types.responses import Response as SdkResponse
     from starlette.testclient import TestClient as TestClientType
 
 #: Deterministic context long enough to exceed the minimum cacheable prompt size.
@@ -29,6 +32,37 @@ _CACHEABLE_CONTEXT = (
     "single API, with the capabilities needed to build generative AI "
     "applications with security, privacy and responsible AI. "
 ) * 150
+
+
+def _emf_lines(captured_out: str) -> list[dict[str, Any]]:
+    """Return the EMF documents printed on stdout.
+
+    Args:
+        captured_out: Captured stdout of the request under test.
+
+    Returns:
+        Every JSON line carrying the ``_aws`` EMF header, in emission order.
+    """
+    lines = []
+    for line in captured_out.split("\n"):
+        if line.strip() and '"_aws"' in line:
+            try:
+                lines.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return lines
+
+
+@pytest.fixture
+def usage_context() -> Generator[None]:
+    """Bind a per-request usage context for code recording usage outside a request.
+
+    ``record_bedrock_usage`` and ``emit_usage_metrics`` write into a context
+    variable that only exists inside a request.
+    """
+    token = usage.init_usage()
+    yield
+    usage.USAGE.reset(token)
 
 
 def _error_envelope(error: APIStatusError) -> dict[str, Any]:
@@ -66,6 +100,20 @@ class TestResponses:
          stdapi/models/chat/_adapters/_openai_responses.py:_build_response_object
     """
 
+    @pytest.fixture(scope="class")
+    def minimal_response(
+        self, openai_client: OpenAI, responses_model: str
+    ) -> SdkResponse:
+        """One minimal completed response shared by the envelope-shape assertions.
+
+        These tests only read fields of the Response envelope, so they would
+        otherwise bill the same generation once each.
+
+        Returns:
+            The result of a single ``responses.create`` call.
+        """
+        return openai_client.responses.create(model=responses_model, input="Hello.")
+
     # ---------------------------------------------------------------------------
     # Group 1: Core Functionality
     # ---------------------------------------------------------------------------
@@ -98,9 +146,7 @@ class TestResponses:
         assert texts[0] in response.output_text
         assert len(response.output_text) > 0
 
-    def test_response_object_fields(
-        self, openai_client: OpenAI, responses_model: str
-    ) -> None:
+    def test_response_object_fields(self, minimal_response: SdkResponse) -> None:
         """A successful response carries the full Response envelope with no error state.
 
         ``tool_choice`` and ``parallel_tool_calls`` are defaulted rather than
@@ -110,7 +156,7 @@ class TestResponses:
         Ref: https://developers.openai.com/api/reference/resources/responses/methods/retrieve
              stdapi/models/chat/_adapters/_openai_responses.py:_build_response_object
         """
-        response = openai_client.responses.create(model=responses_model, input="Hello.")
+        response = minimal_response
 
         assert response.id
         assert response.created_at > 0
@@ -216,8 +262,9 @@ class TestResponses:
     # Group 2: Generation Parameters
     # ---------------------------------------------------------------------------
 
+    @pytest.mark.parametrize("temperature", [0.0, 0.5, 1.0])
     def test_temperature_parameter(
-        self, openai_client: OpenAI, chat_legacy_model: str
+        self, openai_client: OpenAI, chat_legacy_model: str, temperature: float
     ) -> None:
         """``temperature`` is accepted over the whole 0.0-1.0 range and echoed back.
 
@@ -228,16 +275,16 @@ class TestResponses:
         Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
              stdapi/models/chat/_adapters/_openai_responses.py:translate_request
         """
-        for temperature in (0.0, 0.5, 1.0):
-            response = openai_client.responses.create(
-                model=chat_legacy_model, input="Say 'ok'.", temperature=temperature
-            )
-            assert response.status == "completed"
-            assert response.temperature == temperature
-            assert len(response.output_text) > 0
+        response = openai_client.responses.create(
+            model=chat_legacy_model, input="Say 'ok'.", temperature=temperature
+        )
+        assert response.status == "completed"
+        assert response.temperature == temperature
+        assert len(response.output_text) > 0
 
+    @pytest.mark.parametrize("top_p", [0.5, 1.0])
     def test_top_p_parameter(
-        self, openai_client: OpenAI, chat_legacy_model: str
+        self, openai_client: OpenAI, chat_legacy_model: str, top_p: float
     ) -> None:
         """``top_p`` nucleus sampling is accepted and echoed back on the response.
 
@@ -246,13 +293,12 @@ class TestResponses:
         Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
              stdapi/models/chat/_adapters/_openai_responses.py:translate_request
         """
-        for top_p in (0.5, 1.0):
-            response = openai_client.responses.create(
-                model=chat_legacy_model, input="Say 'hello'.", top_p=top_p
-            )
-            assert response.status == "completed"
-            assert response.top_p == top_p
-            assert len(response.output_text) > 0
+        response = openai_client.responses.create(
+            model=chat_legacy_model, input="Say 'hello'.", top_p=top_p
+        )
+        assert response.status == "completed"
+        assert response.top_p == top_p
+        assert len(response.output_text) > 0
 
     def test_max_output_tokens_limits_output(
         self, openai_client: OpenAI, responses_model: str
@@ -350,9 +396,7 @@ class TestResponses:
     # Group 3: Response Metadata & Structure
     # ---------------------------------------------------------------------------
 
-    def test_response_id_format(
-        self, openai_client: OpenAI, responses_model: str
-    ) -> None:
+    def test_response_id_format(self, minimal_response: SdkResponse) -> None:
         """The response id uses a ``resp`` prefix followed by a non-empty suffix.
 
         The separator is load-bearing on this implementation: locally stored
@@ -363,7 +407,7 @@ class TestResponses:
         Ref: https://developers.openai.com/api/reference/resources/responses/methods/retrieve
              stdapi/routes/openai_responses.py:_decode_mantle_id
         """
-        response = openai_client.responses.create(model=responses_model, input="Hello.")
+        response = minimal_response
 
         assert response.id.startswith(("resp-", "resp_")), (
             f"Response ID '{response.id}' should start with 'resp-' or 'resp_'"
@@ -372,9 +416,7 @@ class TestResponses:
             f"Empty response id suffix: {response.id}"
         )
 
-    def test_response_object_type_field(
-        self, openai_client: OpenAI, responses_model: str
-    ) -> None:
+    def test_response_object_type_field(self, minimal_response: SdkResponse) -> None:
         """The ``object`` discriminator of a create result is the literal ``response``.
 
         Clients dispatch on this literal, and the gateway serves several other
@@ -384,13 +426,9 @@ class TestResponses:
         Ref: https://developers.openai.com/api/reference/resources/responses/methods/retrieve
              stdapi/models/chat/_adapters/_openai_responses.py:_build_response_object
         """
-        response = openai_client.responses.create(model=responses_model, input="Hello.")
+        assert minimal_response.object == "response"
 
-        assert response.object == "response"
-
-    def test_usage_token_counts(
-        self, openai_client: OpenAI, responses_model: str
-    ) -> None:
+    def test_usage_token_counts(self, minimal_response: SdkResponse) -> None:
         """``usage`` reports non-zero counts whose total is input plus output tokens.
 
         Bedrock's ``TokenUsage.inputTokens`` excludes the cache buckets while
@@ -401,12 +439,8 @@ class TestResponses:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html
              stdapi/models/chat/_adapters/_openai_responses.py:format_response
         """
-        response = openai_client.responses.create(
-            model=responses_model, input="Say exactly: hello world."
-        )
-
-        assert response.usage is not None
-        counts = response.usage
+        assert minimal_response.usage is not None
+        counts = minimal_response.usage
         assert counts.input_tokens > 0
         assert counts.output_tokens > 0
         assert counts.total_tokens == counts.input_tokens + counts.output_tokens
@@ -415,9 +449,7 @@ class TestResponses:
         assert counts.output_tokens_details is not None
         assert counts.output_tokens_details.reasoning_tokens <= counts.output_tokens
 
-    def test_response_status_completed(
-        self, openai_client: OpenAI, responses_model: str
-    ) -> None:
+    def test_response_status_completed(self, minimal_response: SdkResponse) -> None:
         """A successful synchronous response is ``completed`` with a ``completed_at``.
 
         The gateway derives the status from the Bedrock stop reason:
@@ -427,14 +459,10 @@ class TestResponses:
         Ref: https://developers.openai.com/api/reference/resources/responses/methods/retrieve
              stdapi/models/chat/_adapters/_openai_responses.py:_map_stop_reason
         """
-        response = openai_client.responses.create(
-            model=responses_model, input="Say 'done'."
-        )
-
-        assert response.status == "completed"
-        assert response.incomplete_details is None
-        assert response.error is None
-        assert response.completed_at is not None
+        assert minimal_response.status == "completed"
+        assert minimal_response.incomplete_details is None
+        assert minimal_response.error is None
+        assert minimal_response.completed_at is not None
 
     # ---------------------------------------------------------------------------
     # Group 4: Text Format Configuration
@@ -1070,74 +1098,6 @@ class TestResponses:
     # Group 7: Multi-turn Conversation
     # ---------------------------------------------------------------------------
 
-    @pytest.mark.skip(reason="Response storage not implemented (store=false)")
-    def test_previous_response_id(
-        self, openai_client: OpenAI, responses_model: str
-    ) -> None:
-        """``previous_response_id`` chains a stored response into a new turn.
-
-        Chaining requires the first response to have been stored; this
-        implementation defaults ``store`` to false and silently ignores it when
-        Bedrock session storage is not enabled on the server, which is why the
-        test is skipped rather than xfailed.
-
-        Ref: https://developers.openai.com/api/docs/guides/conversation-state#passing-context-from-the-previous-response
-             stdapi/routes/openai_responses.py:_apply_previous_response
-        """
-        first_response = openai_client.responses.create(
-            model=responses_model,
-            input="Remember this number: 42. Just say 'Noted.'",
-            store=True,
-        )
-        assert first_response.id
-        assert first_response.status == "completed"
-
-        second_response = openai_client.responses.create(
-            model=responses_model,
-            input="What number did I ask you to remember?",
-            previous_response_id=first_response.id,
-            store=True,
-        )
-
-        assert second_response.id != first_response.id
-        assert second_response.status == "completed"
-        assert second_response.previous_response_id == first_response.id
-        assert len(second_response.output_text) > 0
-
-    @pytest.mark.skip(reason="Response storage not implemented (store=false)")
-    def test_multi_turn_context_maintained(
-        self, openai_client: OpenAI, responses_model: str
-    ) -> None:
-        """A chained turn can recall a fact stated in the previous response's input.
-
-        The gateway rehydrates the stored conversation items into the new
-        request, so the colour established in the first turn must reach the
-        model on the second one.  ``instructions`` are deliberately not carried
-        over by the upstream contract.
-
-        Ref: https://developers.openai.com/api/docs/guides/conversation-state#passing-context-from-the-previous-response
-             stdapi/routes/openai_responses.py:_merge_previous_response
-        """
-        first = openai_client.responses.create(
-            model=responses_model,
-            input="My favorite color is blue. Just say you noted it.",
-            instructions="You are a helpful assistant with memory.",
-            store=True,
-        )
-
-        second = openai_client.responses.create(
-            model=responses_model,
-            input="What is my favorite color?",
-            previous_response_id=first.id,
-            store=True,
-        )
-
-        assert second.status == "completed"
-        assert second.previous_response_id == first.id
-        assert "blue" in second.output_text.lower(), (
-            f"Expected 'blue' in response but got: {second.output_text!r}"
-        )
-
     # ---------------------------------------------------------------------------
     # Group 8: Multimodal Input
     # ---------------------------------------------------------------------------
@@ -1193,6 +1153,10 @@ class TestResponses:
         Bedrock accepts only inline image bytes, so the gateway must fetch the
         URL itself before building the Converse request; the inflated input token
         count is what shows the fetched bytes were included.
+
+        The URL must stay publicly reachable for this test to mean anything: a
+        failure here can also be an unreachable third-party asset rather than a
+        gateway regression.
 
         Ref: https://developers.openai.com/api/docs/guides/file-inputs
              stdapi/models/chat/_adapters/_openai_responses.py:_convert_input_content
@@ -1428,60 +1392,6 @@ class TestResponses:
     # Group 10: Response Lifecycle
     # ---------------------------------------------------------------------------
 
-    @pytest.mark.skip(reason="Response storage not implemented (store=false)")
-    def test_retrieve_response(
-        self, openai_client: OpenAI, responses_model: str
-    ) -> None:
-        """A stored response is retrievable by id with the same model and output.
-
-        The gateway persists the response document in a Bedrock session
-        invocation step, so retrieval must return that document rather than a
-        freshly generated one.
-
-        Ref: https://developers.openai.com/api/reference/resources/responses/methods/retrieve
-             stdapi/responses_store.py:load_stored_response
-        """
-        original = openai_client.responses.create(
-            model=responses_model, input="Say 'hello for retrieval test'.", store=True
-        )
-        assert original.id
-
-        retrieved = openai_client.responses.retrieve(original.id)
-
-        assert retrieved.id == original.id
-        assert retrieved.model == original.model
-        assert retrieved.status == "completed"
-        assert retrieved.created_at == original.created_at
-        assert retrieved.output_text == original.output_text
-
-    @pytest.mark.skip(reason="Response storage not implemented (store=false)")
-    def test_list_input_items(
-        self, openai_client: OpenAI, responses_model: str
-    ) -> None:
-        """Listing input items returns the stored request input as normalised items.
-
-        The gateway normalises the stored ``input`` document (a bare string here)
-        into the listable ``ResponseItem`` union, backfilling the fields that union
-        requires, and reports the page envelope with ``has_more``.
-
-        Ref: https://developers.openai.com/api/reference/resources/responses/subresources/input_items/methods/list
-             stdapi/routes/openai_responses.py:_listable_input_items
-        """
-        prompt = "Say 'hello for input items test'."
-        response = openai_client.responses.create(
-            model=responses_model, input=prompt, store=True
-        )
-
-        items = openai_client.responses.input_items.list(response.id)
-
-        assert len(items.data) > 0
-        assert items.has_more is False
-
-        first_item = items.data[0]
-        assert first_item.type == "message"
-        assert getattr(first_item, "role", None) == "user"
-        assert prompt in json.dumps(first_item.to_dict())
-
     def test_include_logprobs(
         self, openai_client: OpenAI, chat_legacy_model: str, use_official_api: bool
     ) -> None:
@@ -1553,97 +1463,6 @@ class TestResponses:
             f"developer role did not reach the system prompt: {response.output_text!r}"
         )
 
-    @pytest.mark.skip(reason="Response storage not implemented (store=false)")
-    def test_function_tool_call_round_trip(
-        self, openai_client: OpenAI, responses_model: str
-    ) -> None:
-        """A ``function_call_output`` keyed by ``call_id`` completes the tool round trip.
-
-        The gateway maps the ``function_call_output`` item to a Bedrock
-        ``toolResult`` block whose ``toolUseId`` is the ``call_id``, so the second
-        turn only validates when the id from the first turn is replayed verbatim.
-
-        Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
-             stdapi/models/chat/_adapters/_openai_responses.py:_map_function_call_output
-        """
-        tools = [
-            {
-                "type": "function",
-                "name": "get_current_weather",
-                "description": "Get the current weather for a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {"type": "string", "description": "City name"}
-                    },
-                    "required": ["location"],
-                    "additionalProperties": False,
-                },
-                "strict": True,
-            }
-        ]
-
-        # First turn: trigger a tool call
-        first = openai_client.responses.create(  # type: ignore[call-overload]
-            model=responses_model,
-            input="What is the weather in Madrid?",
-            tools=tools,
-            tool_choice="required",
-            store=True,
-        )
-        tool_calls = [item for item in first.output if item.type == "function_call"]
-        assert len(tool_calls) >= 1
-        tool_call = tool_calls[0]
-        assert tool_call.call_id
-
-        # Second turn: submit the function result
-        second = openai_client.responses.create(
-            model=responses_model,
-            input=[
-                {
-                    "type": "function_call_output",
-                    "call_id": tool_call.call_id,
-                    "output": '{"temperature": "22 degrees", "condition": "sunny"}',
-                }
-            ],
-            tools=tools,  # type: ignore[arg-type]
-            previous_response_id=first.id,
-            store=True,
-        )
-
-        assert second.status == "completed"
-        msg = next((item for item in second.output if item.type == "message"), None)
-        assert msg is not None, "Expected a message item in second response"
-        assert "22" in second.output_text, (
-            f"Expected the submitted tool result in the answer: {second.output_text!r}"
-        )
-
-    @pytest.mark.skip(reason="Response storage not implemented (store=false)")
-    def test_delete_response(self, openai_client: OpenAI, responses_model: str) -> None:
-        """Deleting a stored response makes it unretrievable with a 404.
-
-        The gateway also discards the backing Bedrock session, so the follow-up
-        retrieve must surface the missing session as a 404 error envelope rather
-        than an empty document.
-
-        Ref: https://developers.openai.com/api/reference/resources/responses/methods/delete
-             stdapi/responses_store.py:delete_stored_response
-        """
-        response = openai_client.responses.create(
-            model=responses_model, input="Say 'hello for delete test'.", store=True
-        )
-        assert response.id
-
-        openai_client.responses.delete(response.id)
-
-        with pytest.raises(NotFoundError) as excinfo:
-            openai_client.responses.retrieve(response.id)
-
-        assert excinfo.value.status_code == 404
-        envelope = _error_envelope(excinfo.value)
-        assert "not found" in envelope["message"].lower()
-        assert response.id in envelope["message"]
-
     def test_reasoning_output_item_and_tokens(
         self, openai_client: OpenAI, responses_model: str, use_official_api: bool
     ) -> None:
@@ -1705,98 +1524,45 @@ class TestResponses:
         assert "does not exist" in envelope["message"]
         assert "definitely-not-a-valid-model-xyz-123" in envelope["message"]
 
-    def test_invalid_temperature_too_high(
-        self, openai_client: OpenAI, responses_model: str
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("temperature", 3.0),
+            ("temperature", -1.0),
+            ("top_p", 2.0),
+            ("max_output_tokens", 0),
+            ("top_logprobs", 21),
+        ],
+        ids=[
+            "temperature-above-max",
+            "temperature-negative",
+            "top_p-above-1",
+            "max_output_tokens-zero",
+            "top_logprobs-above-20",
+        ],
+    )
+    def test_out_of_range_parameter_is_rejected(
+        self, openai_client: OpenAI, responses_model: str, field: str, value: float
     ) -> None:
-        """``temperature`` above the documented maximum of 2 is a 400.
+        """An out-of-range generation parameter is a 400 naming the offending field.
 
-        The bound is enforced by the request model before any Bedrock call, so
-        the error envelope names the offending field.
+        The documented bounds (``temperature`` 0-2, ``top_p`` 0-1,
+        ``max_output_tokens`` strictly positive, ``top_logprobs`` 0-20) are
+        enforced by the request model, so nothing is generated and nothing is
+        billed for a rejected request.
 
         Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
              stdapi/types/openai_responses.py:ResponseCreateParams
         """
         with pytest.raises(BadRequestError) as excinfo:
-            openai_client.responses.create(
-                model=responses_model, input="Hello.", temperature=3.0
+            openai_client.responses.create(  # type: ignore[call-overload]
+                model=responses_model, input="Hello.", **{field: value}
             )
 
         assert excinfo.value.status_code == 400
         envelope = _error_envelope(excinfo.value)
         assert envelope["type"] == "invalid_request_error"
-        assert "temperature" in envelope["message"]
-
-    def test_invalid_temperature_negative(
-        self, openai_client: OpenAI, responses_model: str
-    ) -> None:
-        """A negative ``temperature`` is a 400: the documented minimum is 0.
-
-        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
-             stdapi/types/openai_responses.py:ResponseCreateParams
-        """
-        with pytest.raises(BadRequestError) as excinfo:
-            openai_client.responses.create(
-                model=responses_model, input="Hello.", temperature=-1.0
-            )
-
-        assert excinfo.value.status_code == 400
-        envelope = _error_envelope(excinfo.value)
-        assert envelope["type"] == "invalid_request_error"
-        assert "temperature" in envelope["message"]
-
-    def test_invalid_top_p_error(
-        self, openai_client: OpenAI, responses_model: str
-    ) -> None:
-        """``top_p`` above 1.0 is a 400: nucleus sampling is a probability mass.
-
-        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
-             stdapi/types/openai_responses.py:ResponseCreateParams
-        """
-        with pytest.raises(BadRequestError) as excinfo:
-            openai_client.responses.create(
-                model=responses_model, input="Hello.", top_p=2.0
-            )
-
-        assert excinfo.value.status_code == 400
-        envelope = _error_envelope(excinfo.value)
-        assert envelope["type"] == "invalid_request_error"
-        assert "top_p" in envelope["message"]
-
-    def test_invalid_max_output_tokens_error(
-        self, openai_client: OpenAI, responses_model: str
-    ) -> None:
-        """``max_output_tokens=0`` is a 400: the bound must be strictly positive.
-
-        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
-             stdapi/types/openai_responses.py:ResponseCreateParams
-        """
-        with pytest.raises(BadRequestError) as excinfo:
-            openai_client.responses.create(
-                model=responses_model, input="Hello.", max_output_tokens=0
-            )
-
-        assert excinfo.value.status_code == 400
-        envelope = _error_envelope(excinfo.value)
-        assert envelope["type"] == "invalid_request_error"
-        assert "max_output_tokens" in envelope["message"]
-
-    def test_invalid_top_logprobs_error(
-        self, openai_client: OpenAI, responses_model: str
-    ) -> None:
-        """``top_logprobs`` above the documented maximum of 20 is a 400.
-
-        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
-             stdapi/types/openai_responses.py:ResponseCreateParams
-        """
-        with pytest.raises(BadRequestError) as excinfo:
-            openai_client.responses.create(
-                model=responses_model, input="Hello.", top_logprobs=21
-            )
-
-        assert excinfo.value.status_code == 400
-        envelope = _error_envelope(excinfo.value)
-        assert envelope["type"] == "invalid_request_error"
-        assert "top_logprobs" in envelope["message"]
+        assert field in envelope["message"]
 
     def test_reasoning_parameter_accepted(
         self, openai_client: OpenAI, chat_reasoning_model: str
@@ -1977,7 +1743,15 @@ class TestUnsupportedFeatures:
             if item.type in ("program", "program_output")
         ]
 
-    @pytest.mark.parametrize(("param", "value"), [("truncation", "auto")])
+    @pytest.mark.parametrize(
+        ("param", "value"),
+        [
+            ("truncation", "auto"),
+            ("context_management", [{"type": "compaction"}]),
+            ("conversation", "conv_1"),
+            ("max_tool_calls", 3),
+        ],
+    )
     def test_unsupported_param_returns_400(
         self,
         openai_client: OpenAI,
@@ -1988,9 +1762,11 @@ class TestUnsupportedFeatures:
     ) -> None:
         """Parameters marked unsupported are rejected with ``unsupported_parameter``.
 
-        ``truncation`` — like ``context_management``, ``conversation`` and
-        ``max_tool_calls`` — is rejected by the request model instead of being
-        silently ignored, and the envelope names the offending parameter.
+        Each of them is rejected by the request model instead of being silently
+        ignored, and the envelope names the offending parameter. Accepting
+        ``context_management`` would be the worst failure: it is the reason the
+        standalone /v1/responses/compact route exists, so a client asking for
+        server-side compaction would get an uncompacted answer.
 
         Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
              stdapi/api_errors.py:UnsupportedParameterError
@@ -2182,6 +1958,21 @@ class TestOpenAIInputTokens:
          stdapi/models/chat/_adapters/_openai_responses.py:count_input_tokens_via_bedrock
     """
 
+    @pytest.fixture(scope="class")
+    def hello_input_token_count(
+        self, openai_client: OpenAI, responses_input_tokens_model: str
+    ) -> int:
+        """Baseline count of the one-word input the delta tests compare against.
+
+        Class-scoped so the delta tests share a single CountTokens round trip.
+
+        Returns:
+            The counted input tokens of the bare ``"Hello"`` input.
+        """
+        return openai_client.responses.input_tokens.count(
+            model=responses_input_tokens_model, input="Hello"
+        ).input_tokens
+
     def test_input_tokens_basic(
         self, openai_client: OpenAI, responses_input_tokens_model: str
     ) -> None:
@@ -2198,25 +1989,24 @@ class TestOpenAIInputTokens:
         assert response.object == "response.input_tokens"
 
     def test_input_tokens_with_instructions(
-        self, openai_client: OpenAI, responses_input_tokens_model: str
+        self,
+        openai_client: OpenAI,
+        responses_input_tokens_model: str,
+        hello_input_token_count: int,
     ) -> None:
         """``instructions`` are counted: they become Bedrock ``system`` blocks.
 
         Ref: https://developers.openai.com/api/docs/guides/token-counting
              stdapi/models/chat/_adapters/_openai_responses.py:count_input_tokens_via_bedrock
         """
-        response_without = openai_client.responses.input_tokens.count(
-            model=responses_input_tokens_model, input="Hello"
-        )
-
         response_with = openai_client.responses.input_tokens.count(
             model=responses_input_tokens_model,
             input="Hello",
             instructions="You are a very detailed and verbose assistant that always provides comprehensive answers.",
         )
 
-        assert response_without.input_tokens > 0
-        assert response_with.input_tokens > response_without.input_tokens
+        assert hello_input_token_count > 0
+        assert response_with.input_tokens > hello_input_token_count
 
     def test_input_tokens_with_tools(
         self, openai_client: OpenAI, responses_input_tokens_model: str
@@ -2254,17 +2044,16 @@ class TestOpenAIInputTokens:
         assert response_with.input_tokens > response_without.input_tokens
 
     def test_input_tokens_multi_turn(
-        self, openai_client: OpenAI, responses_input_tokens_model: str
+        self,
+        openai_client: OpenAI,
+        responses_input_tokens_model: str,
+        hello_input_token_count: int,
     ) -> None:
         """A multi-turn message array is counted across all of its turns.
 
         Ref: https://developers.openai.com/api/docs/guides/token-counting
              stdapi/models/chat/_adapters/_openai_responses.py:map_input
         """
-        response_single = openai_client.responses.input_tokens.count(
-            model=responses_input_tokens_model, input="Hello"
-        )
-
         response_multi = openai_client.responses.input_tokens.count(
             model=responses_input_tokens_model,
             input=[
@@ -2282,8 +2071,8 @@ class TestOpenAIInputTokens:
             ],
         )
 
-        assert response_single.input_tokens > 0
-        assert response_multi.input_tokens > response_single.input_tokens
+        assert hello_input_token_count > 0
+        assert response_multi.input_tokens > hello_input_token_count
 
     def test_input_tokens_longer_content_more_tokens(
         self, openai_client: OpenAI, responses_input_tokens_model: str
@@ -2362,6 +2151,62 @@ class TestOpenAIInputTokens:
 
 #: Nova models exercised for code_interpreter (autonomous server-side execution).
 _CODE_INTERP_MODELS = ("amazon.nova-2-lite-v1:0",)
+
+
+@pytest.mark.local
+class TestInputTokensMantleRejection:
+    """POST /v1/responses/input_tokens refuses Bedrock Mantle-served models.
+
+    Counting is backed by ``bedrock-runtime:CountTokens``, which does not know
+    Mantle-only model IDs, so the route rejects them itself instead of letting
+    an opaque AWS ``ValidationException`` surface.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
+         stdapi/routes/openai_responses.py:count_input_tokens
+    """
+
+    def test_mantle_model_is_rejected_before_counting(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A Mantle-served model is a 400 and CountTokens is never called.
+
+        Ref: stdapi/aws_bedrock_mantle.py:serves_via_mantle
+        """
+        from stdapi.models import ModelDetails  # noqa: PLC0415
+        from stdapi.routes import openai_responses  # noqa: PLC0415
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> ModelDetails:
+            return ModelDetails(
+                id=model_id,
+                name=model_id,
+                provider="Vendor",
+                input_modalities=["TEXT"],
+                output_modalities=["TEXT"],
+                regions=["us-east-1"],
+            )
+
+        counted: list[str] = []
+
+        async def _count(*_args: object, **_kwargs: object) -> int:
+            counted.append("called")
+            return 1
+
+        monkeypatch.setattr(openai_responses, "validate_model", _validate_model)
+        monkeypatch.setattr(openai_responses, "serves_via_mantle", lambda _id: True)
+        monkeypatch.setattr(openai_responses, "count_input_tokens_via_bedrock", _count)
+
+        response = app_client.post(
+            "/v1/responses/input_tokens",
+            json={"model": "openai.gpt-oss-120b-1:0", "input": "Hello"},
+        )
+
+        assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert "Bedrock Mantle" in error["message"]
+        assert error["type"] == "invalid_request_error"
+        assert not counted, "CountTokens ran for a model it cannot resolve"
 
 
 class TestCodeInterpreterTool:
@@ -2581,6 +2426,7 @@ class TestUsageAggregation:
         )
 
     @pytest.mark.local
+    @pytest.mark.usefixtures("usage_context")
     def test_record_usage_twice_sums_values(self) -> None:
         """Two recordings for one model collapse into a single summed usage entry.
 
@@ -2591,14 +2437,10 @@ class TestUsageAggregation:
         Ref: stdapi/usage.py:record_bedrock_usage
              stdapi/usage.py:usage_log_entries
         """
-        token = usage.init_usage()
-        try:
-            record_bedrock_usage("test-model", input_tokens=100, output_tokens=50)
-            record_bedrock_usage("test-model", input_tokens=200, output_tokens=75)
+        record_bedrock_usage("test-model", input_tokens=100, output_tokens=50)
+        record_bedrock_usage("test-model", input_tokens=200, output_tokens=75)
 
-            entries = list(usage.usage_log_entries())
-        finally:
-            usage.USAGE.reset(token)
+        entries = list(usage.usage_log_entries())
         assert len(entries) == 1, (
             "Expected exactly one usage entry after two record_bedrock_usage calls"
         )
@@ -2610,6 +2452,7 @@ class TestUsageAggregation:
         assert entry["output_tokens"] == 125, "output_tokens should be summed"
 
     @pytest.mark.local
+    @pytest.mark.usefixtures("usage_context")
     def test_cache_write_tokens_by_ttl_logged(self) -> None:
         """Cache-write tokens are reported per TTL bucket in the usage entry.
 
@@ -2619,18 +2462,14 @@ class TestUsageAggregation:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
              stdapi/usage.py:record_bedrock_usage
         """
-        token = usage.init_usage()
-        try:
-            record_bedrock_usage(
-                "test-model",
-                input_tokens=1000,
-                output_tokens=100,
-                cache_write_tokens_by_ttl={"5m": 500, "1h": 200},
-            )
+        record_bedrock_usage(
+            "test-model",
+            input_tokens=1000,
+            output_tokens=100,
+            cache_write_tokens_by_ttl={"5m": 500, "1h": 200},
+        )
 
-            entries = list(usage.usage_log_entries())
-        finally:
-            usage.USAGE.reset(token)
+        entries = list(usage.usage_log_entries())
         assert len(entries) == 1, "Expected exactly one usage entry"
 
         entry = entries[0]
@@ -2676,15 +2515,7 @@ class TestUsageEMF:
         )
         assert response.status_code == 200
 
-        captured = capfd.readouterr()
-        emf_lines = []
-        for line in captured.out.split("\n"):
-            if line.strip() and '"_aws"' in line:
-                try:
-                    emf_lines.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-
+        emf_lines = _emf_lines(capfd.readouterr().out)
         assert emf_lines, "Expected at least one EMF line in stdout"
 
         emf = emf_lines[0]
@@ -2714,6 +2545,7 @@ class TestUsageEMF:
         assert emf.get("OutputTokens", 0) > 0, "OutputTokens should be > 0"
 
     @pytest.mark.local
+    @pytest.mark.usefixtures("usage_context")
     def test_no_emf_when_cloudwatch_metrics_disabled(
         self, capfd: pytest.CaptureFixture[str]
     ) -> None:
@@ -2725,27 +2557,16 @@ class TestUsageEMF:
         Ref: stdapi/config.py:_Settings
              stdapi/usage.py:emit_usage_metrics
         """
-        token = usage.init_usage()
-        try:
-            record_bedrock_usage("test-model", input_tokens=100, output_tokens=50)
+        record_bedrock_usage("test-model", input_tokens=100, output_tokens=50)
 
-            capfd.readouterr()
-            with pytest.MonkeyPatch.context() as mp:
-                mp.setattr(SETTINGS, "cloudwatch_metrics", False)
-                usage.emit_usage_metrics()
-        finally:
-            usage.USAGE.reset(token)
+        capfd.readouterr()
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(SETTINGS, "cloudwatch_metrics", False)
+            usage.emit_usage_metrics()
 
-        captured = capfd.readouterr()
-        emf_lines = []
-        for line in captured.out.split("\n"):
-            if line.strip() and '"_aws"' in line:
-                try:
-                    emf_lines.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-
-        assert not emf_lines, "Expected no EMF lines when cloudwatch_metrics=False"
+        assert not _emf_lines(capfd.readouterr().out), (
+            "Expected no EMF lines when cloudwatch_metrics=False"
+        )
 
 
 @pytest.mark.local

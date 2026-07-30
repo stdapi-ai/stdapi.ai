@@ -18,12 +18,12 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from openai._models import construct_type
 from openai.types.responses import CompactedResponse as SdkCompactedResponse
-from starlette.testclient import TestClient
 
 from stdapi.api_errors import ApiError
 
 if TYPE_CHECKING:
     from openai import OpenAI
+    from starlette.testclient import TestClient
 from stdapi.models import ModelDetails
 from stdapi.models.chat._adapters._openai_responses import (
     COMPACTION_CONTENT_PREFIX,
@@ -93,14 +93,6 @@ class _StubChatModel:
 
 
 @pytest.fixture
-def client(api_key: str) -> TestClient:
-    """Test client without lifespan (no AWS startup), pre-authenticated."""
-    from stdapi.main import app  # noqa: PLC0415
-
-    return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
-
-
-@pytest.fixture
 def chat_backend(monkeypatch: pytest.MonkeyPatch) -> _StubChatModel:
     """Stub model validation and the chat generation backend."""
 
@@ -129,16 +121,15 @@ class TestResponsesCompactRoute:
     Ref: stdapi/routes/openai_responses.py:_compaction_user_messages
     """
 
-    def test_compact_returns_compaction_item(
-        self, client: TestClient, chat_backend: _StubChatModel
-    ) -> None:
+    @pytest.mark.usefixtures("chat_backend")
+    def test_compact_returns_compaction_item(self, app_client: TestClient) -> None:
         """String input yields a user message echo followed by the compaction item.
 
         A bare string input is the shorthand for a single ``user`` message, so
         it is echoed as an ``input_text`` part, and the summary the backend
         produced is what the compaction item carries.
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/responses/compact",
             json={"model": "amazon.nova-pro-v1:0", "input": "a long conversation"},
         )
@@ -161,8 +152,9 @@ class TestResponsesCompactRoute:
             "the summarisation turn's usage is billed to the caller"
         )
 
+    @pytest.mark.usefixtures("chat_backend")
     def test_compact_echoes_only_user_messages_in_order(
-        self, client: TestClient, chat_backend: _StubChatModel
+        self, app_client: TestClient
     ) -> None:
         """Assistant messages are dropped; user echoes stay ordered before the compaction item.
 
@@ -170,7 +162,7 @@ class TestResponsesCompactRoute:
         already folded into the summary, so re-sending them would duplicate
         context.
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/responses/compact",
             json={
                 "model": "amazon.nova-pro-v1:0",
@@ -187,8 +179,9 @@ class TestResponsesCompactRoute:
         assert all(echo["role"] == "user" for echo in echoes)
         assert item["type"] == "compaction"
 
+    @pytest.mark.usefixtures("chat_backend")
     def test_compact_echoes_part_list_content_as_dicts(
-        self, client: TestClient, chat_backend: _StubChatModel
+        self, app_client: TestClient
     ) -> None:
         """List-based user content parts are echoed back verbatim as dicts.
 
@@ -201,7 +194,7 @@ class TestResponsesCompactRoute:
             {"type": "input_text", "text": "look at this"},
             {"type": "input_image", "image_url": "https://example.com/img.png"},
         ]
-        response = client.post(
+        response = app_client.post(
             "/v1/responses/compact",
             json={
                 "model": "amazon.nova-pro-v1:0",
@@ -214,7 +207,7 @@ class TestResponsesCompactRoute:
         assert item["type"] == "compaction"
 
     def test_compact_appends_summarization_directive(
-        self, client: TestClient, chat_backend: _StubChatModel
+        self, app_client: TestClient, chat_backend: _StubChatModel
     ) -> None:
         """The generation request keeps the input and appends the directive.
 
@@ -222,7 +215,7 @@ class TestResponsesCompactRoute:
         unchanged with the summarisation instruction as a trailing user
         message, and the caller's own ``instructions`` are preserved.
         """
-        client.post(
+        app_client.post(
             "/v1/responses/compact",
             json={
                 "model": "amazon.nova-pro-v1:0",
@@ -245,7 +238,7 @@ class TestResponsesCompactRoute:
 
     def test_previous_response_id_compacts_stored_conversation(
         self,
-        client: TestClient,
+        app_client: TestClient,
         chat_backend: _StubChatModel,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -265,7 +258,7 @@ class TestResponsesCompactRoute:
             return {"input": [{"role": "user", "content": "first"}], "response": {}}
 
         monkeypatch.setattr(openai_responses, "load_stored_response", _load)
-        response = client.post(
+        response = app_client.post(
             "/v1/responses/compact",
             json={"model": "m", "input": "second", "previous_response_id": "resp-1"},
         )
@@ -293,7 +286,7 @@ class TestResponsesCompactRoute:
     @pytest.mark.parametrize("body_input", [None, []], ids=["omitted", "empty-list"])
     def test_empty_input_is_rejected(
         self,
-        client: TestClient,
+        app_client: TestClient,
         chat_backend: _StubChatModel,
         body_input: list[Any] | None,
     ) -> None:
@@ -306,7 +299,7 @@ class TestResponsesCompactRoute:
         body: dict[str, Any] = {"model": "amazon.nova-pro-v1:0"}
         if body_input is not None:
             body["input"] = body_input
-        response = client.post("/v1/responses/compact", json=body)
+        response = app_client.post("/v1/responses/compact", json=body)
         assert response.status_code == 400, response.text
         error = response.json()["error"]
         assert "no conversation to compact" in error["message"]
@@ -314,7 +307,7 @@ class TestResponsesCompactRoute:
         assert not chat_backend.requests, "no model is billed for an empty request"
 
     def test_generation_parameters_are_forwarded(
-        self, client: TestClient, chat_backend: _StubChatModel
+        self, app_client: TestClient, chat_backend: _StubChatModel
     ) -> None:
         """Caching and service-tier parameters reach the generation request.
 
@@ -324,7 +317,7 @@ class TestResponsesCompactRoute:
 
         Ref: stdapi/types/openai_responses.py:CompactParams
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/responses/compact",
             json={
                 "model": "amazon.nova-pro-v1:0",
@@ -345,7 +338,7 @@ class TestResponsesCompactRoute:
         assert request.prompt_cache_options.ttl == "30m"
 
     def test_missing_usage_falls_back_to_zeros(
-        self, client: TestClient, chat_backend: _StubChatModel
+        self, app_client: TestClient, chat_backend: _StubChatModel
     ) -> None:
         """A backend response without usage yields a zeroed usage envelope.
 
@@ -353,7 +346,7 @@ class TestResponsesCompactRoute:
         reports none must still serialise a complete envelope.
         """
         chat_backend.usage = None
-        response = client.post(
+        response = app_client.post(
             "/v1/responses/compact",
             json={"model": "amazon.nova-pro-v1:0", "input": "x"},
         )
@@ -366,7 +359,7 @@ class TestResponsesCompactRoute:
 
     def test_mantle_previous_response_id_is_not_found(
         self,
-        client: TestClient,
+        app_client: TestClient,
         chat_backend: _StubChatModel,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -384,7 +377,7 @@ class TestResponsesCompactRoute:
             "_decode_mantle_id",
             lambda _response_id: ("us-east-1", "resp_native123"),
         )
-        response = client.post(
+        response = app_client.post(
             "/v1/responses/compact",
             json={
                 "model": "amazon.nova-pro-v1:0",
@@ -398,9 +391,8 @@ class TestResponsesCompactRoute:
         assert error["type"] == "invalid_request_error"
         assert not chat_backend.requests
 
-    def test_sdk_parses_compaction_envelope(
-        self, client: TestClient, chat_backend: _StubChatModel
-    ) -> None:
+    @pytest.mark.usefixtures("chat_backend")
+    def test_sdk_parses_compaction_envelope(self, app_client: TestClient) -> None:
         """The response JSON validates against the SDK's ``CompactedResponse`` model.
 
         Clients call this route through ``openai.responses.compact()``, so the
@@ -408,7 +400,7 @@ class TestResponsesCompactRoute:
 
         Ref: https://github.com/openai/openai-python/tree/main/src/openai/types/responses
         """
-        response = client.post(
+        response = app_client.post(
             "/v1/responses/compact",
             json={
                 "model": "amazon.nova-pro-v1:0",
@@ -427,7 +419,7 @@ class TestResponsesCompactRoute:
 
     def test_unknown_previous_response_id_is_not_found(
         self,
-        client: TestClient,
+        app_client: TestClient,
         chat_backend: _StubChatModel,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -443,7 +435,7 @@ class TestResponsesCompactRoute:
             raise ApiError(msg, status=404)
 
         monkeypatch.setattr(openai_responses, "load_stored_response", _load)
-        response = client.post(
+        response = app_client.post(
             "/v1/responses/compact",
             json={"model": "m", "input": "x", "previous_response_id": "resp-zzz"},
         )

@@ -16,8 +16,14 @@ from stdapi.models.chat._adapters._anthropic_message import (
     format_response,
 )
 from stdapi.types.anthropic_messages import (
+    CitationCharLocation,
+    CitationContentBlockLocation,
+    CitationPageLocation,
+    CitationsSearchResultLocation,
+    CitationsWebSearchResultLocation,
     Message,
     ServerToolUseBlock,
+    TextBlock,
     ToolUseBlock,
     Usage,
     WebSearchToolResultBlock,
@@ -43,6 +49,47 @@ def test_map_stop_reason_preserves_context_window_exceeded() -> None:
         "model_context_window_exceeded"
     )
     assert _map_stop_reason("max_tokens") == "max_tokens"
+
+
+@pytest.mark.parametrize(
+    "bedrock_stop_reason",
+    [
+        "content_filtered",
+        "guardrail_intervened",
+        "malformed_model_output",
+        "malformed_tool_use",
+    ],
+)
+def test_map_stop_reason_maps_blocked_generations_to_refusal(
+    bedrock_stop_reason: str,
+) -> None:
+    """Filtered, guardrailed and malformed Bedrock generations become ``refusal``.
+
+    Anthropic has no per-cause stop reason for a blocked generation, so all four
+    Bedrock outcomes collapse onto the single ``refusal`` value.  Mapping any of
+    them to ``end_turn`` instead would tell the caller it received a complete,
+    unfiltered answer.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html
+         stdapi/models/chat/_adapters/_anthropic_message.py:_STOP_REASONS
+    """
+    assert _map_stop_reason(bedrock_stop_reason) == "refusal"
+
+
+def test_map_stop_reason_incomplete_and_unknown_fallbacks() -> None:
+    """The non-standard ``incomplete`` reason becomes ``max_tokens``; anything unknown ``end_turn``.
+
+    ``incomplete`` is not in the Converse stop-reason enum but is observed from
+    some Bedrock backends; an unmapped value must degrade to ``end_turn`` rather
+    than leaking a non-Anthropic literal into the response model.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         stdapi/models/chat/_adapters/_anthropic_message.py:_map_stop_reason
+    """
+    assert _map_stop_reason("incomplete") == "max_tokens"
+    assert _map_stop_reason("something_new") == "end_turn"
+    assert _map_stop_reason(None) == "end_turn"
 
 
 def test_message_accepts_context_window_exceeded_stop_reason() -> None:
@@ -187,3 +234,183 @@ async def test_search_result_correlates_to_mapped_server_tool_use_id() -> None:
         b for b in message.content if isinstance(b, WebSearchToolResultBlock)
     )
     assert web_result.tool_use_id == "srvtoolu_t1"
+
+
+async def _citation_block(location: dict[str, Any]) -> TextBlock:
+    """Run ``format_response`` over one Bedrock ``citationsContent`` block."""
+    contents = cast(
+        "list[ContentBlockOutputTypeDef]",
+        [
+            {
+                "citationsContent": {
+                    "content": [{"text": "Guido created Python"}],
+                    "citations": [
+                        {
+                            "title": "Python history",
+                            "source": "https://example.com/doc",
+                            "sourceContent": [{"text": "released in 1991"}],
+                            "location": location,
+                        }
+                    ],
+                }
+            }
+        ],
+    )
+    message = await format_response(
+        contents=contents,
+        stop_reason="end_turn",
+        usage={},
+        message_id="msg_1",
+        model_id="model-x",
+        forced_tool=None,
+        resp_map_tool_result=lambda *_args: None,
+    )
+    (block,) = message.content
+    assert isinstance(block, TextBlock)
+    return block
+
+
+async def test_citations_content_becomes_a_text_block_with_citations() -> None:
+    """A Bedrock ``citationsContent`` block becomes one text block carrying its citations.
+
+    Bedrock keeps the answer text and the citation metadata in one block, whereas
+    Anthropic attaches ``citations`` to the ``text`` block itself, so the content
+    items are concatenated into the block text and the cited span is taken from
+    ``sourceContent`` rather than from the answer.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         https://docs.aws.amazon.com/nova/latest/nova2-userguide/web-grounding.html
+         stdapi/models/chat/_adapters/_anthropic_message.py:_map_citations_content_from_bedrock
+    """
+    block = await _citation_block({"documentChar": {"start": 3, "end": 9}})
+    assert block.type == "text"
+    assert block.text == "Guido created Python"
+    assert block.citations is not None
+    (citation,) = block.citations
+    assert isinstance(citation, CitationCharLocation)
+    assert citation.cited_text == "released in 1991"
+    assert citation.document_title == "Python history"
+
+
+async def test_citation_char_location_carries_start_and_end_indices() -> None:
+    """``documentChar`` maps to ``char_location`` with the Bedrock start/end offsets.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         stdapi/models/chat/_adapters/_anthropic_message.py:_map_citations_from_bedrock
+    """
+    block = await _citation_block(
+        {"documentChar": {"documentIndex": 2, "start": 3, "end": 9}}
+    )
+    assert block.citations is not None
+    (citation,) = block.citations
+    assert isinstance(citation, CitationCharLocation)
+    assert citation.type == "char_location"
+    assert citation.document_index == 2
+    assert citation.start_char_index == 3
+    assert citation.end_char_index == 9
+
+
+async def test_citation_page_location_carries_page_numbers() -> None:
+    """``documentPage`` maps to ``page_location`` with start/end page numbers.
+
+    The Bedrock payload uses the same generic ``start``/``end`` keys for every
+    location kind, so a mix-up between the page and char arms would silently emit
+    character offsets as page numbers.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         stdapi/models/chat/_adapters/_anthropic_message.py:_map_citations_from_bedrock
+    """
+    block = await _citation_block(
+        {"documentPage": {"documentIndex": 1, "start": 4, "end": 5}}
+    )
+    assert block.citations is not None
+    (citation,) = block.citations
+    assert isinstance(citation, CitationPageLocation)
+    assert citation.type == "page_location"
+    assert citation.document_index == 1
+    assert citation.start_page_number == 4
+    assert citation.end_page_number == 5
+
+
+async def test_citation_document_chunk_maps_to_content_block_location() -> None:
+    """``documentChunk`` maps to ``content_block_location`` with block indices.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         stdapi/models/chat/_adapters/_anthropic_message.py:_map_citations_from_bedrock
+    """
+    block = await _citation_block(
+        {"documentChunk": {"documentIndex": 0, "start": 6, "end": 7}}
+    )
+    assert block.citations is not None
+    (citation,) = block.citations
+    assert isinstance(citation, CitationContentBlockLocation)
+    assert citation.type == "content_block_location"
+    assert citation.start_block_index == 6
+    assert citation.end_block_index == 7
+
+
+async def test_citation_web_location_falls_back_to_the_citation_source_url() -> None:
+    """``web`` maps to ``web_search_result_location``, defaulting the URL to the citation source.
+
+    Bedrock omits ``location.web.url`` when the citation already carries a
+    ``source``; ``encrypted_index`` has no Bedrock equivalent and is emitted empty
+    because the Anthropic model requires the field.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
+         stdapi/models/chat/_adapters/_anthropic_message.py:_map_citations_from_bedrock
+    """
+    block = await _citation_block({"web": {}})
+    assert block.citations is not None
+    (citation,) = block.citations
+    assert isinstance(citation, CitationsWebSearchResultLocation)
+    assert citation.type == "web_search_result_location"
+    assert citation.url == "https://example.com/doc"
+    assert citation.title == "Python history"
+    assert citation.encrypted_index == ""
+
+
+async def test_citation_search_result_location_keeps_source_and_index() -> None:
+    """``searchResultLocation`` maps to ``search_result_location`` with source and block span.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
+         stdapi/models/chat/_adapters/_anthropic_message.py:_map_citations_from_bedrock
+    """
+    block = await _citation_block(
+        {"searchResultLocation": {"searchResultIndex": 3, "start": 1, "end": 2}}
+    )
+    assert block.citations is not None
+    (citation,) = block.citations
+    assert isinstance(citation, CitationsSearchResultLocation)
+    assert citation.type == "search_result_location"
+    assert citation.search_result_index == 3
+    assert citation.source == "https://example.com/doc"
+    assert citation.start_block_index == 1
+    assert citation.end_block_index == 2
+
+
+async def test_citations_content_without_citations_has_none() -> None:
+    """A citations block with no citation entries yields ``citations = None``, not an empty list.
+
+    Anthropic's ``TextBlock.citations`` is optional, and an empty list would make
+    a client believe the answer was grounded.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         stdapi/models/chat/_adapters/_anthropic_message.py:_map_citations_content_from_bedrock
+    """
+    contents = cast(
+        "list[ContentBlockOutputTypeDef]",
+        [{"citationsContent": {"content": [{"text": "plain"}]}}],
+    )
+    message = await format_response(
+        contents=contents,
+        stop_reason="end_turn",
+        usage={},
+        message_id="msg_1",
+        model_id="model-x",
+        forced_tool=None,
+        resp_map_tool_result=lambda *_args: None,
+    )
+    (block,) = message.content
+    assert isinstance(block, TextBlock)
+    assert block.text == "plain"
+    assert block.citations is None

@@ -18,13 +18,12 @@ import pytest
 if TYPE_CHECKING:
     from openai import OpenAI
 
-NOVA_ALL = ("amazon.nova-2-lite-v1:0",)
-
-#: Model used for ``nova_grounding``: Bedrock only accepts the system tool on a
+#: The Nova 2 model under test.  Bedrock only accepts ``nova_grounding`` on a
 #: geo-scoped (``us.``) profile, which conftest forces through
 #: ``aws_bedrock_model_region_restrict``.
-_NOVA_GROUNDING_MODEL = "amazon.nova-2-lite-v1:0"
+_NOVA_MODEL = "amazon.nova-2-lite-v1:0"
 
+#: The ``nova_grounding`` system tool, declared as an ordinary OpenAI function tool.
 _GROUNDING_TOOL: list[dict[str, object]] = [
     {"type": "function", "function": {"name": "nova_grounding"}}
 ]
@@ -40,10 +39,13 @@ class TestNovaChatCompletions:
          stdapi/models/chat/amazon_nova_2.py:ChatModel
     """
 
-    @pytest.mark.parametrize("model", NOVA_ALL)
-    def test_reasoning_effort_parameter(
-        self, openai_client: OpenAI, use_official_api: bool, model: str
-    ) -> None:
+    @pytest.fixture(autouse=True)
+    def _skip_official_api(self, use_official_api: bool) -> None:
+        """Skip the whole class: Nova models are not served by the official OpenAI API."""
+        if use_official_api:
+            pytest.skip("Amazon Nova is not supported on the official API")
+
+    def test_reasoning_effort_parameter(self, openai_client: OpenAI) -> None:
         """``reasoning_effort="minimal"`` enables Nova reasoning and returns its text.
 
         Nova has three effort levels, so ``_REASONING_OVERRIDE`` folds ``minimal`` onto
@@ -55,10 +57,8 @@ class TestNovaChatCompletions:
              https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ReasoningContentBlock.html
              stdapi/models/chat/amazon_nova_2.py:ChatModel._req_configure_reasoning
         """
-        if use_official_api:
-            pytest.skip("Amazon Nova is not supported on the official API")
         resp = openai_client.chat.completions.create(
-            model=model,
+            model=_NOVA_MODEL,
             messages=[{"role": "user", "content": "Reply with OK."}],
             reasoning_effort="minimal",
         )
@@ -73,9 +73,8 @@ class TestNovaChatCompletions:
         assert resp.usage.prompt_tokens > 0
         assert resp.usage.completion_tokens > 0
 
-    @pytest.mark.parametrize("model", NOVA_ALL)
     def test_reasoning_effort_none_explicit_disable(
-        self, openai_client: OpenAI, use_official_api: bool, model: str
+        self, openai_client: OpenAI
     ) -> None:
         """``reasoning_effort="none"`` disables Nova reasoning, so no reasoning text returns.
 
@@ -86,10 +85,8 @@ class TestNovaChatCompletions:
         Ref: https://developers.openai.com/api/docs/guides/reasoning
              stdapi/models/chat/amazon_nova_2.py:ChatModel._req_configure_reasoning
         """
-        if use_official_api:
-            pytest.skip("Amazon Nova is not supported on the official API")
         resp = openai_client.chat.completions.create(
-            model=model,
+            model=_NOVA_MODEL,
             messages=[{"role": "user", "content": "Reply with OK."}],
             reasoning_effort="none",
         )
@@ -110,7 +107,7 @@ class TestNovaChatCompletions:
 
     @pytest.mark.expensive
     def test_nova_grounding_tool_name_auto_promoted_to_system_tool(
-        self, openai_client: OpenAI, use_official_api: bool
+        self, openai_client: OpenAI
     ) -> None:
         """A function tool named ``nova_grounding`` becomes a Bedrock ``systemTool``.
 
@@ -124,12 +121,10 @@ class TestNovaChatCompletions:
              https://docs.aws.amazon.com/nova/latest/nova2-userguide/web-grounding.html
              stdapi/models/chat/_default.py:ChatModel._req_promote_system_tools
         """
-        if use_official_api:
-            pytest.skip("Amazon Nova is not supported on the official API")
         resp = openai_client.chat.completions.create(
-            model=_NOVA_GROUNDING_MODEL,
+            model=_NOVA_MODEL,
             messages=[{"role": "user", "content": "What is today's date? Be concise."}],
-            tools=[{"type": "function", "function": {"name": "nova_grounding"}}],
+            tools=_GROUNDING_TOOL,  # type: ignore[arg-type]
         )
         assert len(resp.choices) >= 1
         choice = resp.choices[0]
@@ -144,7 +139,7 @@ class TestNovaChatCompletions:
         assert resp.usage.completion_tokens > 0
 
     def test_web_search_plain_name_not_auto_promoted(
-        self, openai_client: OpenAI, use_official_api: bool
+        self, openai_client: OpenAI
     ) -> None:
         """A user tool named ``web_search`` stays an ordinary ``toolSpec``.
 
@@ -158,11 +153,9 @@ class TestNovaChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_SystemTool.html
              stdapi/models/chat/_default.py:ChatModel._req_promote_system_tools
         """
-        if use_official_api:
-            pytest.skip("Amazon Nova is not supported on the official API")
         # web_search passed as a regular toolSpec: Nova treats it as a custom tool
         resp = openai_client.chat.completions.create(
-            model=_NOVA_GROUNDING_MODEL,
+            model=_NOVA_MODEL,
             messages=[{"role": "user", "content": "Reply with OK."}],
             tools=[
                 {
@@ -220,9 +213,13 @@ class TestNovaGrounding:
          stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_tool_calls
     """
 
-    def test_tool_calls_suppressed_non_streaming(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    @pytest.fixture(autouse=True)
+    def _skip_official_api(self, use_official_api: bool) -> None:
+        """Skip the whole class: Nova models are not served by the official OpenAI API."""
+        if use_official_api:
+            pytest.skip("Amazon Nova is not supported on the official API")
+
+    def test_tool_calls_suppressed_non_streaming(self, openai_client: OpenAI) -> None:
         """A nova_grounding invocation is hidden from ``tool_calls``.
 
         ``extract_tool_calls`` drops ``toolUse`` blocks whose name is in
@@ -232,10 +229,8 @@ class TestNovaGrounding:
         Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/web-grounding.html
              stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_tool_calls
         """
-        if use_official_api:
-            pytest.skip("Amazon Nova is not supported on the official API")
         resp = openai_client.chat.completions.create(
-            model=_NOVA_GROUNDING_MODEL,
+            model=_NOVA_MODEL,
             messages=[
                 {"role": "user", "content": "What is the current version of Python?"}
             ],
@@ -250,9 +245,7 @@ class TestNovaGrounding:
         assert resp.usage is not None
         assert resp.usage.completion_tokens > 0
 
-    def test_citations_returned_non_streaming(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_citations_returned_non_streaming(self, openai_client: OpenAI) -> None:
         """Web search results are surfaced as ``url_citation`` annotations.
 
         ``extract_citations`` keeps only citations with a ``location.web.url`` and falls
@@ -262,10 +255,8 @@ class TestNovaGrounding:
         Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/web-grounding.html
              stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_citations
         """
-        if use_official_api:
-            pytest.skip("Amazon Nova is not supported on the official API")
         resp = openai_client.chat.completions.create(
-            model=_NOVA_GROUNDING_MODEL,
+            model=_NOVA_MODEL,
             messages=[
                 {
                     "role": "user",
@@ -288,9 +279,7 @@ class TestNovaGrounding:
             assert ann.url_citation.start_index == 0
             assert ann.url_citation.end_index == 0
 
-    def test_tool_calls_suppressed_streaming(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_tool_calls_suppressed_streaming(self, openai_client: OpenAI) -> None:
         """Streaming with nova_grounding emits no tool_call delta chunks.
 
         ``_suppress_system_tool_event`` tracks the Bedrock content-block index of a
@@ -300,14 +289,12 @@ class TestNovaGrounding:
         Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
              stdapi/models/chat/_adapters/_openai_chat_completion.py:_suppress_system_tool_event
         """
-        if use_official_api:
-            pytest.skip("Amazon Nova is not supported on the official API")
         tool_call_chunks = 0
         content_chunks = 0
         finish_reason = None
         first_delta_role = None
         response = openai_client.chat.completions.create(
-            model=_NOVA_GROUNDING_MODEL,
+            model=_NOVA_MODEL,
             messages=[
                 {"role": "user", "content": "What is the latest Python version?"}
             ],
@@ -343,7 +330,7 @@ class TestNovaGrounding:
         assert content_chunks > 0, "Expected at least one content chunk"
         assert finish_reason == "stop"
 
-    def test_multi_turn(self, openai_client: OpenAI, use_official_api: bool) -> None:
+    def test_multi_turn(self, openai_client: OpenAI) -> None:
         """A grounded answer can be replayed as history for a second grounded turn.
 
         Because the ``nova_grounding`` ``toolUse`` blocks are suppressed, the assistant
@@ -353,12 +340,9 @@ class TestNovaGrounding:
         Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/web-grounding.html
              stdapi/models/chat/_adapters/_openai_chat_completion.py:map_messages
         """
-        if use_official_api:
-            pytest.skip("Amazon Nova is not supported on the official API")
-
         # ── Turn 1 ──────────────────────────────────────────────────────────
         resp1 = openai_client.chat.completions.create(
-            model=_NOVA_GROUNDING_MODEL,
+            model=_NOVA_MODEL,
             messages=[
                 {"role": "user", "content": "What is the current Python version?"}
             ],
@@ -373,7 +357,7 @@ class TestNovaGrounding:
 
         # ── Turn 2 ──────────────────────────────────────────────────────────
         resp2 = openai_client.chat.completions.create(
-            model=_NOVA_GROUNDING_MODEL,
+            model=_NOVA_MODEL,
             messages=[
                 {"role": "user", "content": "What is the current Python version?"},
                 {"role": "assistant", "content": msg1.content},

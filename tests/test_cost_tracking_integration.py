@@ -14,6 +14,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 import pytest
+import pytest_asyncio
 from aiobotocore.session import get_session
 
 from stdapi import monitoring, pricing
@@ -29,9 +30,6 @@ if TYPE_CHECKING:
 #: Small, widely available chat model used for the one live Bedrock call.
 _CHAT_MODEL = "amazon.nova-micro-v1:0"
 
-#: One live catalog load shared by all tests (reloads get throttled by AWS).
-_CATALOG_CACHE: dict[pricing.PriceKey, pricing.Price] = {}
-
 
 @pytest.fixture
 def client(test_client: TestClient | None) -> TestClient:
@@ -41,37 +39,48 @@ def client(test_client: TestClient | None) -> TestClient:
     return test_client
 
 
-@pytest.fixture
-async def live_catalog(
-    test_client: TestClient | None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Enable cost tracking and load the real price catalog from AWS.
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def price_catalog(
+    test_client: TestClient | None,
+) -> dict[pricing.PriceKey, pricing.Price]:
+    """Load the real AWS Price List catalog once for the whole module.
 
-    The app's shared pricing client is bound to the server's event loop, so
-    the load runs through a fresh client on this test loop instead. Skips
-    before loading anything when not running against the local test server
-    (same reason as the ``client`` fixture) -- otherwise a ``--server-url
-    --slow`` run would pay for a full Price List load just to skip.
+    Reloads get throttled by AWS, so this pays for exactly one load. The app's
+    shared pricing client is bound to the server's event loop, so the load runs
+    through a fresh client here instead. Skips before loading anything when not
+    running against the local test server -- otherwise a ``--server-url --slow``
+    run would pay for a full Price List load just to skip.
+
+    Returns:
+        The loaded price index.
     """
     if test_client is None:
         pytest.skip("Requires local test server")
-    monkeypatch.setattr(SETTINGS, "cost_tracking", True)
-    if not _CATALOG_CACHE:
-        client_patch = pytest.MonkeyPatch()
+    with pytest.MonkeyPatch.context() as patch:
         async with get_session().create_client(
             "pricing", region_name=pricing.pricing_endpoint_region()
         ) as fresh_client:
-            client_patch.setattr(
+            patch.setattr(
                 pricing, "get_client", lambda _service, _region=None: fresh_client
             )
-            try:
-                await pricing._load_price_catalog([])  # noqa: SLF001
-            finally:
-                client_patch.undo()
-        _CATALOG_CACHE.update(pricing._state.price_index)  # noqa: SLF001
-    else:
-        pricing._state.price_index = dict(_CATALOG_CACHE)  # noqa: SLF001
-    assert pricing._state.price_index  # noqa: SLF001
+            await pricing._load_price_catalog([])  # noqa: SLF001
+    catalog = dict(pricing._state.price_index)  # noqa: SLF001
+    assert catalog
+    return catalog
+
+
+@pytest.fixture
+def live_catalog(
+    price_catalog: dict[pricing.PriceKey, pricing.Price],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Enable cost tracking and install the loaded catalog for one test.
+
+    Reinstalling per test is required: conftest's autouse ``_clean_price_index``
+    empties the index before every test.
+    """
+    monkeypatch.setattr(SETTINGS, "cost_tracking", True)
+    monkeypatch.setattr(pricing._state, "price_index", dict(price_catalog))  # noqa: SLF001
 
 
 @pytest.mark.slow

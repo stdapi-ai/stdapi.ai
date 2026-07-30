@@ -19,6 +19,9 @@ from openai import BadRequestError
 
 from tests.conftest import OUTPUT_DIR, SAMPLES_DIR
 
+#: Every test in this module is reported as skipped: the model is deprecated.
+pytestmark = pytest.mark.skip(reason="Amazon Nova Canvas is deprecated")
+
 if TYPE_CHECKING:
     from openai import OpenAI
 
@@ -43,6 +46,13 @@ def _decoded_png(b64_json: str | None) -> bytes:
     return data
 
 
+@pytest.fixture(autouse=True)
+def _skip_on_official_api(use_official_api: bool) -> None:
+    """Skip every test here: Nova Canvas has no official OpenAI equivalent."""
+    if use_official_api:
+        pytest.skip("Amazon Nova Canvas is not available on the official OpenAI API")
+
+
 class TestAmazonNovaCanvasEditing:
     """Nova Canvas ``taskType`` dispatch and provider extras on the edits route.
 
@@ -55,7 +65,6 @@ class TestAmazonNovaCanvasEditing:
     def test_edit_with_extra_parameters(
         self,
         openai_client: OpenAI,
-        use_official_api: bool,
         sample_image_file: bytes,
         sample_mask_file: bytes,
         model_id: str,
@@ -70,11 +79,6 @@ class TestAmazonNovaCanvasEditing:
         Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._apply_extra_params
              stdapi/aws_bedrock.py:get_extra_model_parameters
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova Canvas is not available on the official OpenAI API"
-            )
-
         response = openai_client.images.edit(
             image=sample_image_file,
             mask=sample_mask_file,
@@ -103,7 +107,6 @@ class TestAmazonNovaCanvasEditing:
     def test_edit_b64_single(
         self,
         openai_client: OpenAI,
-        use_official_api: bool,
         sample_image_file: bytes,
         sample_mask_file: bytes,
         model_id: str,
@@ -118,11 +121,6 @@ class TestAmazonNovaCanvasEditing:
         Ref: stdapi/utils.py:alpha_mask_to_bw
              https://docs.aws.amazon.com/nova/latest/userguide/image-gen-access.html
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova Canvas is not available on the official OpenAI API"
-            )
-
         response = openai_client.images.edit(
             image=sample_image_file,
             mask=sample_mask_file,
@@ -164,11 +162,7 @@ class TestAmazonNovaCanvasEditing:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_ALL)
     def test_edit_b64_single_without_mask(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file: bytes, model_id: str
     ) -> None:
         """A mask-less edit still returns one base64 PNG, with a single input image.
 
@@ -179,11 +173,6 @@ class TestAmazonNovaCanvasEditing:
 
         Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._edit_image
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova Canvas is not available on the official OpenAI API"
-            )
-
         response = openai_client.images.edit(
             image=sample_image_file,
             prompt="A green square",
@@ -221,7 +210,6 @@ class TestAmazonNovaCanvasEditing:
     def test_edit_with_outpainting_task_type(
         self,
         openai_client: OpenAI,
-        use_official_api: bool,
         sample_image_file: bytes,
         sample_mask_file: bytes,
         model_id: str,
@@ -234,11 +222,6 @@ class TestAmazonNovaCanvasEditing:
 
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-access.html
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova Canvas is not available on the official OpenAI API"
-            )
-
         response = openai_client.images.edit(
             image=sample_image_file,
             mask=sample_mask_file,
@@ -263,7 +246,6 @@ class TestAmazonNovaCanvasEditing:
     def test_edit_with_outpainting_task_type_and_alpha_mask(
         self,
         openai_client: OpenAI,
-        use_official_api: bool,
         sample_image_file: bytes,
         sample_alpha_mask_file: bytes,
         model_id: str,
@@ -280,11 +262,6 @@ class TestAmazonNovaCanvasEditing:
         Ref: stdapi/utils.py:alpha_mask_to_bw
              https://docs.aws.amazon.com/nova/latest/userguide/image-gen-access.html
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova Canvas is not available on the official OpenAI API"
-            )
-
         response = openai_client.images.edit(
             image=sample_image_file,
             mask=sample_alpha_mask_file,
@@ -311,11 +288,7 @@ class TestAmazonNovaCanvasEditing:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_edit_with_background_removal_task_type(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file: bytes, model_id: str
     ) -> None:
         """``BACKGROUND_REMOVAL`` needs no mask and ignores the prompt.
 
@@ -325,11 +298,6 @@ class TestAmazonNovaCanvasEditing:
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
              stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._get_request_background_removal
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova Canvas is not available on the official OpenAI API"
-            )
-
         response = openai_client.images.edit(
             image=sample_image_file,
             prompt="Remove the background",
@@ -354,7 +322,6 @@ class TestAmazonNovaCanvasEditing:
     def test_edit_with_virtual_try_on(
         self,
         openai_client: OpenAI,
-        use_official_api: bool,
         chat_vision_judge_model: str,
         model_id: str,
         mask_type: str,
@@ -371,11 +338,6 @@ class TestAmazonNovaCanvasEditing:
         Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._get_request_virtual_try_on
              https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova Canvas is not available on the official OpenAI API"
-            )
-
         source_image = (SAMPLES_DIR / "vto_upper_body_source.jpg").read_bytes()
         reference_image = (SAMPLES_DIR / "vto_upper_body_reference.jpg").read_bytes()
 
@@ -481,11 +443,7 @@ class TestAmazonNovaCanvasEditing:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_edit_inpainting_without_mask(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file: bytes, model_id: str
     ) -> None:
         """``INPAINTING`` accepts a ``maskPrompt`` instead of an uploaded mask.
 
@@ -494,11 +452,6 @@ class TestAmazonNovaCanvasEditing:
 
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova Canvas is not available on the official OpenAI API"
-            )
-
         response = openai_client.images.edit(
             image=sample_image_file,
             prompt="A red circle in the center",
@@ -523,11 +476,7 @@ class TestAmazonNovaCanvasEditing:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_edit_outpainting_without_mask(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file: bytes, model_id: str
     ) -> None:
         """``OUTPAINTING`` accepts a ``maskPrompt`` instead of an uploaded mask.
 
@@ -536,11 +485,6 @@ class TestAmazonNovaCanvasEditing:
 
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova Canvas is not available on the official OpenAI API"
-            )
-
         response = openai_client.images.edit(
             image=sample_image_file,
             prompt="Extend with mountains",
@@ -566,7 +510,6 @@ class TestAmazonNovaCanvasEditing:
     def test_edit_with_invalid_task_type(
         self,
         openai_client: OpenAI,
-        use_official_api: bool,
         sample_image_file: bytes,
         sample_mask_file: bytes,
         model_id: str,
@@ -580,11 +523,6 @@ class TestAmazonNovaCanvasEditing:
         Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._edit_image
              stdapi/api_providers/openai.py:_format_error
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova Canvas is not available on the official OpenAI API"
-            )
-
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.edit(
                 image=sample_image_file,
@@ -608,11 +546,7 @@ class TestAmazonNovaCanvasEditing:
 
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_edit_with_invalid_mask_type(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        sample_image_file: bytes,
-        model_id: str,
+        self, openai_client: OpenAI, sample_image_file: bytes, model_id: str
     ) -> None:
         """An unknown ``virtualTryOnParams.maskType`` is rejected before invoking Bedrock.
 
@@ -621,11 +555,6 @@ class TestAmazonNovaCanvasEditing:
 
         Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._get_request_virtual_try_on
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova Canvas is not available on the official OpenAI API"
-            )
-
         source_image = (SAMPLES_DIR / "vto_upper_body_source.jpg").read_bytes()
         reference_image = (SAMPLES_DIR / "vto_upper_body_reference.jpg").read_bytes()
 
@@ -651,6 +580,3 @@ class TestAmazonNovaCanvasEditing:
         assert "INVALID_MASK_TYPE" in message, (
             f"expected the rejected maskType to be echoed, got: {message}"
         )
-
-
-pytest.skip("Amazon Nova Canvas is deprecated", allow_module_level=True)

@@ -20,7 +20,7 @@ from aiohttp.test_utils import TestServer
 from stdapi import aws, server
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import AsyncGenerator, Generator
 
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
@@ -42,17 +42,17 @@ def _restore_globals() -> Generator[None]:
         aws.AWS_ENVIRONMENT["account_id"] = account_id
 
 
-async def _metadata_server(failures: int) -> TestServer:
-    """Start a fake ECS container metadata endpoint.
+@pytest.fixture
+async def metadata_server(request: pytest.FixtureRequest) -> AsyncGenerator[TestServer]:
+    """Fake ECS container metadata endpoint, closed on teardown.
 
-    Args:
-        failures: Number of container requests answered with a server error
-            before the endpoint starts working.
+    The indirect parameter is the number of container requests answered with a
+    server error before the endpoint starts working; it defaults to none.
 
-    Returns:
+    Yields:
         The started test server.
     """
-    remaining = failures
+    remaining: int = getattr(request, "param", 0)
 
     async def container(_: web.Request) -> web.Response:
         nonlocal remaining
@@ -69,35 +69,38 @@ async def _metadata_server(failures: int) -> TestServer:
     app.router.add_get("/v4/id/task", task)
     test_server = TestServer(app)
     await test_server.start_server()
-    return test_server
+    yield test_server
+    await test_server.close()
 
 
-@pytest.mark.parametrize("failures", [0, 2])
+@pytest.mark.parametrize(
+    "metadata_server",
+    [pytest.param(0, id="first-attempt"), pytest.param(2, id="after-two-failures")],
+    indirect=True,
+)
 async def test_account_info_from_ecs_metadata(
-    monkeypatch: pytest.MonkeyPatch, failures: int
+    monkeypatch: pytest.MonkeyPatch, metadata_server: TestServer
 ) -> None:
     """The account ID and task-qualified server name come from the ECS task metadata.
 
     The account ID is field 4 of the task ARN and the task ID is the last segment
     of field 5; the container name comes from the container endpoint itself. The
     endpoint is answered by the ECS agent and can be slow or briefly unavailable
-    during startup, so ``failures=2`` covers the retry path (up to
+    during startup, so the two-failure case covers the retry path (up to
     ``_ECS_METADATA_ATTEMPTS`` attempts) still yielding no warning.
 
     Ref: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-metadata-endpoint-v4-fargate-response.html
          stdapi/aws.py:_set_account_info_from_ecs
     """
     monkeypatch.setattr(aws, "_ECS_METADATA_RETRY_DELAY", 0)
-    test_server = await _metadata_server(failures)
     monkeypatch.setenv(
-        "ECS_CONTAINER_METADATA_URI_V4", str(test_server.make_url("/v4/id"))
+        "ECS_CONTAINER_METADATA_URI_V4", str(metadata_server.make_url("/v4/id"))
     )
-    try:
-        assert await aws.initialize_aws_account_info() is None, (
-            "a reachable metadata endpoint must not produce a startup warning"
-        )
-    finally:
-        await test_server.close()
+
+    assert await aws.initialize_aws_account_info() is None, (
+        "a reachable metadata endpoint must not produce a startup warning"
+    )
+
     assert aws.AWS_ENVIRONMENT["account_id"] == "123456789012"
     assert f"abcdef0123456789-main-{server.SERVER_ID}" == server.SERVER_NAME
 
@@ -114,10 +117,9 @@ async def test_unreachable_ecs_metadata_falls_back_to_sts(
     Ref: stdapi/aws.py:_set_account_id_from_sts
     """
     monkeypatch.setattr(aws, "_ECS_METADATA_RETRY_DELAY", 0)
-    test_server = await _metadata_server(0)
-    url = str(test_server.make_url("/v4/id"))
-    await test_server.close()  # Nothing listens on that port anymore
-    monkeypatch.setenv("ECS_CONTAINER_METADATA_URI_V4", url)
+    # Port 1 on loopback is reserved and never bound, so the connection is refused
+    # without racing another process for a just-released ephemeral port.
+    monkeypatch.setenv("ECS_CONTAINER_METADATA_URI_V4", "http://127.0.0.1:1/v4/id")
     called = False
 
     async def sts() -> None:

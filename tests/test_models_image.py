@@ -210,32 +210,59 @@ class TestMaskAlphaConversion:
 
     OpenAI marks the region to edit with alpha 0, while Titan and Nova Canvas
     take an alpha-less mask where black is inside the mask; outpainting then
-    alters the white pixels instead, hence the inverted polarity.
+    alters the white pixels instead, hence the inverted polarity. Both backends
+    implement the conversion separately, so each case runs against both.
 
     Ref: stdapi/utils.py:alpha_mask_to_bw
          https://docs.aws.amazon.com/nova/latest/userguide/image-gen-access.html
          https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
+         stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob
+         stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob
     """
 
-    async def test_titan_inpainting_mask_with_alpha_is_converted_to_bw(self) -> None:
-        """A transparent Titan inpainting mask is converted to pure black.
+    @pytest.fixture(
+        params=[
+            pytest.param(
+                (_ImageGenerationJob, _ImageGenerationConfig, 512), id="titan"
+            ),
+            pytest.param(
+                (
+                    nova_canvas._ImageGenerationJob,  # noqa: SLF001
+                    nova_canvas._ImageGenerationConfig,  # noqa: SLF001
+                    1024,
+                ),
+                id="nova_canvas",
+            ),
+        ]
+    )
+    def job_and_config(self, request: pytest.FixtureRequest) -> tuple[Any, Any]:
+        """Build a 1-image edit job and its config at the backend's native size.
 
-        Ref: stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._get_request_inpainting
+        Returns:
+            The job and the matching generation config.
         """
-        job = _ImageGenerationJob(
+        job_cls, config_cls, size = request.param
+        job = job_cls(
             model=cast("Any", None),
             prompt="a cat",
             count=1,
-            width=512,
-            height=512,
+            width=size,
+            height=size,
             quality=None,
             style=None,
             output_format=None,
             output_compression=0,
             extra_params={},
         )
-        config = _ImageGenerationConfig(width=512, height=512, numberOfImages=1)
+        return job, config_cls(width=size, height=size, numberOfImages=1)
+
+    async def test_inpainting_mask_with_alpha_is_converted_to_bw(
+        self, job_and_config: tuple[Any, Any]
+    ) -> None:
+        """A transparent inpainting mask is converted to pure black."""
+        job, config = job_and_config
         request = await job._get_request_inpainting(config, "image", _b64_rgba_png(0))  # noqa: SLF001
+
         assert request["taskType"] == "INPAINTING"
         assert request["inPaintingParams"]["image"] == "image"
         mask = request["inPaintingParams"]["maskImage"]
@@ -245,150 +272,33 @@ class TestMaskAlphaConversion:
             assert image.mode == "RGB"
             assert image.getpixel((0, 0)) == (0, 0, 0)
 
-    async def test_titan_outpainting_mask_without_alpha_passes_through(self) -> None:
-        """A Titan outpainting mask with no alpha channel is forwarded unchanged.
+    async def test_outpainting_mask_without_alpha_passes_through(
+        self, job_and_config: tuple[Any, Any]
+    ) -> None:
+        """An outpainting mask with no alpha channel is forwarded unchanged.
 
         A pure black/white PNG is already a native Bedrock mask, so the
         conversion is a no-op passthrough.
-
-        Ref: stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._get_request_outpainting
         """
-        job = _ImageGenerationJob(
-            model=cast("Any", None),
-            prompt="a cat",
-            count=1,
-            width=512,
-            height=512,
-            quality=None,
-            style=None,
-            output_format=None,
-            output_compression=0,
-            extra_params={},
-        )
-        config = _ImageGenerationConfig(width=512, height=512, numberOfImages=1)
+        job, config = job_and_config
         mask_input = _b64_rgb_png()
         request = await job._get_request_outpainting(config, "image", mask_input)  # noqa: SLF001
+
         assert request["taskType"] == "OUTPAINTING"
         assert request["outPaintingParams"]["image"] == "image"
         assert request["outPaintingParams"]["maskImage"] == mask_input
 
-    async def test_titan_outpainting_mask_with_alpha_uses_inverted_polarity(
-        self,
+    async def test_outpainting_mask_with_alpha_uses_inverted_polarity(
+        self, job_and_config: tuple[Any, Any]
     ) -> None:
-        """A transparent Titan outpainting mask is converted to pure white.
+        """A transparent outpainting mask is converted to pure white.
 
         Outpainting uses the opposite mask polarity from inpainting: white
         marks the region to generate, black the region to preserve.
-
-        Ref: stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._get_request_outpainting
         """
-        job = _ImageGenerationJob(
-            model=cast("Any", None),
-            prompt="a cat",
-            count=1,
-            width=512,
-            height=512,
-            quality=None,
-            style=None,
-            output_format=None,
-            output_compression=0,
-            extra_params={},
-        )
-        config = _ImageGenerationConfig(width=512, height=512, numberOfImages=1)
+        job, config = job_and_config
         request = await job._get_request_outpainting(config, "image", _b64_rgba_png(0))  # noqa: SLF001
-        assert request["taskType"] == "OUTPAINTING"
-        mask = request["outPaintingParams"]["maskImage"]
 
-        with BytesIO(pybase64_b64decode(mask)) as buffer, Image.open(buffer) as image:
-            assert image.mode == "RGB"
-            assert image.getpixel((0, 0)) == (255, 255, 255)
-
-    async def test_nova_canvas_inpainting_mask_with_alpha_is_converted_to_bw(
-        self,
-    ) -> None:
-        """A transparent Nova Canvas inpainting mask is converted to pure black.
-
-        Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._get_request_inpainting
-        """
-        job = nova_canvas._ImageGenerationJob(  # noqa: SLF001
-            model=cast("Any", None),
-            prompt="a cat",
-            count=1,
-            width=1024,
-            height=1024,
-            quality=None,
-            style=None,
-            output_format=None,
-            output_compression=0,
-            extra_params={},
-        )
-        config = nova_canvas._ImageGenerationConfig(  # noqa: SLF001
-            width=1024, height=1024, numberOfImages=1
-        )
-        request = await job._get_request_inpainting(config, "image", _b64_rgba_png(0))  # noqa: SLF001
-        assert request["taskType"] == "INPAINTING"
-        assert request["inPaintingParams"]["image"] == "image"
-        mask = request["inPaintingParams"]["maskImage"]
-        assert mask != _b64_rgba_png(0), "an alpha mask must not be forwarded as-is"
-
-        with BytesIO(pybase64_b64decode(mask)) as buffer, Image.open(buffer) as image:
-            assert image.mode == "RGB"
-            assert image.getpixel((0, 0)) == (0, 0, 0)
-
-    async def test_nova_canvas_outpainting_mask_without_alpha_passes_through(
-        self,
-    ) -> None:
-        """A Nova Canvas outpainting mask with no alpha channel is forwarded unchanged.
-
-        Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._get_request_outpainting
-        """
-        job = nova_canvas._ImageGenerationJob(  # noqa: SLF001
-            model=cast("Any", None),
-            prompt="a cat",
-            count=1,
-            width=1024,
-            height=1024,
-            quality=None,
-            style=None,
-            output_format=None,
-            output_compression=0,
-            extra_params={},
-        )
-        config = nova_canvas._ImageGenerationConfig(  # noqa: SLF001
-            width=1024, height=1024, numberOfImages=1
-        )
-        mask_input = _b64_rgb_png()
-        request = await job._get_request_outpainting(config, "image", mask_input)  # noqa: SLF001
-        assert request["taskType"] == "OUTPAINTING"
-        assert request["outPaintingParams"]["image"] == "image"
-        assert request["outPaintingParams"]["maskImage"] == mask_input
-
-    async def test_nova_canvas_outpainting_mask_with_alpha_uses_inverted_polarity(
-        self,
-    ) -> None:
-        """A transparent Nova Canvas outpainting mask is converted to pure white.
-
-        Outpainting uses the opposite mask polarity from inpainting: white
-        marks the region to generate, black the region to preserve.
-
-        Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._get_request_outpainting
-        """
-        job = nova_canvas._ImageGenerationJob(  # noqa: SLF001
-            model=cast("Any", None),
-            prompt="a cat",
-            count=1,
-            width=1024,
-            height=1024,
-            quality=None,
-            style=None,
-            output_format=None,
-            output_compression=0,
-            extra_params={},
-        )
-        config = nova_canvas._ImageGenerationConfig(  # noqa: SLF001
-            width=1024, height=1024, numberOfImages=1
-        )
-        request = await job._get_request_outpainting(config, "image", _b64_rgba_png(0))  # noqa: SLF001
         assert request["taskType"] == "OUTPAINTING"
         mask = request["outPaintingParams"]["maskImage"]
 

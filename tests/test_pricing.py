@@ -96,6 +96,19 @@ def _ingest_fixture(
     return results, diagnostics
 
 
+def _use_fake_catalog(
+    monkeypatch: pytest.MonkeyPatch, client: object, region: str = "us-east-1"
+) -> None:
+    """Point the catalog loader at *client* and at a single region.
+
+    The price index itself needs no reset: conftest's autouse ``_clean_price_index``
+    already empties it before every test.
+    """
+    monkeypatch.setattr(pricing, "get_client", lambda *_a, **_k: client)
+    monkeypatch.setattr(pricing, "_catalog_regions", lambda: {region})
+    monkeypatch.setattr(SETTINGS, "cost_price_overrides", {})
+
+
 def _price_item(
     attrs: Mapping[str, object], *, unit: str, price: str
 ) -> dict[str, object]:
@@ -579,10 +592,7 @@ class TestCrossFetchCollisionDetection:
     ) -> tuple[dict[PriceKey, Price], list[str]]:
         """Run a full _load_price_catalog against a fake pricing client."""
         client = _FakePricingClient(items_by_service_code, delay_by_service_code)
-        monkeypatch.setattr(pricing, "get_client", lambda *_a, **_k: client)
-        monkeypatch.setattr(pricing, "_catalog_regions", lambda: {"us-east-1"})
-        monkeypatch.setattr(SETTINGS, "cost_price_overrides", {})
-        monkeypatch.setattr(pricing._state, "price_index", {})  # noqa: SLF001
+        _use_fake_catalog(monkeypatch, client)
         diagnostics: list[str] = []
         await pricing._load_price_catalog(diagnostics)  # noqa: SLF001
         return pricing._state.price_index, diagnostics  # noqa: SLF001
@@ -696,10 +706,7 @@ class TestPartialFetchFailureIsTolerated:
             },
             completed=completed,
         )
-        monkeypatch.setattr(pricing, "get_client", lambda *_a, **_k: client)
-        monkeypatch.setattr(pricing, "_catalog_regions", lambda: {"us-east-1"})
-        monkeypatch.setattr(SETTINGS, "cost_price_overrides", {})
-        monkeypatch.setattr(pricing._state, "price_index", {})  # noqa: SLF001
+        _use_fake_catalog(monkeypatch, client)
 
         await pricing._load_price_catalog([])  # noqa: SLF001
 
@@ -719,10 +726,7 @@ class TestPartialFetchFailureIsTolerated:
                 "AmazonBedrock": ClientError(error_response, "GetProducts")  # type: ignore[arg-type]
             },
         )
-        monkeypatch.setattr(pricing, "get_client", lambda *_a, **_k: client)
-        monkeypatch.setattr(pricing, "_catalog_regions", lambda: {"us-east-1"})
-        monkeypatch.setattr(SETTINGS, "cost_price_overrides", {})
-        monkeypatch.setattr(pricing._state, "price_index", {})  # noqa: SLF001
+        _use_fake_catalog(monkeypatch, client)
 
         await pricing._load_price_catalog([])  # noqa: SLF001
 
@@ -749,10 +753,7 @@ class TestPartialFetchFailureIsTolerated:
             raise_by_service_code=raises,
             completed=completed,
         )
-        monkeypatch.setattr(pricing, "get_client", lambda *_a, **_k: client)
-        monkeypatch.setattr(pricing, "_catalog_regions", lambda: {"us-east-1"})
-        monkeypatch.setattr(SETTINGS, "cost_price_overrides", {})
-        monkeypatch.setattr(pricing._state, "price_index", {})  # noqa: SLF001
+        _use_fake_catalog(monkeypatch, client)
 
         diagnostics: list[str] = []
         await pricing._load_price_catalog(diagnostics)  # noqa: SLF001
@@ -1151,29 +1152,17 @@ class TestLumaRayIngestion:
     @staticmethod
     def _item(usagetype: str, price: str) -> str:
         return json.dumps(
-            {
-                "product": {
-                    "attributes": {
-                        "regionCode": "us-west-2",
-                        "usagetype": usagetype,
-                        "inferenceType": "Video",
-                        "model": "Ray v2",
-                        "provider": "Luma AI",
-                    }
+            _price_item(
+                {
+                    "regionCode": "us-west-2",
+                    "usagetype": usagetype,
+                    "inferenceType": "Video",
+                    "model": "Ray v2",
+                    "provider": "Luma AI",
                 },
-                "terms": {
-                    "OnDemand": {
-                        "SKU1": {
-                            "priceDimensions": {
-                                "SKU1.A": {
-                                    "unit": "Second",
-                                    "pricePerUnit": {"USD": price},
-                                }
-                            }
-                        }
-                    }
-                },
-            }
+                unit="Second",
+                price=price,
+            )
         )
 
     def test_bare_video_inference_type_maps_to_output_seconds(self) -> None:
@@ -2582,6 +2571,71 @@ class TestDefaultModelPrices:
         assert price is not None
         assert price.amount == Decimal("0.07")
         assert price.currency == "USD"
+
+    def test_gap_model_prices_identically_on_the_mantle_service(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The same default rate resolves for Bedrock and for Bedrock Mantle.
+
+        The pricing page does not distinguish invocation APIs, so a Mantle-served
+        model would otherwise bill at zero while its runtime twin bills correctly.
+
+        Ref: stdapi/pricing.py:register_default_prices
+        """
+        index: dict[PriceKey, Price] = {}
+        pricing._apply_default_prices(index)  # noqa: SLF001
+        monkeypatch.setattr(pricing._state, "price_index", index)  # noqa: SLF001
+        prices = [
+            resolve_price(
+                service,
+                "stability.stable-image-inpaint-v1:0",
+                "us-east-1",
+                Dimension.OUTPUT_IMAGES,
+            )
+            for service in (Service.BEDROCK, Service.BEDROCK_MANTLE)
+        ]
+        assert all(price is not None for price in prices)
+        assert {price.amount for price in prices if price} == {Decimal("0.07")}
+
+    def test_registration_keys_every_service_region_and_dimension(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Registering one model fans out over both services, every region and dimension.
+
+        The registry is a plain dict keyed by ``PriceKey``, so the fan-out at
+        registration time is the only thing that makes a default reachable; the
+        tier is pinned to ``standard`` so the tier-ratio fallback can scale it.
+
+        Ref: stdapi/pricing.py:register_default_prices
+        """
+        monkeypatch.setattr(pricing, "_DEFAULT_PRICES", {})
+        pricing.register_default_prices(
+            {
+                "test.gap-model": {
+                    Dimension.INPUT_TOKENS: "0.000123",
+                    Dimension.OUTPUT_TOKENS: "0.000456",
+                }
+            },
+            ["us-east-1", "eu-west-1"],
+        )
+
+        registry = pricing._DEFAULT_PRICES  # noqa: SLF001
+        model = pricing.resolve_model_key("test.gap-model")
+        assert len(registry) == 8, "2 services x 2 regions x 2 dimensions"
+        assert {key.service for key in registry} == {
+            Service.BEDROCK,
+            Service.BEDROCK_MANTLE,
+        }
+        assert {key.region for key in registry} == {"us-east-1", "eu-west-1"}
+        assert {key.tier for key in registry} == {"standard"}
+        key = PriceKey(
+            Service.BEDROCK_MANTLE,
+            model,
+            "eu-west-1",
+            Dimension.OUTPUT_TOKENS,
+            "standard",
+        )
+        assert registry[key] == Price(Decimal("0.000456"), "USD")
 
     def test_published_row_disables_defaults_for_that_model(self) -> None:
         """Any published row for a model must suppress all its default prices."""
@@ -4068,10 +4122,7 @@ class TestStartPriceCatalogBackgroundLoad:
                 "AmazonBedrock": ClientError(error_response, "GetProducts")  # type: ignore[arg-type]
             },
         )
-        monkeypatch.setattr(pricing, "get_client", lambda *_a, **_k: client)
-        monkeypatch.setattr(pricing, "_catalog_regions", lambda: {"us-east-1"})
-        monkeypatch.setattr(SETTINGS, "cost_price_overrides", {})
-        monkeypatch.setattr(pricing._state, "price_index", {})  # noqa: SLF001
+        _use_fake_catalog(monkeypatch, client)
 
         real_load = pricing._load_price_catalog  # noqa: SLF001
         load_calls = 0

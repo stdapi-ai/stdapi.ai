@@ -11,10 +11,15 @@ import json
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from pybase64 import b64decode
 
+from stdapi.aws_bedrock import PROMPT_CACHING
 from stdapi.config import SETTINGS
 from stdapi.models.chat._adapters._openai_chat_completion import (
+    _FINISH_REASONS,
     _LEGACY_FUNCTION,
+    _get_or_generate_audio,
+    build_output_config,
     extract_output_text,
     format_response,
     format_stream,
@@ -22,9 +27,22 @@ from stdapi.models.chat._adapters._openai_chat_completion import (
     map_messages,
     translate_request,
 )
+from stdapi.models.chat._adapters._openai_common import (
+    CACHE_TTL,
+    map_service_tier,
+    parse_prompt_cache_key,
+    resolve_cache_ttl,
+)
+from stdapi.types.openai import (
+    JSONSchema,
+    ResponseFormatJSONObject,
+    ResponseFormatJSONSchema,
+    ResponseFormatText,
+)
 from stdapi.types.openai_chat_completions import (
     Audio,
     ChatCompletionAssistantMessageParam,
+    ChatCompletionAudioParam,
     ChatCompletionSystemMessageParam,
     ChatCompletionToolMessageParam,
     ChatCompletionUserMessageParam,
@@ -33,9 +51,28 @@ from stdapi.types.openai_chat_completions import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Generator
 
 pytestmark = pytest.mark.local
+
+
+@pytest.fixture(autouse=True)
+def _adapter_call_context(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
+    """Bind the per-request state the adapter reads outside a real request.
+
+    ``format_response``/``format_stream`` read the ``_LEGACY_FUNCTION`` contextvar
+    (normally set by ``translate_request``) and log request params through
+    ``SETTINGS``; binding both here keeps the contextvar from leaking between
+    tests and keeps the offline runs silent.
+
+    Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:_LEGACY_FUNCTION
+    """
+    monkeypatch.setattr(SETTINGS, "log_request_params", False)
+    token = _LEGACY_FUNCTION.set(False)
+    try:
+        yield
+    finally:
+        _LEGACY_FUNCTION.reset(token)
 
 
 async def _stub_stream(events: list[dict[str, Any]]) -> AsyncIterator[dict[str, Any]]:
@@ -51,33 +88,25 @@ async def _stub_stream(events: list[dict[str, Any]]) -> AsyncIterator[dict[str, 
         yield event
 
 
-async def _collect_chunks(
-    monkeypatch: pytest.MonkeyPatch, events: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
+async def _collect_chunks(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Run ``format_stream`` over stub events and return the decoded chunk payloads.
 
     Args:
-        monkeypatch: Pytest monkeypatch fixture.
         events: Converse stream event dicts to replay.
 
     Returns:
         The JSON-decoded chunks, excluding the ``[DONE]`` sentinel.
     """
-    monkeypatch.setattr(SETTINGS, "log_request_params", False)
-    token = _LEGACY_FUNCTION.set(False)
-    try:
-        sse_events = [
-            event
-            async for event in format_stream(
-                completion_id="chatcmpl-1",
-                created=0,
-                model_id="model",
-                stream=_stub_stream(events),  # type: ignore[arg-type]
-                service_tier=None,
-            )
-        ]
-    finally:
-        _LEGACY_FUNCTION.reset(token)
+    sse_events = [
+        event
+        async for event in format_stream(
+            completion_id="chatcmpl-1",
+            created=0,
+            model_id="model",
+            stream=_stub_stream(events),  # type: ignore[arg-type]
+            service_tier=None,
+        )
+    ]
     assert sse_events[-1].data == "[DONE]", "the stream must end with the sentinel"
     return [
         json.loads(event.data)
@@ -241,41 +270,31 @@ class TestFormatResponseCacheWriteTokens:
             },
         }
 
-    async def _usage(
-        self, monkeypatch: pytest.MonkeyPatch, cache_read: int, cache_write: int
-    ) -> CompletionUsage:
+    async def _usage(self, cache_read: int, cache_write: int) -> CompletionUsage:
         """Format a response with the given cache token counts and return its usage.
 
         Args:
-            monkeypatch: Pytest monkeypatch fixture.
             cache_read: ``cacheReadInputTokens`` value.
             cache_write: ``cacheWriteInputTokens`` value.
 
         Returns:
             The usage of the formatted completion.
         """
-        monkeypatch.setattr(SETTINGS, "log_request_params", False)
-        token = _LEGACY_FUNCTION.set(False)
-        try:
-            completion = await format_response(
-                completion_id="chatcmpl-1",
-                created=0,
-                model_id="model",
-                responses=[self._converse_response(cache_read, cache_write)],  # type: ignore[list-item]
-                service_tier=None,
-                audio_params=None,
-                modalities=["text"],
-            )
-        finally:
-            _LEGACY_FUNCTION.reset(token)
+        completion = await format_response(
+            completion_id="chatcmpl-1",
+            created=0,
+            model_id="model",
+            responses=[self._converse_response(cache_read, cache_write)],  # type: ignore[list-item]
+            service_tier=None,
+            audio_params=None,
+            modalities=["text"],
+        )
         assert completion.usage is not None
         return completion.usage
 
-    async def test_cache_write_tokens_are_reported(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_cache_write_tokens_are_reported(self) -> None:
         """A positive cacheWriteInputTokens is exposed as cache_write_tokens."""
-        usage = await self._usage(monkeypatch, cache_read=0, cache_write=7)
+        usage = await self._usage(cache_read=0, cache_write=7)
         assert usage.prompt_tokens_details is not None
         assert usage.prompt_tokens_details.cache_write_tokens == 7
         assert usage.prompt_tokens_details.cached_tokens == 0
@@ -285,11 +304,9 @@ class TestFormatResponseCacheWriteTokens:
         assert usage.completion_tokens == 5
         assert usage.total_tokens == 22
 
-    async def test_cache_read_and_write_tokens_are_reported(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_cache_read_and_write_tokens_are_reported(self) -> None:
         """Both cache buckets are reported together."""
-        usage = await self._usage(monkeypatch, cache_read=3, cache_write=7)
+        usage = await self._usage(cache_read=3, cache_write=7)
         assert usage.prompt_tokens_details is not None
         assert usage.prompt_tokens_details.cached_tokens == 3
         assert usage.prompt_tokens_details.cache_write_tokens == 7
@@ -298,11 +315,9 @@ class TestFormatResponseCacheWriteTokens:
         )
         assert usage.total_tokens == 25
 
-    async def test_details_omitted_without_cache_usage(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_details_omitted_without_cache_usage(self) -> None:
         """No cache usage leaves prompt_tokens_details unset."""
-        usage = await self._usage(monkeypatch, cache_read=0, cache_write=0)
+        usage = await self._usage(cache_read=0, cache_write=0)
         assert usage.prompt_tokens_details is None
         assert usage.prompt_tokens == 10
         assert usage.total_tokens == 15
@@ -330,13 +345,9 @@ class TestLegacyFunctionDetection:
             The legacy function format flag seen by the response formatters.
         """
         request = CompletionCreateParams.model_validate(payload)
-        token = _LEGACY_FUNCTION.set(False)
-        try:
-            await map_messages(request.messages)
-            translate_request(request, "model")
-            return _LEGACY_FUNCTION.get()
-        finally:
-            _LEGACY_FUNCTION.reset(token)
+        await map_messages(request.messages)
+        translate_request(request, "model")
+        return _LEGACY_FUNCTION.get()
 
     async def test_function_message_history_enables_legacy_format(self) -> None:
         """A replayed `function` message keeps the legacy format without `functions`."""
@@ -484,12 +495,9 @@ class TestStreamToolCallIndex:
             for tool_call in choice["delta"].get("tool_calls", ())
         ]
 
-    async def test_tool_call_index_ignores_preceding_content_blocks(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_tool_call_index_ignores_preceding_content_blocks(self) -> None:
         """A tool call following a reasoning block still streams with index 0."""
         chunks = await _collect_chunks(
-            monkeypatch,
             [
                 {
                     "contentBlockDelta": {
@@ -510,7 +518,7 @@ class TestStreamToolCallIndex:
                     }
                 },
                 {"messageStop": {"stopReason": "tool_use"}},
-            ],
+            ]
         )
         assert self._indices(chunks) == [0, 0]
         assert len(chunks) == 5
@@ -528,12 +536,9 @@ class TestStreamToolCallIndex:
             "usage is only emitted when stream_options.include_usage is set"
         )
 
-    async def test_parallel_tool_calls_are_numbered_contiguously(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_parallel_tool_calls_are_numbered_contiguously(self) -> None:
         """Two toolUse blocks after a text block stream as indices 0 and 1."""
         chunks = await _collect_chunks(
-            monkeypatch,
             [
                 {
                     "contentBlockDelta": {
@@ -560,7 +565,7 @@ class TestStreamToolCallIndex:
                     }
                 },
                 {"messageStop": {"stopReason": "tool_use"}},
-            ],
+            ]
         )
         assert self._indices(chunks) == [0, 1, 1]
         assert len(chunks) == 6
@@ -576,3 +581,327 @@ class TestStreamToolCallIndex:
         ]
         assert chunks[5]["choices"][0]["finish_reason"] == "tool_calls"
         assert {chunk["id"] for chunk in chunks} == {"chatcmpl-1"}
+
+
+class TestMapBedrockStopReason:
+    """Every Bedrock ``stopReason`` maps to a documented OpenAI ``finish_reason``.
+
+    The OpenAI enum is exactly ``stop``/``length``/``tool_calls``/``content_filter``
+    (plus the legacy ``function_call``), so Bedrock's wider stop-reason vocabulary
+    is folded into it, and anything unknown degrades to ``stop``.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:map_bedrock_stop_reason
+    """
+
+    @pytest.mark.parametrize(
+        ("stop_reason", "expected"),
+        [
+            ("max_tokens", "length"),
+            ("model_context_window_exceeded", "length"),
+            ("incomplete", "length"),
+            ("content_filtered", "content_filter"),
+            ("guardrail_intervened", "content_filter"),
+            ("malformed_model_output", "content_filter"),
+            ("malformed_tool_use", "content_filter"),
+            ("tool_use", "tool_calls"),
+            ("end_turn", "stop"),
+            ("stop_sequence", "stop"),
+            ("a-reason-bedrock-has-not-shipped-yet", "stop"),
+            (None, "stop"),
+        ],
+    )
+    def test_stop_reason_maps_to_finish_reason(
+        self, stop_reason: str | None, expected: str
+    ) -> None:
+        """A truncated or filtered turn is never reported as a completed one.
+
+        ``model_context_window_exceeded`` and the non-standard ``incomplete``
+        must surface as ``length``, and the four guardrail/malformed reasons as
+        ``content_filter``; collapsing any of them to ``stop`` would let a client
+        treat a censored or cut-off answer as a finished one.
+        """
+        assert map_bedrock_stop_reason(stop_reason, legacy_function=False) == expected
+
+    def test_every_mapping_table_entry_is_covered(self) -> None:
+        """The parametrized cases enumerate the whole ``_FINISH_REASONS`` table."""
+        covered = {
+            "max_tokens",
+            "model_context_window_exceeded",
+            "incomplete",
+            "content_filtered",
+            "guardrail_intervened",
+            "malformed_model_output",
+            "malformed_tool_use",
+            "tool_use",
+        }
+        assert set(_FINISH_REASONS) == covered
+
+    @pytest.mark.parametrize(
+        "stop_reason", ["max_tokens", "content_filtered", "end_turn", None]
+    )
+    def test_legacy_flag_only_rewrites_tool_calls(
+        self, stop_reason: str | None
+    ) -> None:
+        """``legacy_function`` rewrites only ``tool_calls``, never the other reasons.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat.md
+        """
+        assert map_bedrock_stop_reason(
+            stop_reason, legacy_function=True
+        ) == map_bedrock_stop_reason(stop_reason, legacy_function=False)
+
+
+class TestServiceTierMapping:
+    """``service_tier`` maps to the Bedrock tier applied and the tier echoed back.
+
+    Bedrock only knows ``priority``/``flex``/``reserved``; the remaining OpenAI
+    values leave the Converse request untouched and are echoed as ``default``.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+         https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html
+         stdapi/models/chat/_adapters/_openai_common.py:map_service_tier
+    """
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ("priority", ("priority", "priority")),
+            ("flex", ("flex", "flex")),
+            ("reserved", ("reserved", "reserved")),
+            ("auto", (None, "default")),
+            ("default", (None, "default")),
+            ("scale", (None, "default")),
+            (None, (None, None)),
+        ],
+    )
+    def test_service_tier_maps_only_bedrock_backed_values(
+        self, value: str | None, expected: tuple[str | None, str | None]
+    ) -> None:
+        """Paid tiers reach Bedrock; the rest collapse to the standard tier.
+
+        The first element is what goes on the Converse request, so a regression
+        that stopped forwarding ``priority``/``flex`` would silently downgrade a
+        paid request while the echoed value stayed unchanged.
+        """
+        assert map_service_tier(value) == expected  # type: ignore[arg-type]
+
+
+class TestPromptCacheRetention:
+    """``prompt_cache_retention`` resolves to the Bedrock ``cachePoint`` TTL.
+
+    Bedrock's longest TTL is ``1h``, so OpenAI's ``24h`` is clamped to it, while
+    ``in_memory`` means "Bedrock default" and emits no explicit TTL.
+
+    Ref: https://developers.openai.com/api/docs/guides/prompt-caching
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CachePointBlock.html
+         stdapi/models/chat/_adapters/_openai_common.py:resolve_cache_ttl
+    """
+
+    @pytest.mark.parametrize(
+        ("retention", "expected"),
+        [("in_memory", None), ("24h", "1h"), ("1h", "1h"), ("5m", "5m"), (None, None)],
+    )
+    def test_retention_maps_to_bedrock_ttl(
+        self, retention: str | None, expected: str | None
+    ) -> None:
+        """The two upstream values (``in_memory``, ``24h``) resolve without error."""
+        assert resolve_cache_ttl(retention) == expected  # type: ignore[arg-type]
+
+    def test_every_retention_value_is_covered(self) -> None:
+        """The parametrized cases enumerate the whole ``CACHE_TTL`` table."""
+        assert set(CACHE_TTL) == {"in_memory", "24h", "1h", "5m"}
+
+
+class TestPromptCacheKeySelector:
+    """``prompt_cache_key`` doubles as a dot-separated cache-component selector.
+
+    Upstream treats the key as an opaque cache bucket; this gateway additionally
+    reads recognised tokens as the set of prompt sections to mark with a Bedrock
+    ``cachePoint``, which directly changes what is billed as a cache write.
+
+    Ref: https://developers.openai.com/api/docs/guides/prompt-caching
+         stdapi/models/chat/_adapters/_openai_common.py:parse_prompt_cache_key
+    """
+
+    @pytest.mark.parametrize(
+        ("key", "expected"),
+        [
+            ("system.tools", {"system", "tools"}),
+            ("messages", {"messages"}),
+            ("system.messages.tools", {"system", "messages", "tools"}),
+            ("system.not-a-component", {"system"}),
+        ],
+    )
+    def test_named_components_are_selected(self, key: str, expected: set[str]) -> None:
+        """Recognised tokens select exactly their components; others are dropped."""
+        assert parse_prompt_cache_key(key) == expected
+
+    @pytest.mark.parametrize("key", ["opaque-hash", "default"])
+    def test_unrecognised_key_enables_every_component(self, key: str) -> None:
+        """A key with no recognisable token falls back to caching everything.
+
+        This is the branch an upstream client hits, since OpenAI's own
+        ``prompt_cache_key`` is an arbitrary bucketing string.
+        """
+        assert parse_prompt_cache_key(key) == PROMPT_CACHING
+
+    @pytest.mark.parametrize("key", [None, ""])
+    def test_absent_key_disables_caching(self, key: str | None) -> None:
+        """No key means no cache point is written at all."""
+        assert parse_prompt_cache_key(key) == set()
+
+
+class TestBuildOutputConfig:
+    """``response_format`` becomes the Bedrock ``outputConfig`` JSON schema string.
+
+    Bedrock takes the schema as a serialized string, so a mapping is encoded once
+    and an already-serialized schema is passed through instead of being encoded
+    twice.
+
+    Ref: https://developers.openai.com/api/docs/guides/structured-outputs
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:build_output_config
+    """
+
+    def test_mapping_schema_is_serialized_once(self) -> None:
+        """A dict schema is emitted as its compact JSON serialization."""
+        response_format = ResponseFormatJSONSchema.model_validate(
+            {
+                "type": "json_schema",
+                "json_schema": {"name": "answer", "schema": {"type": "object"}},
+            }
+        )
+        assert build_output_config(response_format) == {"schema": '{"type":"object"}'}
+
+    def test_string_schema_is_passed_through_verbatim(self) -> None:
+        """A pre-serialized schema string reaches Bedrock unaltered.
+
+        ``JSONSchema.schema_`` is typed as a mapping, so this branch is defensive:
+        it is reachable only from a model built without validation, and re-encoding
+        the string would hand Bedrock a quoted string instead of a schema.
+        """
+        response_format = ResponseFormatJSONSchema.model_construct(
+            type="json_schema",
+            json_schema=JSONSchema.model_construct(
+                name="answer", schema_='{"type":"object"}'
+            ),
+        )
+        assert build_output_config(response_format) == {"schema": '{"type":"object"}'}
+
+    def test_json_object_and_text_formats(self) -> None:
+        """``json_object`` sends the empty schema and plain text sends none."""
+        assert build_output_config(ResponseFormatJSONObject(type="json_object")) == {
+            "schema": "{}"
+        }
+        assert build_output_config(ResponseFormatText(type="text")) is None
+        assert build_output_config(None) is None
+
+
+class TestTopKForwarding:
+    """``top_k`` is a declared field routed through the inference configuration.
+
+    ``top_k`` is a Qwen-compatible gateway extra; being declared (rather than an
+    unknown key) is what keeps it out of ``model_extra`` and routes it through
+    ``set_inference_configuration``.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:translate_request
+    """
+
+    @staticmethod
+    def _translate(payload: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
+        """Translate a request and return its inference config and extra fields.
+
+        Args:
+            payload: Raw chat completion request payload.
+
+        Returns:
+            The Bedrock ``inferenceConfig`` and ``additionalModelRequestFields``.
+        """
+        request = CompletionCreateParams.model_validate(payload)
+        assert request.model_extra == {}, "top_k must be a declared field"
+        inference_config, additional_fields, *_ = translate_request(
+            request, "anthropic.claude-haiku-4-5-20251001-v1:0"
+        )
+        return inference_config, additional_fields
+
+    def test_top_k_reaches_the_model_request(self) -> None:
+        """``top_k`` is forwarded as an ``additionalModelRequestFields`` entry.
+
+        Converse has no ``topK`` in ``inferenceConfig``, so the value travels in
+        the model-specific fields rather than being dropped.
+        """
+        _, additional_fields = self._translate(
+            {
+                "model": "model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "top_k": 7,
+            }
+        )
+        assert additional_fields["top_k"] == 7
+
+    def test_top_k_absent_adds_no_field(self) -> None:
+        """Omitting ``top_k`` leaves the model request fields untouched."""
+        _, additional_fields = self._translate(
+            {"model": "model", "messages": [{"role": "user", "content": "hi"}]}
+        )
+        assert "top_k" not in additional_fields
+
+
+#: Bedrock output content block carrying model-native audio.
+_NATIVE_AUDIO_BLOCK: dict[str, Any] = {
+    "audio": {"format": "mp3", "source": {"bytes": b"RAWAUDIO"}}
+}
+
+
+class TestAudioOutputEnvelope:
+    """The ``ChatCompletionAudio`` envelope identifies and dates each audio choice.
+
+    Ref: https://developers.openai.com/api/docs/guides/audio
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlock.html
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:_get_or_generate_audio
+    """
+
+    @staticmethod
+    def _audio_params() -> ChatCompletionAudioParam:
+        """Return an MP3/alloy audio request parameter object.
+
+        Returns:
+            The audio output configuration.
+        """
+        return ChatCompletionAudioParam(voice="alloy", format="mp3")
+
+    async def test_model_native_audio_block_is_returned_verbatim(self) -> None:
+        """A Bedrock ``audio`` content block bypasses TTS and is returned as-is.
+
+        No speech synthesis is reachable in this test process, so a fall-through
+        to the Polly path would fail rather than silently substitute a different
+        waveform.
+        """
+        contents: list[Any] = [{"text": "hello"}, _NATIVE_AUDIO_BLOCK]
+        audio = await _get_or_generate_audio(
+            self._audio_params(), contents, "chatcmpl-1", "hello", 1234, 0
+        )
+        assert b64decode(audio.data) == b"RAWAUDIO"
+        assert audio.transcript == "hello", "the text output stays the transcript"
+
+    async def test_audio_id_is_unique_per_choice_and_expiry_is_the_request_time(
+        self,
+    ) -> None:
+        """Each choice gets its own ``audio-<completion id>-<index>`` handle.
+
+        ``expires_at`` is set to the completion's ``created`` timestamp, so a
+        client replaying an audio id by that field always sees an elapsed expiry.
+        """
+        contents: list[Any] = [_NATIVE_AUDIO_BLOCK]
+        first = await _get_or_generate_audio(
+            self._audio_params(), contents, "chatcmpl-1", "hello", 1234, 0
+        )
+        second = await _get_or_generate_audio(
+            self._audio_params(), contents, "chatcmpl-1", "hello", 1234, 1
+        )
+        assert first.id == "audio-chatcmpl-1-0"
+        assert second.id == "audio-chatcmpl-1-1"
+        assert first.id != second.id, "n>1 choices must not share an audio id"
+        assert first.expires_at == 1234
