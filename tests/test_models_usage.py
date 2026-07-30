@@ -10,27 +10,44 @@ ConverseStream-only guardrail ``streamProcessingMode`` field that non-streaming
 Converse rejects. Pricing and log-entry coverage of those dimensions lives in
 tests/test_usage.py.
 
+Also covers the response-facing side of the same prompt-router attribution:
+``ChatModel.create_completion``/``create_response`` report the router's
+actually-invoked model in the OpenAI ``model`` field on non-streaming calls,
+and deliberately keep the router's configured ID on streaming calls (the
+invoked-model trace only arrives in the terminal stream event).
+
 All AWS calls are replaced by fakes: no Bedrock client is contacted.
 
 Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
      https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStream.html
      stdapi/models/__init__.py:ModelBase._record_converse_usage
+     stdapi/models/chat/_default.py:ChatModel.create_completion
+     stdapi/models/chat/_default.py:ChatModel.create_response
 """
 
 from asyncio import Event, create_task, gather, wait_for
 from decimal import Decimal
+from json import loads
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from botocore.exceptions import ClientError
 from pydantic_core import to_json
+from sse_starlette import EventSourceResponse, ServerSentEvent
 
 import stdapi.models
 from stdapi import usage
 from stdapi.config import SETTINGS
 from stdapi.models import ModelBase, _count_grounding_tool_uses, _iter_invoke_stream
+from stdapi.models.chat._default import ChatModel
+from stdapi.monitoring import REQUEST_ID
 from stdapi.pricing import Dimension, Price, PriceKey, Service, _state
 from stdapi.region_routing import RegionRouter
+from stdapi.types.openai_chat_completions import ChatCompletion
+from stdapi.types.openai_chat_completions import (
+    CompletionCreateParams as ChatCompletionCreateParams,
+)
+from stdapi.types.openai_responses import Response, ResponseCreateParams
 from stdapi.usage import compute_costs
 from tests.conftest import set_test_price
 
@@ -763,3 +780,262 @@ class TestConverseFailoverUsage:
         assert key.region == "eu-west-1"
         assert record.quantities[Dimension.INPUT_TOKENS] == 7
         assert record.quantities[Dimension.OUTPUT_TOKENS] == 3
+
+
+def _routed_converse_response(invoked_model_arn: str | None) -> dict[str, Any]:
+    """Build a minimal Converse response, optionally carrying a prompt-router trace.
+
+    Args:
+        invoked_model_arn: ``trace.promptRouter.invokedModelId`` to report, or
+            ``None`` for a plain (non-router) response.
+
+    Returns:
+        A Bedrock Converse response usable by both the Chat Completions and
+        Responses formatters.
+    """
+    response: dict[str, Any] = {
+        "output": {"message": {"content": [{"text": "hi"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+    }
+    if invoked_model_arn:
+        response["trace"] = {"promptRouter": {"invokedModelId": invoked_model_arn}}
+    return response
+
+
+def _sse_json_data(event: ServerSentEvent) -> str | None:
+    """Return an SSE event's JSON data payload, or None for the ``[DONE]`` sentinel.
+
+    Args:
+        event: A single yielded SSE event.
+
+    Returns:
+        The event's ``data`` string, or ``None`` when it is the non-JSON
+        ``[DONE]`` sentinel.
+    """
+    data = event.data
+    assert isinstance(data, str)
+    return None if data == "[DONE]" else data
+
+
+@pytest.mark.usefixtures("request_log")
+class TestChatModelReportsInvokedModel:
+    """ChatModel.create_completion / create_response: ``model`` reflects the router's pick.
+
+    OpenAI's contract is that ``model`` names the model that actually produced
+    the completion. A prompt router resolves to a concrete target model per
+    request (reported via ``trace.promptRouter.invokedModelId``), so the
+    response must name that model rather than the router's own (configured)
+    ID -- mirroring the usage-attribution fix already covered by
+    ``TestRecordConverseUsagePromptRouterAttribution``. Streaming responses
+    cannot do this: the invoked-model trace only arrives in the terminal
+    stream event, well after the first chunk (carrying ``model``) has already
+    been sent to the client, so streaming keeps reporting the router's
+    configured ID on every chunk instead of mixing IDs mid-stream.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+         stdapi/models/chat/_default.py:ChatModel.create_completion
+         stdapi/models/chat/_default.py:ChatModel.create_response
+    """
+
+    #: ARN a prompt router reports as its invoked model in these tests.
+    _INVOKED_ARN = (
+        "arn:aws:bedrock:us-east-1::foundation-model/"
+        "anthropic.claude-3-haiku-20240307-v1:0"
+    )
+
+    #: Catalog ID that ``_INVOKED_ARN`` resolves to.
+    _INVOKED_MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
+
+    async def test_chat_completion_reports_the_router_invoked_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A router request's ChatCompletion.model is the invoked model, not the router ID."""
+        monkeypatch.setitem(
+            stdapi.models._ALL_MODELS,  # noqa: SLF001
+            self._INVOKED_MODEL_ID,
+            cast("Any", object()),
+        )
+
+        async def fake_converse(
+            _self: ChatModel, _request: dict[str, Any]
+        ) -> dict[str, Any]:
+            return _routed_converse_response(self._INVOKED_ARN)
+
+        monkeypatch.setattr(ChatModel, "converse", fake_converse)
+        request = ChatCompletionCreateParams.model_validate(
+            {"model": "my-router", "messages": [{"role": "user", "content": "hi"}]}
+        )
+        response = await ChatModel("my-router").create_completion(
+            request, "chatcmpl-1", 0
+        )
+        assert isinstance(response, ChatCompletion)
+        assert response.model == self._INVOKED_MODEL_ID
+
+    async def test_chat_completion_keeps_the_configured_model_without_a_router(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A plain (non-router) request's ChatCompletion.model is the requested model, unchanged."""
+
+        async def fake_converse(
+            _self: ChatModel, _request: dict[str, Any]
+        ) -> dict[str, Any]:
+            return _routed_converse_response(None)
+
+        monkeypatch.setattr(ChatModel, "converse", fake_converse)
+        request = ChatCompletionCreateParams.model_validate(
+            {"model": "plain-model", "messages": [{"role": "user", "content": "hi"}]}
+        )
+        response = await ChatModel("plain-model").create_completion(
+            request, "chatcmpl-2", 0
+        )
+        assert isinstance(response, ChatCompletion)
+        assert response.model == "plain-model"
+
+    async def test_chat_completion_stream_keeps_the_router_id_on_every_chunk(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every streamed chunk -- including the trailing usage chunk -- keeps the router's ID.
+
+        The trailing metadata event (last in the stream) carries the invoked-model
+        trace, arriving only after the first chunk already shipped `model` to the
+        client; no later chunk may silently switch to a different model.
+        """
+        monkeypatch.setitem(
+            stdapi.models._ALL_MODELS,  # noqa: SLF001
+            self._INVOKED_MODEL_ID,
+            cast("Any", object()),
+        )
+
+        async def fake_stream() -> AsyncIterator[dict[str, Any]]:
+            yield {"contentBlockDelta": {"delta": {"text": "hi"}}}
+            yield {"messageStop": {"stopReason": "end_turn"}}
+            yield {
+                "metadata": {
+                    "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+                    "trace": {"promptRouter": {"invokedModelId": self._INVOKED_ARN}},
+                }
+            }
+
+        async def fake_converse_stream(
+            _self: ChatModel, _request: dict[str, Any]
+        ) -> dict[str, Any]:
+            return {"stream": fake_stream()}
+
+        monkeypatch.setattr(ChatModel, "converse_stream", fake_converse_stream)
+        request = ChatCompletionCreateParams.model_validate(
+            {
+                "model": "my-router",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            }
+        )
+        request_id_token = REQUEST_ID.set("req-stream-chat-completion")
+        try:
+            result = await ChatModel("my-router").create_completion(
+                request, "chatcmpl-3", 0
+            )
+            assert isinstance(result, EventSourceResponse)
+            events = cast(
+                "list[ServerSentEvent]", [event async for event in result.body_iterator]
+            )
+        finally:
+            REQUEST_ID.reset(request_id_token)
+
+        models_seen = {
+            loads(data)["model"]
+            for event in events
+            if (data := _sse_json_data(event)) is not None
+        }
+        assert models_seen == {"my-router"}
+
+    async def test_response_reports_the_router_invoked_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A router request's Response.model is the invoked model, not the router ID."""
+        monkeypatch.setitem(
+            stdapi.models._ALL_MODELS,  # noqa: SLF001
+            self._INVOKED_MODEL_ID,
+            cast("Any", object()),
+        )
+
+        async def fake_converse(
+            _self: ChatModel, _request: dict[str, Any]
+        ) -> dict[str, Any]:
+            return _routed_converse_response(self._INVOKED_ARN)
+
+        monkeypatch.setattr(ChatModel, "converse", fake_converse)
+        request = ResponseCreateParams(model="my-router", input="hi")
+        response = await ChatModel("my-router").create_response(request, "resp-1", 0.0)
+        assert isinstance(response, Response)
+        assert response.model == self._INVOKED_MODEL_ID
+
+    async def test_response_keeps_the_configured_model_without_a_router(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A plain (non-router) request's Response.model is the requested model, unchanged."""
+
+        async def fake_converse(
+            _self: ChatModel, _request: dict[str, Any]
+        ) -> dict[str, Any]:
+            return _routed_converse_response(None)
+
+        monkeypatch.setattr(ChatModel, "converse", fake_converse)
+        request = ResponseCreateParams(model="plain-model", input="hi")
+        response = await ChatModel("plain-model").create_response(
+            request, "resp-2", 0.0
+        )
+        assert isinstance(response, Response)
+        assert response.model == "plain-model"
+
+    async def test_response_stream_keeps_the_router_id_on_every_event(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every streamed Responses SSE event keeps the router's configured model ID.
+
+        Same rationale as the Chat Completions stream case: the invoked-model
+        trace only arrives in the terminal stream event.
+        """
+        monkeypatch.setitem(
+            stdapi.models._ALL_MODELS,  # noqa: SLF001
+            self._INVOKED_MODEL_ID,
+            cast("Any", object()),
+        )
+
+        async def fake_stream() -> AsyncIterator[dict[str, Any]]:
+            yield {"contentBlockDelta": {"delta": {"text": "hi"}}}
+            yield {"messageStop": {"stopReason": "end_turn"}}
+            yield {
+                "metadata": {
+                    "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+                    "trace": {"promptRouter": {"invokedModelId": self._INVOKED_ARN}},
+                }
+            }
+
+        async def fake_converse_stream(
+            _self: ChatModel, _request: dict[str, Any]
+        ) -> dict[str, Any]:
+            return {"stream": fake_stream()}
+
+        monkeypatch.setattr(ChatModel, "converse_stream", fake_converse_stream)
+        request = ResponseCreateParams(model="my-router", input="hi", stream=True)
+        request_id_token = REQUEST_ID.set("req-stream-response")
+        try:
+            result = await ChatModel("my-router").create_response(
+                request, "resp-3", 0.0
+            )
+            assert isinstance(result, EventSourceResponse)
+            events = cast(
+                "list[ServerSentEvent]", [event async for event in result.body_iterator]
+            )
+        finally:
+            REQUEST_ID.reset(request_id_token)
+
+        models_seen = {
+            payload["response"]["model"]
+            for event in events
+            if (data := _sse_json_data(event)) is not None
+            and "response" in (payload := loads(data))
+        }
+        assert models_seen == {"my-router"}

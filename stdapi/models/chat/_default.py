@@ -16,6 +16,7 @@ from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, PromptCaching
 from stdapi.config import SETTINGS
 from stdapi.input_file import prefetch_all_content_types
+from stdapi.models import _invoked_model_id
 from stdapi.models.capabilities import Capability
 from stdapi.models.chat import ChatModelBase
 from stdapi.models.chat._adapters import _anthropic_message as anthropic_adapter
@@ -227,6 +228,9 @@ class ChatModel(ChatModelBase[Any, Any]):
             request_metadata=request_metadata,
         )
         if request.stream:
+            # The prompt router's invoked-model trace only arrives in the terminal
+            # stream event, after the first chunk (which carries `model`) is already
+            # sent, so streaming keeps reporting the configured (router) model ID.
             return EventSourceResponse(
                 log_request_sse_stream_event(
                     openai_adapter.format_stream(
@@ -243,13 +247,15 @@ class ChatModel(ChatModelBase[Any, Any]):
                     )
                 )
             )
+        responses = await gather(
+            *(self.converse(bedrock_request) for _ in range(choices_count))
+        )
         return await openai_adapter.format_response(
             completion_id,
             created,
-            self._model_id,
-            await gather(
-                *(self.converse(bedrock_request) for _ in range(choices_count))
-            ),
+            # Report the model the prompt router actually invoked, when applicable.
+            _invoked_model_id(responses[0]) or self._model_id,
+            responses,
             openai_service_tier,
             request.audio,
             request.modalities or openai_adapter.DEFAULT_OUTPUT_MODALITIES,  # type: ignore[arg-type]
@@ -338,7 +344,11 @@ class ChatModel(ChatModelBase[Any, Any]):
             *(self.converse(req) for req in bedrock_requests for _ in range(n))
         )
         return text_completion_adapter.format_response(
-            completion_id, created, self._model_id, responses, openai_service_tier
+            completion_id,
+            created,
+            _invoked_model_id(responses[0]) or self._model_id,
+            responses,
+            openai_service_tier,
         )
 
     async def create_message(
@@ -563,6 +573,9 @@ class ChatModel(ChatModelBase[Any, Any]):
                     fallback_model=SETTINGS.image_generation_model,
                 )
 
+            # The prompt router's invoked-model trace only arrives in the terminal
+            # stream event, after the first chunk (which carries `model`) is already
+            # sent, so streaming keeps reporting the configured (router) model ID.
             return EventSourceResponse(
                 log_request_sse_stream_event(
                     responses_adapter.format_stream(
@@ -579,11 +592,13 @@ class ChatModel(ChatModelBase[Any, Any]):
                 )
             )
 
+        converse_response = await self.converse(bedrock_request)
         response = await responses_adapter.format_response(
             response_id,
             created_at,
-            self._model_id,
-            await self.converse(bedrock_request),
+            # Report the model the prompt router actually invoked, when applicable.
+            _invoked_model_id(converse_response) or self._model_id,
+            converse_response,
             request,
             suppress_names,
             web_search_names,
@@ -638,6 +653,9 @@ class ChatModel(ChatModelBase[Any, Any]):
 
         suppress_names = self.SUPPORTED_SYSTEM_TOOLS or None
         if request.stream:
+            # The prompt router's invoked-model trace only arrives in the terminal
+            # stream event, after the first chunk (which carries `model`) is already
+            # sent, so streaming keeps reporting the configured (router) model ID.
             return EventSourceResponse(
                 log_request_sse_stream_event(
                     responses_adapter.format_stream(
@@ -654,11 +672,13 @@ class ChatModel(ChatModelBase[Any, Any]):
                 )
             )
 
+        converse_response = await self.converse(bedrock_request)
         response = await responses_adapter.format_response(
             response_id,
             created_at,
-            self._model_id,
-            await self.converse(bedrock_request),
+            # Report the model the prompt router actually invoked, when applicable.
+            _invoked_model_id(converse_response) or self._model_id,
+            converse_response,
             request,
             suppress_names,
             None,

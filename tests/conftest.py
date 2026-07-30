@@ -149,6 +149,22 @@ def set_test_price(
 
 
 @pytest.fixture(autouse=True)
+def _clean_input_files() -> Generator[None]:
+    """Reset the per-request InputFile registry around each test.
+
+    ``_CURRENT_INPUT_FILES`` is bound per request in production but is just a
+    context variable here, so a file registered by one test stays visible to the
+    next. The next test's ``prefetch_all_content_types`` then resolves a stranger's
+    S3-backed file and reaches for a client it never set up.
+    """
+    from stdapi.input_file import _CURRENT_INPUT_FILES  # noqa: PLC0415
+
+    token = _CURRENT_INPUT_FILES.set([])
+    yield
+    _CURRENT_INPUT_FILES.reset(token)
+
+
+@pytest.fixture(autouse=True)
 def _clean_price_index() -> Generator[None]:
     """Reset the price index around each test so seeded prices cannot leak.
 
