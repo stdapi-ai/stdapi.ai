@@ -2071,6 +2071,10 @@ class TestChatCompletions:
         "gpt-5-nano rejects prompt_cache_options with "
         "'prompt_cache_options is not supported on this model'"
     )
+    @pytest.mark.retry(
+        "Same cold-cache race as the prompt_cache_key tests: the entry the first "
+        "call writes may not be readable when the second one is sent"
+    )
     def test_prompt_cache_explicit_breakpoint(
         self, openai_client: OpenAI, chat_model: str
     ) -> None:
