@@ -138,6 +138,44 @@ def test_opus_5_requires_no_computer_use_beta_flag() -> None:
     )
 
 
+class TestReasoningSignatureRequirement:
+    """Only Claude declares that a replayed reasoning block must stay signed.
+
+    Bedrock answers a signature-less ``reasoningContent`` replay on Claude with
+    ``messages.1.content.0.thinking.signature: Field required``, while Nova,
+    DeepSeek and Kimi accept it, so the flag gates the drop to Claude alone.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+         stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel
+    """
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "anthropic.claude-3-5-haiku-20241022-v1:0",
+            "anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "anthropic.claude-haiku-4-5-20251001-v1:0",
+            "anthropic.claude-opus-4-6-v1",
+            "anthropic.claude-opus-5",
+            "anthropic.claude-fable-5",
+        ],
+    )
+    def test_every_claude_generation_requires_the_signature(
+        self, model_id: str
+    ) -> None:
+        """Claude replays are gated whatever the generation serving them."""
+        assert _claude_model(model_id).REASONING_SIGNATURE_REQUIRED is True
+
+    @pytest.mark.parametrize(
+        "model_id",
+        ["amazon.nova-2-lite-v1:0", "deepseek.v3.2", "moonshot.kimi-k2-thinking"],
+    )
+    def test_other_families_replay_reasoning_unsigned(self, model_id: str) -> None:
+        """Families accepting an unsigned replay keep receiving it."""
+        model = cast("ChatModel", get_chat_model(model_id))
+        assert model.REASONING_SIGNATURE_REQUIRED is False
+
+
 class TestReasoningDisabled:
     """Disabling reasoning is skipped on the models Bedrock rejects it for.
 

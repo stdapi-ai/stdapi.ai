@@ -45,15 +45,21 @@ from stdapi.types.openai_chat_completions import (
     Audio,
     ChatCompletionAssistantMessageParam,
     ChatCompletionAudioParam,
+    ChatCompletionContentPartRefusalParam,
+    ChatCompletionContentPartTextParam,
+    ChatCompletionMessageFunctionToolCall,
     ChatCompletionSystemMessageParam,
     ChatCompletionToolMessageParam,
     ChatCompletionUserMessageParam,
     CompletionCreateParams,
     CompletionUsage,
+    FunctionCall,
 )
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Generator
+
+    from stdapi.monitoring import EventLog
 
 pytestmark = pytest.mark.local
 
@@ -90,11 +96,18 @@ async def _stub_stream(events: list[dict[str, Any]]) -> AsyncIterator[dict[str, 
         yield event
 
 
-async def _collect_chunks(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+async def _collect_chunks(
+    events: list[dict[str, Any]],
+    *,
+    include_usage: bool = False,
+    suppress_reasoning: bool = False,
+) -> list[dict[str, Any]]:
     """Run ``format_stream`` over stub events and return the decoded chunk payloads.
 
     Args:
         events: Converse stream event dicts to replay.
+        include_usage: Whether to request the trailing usage-only chunk.
+        suppress_reasoning: Whether to request reasoning-free deltas.
 
     Returns:
         The JSON-decoded chunks, excluding the ``[DONE]`` sentinel.
@@ -107,6 +120,8 @@ async def _collect_chunks(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             model_id="model",
             stream=_stub_stream(events),  # type: ignore[arg-type]
             service_tier=None,
+            include_usage=include_usage,
+            suppress_reasoning=suppress_reasoning,
         )
     ]
     assert sse_events[-1].data == "[DONE]", "the stream must end with the sentinel"
@@ -465,6 +480,170 @@ class TestMapMessagesEmptyContent:
             ]
         )
         assert messages == [{"role": "user", "content": [{"text": "hi"}]}]
+
+
+#: Assistant turn as an OpenAI SDK client replays it: content, reasoning and a tool call.
+def _replayed_assistant_turn(
+    reasoning_content: str | list[ChatCompletionContentPartTextParam],
+) -> list[Any]:
+    """Build the message list of a second turn appending the previous answer.
+
+    Args:
+        reasoning_content: The ``reasoning_content`` value replayed by the client.
+
+    Returns:
+        A user/assistant/user message list ready for ``map_messages``.
+    """
+    return [
+        ChatCompletionUserMessageParam(role="user", content="q"),
+        ChatCompletionAssistantMessageParam(
+            role="assistant",
+            content="answer",
+            reasoning_content=reasoning_content,
+            tool_calls=[
+                ChatCompletionMessageFunctionToolCall(
+                    id="call_1",
+                    type="function",
+                    function=FunctionCall(name="f", arguments='{"a": 1}'),
+                )
+            ],
+        ),
+        ChatCompletionToolMessageParam(
+            role="tool", content="ok", tool_call_id="call_1"
+        ),
+    ]
+
+
+#: The toolUse block the replayed assistant turn always keeps.
+_REPLAYED_TOOL_USE: dict[str, Any] = {
+    "toolUse": {"toolUseId": "call_1", "name": "f", "input": {"a": 1}}
+}
+
+
+@pytest.mark.usefixtures("request_log")
+class TestReplayedReasoningSignature:
+    """Replayed ``reasoning_content`` reaches only the models that accept it unsigned.
+
+    The standard OpenAI SDK multi-turn idiom appends the assistant message the
+    API just returned, and DeepSeek's API requires replaying ``reasoning_content``
+    when the turn called a tool. That field is plain text, so the block rebuilt
+    from it carries no signature. Claude rejects the whole request in that case
+    (``messages.1.content.0.thinking.signature: Field required``, measured on
+    Bedrock with extended thinking both enabled and disabled), while Nova,
+    DeepSeek and Kimi accept it, so the block is dropped only where it is fatal.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+         https://api-docs.deepseek.com/api/create-chat-completion
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:_map_assistant_reasoning_content
+    """
+
+    async def test_signature_requiring_model_drops_the_block_and_warns(
+        self, request_log: EventLog
+    ) -> None:
+        """A Claude-style model gets no reasoning block, and the drop is logged."""
+        messages, _ = await map_messages(
+            _replayed_assistant_turn("thinking out loud"),
+            reasoning_signature_required=True,
+        )
+
+        assert not any(
+            "reasoningContent" in block
+            for message in messages
+            for block in message["content"]
+        ), "an unsigned reasoning block would make Bedrock reject the whole request"
+        assert request_log["level"] == "warning"
+        assert any(
+            "reasoning" in str(detail) for detail in request_log["error_detail"]
+        ), "the dropped reasoning content must be reported in the request log"
+
+    async def test_other_models_still_receive_the_block(
+        self, request_log: EventLog
+    ) -> None:
+        """A model accepting unsigned reasoning keeps the replayed block, silently."""
+        messages, _ = await map_messages(_replayed_assistant_turn("thinking out loud"))
+
+        assert messages[1]["content"] == [
+            {"text": "answer"},
+            {"reasoningContent": {"reasoningText": {"text": "thinking out loud"}}},
+            _REPLAYED_TOOL_USE,
+        ]
+        assert request_log["level"] == "info", "keeping the block warns about nothing"
+
+    async def test_list_form_reasoning_content_is_dropped_too(self) -> None:
+        """The parts form of ``reasoning_content`` is unsigned as well, so it goes."""
+        messages, _ = await map_messages(
+            _replayed_assistant_turn(
+                [
+                    ChatCompletionContentPartTextParam(type="text", text="thin"),
+                    ChatCompletionContentPartTextParam(type="text", text="king"),
+                ]
+            ),
+            reasoning_signature_required=True,
+        )
+
+        assert messages[1]["content"] == [{"text": "answer"}, _REPLAYED_TOOL_USE]
+
+    @pytest.mark.parametrize("signature_required", [False, True])
+    async def test_the_rest_of_the_assistant_turn_is_untouched(
+        self, signature_required: bool
+    ) -> None:
+        """Content, refusal and tool calls keep their value and their order.
+
+        Converse requires ``toolUse`` blocks last, so dropping the reasoning
+        block must not reshuffle what surrounds it.
+        """
+        messages, _ = await map_messages(
+            [
+                ChatCompletionUserMessageParam(role="user", content="q"),
+                ChatCompletionAssistantMessageParam(
+                    role="assistant",
+                    content=[
+                        ChatCompletionContentPartTextParam(type="text", text="answer"),
+                        ChatCompletionContentPartRefusalParam(
+                            type="refusal", refusal="I cannot"
+                        ),
+                    ],
+                    reasoning_content="thinking out loud",
+                    tool_calls=[
+                        ChatCompletionMessageFunctionToolCall(
+                            id="call_1",
+                            type="function",
+                            function=FunctionCall(name="f", arguments='{"a": 1}'),
+                        )
+                    ],
+                ),
+            ],
+            reasoning_signature_required=signature_required,
+        )
+
+        reasoning = (
+            []
+            if signature_required
+            else [
+                {"reasoningContent": {"reasoningText": {"text": "thinking out loud"}}}
+            ]
+        )
+        assert messages[1]["content"] == [
+            {"text": "answer"},
+            {"text": "I cannot"},
+            *reasoning,
+            _REPLAYED_TOOL_USE,
+        ]
+
+    async def test_a_turn_without_reasoning_never_warns(
+        self, request_log: EventLog
+    ) -> None:
+        """Nothing is logged when the replayed turn carries no reasoning at all."""
+        messages, _ = await map_messages(
+            [
+                ChatCompletionUserMessageParam(role="user", content="q"),
+                ChatCompletionAssistantMessageParam(role="assistant", content="answer"),
+            ],
+            reasoning_signature_required=True,
+        )
+
+        assert messages[1]["content"] == [{"text": "answer"}]
+        assert request_log["level"] == "info"
 
 
 class TestStreamToolCallIndex:
@@ -949,3 +1128,131 @@ class TestAudioOutputEnvelope:
         assert second.id == "audio-chatcmpl-1-1"
         assert first.id != second.id, "n>1 choices must not share an audio id"
         assert first.expires_at == 1234
+
+
+#: Converse stream carrying reasoning deltas, then text, then usage.
+_REASONING_STREAM_EVENTS: list[dict[str, Any]] = [
+    {
+        "contentBlockDelta": {
+            "delta": {"reasoningContent": {"text": "think"}},
+            "contentBlockIndex": 0,
+        }
+    },
+    {
+        "contentBlockDelta": {
+            "delta": {"reasoningContent": {"text": "ing"}},
+            "contentBlockIndex": 0,
+        }
+    },
+    {"contentBlockDelta": {"delta": {"text": "hi"}, "contentBlockIndex": 1}},
+    {"messageStop": {"stopReason": "end_turn"}},
+    {"metadata": {"usage": {"inputTokens": 10, "outputTokens": 8}}},
+]
+
+#: Converse response whose message carries both reasoning and text.
+_REASONING_RESPONSE: dict[str, Any] = {
+    "output": {
+        "message": {
+            "role": "assistant",
+            "content": [
+                {"reasoningContent": {"reasoningText": {"text": "thinking"}}},
+                {"text": "hi"},
+            ],
+        }
+    },
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 10, "outputTokens": 8},
+}
+
+
+class TestReasoningSuppression:
+    """Suppression hides the reasoning text without changing anything else.
+
+    ``include_reasoning: false`` and ``reasoning: {"exclude": true}`` ask for the
+    completion without its chain of thought: the model still reasons, so the
+    reasoning tokens stay inside the billed ``completion_tokens``, and only the
+    ``reasoning_content`` field disappears.
+
+    Ref: https://openrouter.ai/docs/guides/best-practices/reasoning-tokens
+         stdapi/types/openai_chat_completions.py:CompletionCreateParams.suppress_reasoning
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:format_stream
+    """
+
+    @staticmethod
+    def _suppress(**extra: Any) -> bool:  # noqa: ANN401
+        """Resolve the suppression flag of a request carrying *extra* fields.
+
+        Args:
+            **extra: Reasoning-related request fields.
+
+        Returns:
+            The request's ``suppress_reasoning`` value.
+        """
+        return CompletionCreateParams.model_validate(
+            {"model": "m", "messages": [{"role": "user", "content": "hi"}], **extra}
+        ).suppress_reasoning
+
+    async def test_streaming_drops_every_reasoning_delta_but_keeps_usage(self) -> None:
+        """No delta carries ``reasoning_content``, and the tokens stay billed."""
+        chunks = await _collect_chunks(
+            _REASONING_STREAM_EVENTS,
+            include_usage=True,
+            suppress_reasoning=self._suppress(include_reasoning=False),
+        )
+        deltas = [choice["delta"] for chunk in chunks for choice in chunk["choices"]]
+        assert not any("reasoning_content" in delta for delta in deltas)
+        assert [d["content"] for d in deltas if "content" in d] == ["hi"]
+        usage = next(chunk["usage"] for chunk in chunks if chunk.get("usage"))
+        assert usage["completion_tokens"] == 8, (
+            "the reasoning tokens were generated and must still be billed"
+        )
+
+    async def test_streaming_keeps_the_reasoning_deltas_by_default(self) -> None:
+        """Without suppression the same stream still emits its reasoning deltas."""
+        chunks = await _collect_chunks(_REASONING_STREAM_EVENTS)
+        deltas = [choice["delta"] for chunk in chunks for choice in chunk["choices"]]
+        assert [d["reasoning_content"] for d in deltas if "reasoning_content" in d] == [
+            "think",
+            "ing",
+        ]
+
+    async def test_non_streaming_message_omits_the_reasoning_field(self) -> None:
+        """``reasoning: {"exclude": true}`` leaves the field out of the message."""
+        completion = await format_response(
+            completion_id="chatcmpl-1",
+            created=0,
+            model_id="model",
+            responses=[_REASONING_RESPONSE],  # type: ignore[list-item]
+            service_tier=None,
+            audio_params=None,
+            modalities=["text"],
+            suppress_reasoning=self._suppress(reasoning={"exclude": True}),
+        )
+        message = completion.choices[0].message
+        assert message.reasoning_content is None
+        assert message.content == "hi"
+        assert "reasoning_content" not in completion.model_dump(exclude_none=True)
+
+    async def test_emitted_reasoning_never_uses_the_bare_name(self) -> None:
+        """The wire body and every chunk name the field ``reasoning_content``.
+
+        Ref: stdapi/types/openai_chat_completions.py:ChatCompletionMessage
+        """
+        completion = await format_response(
+            completion_id="chatcmpl-1",
+            created=0,
+            model_id="model",
+            responses=[_REASONING_RESPONSE],  # type: ignore[list-item]
+            service_tier=None,
+            audio_params=None,
+            modalities=["text"],
+        )
+        message = completion.model_dump(mode="json", exclude_none=True)["choices"][0][
+            "message"
+        ]
+        assert message["reasoning_content"] == "thinking"
+        assert "reasoning" not in message, "the bare vendor name is never emitted"
+
+        chunks = await _collect_chunks(_REASONING_STREAM_EVENTS)
+        deltas = [choice["delta"] for chunk in chunks for choice in chunk["choices"]]
+        assert not any("reasoning" in delta for delta in deltas)

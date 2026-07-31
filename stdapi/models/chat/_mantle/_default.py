@@ -78,6 +78,9 @@ _LEARNED_SURFACE: dict[str, Surface] = {}
 #: Serialized key marking a stream frame that carries reasoning text.
 _REASONING_MARKER = '"reasoning"'
 
+#: Serialized key marking a stream frame already using this surface's name for it.
+_REASONING_CONTENT_MARKER = '"reasoning_content"'
+
 
 class ChatModel(ChatModelBase[Any, Any]):
     """Default Mantle chat model (unknown models assume the Responses API)."""
@@ -305,6 +308,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         payload: dict[str, Any],
         *,
         region: RegionName | None = None,
+        exclude_reasoning: bool = False,
     ) -> tuple[MantleApi, RegionName, dict[str, Any]]:
         """Serve a non-streaming request, billing it and converting the result.
 
@@ -317,6 +321,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             inbound: API matching the inbound route.
             payload: Inbound request body, normalized to *inbound* wire format.
             region: Pinned region, if any.
+            exclude_reasoning: Drop the reasoning text from the response.
 
         Returns:
             Tuple of (upstream API used, serving region, response converted
@@ -329,7 +334,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             api, raw.get("usage") or {}, serving_region, raw.get("service_tier")
         )
         if api == "chat_completions":
-            convert.rename_reasoning_field(raw)
+            convert.rename_reasoning_field(raw, exclude=exclude_reasoning)
         if api != inbound:
             raw = convert.convert_response(api, inbound, raw)
         return api, serving_region, raw
@@ -347,6 +352,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             [AsyncGenerator[ServerSentEvent]], AsyncGenerator[ServerSentEvent]
         ]
         | None = None,
+        exclude_reasoning: bool = False,
     ) -> EventSourceResponse:
         """Serve a streaming request as a logged ``EventSourceResponse``.
 
@@ -361,6 +367,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             response_id: Route-assigned response ID stamped on converted
                 Responses events (ignored when served natively).
             wrap: Optional converter applied to the relayed event stream.
+            exclude_reasoning: Drop the reasoning deltas from the stream.
 
         Returns:
             Streaming response relaying the upstream events.
@@ -376,6 +383,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             strip_usage_chunk=strip_usage_chunk,
             id_rewrites=id_rewrites,
             response_id=response_id,
+            exclude_reasoning=exclude_reasoning,
         )
         if wrap is not None:
             relayed = wrap(relayed)
@@ -420,6 +428,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         strip_usage_chunk: bool,
         id_rewrites: dict[str, str] | None = None,
         response_id: str | None = None,
+        exclude_reasoning: bool = False,
     ) -> AsyncGenerator[ServerSentEvent]:
         """Relay upstream SSE events to the client, recording billed usage.
 
@@ -440,6 +449,7 @@ class ChatModel(ChatModelBase[Any, Any]):
                 in-place as stored-response IDs appear in the stream.
             response_id: Route-assigned response ID stamped on converted
                 Responses events (native streams keep their tagged upstream ID).
+            exclude_reasoning: Drop the reasoning deltas from the stream.
 
         Yields:
             Server-sent events in the inbound wire format.
@@ -447,7 +457,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         rewrites = id_rewrites if id_rewrites is not None else {}
         observed = self._observe_stream(api, events, region, rewrites)
         if api == "chat_completions":
-            observed = _rename_stream_reasoning(observed)
+            observed = _rename_stream_reasoning(observed, exclude=exclude_reasoning)
         if api != inbound:
             observed = convert.convert_stream(api, inbound, observed, response_id)
         async for event, data in observed:
@@ -586,8 +596,11 @@ class ChatModel(ChatModelBase[Any, Any]):
                 "chat_completions",
                 payload,
                 strip_usage_chunk=not _include_usage(request),
+                exclude_reasoning=request.suppress_reasoning,
             )
-        _, _, raw = await self._serve_validated("chat_completions", payload)
+        _, _, raw = await self._serve_validated(
+            "chat_completions", payload, exclude_reasoning=request.suppress_reasoning
+        )
         return log_response_params(validate_pruning_extras(ChatCompletion, raw))
 
     async def create_text_completion(
@@ -808,7 +821,7 @@ def _include_usage(
 
 
 async def _rename_stream_reasoning(
-    events: AsyncGenerator[SseEvent],
+    events: AsyncGenerator[SseEvent], *, exclude: bool = False
 ) -> AsyncGenerator[SseEvent]:
     """Rename ``reasoning`` to ``reasoning_content`` on Chat Completions frames.
 
@@ -817,15 +830,24 @@ async def _rename_stream_reasoning(
 
     Args:
         events: Chat Completions SSE events.
+        exclude: Drop the reasoning text instead of renaming it.
 
     Yields:
         The same events, with the reasoning delta key renamed where present.
     """
+    markers = (
+        (_REASONING_MARKER, _REASONING_CONTENT_MARKER)
+        if exclude
+        else (_REASONING_MARKER,)
+    )
     async for event, data in events:
-        if _REASONING_MARKER not in data or (parsed := _try_loads(data)) is None:
+        if (
+            not any(marker in data for marker in markers)
+            or (parsed := _try_loads(data)) is None
+        ):
             yield event, data
             continue
-        yield event, dumps(convert.rename_reasoning_field(parsed))
+        yield event, dumps(convert.rename_reasoning_field(parsed, exclude=exclude))
 
 
 def _may_carry_usage(data: str) -> bool:

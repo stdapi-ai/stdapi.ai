@@ -278,6 +278,10 @@ class AnthropicClaudeChatModel(_BaseChatModel):
     #: Whether the model accepts an explicitly disabled reasoning configuration.
     REASONING_DISABLE_SUPPORTED: ClassVar[bool] = True
 
+    #: Claude rejects a replayed reasoning block that lost its signature, with or
+    #: without extended thinking enabled.
+    REASONING_SIGNATURE_REQUIRED: ClassVar[bool] = True
+
     def _req_extract_server_tools(
         self, tool_config: ToolConfigurationTypeDef | None
     ) -> list[JsonMapping]:

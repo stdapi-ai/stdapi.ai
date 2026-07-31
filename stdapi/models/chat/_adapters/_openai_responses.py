@@ -1088,6 +1088,7 @@ async def map_input(
     *,
     allow_explicit_caching: bool = False,
     cache_ttl: CacheTTLType | None = None,
+    reasoning_signature_required: bool = False,
 ) -> tuple[list[MessageTypeDef], list[SystemContentBlockTypeDef]]:
     """Convert a Responses API input to Bedrock messages and system blocks.
 
@@ -1098,6 +1099,8 @@ async def map_input(
             input content parts emit a Bedrock cache point.  Breakpoints on
             tool output items are always ignored.
         cache_ttl: Cache TTL of the emitted cache points, ``None`` for the default.
+        reasoning_signature_required: Whether the model rejects an unsigned
+            replayed reasoning block, which is then dropped with a warning.
 
     Returns:
         Tuple of ``(bedrock_messages, system_blocks)``.
@@ -1119,7 +1122,13 @@ async def map_input(
         _openai_common.build_cache_point(cache_ttl) if allow_explicit_caching else None
     )
     for item in input_param:
-        await _map_input_item(item, bedrock_messages, system_blocks, cache_point)
+        await _map_input_item(
+            item,
+            bedrock_messages,
+            system_blocks,
+            cache_point,
+            reasoning_signature_required=reasoning_signature_required,
+        )
 
     return bedrock_messages, system_blocks
 
@@ -1129,6 +1138,8 @@ async def _map_input_item(
     bedrock_messages: list[MessageTypeDef],
     system_blocks: list[SystemContentBlockTypeDef],
     cache_point: ContentBlockTypeDef | None = None,
+    *,
+    reasoning_signature_required: bool = False,
 ) -> None:
     """Map a single Responses input item to Bedrock messages or system blocks.
 
@@ -1141,6 +1152,8 @@ async def _map_input_item(
         system_blocks: Mutable system blocks list to append to.
         cache_point: Cache point block to insert after each content part marked
             with ``prompt_cache_breakpoint``, or ``None`` to ignore breakpoints.
+        reasoning_signature_required: Whether the model rejects an unsigned
+            replayed reasoning block, which is then dropped with a warning.
     """
     match item:
         case EasyInputMessage() | InputMessage():
@@ -1158,7 +1171,9 @@ async def _map_input_item(
         case ImageGenerationCallInput():
             _map_image_generation_call(item, bedrock_messages)
         case ResponseReasoningItem():
-            _map_reasoning_item(item, bedrock_messages)
+            _map_reasoning_item(
+                item, bedrock_messages, signature_required=reasoning_signature_required
+            )
         case CompactionItemParam():
             _map_compaction_item(item, bedrock_messages)
 
@@ -1261,7 +1276,10 @@ def decode_reasoning_content(
 
 
 def _map_reasoning_item(
-    item: ResponseReasoningItem, bedrock_messages: list[MessageTypeDef]
+    item: ResponseReasoningItem,
+    bedrock_messages: list[MessageTypeDef],
+    *,
+    signature_required: bool = False,
 ) -> None:
     """Map an echoed ``ResponseReasoningItem`` to Bedrock ``reasoningContent`` blocks.
 
@@ -1274,9 +1292,13 @@ def _map_reasoning_item(
     they are never attached to summary fallback texts.  Empty items are dropped
     without logging.
 
+    Models requiring a signature reject a text that lost its envelope, so those
+    texts are dropped with a warning; ``redactedContent`` blocks are unaffected.
+
     Args:
         item: The reasoning item to map.
         bedrock_messages: Mutable Bedrock messages list to append to.
+        signature_required: Whether the model rejects an unsigned reasoning block.
     """
     texts = [
         part.text
@@ -1295,6 +1317,13 @@ def _map_reasoning_item(
         signatures, redacted = decoded
     if from_summary:
         signatures = []
+    if signature_required and len(texts) > len(signatures):
+        log_error_details(
+            "Dropped the replayed reasoning content of a reasoning item: "
+            "this model only accepts reasoning it produced itself",
+            level="warning",
+        )
+        texts = texts[: len(signatures)]
 
     blocks: list[ContentBlockTypeDef] = []
     for index, text in enumerate(texts):
@@ -2901,7 +2930,11 @@ async def format_stream(
 
 
 async def count_input_tokens_via_bedrock(
-    request: InputTokenCountParams, model_id: str, region: RegionName
+    request: InputTokenCountParams,
+    model_id: str,
+    region: RegionName,
+    *,
+    reasoning_signature_required: bool = False,
 ) -> int:
     """Count input tokens using the AWS Bedrock Runtime CountTokens API.
 
@@ -2912,6 +2945,9 @@ async def count_input_tokens_via_bedrock(
         request: The input-token count request (model + input + tools/etc.).
         model_id: The Bedrock model identifier.
         region: The AWS region of the model.
+        reasoning_signature_required: Whether the model rejects an unsigned
+            replayed reasoning block, which the generation path drops and which
+            must therefore not be counted either.
 
     Returns:
         The total number of input tokens.
@@ -2920,7 +2956,9 @@ async def count_input_tokens_via_bedrock(
         ApiError: If the input exceeds the model's context window.
     """
     bedrock_messages, system_blocks = await map_input(
-        request.input, request.instructions
+        request.input,
+        request.instructions,
+        reasoning_signature_required=reasoning_signature_required,
     )
 
     req: ConverseTokensRequestTypeDef = {"messages": bedrock_messages}

@@ -159,6 +159,10 @@ class ChatModel(ChatModelBase[Any, Any]):
     #: When False (default), they are extracted and merged into the system prompt field.
     SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED: ClassVar[bool] = False
 
+    #: Replayed reasoning content must carry the signature the model issued with it.
+    #: When True, a replayed reasoning block that has no signature is dropped.
+    REASONING_SIGNATURE_REQUIRED: ClassVar[bool] = False
+
     #: Maximum cache control blocks (Bedrock limit).
     MAX_CACHE_BLOCKS: ClassVar[int] = 4
 
@@ -204,6 +208,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             request.messages,
             allow_explicit_caching=self.PROMPT_CACHING_SUPPORTED,
             cache_ttl=cache_ttl,
+            reasoning_signature_required=self.REASONING_SIGNATURE_REQUIRED,
         )
         _openai_common.enforce_json_object(
             system_blocks,
@@ -273,6 +278,7 @@ class ChatModel(ChatModelBase[Any, Any]):
                             and request.stream_options.include_usage is True
                         ),
                         suppress_tool_names=self.SUPPORTED_SYSTEM_TOOLS or None,
+                        suppress_reasoning=request.suppress_reasoning,
                     )
                 )
             )
@@ -289,6 +295,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             request.audio,
             request.modalities or openai_adapter.DEFAULT_OUTPUT_MODALITIES,  # type: ignore[arg-type]
             self.SUPPORTED_SYSTEM_TOOLS or None,
+            suppress_reasoning=request.suppress_reasoning,
         )
 
     async def create_text_completion(
@@ -519,6 +526,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             cache_ttl=self._cache_ttl(
                 request.prompt_cache_retention, request.prompt_cache_options
             ),
+            reasoning_signature_required=self.REASONING_SIGNATURE_REQUIRED,
         )
         _openai_common.enforce_json_object(
             system_blocks,

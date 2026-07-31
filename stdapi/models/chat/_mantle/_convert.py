@@ -75,6 +75,10 @@ _CHAT_EXTENSION_FIELDS = (
     "amazon_bedrock_guardrail_config",
     "amazon-bedrock-guardrailConfig",
     "store",  # Persisted locally; forwarding would create unreachable objects.
+    # Normalized onto `reasoning_effort`/`thinking_budget`/`enable_thinking`,
+    # which upstream understands.
+    "reasoning",
+    "include_reasoning",
 )
 
 #: stdapi extension fields stripped from passthrough Responses payloads.
@@ -303,7 +307,9 @@ def _ensure_single_choice(payload: dict[str, Any]) -> None:
         raise ApiError(msg, status=400)
 
 
-def rename_reasoning_field(payload: dict[str, Any]) -> dict[str, Any]:
+def rename_reasoning_field(
+    payload: dict[str, Any], *, exclude: bool = False
+) -> dict[str, Any]:
     """Rename ``reasoning`` to ``reasoning_content`` on a Chat Completions payload.
 
     Covers the non-streaming ``choices[].message`` and the streaming
@@ -318,6 +324,8 @@ def rename_reasoning_field(payload: dict[str, Any]) -> dict[str, Any]:
 
     Args:
         payload: Chat Completions response or chunk dict, modified in place.
+        exclude: Drop the reasoning text instead of renaming it; usage is left
+            untouched, the text is generated either way.
 
     Returns:
         The same payload.
@@ -327,9 +335,13 @@ def rename_reasoning_field(payload: dict[str, Any]) -> dict[str, Any]:
             continue
         for key in ("message", "delta"):
             target = choice.get(key)
-            if (
-                isinstance(target, dict)
-                and isinstance(target.get(_REASONING_KEY), str)
+            if not isinstance(target, dict):
+                continue
+            if exclude:
+                target.pop(_REASONING_KEY, None)
+                target.pop(_REASONING_CONTENT_KEY, None)
+            elif (
+                isinstance(target.get(_REASONING_KEY), str)
                 and _REASONING_CONTENT_KEY not in target
             ):
                 target[_REASONING_CONTENT_KEY] = target.pop(_REASONING_KEY)

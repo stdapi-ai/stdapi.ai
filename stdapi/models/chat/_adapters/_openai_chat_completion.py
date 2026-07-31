@@ -16,7 +16,7 @@ from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import build_system_blocks, set_inference_configuration
 from stdapi.models.audio import synthesize_speech
 from stdapi.models.chat._adapters import _common, _openai_common
-from stdapi.monitoring import log_response_params
+from stdapi.monitoring import log_error_details, log_response_params
 from stdapi.types.openai import (
     FunctionDefinition,
     ResponseFormatJSONObject,
@@ -606,17 +606,32 @@ def _map_assistant_content(
 def _map_assistant_reasoning_content(
     content_blocks: list[ContentBlockTypeDef],
     message_param: ChatCompletionAssistantMessageParam,
+    *,
+    signature_required: bool = False,
 ) -> None:
     """Append a reasoning content block from an assistant message.
+
+    ``reasoning_content`` is plain text, so the replayed block never carries the
+    signature the model issued with it.  Models requiring one reject the whole
+    request, so their block is dropped instead: the turn keeps its content and
+    tool calls and only loses thinking continuity.
 
     Args:
         content_blocks: Mutable list to append blocks to.
         message_param: The assistant message.
+        signature_required: Whether the model rejects an unsigned reasoning block.
 
     Raises:
         ApiError: If a reasoning content part has an unsupported type.
     """
     if (reasoning_content := message_param.reasoning_content) is None:
+        return
+    if signature_required:
+        log_error_details(
+            "Dropped the replayed reasoning content of an assistant message: "
+            "this model only accepts reasoning it produced itself",
+            level="warning",
+        )
         return
     if isinstance(reasoning_content, str):
         text = reasoning_content
@@ -635,6 +650,8 @@ def _map_assistant_reasoning_content(
 def _extract_assistant_blocks(
     message_param: ChatCompletionAssistantMessageParam,
     cache_point: ContentBlockTypeDef | None = None,
+    *,
+    reasoning_signature_required: bool = False,
 ) -> list[ContentBlockTypeDef]:
     """Append assistant tool use and content blocks.
 
@@ -648,6 +665,8 @@ def _extract_assistant_blocks(
         message_param: The assistant message to convert (may include tool calls).
         cache_point: Cache point block to insert after each content part marked
             with ``prompt_cache_breakpoint``, or ``None`` to ignore breakpoints.
+        reasoning_signature_required: Whether the model rejects an unsigned
+            replayed reasoning block, which is then dropped.
 
     Returns:
         Content blocks.
@@ -658,7 +677,9 @@ def _extract_assistant_blocks(
     content_blocks: list[ContentBlockTypeDef] = []
 
     _map_assistant_content(content_blocks, message_param, cache_point)
-    _map_assistant_reasoning_content(content_blocks, message_param)
+    _map_assistant_reasoning_content(
+        content_blocks, message_param, signature_required=reasoning_signature_required
+    )
 
     # Tools and function calls must be at the end
     for tool_call in message_param.tool_calls or []:
@@ -741,6 +762,7 @@ async def map_messages(
     *,
     allow_explicit_caching: bool = False,
     cache_ttl: CacheTTLType | None = None,
+    reasoning_signature_required: bool = False,
 ) -> tuple[list[MessageTypeDef], list[SystemContentBlockTypeDef]]:
     """Convert OpenAI message params into Bedrock messages and system blocks.
 
@@ -753,6 +775,8 @@ async def map_messages(
             content parts emit a Bedrock cache point.  Breakpoints on tool and
             function result messages are always ignored.
         cache_ttl: Cache TTL of the emitted cache points, ``None`` for the default.
+        reasoning_signature_required: Whether the model rejects an unsigned
+            replayed reasoning block, which is then dropped with a warning.
 
     Returns:
         Tuple of (bedrock_messages, system_blocks).
@@ -790,7 +814,11 @@ async def map_messages(
             content_blocks = _extract_function_blocks(function_msg)
         elif role_name == "assistant":
             assistant_msg: ChatCompletionAssistantMessageParam = message_param  # type: ignore[assignment]
-            content_blocks = _extract_assistant_blocks(assistant_msg, cache_point)
+            content_blocks = _extract_assistant_blocks(
+                assistant_msg,
+                cache_point,
+                reasoning_signature_required=reasoning_signature_required,
+            )
         else:
             content_blocks = await _extract_content_blocks(
                 message_param.content, cache_point
@@ -962,6 +990,8 @@ async def format_response(
     audio_params: ChatCompletionAudioParam | None,
     modalities: list[OutputModalities],
     suppress_tool_names: frozenset[str] | None = None,
+    *,
+    suppress_reasoning: bool = False,
 ) -> ChatCompletion:
     """Format Bedrock Converse responses as an OpenAI ChatCompletion.
 
@@ -975,6 +1005,8 @@ async def format_response(
         modalities: List of output modalities such as text or audio.
         suppress_tool_names: Optional set of Bedrock tool names to exclude
             from the returned tool_calls (e.g. system tools handled server-side).
+        suppress_reasoning: Omit the reasoning text from the message; the
+            reasoning tokens are still generated and reported in usage.
 
     Returns:
         A structured ChatCompletion response.
@@ -1018,7 +1050,7 @@ async def format_response(
                 message=ChatCompletionMessage(
                     role="assistant",
                     content=content if "text" in modalities else None,
-                    reasoning_content=reasoning_content,
+                    reasoning_content=None if suppress_reasoning else reasoning_content,
                     tool_calls=tool_calls,
                     function_call=function_call,
                     annotations=annotations,
@@ -1053,6 +1085,7 @@ def _stream_get_content_block_delta(
     tool_call_indices: dict[int, int],
     *,
     legacy_function: bool,
+    suppress_reasoning: bool = False,
 ) -> None:
     """Process a content block delta and update the choice delta.
 
@@ -1062,11 +1095,16 @@ def _stream_get_content_block_delta(
         tool_call_indices: Mutable mapping of content block index to tool call
             position.
         legacy_function: Whether to use legacy function handling.
+        suppress_reasoning: Skip the reasoning text delta.
     """
     delta = delta_block["delta"]
     if "text" in delta:
         choice_delta.content = delta["text"]
-    if (rc := delta.get("reasoningContent")) and "text" in rc:
+    if (
+        not suppress_reasoning
+        and (rc := delta.get("reasoningContent"))
+        and "text" in rc
+    ):
         choice_delta.reasoning_content = rc["text"]
     if "toolUse" not in delta:
         return
@@ -1096,6 +1134,7 @@ def _stream_delta_chunk(
     *,
     legacy_function: bool,
     chunk: ChatCompletionChunk | None = None,
+    suppress_reasoning: bool = False,
 ) -> tuple[ChatCompletionChunk | None, bool]:
     """Process a streaming event into a ChatCompletionChunk.
 
@@ -1109,6 +1148,8 @@ def _stream_delta_chunk(
             position.
         legacy_function: Whether to use legacy function handling.
         chunk: The current chunk to update. Defaults to None.
+        suppress_reasoning: Drop the reasoning text deltas, emitting no chunk
+            for an event that carries nothing else.
 
     Returns:
         Tuple of (updated chunk, whether stream has ended).
@@ -1157,7 +1198,11 @@ def _stream_delta_chunk(
                 delta_block,
                 tool_call_indices,
                 legacy_function=legacy_function,
+                suppress_reasoning=suppress_reasoning,
             )
+            if suppress_reasoning and not choice_delta.model_fields_set:
+                # The event carried reasoning text only: nothing left to send.
+                return None, end
 
         case {"messageStop": stop_block}:
             choice.finish_reason = map_bedrock_stop_reason(
@@ -1210,6 +1255,7 @@ async def format_stream(
     *,
     include_usage: bool = False,
     suppress_tool_names: frozenset[str] | None = None,
+    suppress_reasoning: bool = False,
 ) -> AsyncGenerator[ServerSentEvent]:
     """Stream Bedrock Converse events as OpenAI ChatCompletionChunk SSE events.
 
@@ -1227,6 +1273,8 @@ async def format_stream(
         suppress_tool_names: Optional set of Bedrock tool names whose
             contentBlockStart/contentBlockDelta/contentBlockStop events are
             silently dropped (e.g. system tools handled server-side).
+        suppress_reasoning: Emit no reasoning delta; the reasoning tokens are
+            still generated and reported in usage.
 
     Yields:
         JSONServerSentEvent chunks, terminated by the ``[DONE]`` sentinel.
@@ -1279,6 +1327,7 @@ async def format_stream(
             tool_call_indices,
             legacy_function=legacy_function,
             chunk=chunk,
+            suppress_reasoning=suppress_reasoning,
         )
         end_state |= end
         if chunk:

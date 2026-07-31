@@ -2577,6 +2577,61 @@ class TestChatCompletionsPayloadBuilder:
             "function": {"name": "get_weather"},
         }
 
+    async def test_reasoning_object_is_consumed_and_sent_as_reasoning_effort(
+        self,
+    ) -> None:
+        """``reasoning``/``include_reasoning`` are replaced by ``reasoning_effort``.
+
+        Upstream documents the flat field only, so the objects this surface also
+        accepts must not travel: they are normalized on the way in and stripped
+        from the passthrough payload.
+
+        Ref: https://openrouter.ai/docs/guides/best-practices/reasoning-tokens
+             stdapi/models/chat/_mantle/_convert.py:_CHAT_EXTENSION_FIELDS
+        """
+        request = ChatCompletionCreateParams.model_validate(
+            {
+                "model": "ignored",
+                "messages": [{"role": "user", "content": "hi"}],
+                "reasoning": {"effort": "high"},
+                "include_reasoning": False,
+            }
+        )
+        payload = await mantle_convert.chat_completions_payload(request, "model-id")
+        assert payload["reasoning_effort"] == "high"
+        assert "reasoning" not in payload
+        assert "include_reasoning" not in payload
+        converted = mantle_convert._chat_to_responses_request(payload)  # noqa: SLF001
+        assert converted["reasoning"] == {"effort": "high"}, (
+            "the Responses conversion reads the normalized field"
+        )
+
+    async def test_replayed_reasoning_alias_travels_under_the_upstream_name(
+        self,
+    ) -> None:
+        """An assistant turn replaying ``reasoning`` is sent back as ``reasoning``.
+
+        The alias is normalized to ``reasoning_content`` at validation time, and
+        ``_restore_reasoning_field`` renames it back, so a client replaying
+        either name reaches upstream with the one name upstream knows.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_restore_reasoning_field
+             stdapi/types/openai_chat_completions.py:ChatCompletionAssistantMessageParam
+        """
+        request = ChatCompletionCreateParams.model_validate(
+            {
+                "model": "ignored",
+                "messages": [
+                    {"role": "user", "content": "q"},
+                    {"role": "assistant", "content": "a", "reasoning": "because"},
+                    {"role": "user", "content": "and?"},
+                ],
+            }
+        )
+        payload = await mantle_convert.chat_completions_payload(request, "model-id")
+        assert payload["messages"][1]["reasoning"] == "because"
+        assert "reasoning_content" not in payload["messages"][1]
+
 
 class TestMessagesPayloadBuilder:
     """Validated Anthropic Messages requests dumped to the Mantle passthrough shape.
@@ -3595,6 +3650,64 @@ class TestRenameReasoningField:
     Ref: https://api-docs.deepseek.com/api/create-chat-completion
          stdapi/models/chat/_mantle/_convert.py:rename_reasoning_field
     """
+
+    def test_message_and_delta_reasoning_are_both_promoted(self) -> None:
+        """The non-streaming message and the streamed delta are both renamed."""
+        payload: dict[str, Any] = {
+            "choices": [
+                {"message": {"role": "assistant", "reasoning": "why"}},
+                {"delta": {"reasoning": "wh"}},
+            ]
+        }
+
+        mantle_convert.rename_reasoning_field(payload)
+
+        assert payload["choices"][0]["message"] == {
+            "role": "assistant",
+            "reasoning_content": "why",
+        }
+        assert payload["choices"][1]["delta"] == {"reasoning_content": "wh"}
+
+    def test_an_existing_reasoning_content_wins(self) -> None:
+        """A payload already using this surface's name is left as it arrived."""
+        payload: dict[str, Any] = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "reasoning": "other",
+                        "reasoning_content": "kept",
+                    }
+                }
+            ]
+        }
+
+        mantle_convert.rename_reasoning_field(payload)
+
+        assert payload["choices"][0]["message"]["reasoning_content"] == "kept"
+        assert payload["choices"][0]["message"]["reasoning"] == "other", (
+            "the unknown key is pruned by validation, never merged"
+        )
+
+    def test_excluding_drops_the_text_under_either_name(self) -> None:
+        """``exclude`` removes the chain of thought instead of renaming it.
+
+        Ref: stdapi/types/openai_chat_completions.py:CompletionCreateParams.suppress_reasoning
+        """
+        payload: dict[str, Any] = {
+            "choices": [
+                {"message": {"role": "assistant", "content": "hi", "reasoning": "why"}},
+                {"delta": {"reasoning_content": "wh"}},
+            ]
+        }
+
+        mantle_convert.rename_reasoning_field(payload, exclude=True)
+
+        assert payload["choices"][0]["message"] == {
+            "role": "assistant",
+            "content": "hi",
+        }
+        assert payload["choices"][1]["delta"] == {}
 
     def test_a_non_text_reasoning_value_keeps_its_own_name(self) -> None:
         """Only text is promoted; any other shape stays an unknown field.

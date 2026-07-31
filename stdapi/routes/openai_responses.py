@@ -15,7 +15,7 @@ The module provides:
 
 from functools import partial
 from re import fullmatch
-from typing import TYPE_CHECKING, Annotated, Any, Literal, Never, get_args
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Never, cast, get_args
 
 from fastapi import APIRouter, Depends, Path, Query
 from pydantic import TypeAdapter, ValidationError
@@ -93,6 +93,7 @@ if TYPE_CHECKING:
 
     from stdapi.aws_bedrock_mantle import Surface
     from stdapi.models.chat import ChatModelBase
+    from stdapi.models.chat._default import ChatModel
 
 register_route_capability(
     "openai_response", f"{SETTINGS.openai_routes_prefix}/v1/responses", "TEXT", "TEXT"
@@ -696,13 +697,19 @@ async def count_input_tokens(
     model = await validate_model(
         request.model, input_modality="TEXT", output_modality="TEXT", error_status=400
     )
-    if serves_via_mantle(model.get_id()):
+    model_id = model.get_id()
+    if serves_via_mantle(model_id):
         msg = "Token counting is not supported for this model on this endpoint."
         raise ApiError(msg, status=400)
+    # Mantle is excluded above, so the model is always a Converse ChatModel.
+    chat_model = cast("ChatModel", get_chat_model(model_id))
     return log_response_params(
         InputTokenCountResponse(
             input_tokens=await count_input_tokens_via_bedrock(
-                request, model.get_id(), model.regions[0]
+                request,
+                model_id,
+                model.regions[0],
+                reasoning_signature_required=chat_model.REASONING_SIGNATURE_REQUIRED,
             )
         )
     )

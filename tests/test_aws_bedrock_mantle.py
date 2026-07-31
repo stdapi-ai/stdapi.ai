@@ -3371,6 +3371,88 @@ class TestReasoningFieldSurfacing:
         assert out["output"][0]["type"] == "reasoning"
         assert out["output"][0]["content"][0]["text"] == " Let total be T."
 
+    async def test_excluded_reasoning_is_dropped_from_the_response(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``exclude_reasoning`` removes the text instead of surfacing it.
+
+        The client asked for the completion without its chain of thought
+        (``include_reasoning: false``), so neither name may reach it.
+
+        Ref: stdapi/types/openai_chat_completions.py:CompletionCreateParams.suppress_reasoning
+        """
+        raw = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "test.model",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": " 45",
+                        "reasoning": " Let total be T.",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 70, "completion_tokens": 342},
+        }
+
+        async def fake_serve(
+            self: mantle_default.ChatModel,  # noqa: ARG001
+            inbound: str,  # noqa: ARG001
+            payload: dict[str, Any],  # noqa: ARG001
+            *,
+            stream: bool,  # noqa: ARG001
+            region: str | None = None,  # noqa: ARG001
+        ) -> tuple[str, str, dict[str, Any]]:
+            return "chat_completions", "us-east-1", raw
+
+        monkeypatch.setattr(mantle_default.ChatModel, "_serve", fake_serve)
+        usage_records = _capture_usage_records(monkeypatch)
+        model = mantle_default.ChatModel("test.reasoning-model")
+        _, _, out = await model._serve_validated(  # noqa: SLF001
+            "chat_completions", {"messages": []}, exclude_reasoning=True
+        )
+        message = out["choices"][0]["message"]
+        assert "reasoning_content" not in message
+        assert "reasoning" not in message
+        assert message["content"] == " 45"
+        assert usage_records, "the generated tokens are still billed"
+
+    async def test_excluded_reasoning_is_dropped_from_the_stream(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reasoning deltas carry no text once the client opted out."""
+        _capture_usage_records(monkeypatch)
+        model = mantle_default.ChatModel("test.reasoning-stream-model")
+        chunks: list[SseEvent] = [
+            (None, dumps({"choices": [{"index": 0, "delta": {"reasoning": "step"}}]})),
+            (
+                None,
+                dumps(
+                    {"choices": [{"index": 0, "delta": {"reasoning_content": "step"}}]}
+                ),
+            ),
+        ]
+        events = [
+            event
+            async for event in model._relay_stream(  # noqa: SLF001
+                "chat_completions",
+                "chat_completions",
+                _fake_stream(chunks),
+                "us-east-1",
+                strip_usage_chunk=False,
+                exclude_reasoning=True,
+            )
+        ]
+        deltas = [
+            loads(_event_data(event))["choices"][0]["delta"] for event in events[:-1]
+        ]
+        assert deltas == [{}, {}]
+
     async def test_streaming_delta_renamed(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

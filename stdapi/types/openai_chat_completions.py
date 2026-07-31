@@ -1,6 +1,6 @@
 """Local OpenAI-compatible chat completions types."""
 
-from typing import Annotated, ClassVar, Literal, Self
+from typing import Annotated, Any, ClassVar, Literal, Self
 
 from pydantic import AliasChoices, Field, model_validator
 
@@ -548,12 +548,32 @@ class ChatCompletionAssistantMessageParam(_MessageParam):
     # Deepseek Chat Completion API fields.
     reasoning_content: str | list[ChatCompletionContentPartTextParam] | None = Field(
         default=None,
-        description="Reasoning content. Extra field from Deepseek Chat Completion API.",
+        description="Reasoning content, also accepted under the `reasoning` name. Extra field from Deepseek Chat Completion API.",
     )
     prefix: bool | None = Field(
         default=None,
         description="Force model to start with the provided prefix. UNSUPPORTED on this implementation.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_reasoning_alias(cls, data: Any) -> Any:  # noqa: ANN401
+        """Read a replayed `reasoning` field as `reasoning_content`.
+
+        Args:
+            data: Raw assistant message.
+
+        Returns:
+            The message, with `reasoning` folded into `reasoning_content` when
+            the latter carries nothing.
+        """
+        if not isinstance(data, dict) or "reasoning" not in data:
+            return data
+        data = dict(data)
+        alias = data.pop("reasoning")
+        if data.get("reasoning_content") is None:
+            data["reasoning_content"] = alias
+        return data
 
 
 # Ref: openai.types.chat.chat_completion_user_message_param.ChatCompletionUserMessageParam
@@ -698,6 +718,32 @@ class MoonshotThinkingOptions(BaseModelRequest):
 
     type: Literal["enabled", "disabled"] = Field(
         description="Enable or disable thinking capability."
+    )
+
+
+class ReasoningOptions(BaseModelRequest):
+    """Reasoning configuration accepted as a single object.
+
+    Groups the reasoning knobs the flat fields expose individually: `effort`
+    matches `reasoning_effort`, `max_tokens` matches `thinking_budget`, and
+    `enabled` matches `enable_thinking`.
+    """
+
+    effort: ReasoningEffort | None = Field(
+        default=None,
+        description="Reasoning effort, as `reasoning_effort`. Mutually exclusive with `max_tokens`.",
+    )
+    max_tokens: int | None = Field(
+        default=None,
+        ge=0,
+        description="Max reasoning length in tokens, as `thinking_budget`. Mutually exclusive with `effort`.",
+    )
+    exclude: bool | None = Field(
+        default=None,
+        description="Omit the reasoning text from the response; it is still generated and billed.",
+    )
+    enabled: bool | None = Field(
+        default=None, description="Enable reasoning, as `enable_thinking`."
     )
 
 
@@ -1312,6 +1358,18 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         description="Enable/disable thinking. Extra field from Moonshot Chat Completion API.",
     )
 
+    # OpenRouter Chat Completion API fields.
+    reasoning: ReasoningOptions | None = Field(
+        default=None,
+        description="Reasoning options, equivalent to `reasoning_effort`, `thinking_budget` and `enable_thinking`. "
+        "Conflicting values are rejected. Extra field from OpenRouter Chat Completion API.",
+    )
+    include_reasoning: bool | None = Field(
+        default=None,
+        description="Include the reasoning text in the response; `false` is equivalent to `reasoning.exclude: true`. "
+        "Extra field from OpenRouter Chat Completion API.",
+    )
+
     moderation: RequestModeration | None = Field(
         default=None,
         description="Apply an AWS Bedrock guardrail to this request; results "
@@ -1326,6 +1384,99 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         "web_search_options",
         "translation_options",
     }
+
+    #: `reasoning` sub-field paired with the flat field carrying the same setting.
+    _REASONING_EQUIVALENTS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("effort", "reasoning_effort"),
+        ("max_tokens", "thinking_budget"),
+        ("enabled", "enable_thinking"),
+    )
+
+    @property
+    def suppress_reasoning(self) -> bool:
+        """Whether the reasoning text must be kept out of the response."""
+        return self.include_reasoning is False or (
+            self.reasoning is not None and self.reasoning.exclude is True
+        )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_reasoning(cls, data: Any) -> Any:  # noqa: ANN401
+        """Fold the `reasoning` object onto the flat fields it duplicates.
+
+        Args:
+            data: Raw request payload.
+
+        Returns:
+            The payload, with `reasoning.effort`, `reasoning.max_tokens` and
+            `reasoning.enabled` applied to `reasoning_effort`,
+            `thinking_budget` and `enable_thinking`.
+
+        Raises:
+            ValueError: If a `reasoning` entry contradicts another field.
+        """
+        if not isinstance(data, dict):
+            return data
+        reasoning = data.get("reasoning")
+        if isinstance(reasoning, ReasoningOptions):
+            reasoning = reasoning.model_dump(exclude_none=True)
+        if not isinstance(reasoning, dict):
+            return data
+        cls._validate_reasoning_conflicts(reasoning, data)
+        data = dict(data)
+        for source, target in cls._REASONING_EQUIVALENTS:
+            if (value := reasoning.get(source)) is not None:
+                data[target] = value
+        # An explicit budget implies reasoning is on, as `thinking_budget` requires.
+        if (
+            reasoning.get("max_tokens") is not None
+            and data.get("enable_thinking") is None
+        ):
+            data["enable_thinking"] = True
+        return data
+
+    @classmethod
+    def _validate_reasoning_conflicts(
+        cls, reasoning: JsonMapping, data: JsonMapping
+    ) -> None:
+        """Reject a `reasoning` object contradicting itself or another field.
+
+        Args:
+            reasoning: Raw `reasoning` object.
+            data: Raw request payload carrying it.
+
+        Raises:
+            ValueError: If two entries request opposite behaviors.
+        """
+        effort = reasoning.get("effort")
+        if effort is not None and reasoning.get("max_tokens") is not None:
+            msg = "Only one of `reasoning.effort` or `reasoning.max_tokens` can be specified."
+            raise ValueError(msg)
+        # The flat spelling counts as well: the two are merged a moment later, so
+        # checking only the object would accept one wording of a contradiction and
+        # reject the other.
+        effective_effort = (
+            effort if effort is not None else data.get("reasoning_effort")
+        )
+        if reasoning.get("enabled") is False and effective_effort not in (None, "none"):
+            msg = "`reasoning.effort` requires `reasoning.enabled` to be `true`."
+            raise ValueError(msg)
+        exclude, include = reasoning.get("exclude"), data.get("include_reasoning")
+        # Compared as booleans, not for truthiness: `exclude: false` beside
+        # `include_reasoning: false` is the same contradiction as the other way
+        # round, and silently suppressing there would drop the reasoning entirely.
+        if (
+            exclude is not None
+            and include is not None
+            and bool(exclude) == bool(include)
+        ):
+            msg = "`reasoning.exclude` and `include_reasoning` request the opposite behavior."
+            raise ValueError(msg)
+        for source, target in cls._REASONING_EQUIVALENTS:
+            value = reasoning.get(source)
+            if value is not None and data.get(target) not in (None, value):
+                msg = f"`reasoning.{source}` and `{target}` must have the same value."
+                raise ValueError(msg)
 
     @model_validator(mode="after")
     def _unsupported(self) -> Self:

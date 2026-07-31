@@ -73,6 +73,8 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 | `enable_thinking` (Qwen API-compatible)  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Enable/disable thinking mode (accepted for all reasoning models) |
 | `thinking_budget` (Qwen API-compatible)  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Thinking token budget (accepted for all reasoning models)      |
 | `thinking` (Moonshot API-compatible)     |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Thinking config: {"type": "enabled"/"disabled"} (accepted for all models) |
+| `reasoning` (OpenRouter API-compatible)  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Reasoning object: `effort`, `max_tokens`, `enabled`, `exclude`. Equivalent to `reasoning_effort`, `thinking_budget` and `enable_thinking`; conflicting values are rejected with `400` |
+| `include_reasoning` (OpenRouter API-compatible) |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `false` omits the reasoning text from the response, like `reasoning: {"exclude": true}`; the reasoning tokens are still generated and billed |
 | `n` (multiple choices)                   |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Generate multiple responses, not supported with streaming       |
 | `logprobs`                               | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Rejected with `400` when enabled (`false`/`null` accepted, as they request the default behavior); `top_logprobs` (above) remains usable |
 | `prediction`                             | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Static predicted output content                                 |
@@ -90,7 +92,7 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 | Streaming obfuscation                    | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Unsupported                                                     |
 | Audio                                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Model output or synthesis from text output (synthesis is Converse-only — not performed for Mantle-served requests) |
 | `response_format` (JSON mode)            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | `json_object` accepted for all models, without a syntax guarantee on every model; `json_schema` structured output is model-specific |
-| `reasoning_content` (From Deepseek API)  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Text reasoning messages                                         |
+| `reasoning_content` (From Deepseek API)  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Text reasoning messages. The single response field; on an assistant message replayed in `messages`, `reasoning` is accepted as an alias for it, and it is [dropped on models that only accept their own thinking](#replaying-reasoning-in-a-multi-turn-conversation) |
 | `annotations` (URL citations)            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | URL citations from system tools (non-streaming only)            |
 | **Usage tracking**                       |                                          |                                                                 |
 | Input text tokens                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Billing unit                                                    |
@@ -703,6 +705,53 @@ The `thinking` parameter provides a Moonshot API-compatible format for controlli
 - `thinking={"type": "adaptive"}` — Let the model decide when to think
 
 This format is accepted for all reasoning-capable models. Models that don't support this parameter will ignore it.
+
+#### :material-router-network: OpenRouter API-Compatible Reasoning Object
+
+The `reasoning` object groups the same controls into a single field, and `include_reasoning` toggles whether the reasoning text is returned.
+
+!!! info "Documentation"
+    See [OpenRouter Reasoning Tokens](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens) for more information.
+
+**Parameters:**
+
+- `reasoning.effort` (string): Effort level, exactly as `reasoning_effort`
+- `reasoning.max_tokens` (integer): Reasoning token budget, exactly as `thinking_budget` (implies `enabled`)
+- `reasoning.enabled` (boolean): Enable reasoning, exactly as `enable_thinking`
+- `reasoning.exclude` (boolean): Omit the reasoning text from the response
+- `include_reasoning` (boolean): `false` is equivalent to `reasoning: {"exclude": true}`
+
+**Example:**
+
+```bash
+curl -X POST "$BASE/v1/chat/completions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "anthropic.claude-sonnet-5",
+    "reasoning": {"effort": "high", "exclude": true},
+    "messages": [{"role": "user", "content": "Solve this complex problem..."}]
+  }'
+```
+
+!!! note "Conflicting Values"
+    `reasoning.effort` and `reasoning.max_tokens` are mutually exclusive, and a sub-field disagreeing with its flat equivalent (for example `reasoning: {"effort": "high"}` with `reasoning_effort: "low"`) is rejected with `400`.
+
+!!! note "Excluded Reasoning"
+    Excluding the reasoning text does not disable reasoning: the model still thinks, and the reasoning tokens are still counted in `usage` and billed. Use `reasoning_effort: "none"` or `reasoning: {"enabled": false}` to turn reasoning off.
+
+#### :material-history: Replaying Reasoning in a Multi-Turn Conversation
+
+Appending the assistant message you just received to `messages` — the standard
+multi-turn idiom, and what the [DeepSeek API](https://api-docs.deepseek.com/api/create-chat-completion)
+asks for after a tool call — is always accepted, `reasoning_content` included.
+
+Anthropic Claude models only continue from a thinking passage they can recognise
+as their own, which a replayed text field is not, so their reasoning is left out
+of that turn instead. The message content, tool calls and refusal are sent
+unchanged and the conversation continues normally; only the earlier chain of
+thought is no longer visible to the model. Every other model family receives the
+replayed reasoning as-is.
 
 ## Available Request Headers
 

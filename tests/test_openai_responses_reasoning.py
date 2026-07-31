@@ -17,7 +17,9 @@ from openai.types.responses.response_content_part_done_event import (
     ResponseContentPartDoneEvent as SDKResponseContentPartDoneEvent,
 )
 
+import stdapi.models.chat._adapters._openai_responses as responses_adapter
 from stdapi.models.chat._adapters._openai_responses import (
+    count_input_tokens_via_bedrock,
     decode_reasoning_content,
     encode_reasoning_content,
     format_response,
@@ -25,6 +27,8 @@ from stdapi.models.chat._adapters._openai_responses import (
     map_input,
 )
 from stdapi.types.openai_responses import (
+    EasyInputMessage,
+    InputTokenCountParams,
     Reasoning,
     ReasoningItemContentInput,
     ReasoningItemSummary,
@@ -46,6 +50,7 @@ if TYPE_CHECKING:
         ConverseStreamOutputTypeDef,
     )
 
+    from stdapi.monitoring import EventLog
     from stdapi.types.openai_responses import ResponseInputItem
 
 
@@ -638,12 +643,10 @@ class TestReasoningInputRoundTrip:
     async def test_unsigned_replay_without_encrypted_content(self) -> None:
         """An echoed item with no ``encrypted_content`` maps to an unsigned block.
 
-        Pins current behavior when a client replays a reasoning item that was
-        never requested with ``include=["reasoning.encrypted_content"]``: the
-        resulting ``reasoningText`` block carries no ``signature`` key.
-        Anthropic models may reject unsigned thinking blocks when they are
-        replayed as part of a tool-use continuation; clients should request
-        ``include=["reasoning.encrypted_content"]`` to avoid this.
+        A client replaying a reasoning item that was never requested with
+        ``include=["reasoning.encrypted_content"]`` gets a ``reasoningText``
+        block with no ``signature`` key, which is what models accepting an
+        unsigned replay receive.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ReasoningContentBlock.html
              stdapi/models/chat/_adapters/_openai_responses.py:_map_reasoning_item
@@ -660,6 +663,218 @@ class TestReasoningInputRoundTrip:
         ]
         content_block = messages[0]["content"][0]
         assert "signature" not in content_block["reasoningContent"]["reasoningText"]
+
+
+class TestReasoningInputSignatureRequired:
+    """Models rejecting an unsigned replay receive only the blocks they signed.
+
+    A reasoning item echoed without its ``encrypted_content`` envelope has lost
+    its signatures, and Claude answers such a replay with
+    ``messages.1.content.0.thinking.signature: Field required``.  Those texts are
+    dropped so the turn still gets an answer, at the cost of thinking continuity.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+         stdapi/models/chat/_adapters/_openai_responses.py:_map_reasoning_item
+    """
+
+    async def test_unsigned_item_is_dropped_and_warns(
+        self, request_log: EventLog
+    ) -> None:
+        """An envelope-less item yields no message, and the drop is logged."""
+        item = ResponseReasoningItemInput(
+            id="rs-1",
+            summary=[],
+            type="reasoning",
+            content=[ReasoningItemContentInput(text="think", type="reasoning_text")],
+        )
+
+        messages, _ = await map_input(
+            cast("list[ResponseInputItem]", [item]),
+            None,
+            reasoning_signature_required=True,
+        )
+
+        assert messages == []
+        assert request_log["level"] == "warning"
+        assert any(
+            "reasoning" in str(detail) for detail in request_log["error_detail"]
+        ), "the dropped reasoning content must be reported in the request log"
+
+    async def test_signed_item_is_replayed_untouched(
+        self, request_log: EventLog
+    ) -> None:
+        """A gateway-issued envelope still replays its signed and redacted blocks."""
+        item = ResponseReasoningItemInput(
+            id="rs-1",
+            summary=[],
+            type="reasoning",
+            content=[ReasoningItemContentInput(text="think", type="reasoning_text")],
+            encrypted_content=encode_reasoning_content(["sig-1"], [b"\x00\x01"]),
+            status="completed",
+        )
+
+        messages, _ = await map_input(
+            cast("list[ResponseInputItem]", [item]),
+            None,
+            reasoning_signature_required=True,
+        )
+
+        assert messages[0]["content"] == [
+            {
+                "reasoningContent": {
+                    "reasoningText": {"text": "think", "signature": "sig-1"}
+                }
+            },
+            {"reasoningContent": {"redactedContent": b"\x00\x01"}},
+        ]
+        assert request_log["level"] == "info", "a signed replay warns about nothing"
+
+    async def test_summary_fallback_is_dropped(self) -> None:
+        """A summary text is never signature-bearing, so it cannot be replayed."""
+        item = ResponseReasoningItemInput(
+            id="rs-1",
+            summary=[ReasoningItemSummary(text="the summary", type="summary_text")],
+            type="reasoning",
+        )
+
+        messages, _ = await map_input(
+            cast("list[ResponseInputItem]", [item]),
+            None,
+            reasoning_signature_required=True,
+        )
+
+        assert messages == []
+
+    async def test_surrounding_items_are_untouched(self) -> None:
+        """Dropping the reasoning leaves the messages around it in place and in order."""
+        item = ResponseReasoningItemInput(
+            id="rs-1",
+            summary=[],
+            type="reasoning",
+            content=[ReasoningItemContentInput(text="think", type="reasoning_text")],
+        )
+
+        messages, _ = await map_input(
+            cast(
+                "list[ResponseInputItem]",
+                [
+                    EasyInputMessage(role="user", content="q", type="message"),
+                    item,
+                    EasyInputMessage(role="assistant", content="a", type="message"),
+                ],
+            ),
+            None,
+            reasoning_signature_required=True,
+        )
+
+        assert messages == [
+            {"role": "user", "content": [{"text": "q"}]},
+            {"role": "assistant", "content": [{"text": "a"}]},
+        ]
+
+
+class TestInputTokenCountSignatureRequired:
+    """The token count reflects the input the generation path would actually send.
+
+    ``POST /v1/responses/input_tokens`` answers "how many tokens will this cost",
+    so it must apply the same unsigned-reasoning drop as ``create_response``;
+    counting text the model never receives over-reports the prompt.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/input-tokens
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
+         stdapi/models/chat/_adapters/_openai_responses.py:count_input_tokens_via_bedrock
+    """
+
+    @staticmethod
+    def _counted_messages(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+        """Patch the Bedrock client and return the list the counted messages land in."""
+        counted: list[dict[str, Any]] = []
+
+        class _FakeClient:
+            async def count_tokens(
+                self,
+                *,
+                modelId: str,  # noqa: N803 (mirrors the boto3 client's camelCase kwarg)
+                input: dict[str, Any],  # noqa: A002
+            ) -> dict[str, int]:
+                counted.extend(input["converse"]["messages"])
+                return {"inputTokens": 7}
+
+        monkeypatch.setattr(
+            responses_adapter,
+            "get_client",
+            lambda _service, _region=None: _FakeClient(),
+        )
+        return counted
+
+    @staticmethod
+    def _request(encrypted_content: str | None) -> InputTokenCountParams:
+        """Build a count request replaying one reasoning item after a question."""
+        return InputTokenCountParams.model_validate(
+            {
+                "model": "m",
+                "input": [
+                    EasyInputMessage(role="user", content="q", type="message"),
+                    ResponseReasoningItemInput(
+                        id="rs-1",
+                        summary=[],
+                        type="reasoning",
+                        content=[
+                            ReasoningItemContentInput(
+                                text="think", type="reasoning_text"
+                            )
+                        ],
+                        encrypted_content=encrypted_content,
+                    ),
+                ],
+            }
+        )
+
+    async def test_unsigned_reasoning_is_not_counted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A model requiring a signature is not billed for reasoning it will not see."""
+        counted = self._counted_messages(monkeypatch)
+
+        tokens = await count_input_tokens_via_bedrock(
+            self._request(None), "m", "us-east-1", reasoning_signature_required=True
+        )
+
+        assert tokens == 7, "the Bedrock inputTokens value is returned unchanged"
+        assert counted == [{"role": "user", "content": [{"text": "q"}]}]
+
+    async def test_signed_reasoning_is_counted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reasoning that survives the drop is part of the prompt, so it is counted."""
+        counted = self._counted_messages(monkeypatch)
+
+        await count_input_tokens_via_bedrock(
+            self._request(encode_reasoning_content(["sig-1"], [])),
+            "m",
+            "us-east-1",
+            reasoning_signature_required=True,
+        )
+
+        assert counted[1]["content"] == [
+            {
+                "reasoningContent": {
+                    "reasoningText": {"text": "think", "signature": "sig-1"}
+                }
+            }
+        ]
+
+    async def test_other_models_still_count_unsigned_reasoning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Model families accepting an unsigned replay receive, and pay for, it."""
+        counted = self._counted_messages(monkeypatch)
+
+        await count_input_tokens_via_bedrock(self._request(None), "m", "us-east-1")
+
+        assert counted[1]["content"] == [
+            {"reasoningContent": {"reasoningText": {"text": "think"}}}
+        ]
 
 
 class TestReasoningLive:

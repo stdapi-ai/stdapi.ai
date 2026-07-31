@@ -17,11 +17,12 @@ import pytest
 from aiobotocore.session import get_session
 from openai import APIError, BadRequestError, NotFoundError, OpenAI
 from pybase64 import b64encode
-from pydantic import ValidationError
+from pydantic import ConfigDict, ValidationError
 
 from stdapi.config import SETTINGS
 from stdapi.models.chat._adapters._openai_chat_completion import (
     _LEGACY_FUNCTION,
+    extract_reasoning,
     format_response,
     format_stream,
 )
@@ -31,7 +32,10 @@ from stdapi.models.chat._adapters._openai_common import (
 )
 from stdapi.models.chat._default import ChatModel
 from stdapi.models.deprecation import DEPRECATED_MODELS
-from stdapi.types.openai_chat_completions import CompletionCreateParams
+from stdapi.types.openai_chat_completions import (
+    ChatCompletionAssistantMessageParam,
+    CompletionCreateParams,
+)
 from tests._helpers import strip_code_fence
 from tests.conftest import logged_usage_entries
 
@@ -4003,3 +4007,259 @@ class TestStreamObfuscationOption:
         )
         assert request.stream_options is not None
         assert request.stream_options.include_obfuscation is False
+
+
+class TestOpenRouterReasoningOptions:
+    """The `reasoning` object and `include_reasoning` configure reasoning.
+
+    OpenRouter groups the reasoning controls into one object; each entry means
+    exactly what the flat field of the same purpose means here, so a client
+    written against either spelling gets the same completion, and a request
+    stating both differently is rejected instead of silently picking one.
+
+    Ref: https://openrouter.ai/docs/guides/best-practices/reasoning-tokens
+         stdapi/types/openai_chat_completions.py:CompletionCreateParams._normalize_reasoning
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    def _validate(**extra: Any) -> CompletionCreateParams:  # noqa: ANN401
+        """Validate a minimal request carrying *extra* fields.
+
+        Args:
+            **extra: Extra request fields.
+
+        Returns:
+            The validated request.
+        """
+        return CompletionCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                **extra,
+            }
+        )
+
+    def test_effort_is_the_reasoning_effort_field(self) -> None:
+        """``reasoning={"effort": "high"}`` configures ``reasoning_effort="high"``."""
+        grouped = self._validate(reasoning={"effort": "high"})
+        assert grouped.reasoning_effort == "high"
+        assert extract_reasoning(grouped) == extract_reasoning(
+            self._validate(reasoning_effort="high")
+        )
+
+    def test_max_tokens_is_the_thinking_budget_field(self) -> None:
+        """``reasoning.max_tokens`` sizes the budget and turns reasoning on.
+
+        The budget is meaningless without reasoning enabled, so an explicit
+        budget implies it rather than 400-ing on the ``thinking_budget`` rule.
+        """
+        grouped = self._validate(reasoning={"max_tokens": 2048})
+        assert grouped.thinking_budget == 2048
+        assert grouped.enable_thinking is True
+        assert extract_reasoning(grouped) == extract_reasoning(
+            self._validate(enable_thinking=True, thinking_budget=2048)
+        )
+
+    def test_enabled_false_disables_reasoning(self) -> None:
+        """``reasoning={"enabled": false}`` is ``enable_thinking=false``."""
+        grouped = self._validate(reasoning={"enabled": False})
+        assert grouped.enable_thinking is False
+        assert extract_reasoning(grouped) == extract_reasoning(
+            self._validate(enable_thinking=False)
+        )
+
+    def test_agreeing_duplicate_values_are_accepted(self) -> None:
+        """The same effort stated twice is not a conflict."""
+        assert (
+            self._validate(
+                reasoning={"effort": "low"}, reasoning_effort="low"
+            ).reasoning_effort
+            == "low"
+        )
+
+    def test_exclude_and_include_reasoning_false_both_suppress(self) -> None:
+        """Both spellings ask for the completion without its reasoning text."""
+        assert self._validate(reasoning={"exclude": True}).suppress_reasoning is True
+        assert self._validate(include_reasoning=False).suppress_reasoning is True
+        assert self._validate(include_reasoning=True).suppress_reasoning is False
+        assert self._validate().suppress_reasoning is False, (
+            "reasoning text is returned unless the client opts out"
+        )
+
+    def test_excluding_does_not_disable_reasoning(self) -> None:
+        """``exclude`` hides the text; it never turns the reasoning off."""
+        assert extract_reasoning(self._validate(reasoning={"exclude": True})) is None
+        reasoning = extract_reasoning(
+            self._validate(reasoning={"effort": "high", "exclude": True})
+        )
+        assert reasoning is not None
+        assert reasoning["enabled"] is True
+
+    @pytest.mark.parametrize(
+        ("body", "expected"),
+        [
+            pytest.param(
+                {"reasoning": {"effort": "high", "max_tokens": 1024}},
+                "reasoning.max_tokens",
+                id="effort-with-budget",
+            ),
+            pytest.param(
+                {"reasoning": {"effort": "high"}, "reasoning_effort": "low"},
+                "reasoning_effort",
+                id="effort-disagrees-with-flat-field",
+            ),
+            pytest.param(
+                {"reasoning": {"max_tokens": 10}, "thinking_budget": 20},
+                "thinking_budget",
+                id="budget-disagrees-with-flat-field",
+            ),
+            pytest.param(
+                {"reasoning": {"enabled": True}, "enable_thinking": False},
+                "enable_thinking",
+                id="enabled-disagrees-with-flat-field",
+            ),
+            pytest.param(
+                {"reasoning": {"effort": "high", "enabled": False}},
+                "reasoning.enabled",
+                id="effort-with-reasoning-off",
+            ),
+            pytest.param(
+                {"reasoning": {"exclude": True}, "include_reasoning": True},
+                "include_reasoning",
+                id="exclude-disagrees-with-include",
+            ),
+            pytest.param(
+                # The mirror image of the entry above: `exclude: false` is an
+                # explicit ask for the reasoning, so pairing it with
+                # `include_reasoning: false` contradicts just as squarely, and
+                # accepting it would silently drop the chain of thought.
+                {"reasoning": {"exclude": False}, "include_reasoning": False},
+                "include_reasoning",
+                id="keep-disagrees-with-drop",
+            ),
+            pytest.param(
+                # Same contradiction as effort-with-reasoning-off, spelled with
+                # the flat field. Checking only the object would accept one
+                # wording and reject the other.
+                {"reasoning": {"enabled": False}, "reasoning_effort": "high"},
+                "reasoning.enabled",
+                id="flat-effort-with-reasoning-off",
+            ),
+        ],
+    )
+    def test_contradictory_options_are_rejected(
+        self, body: dict[str, Any], expected: str
+    ) -> None:
+        """Each contradiction fails validation with a message naming the culprit."""
+        with pytest.raises(ValidationError) as exc_info:
+            self._validate(**body)
+        assert expected in str(exc_info.value)
+
+    def test_conflict_is_reported_as_a_clean_400(
+        self, app_client: TestClientType
+    ) -> None:
+        """The rejection reaches the client as an OpenAI-shaped 400 envelope.
+
+        Ref: stdapi/api_errors.py
+        """
+        response = app_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "reasoning": {"effort": "high", "max_tokens": 1024},
+            },
+        )
+        assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "reasoning.effort" in error["message"]
+
+
+class TestAssistantReasoningAlias:
+    """A replayed assistant turn may name its thinking text ``reasoning``.
+
+    Vendors disagree on the name of the field they hand back, and the OpenAI SDK
+    idiom is to append the returned message verbatim to the next request, so both
+    names are accepted on input and normalized to the one this surface documents.
+    The response side is unaffected: ``reasoning_content`` remains the only
+    emitted name.
+
+    Ref: https://openrouter.ai/docs/guides/best-practices/reasoning-tokens
+         https://docs.vllm.ai/en/latest/features/reasoning_outputs.html
+         stdapi/types/openai_chat_completions.py:ChatCompletionAssistantMessageParam
+    """
+
+    pytestmark = pytest.mark.local
+
+    class _LenientAssistantMessage(ChatCompletionAssistantMessageParam):
+        """The same message as configured without strict input validation."""
+
+        model_config = ConfigDict(extra="ignore", frozen=True)
+
+    @pytest.mark.parametrize("strict", [True, False], ids=["strict", "lenient"])
+    def test_the_alias_is_read_as_reasoning_content(self, strict: bool) -> None:
+        """``reasoning`` populates the field under both validation settings.
+
+        Without the alias the key would be dropped when extra fields are ignored
+        and rejected when they are forbidden -- both invisible to the client.
+        """
+        model: type[ChatCompletionAssistantMessageParam] = (
+            ChatCompletionAssistantMessageParam
+            if strict
+            else self._LenientAssistantMessage
+        )
+        message = model.model_validate(
+            {"role": "assistant", "content": "a", "reasoning": "because"}
+        )
+        assert message.reasoning_content == "because"
+
+    def test_reasoning_content_wins_when_both_are_sent(self) -> None:
+        """The documented name takes precedence, as every dual-reading client does."""
+        message = ChatCompletionAssistantMessageParam.model_validate(
+            {
+                "role": "assistant",
+                "content": "a",
+                "reasoning": "ignored",
+                "reasoning_content": "kept",
+            }
+        )
+        assert message.reasoning_content == "kept"
+
+    def test_the_alias_maps_to_bedrock_like_the_documented_name(self) -> None:
+        """Either name produces the same request, so replay behaves identically.
+
+        Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:_map_assistant_reasoning_content
+        """
+        aliased = CompletionCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "messages": [
+                    {"role": "user", "content": "q"},
+                    {"role": "assistant", "content": "a", "reasoning": "because"},
+                ],
+            }
+        )
+        documented = CompletionCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "messages": [
+                    {"role": "user", "content": "q"},
+                    {
+                        "role": "assistant",
+                        "content": "a",
+                        "reasoning_content": "because",
+                    },
+                ],
+            }
+        )
+        assert aliased.messages == documented.messages
+
+    def test_a_missing_reasoning_field_is_never_required(self) -> None:
+        """An assistant turn replayed without any reasoning text stays valid."""
+        message = ChatCompletionAssistantMessageParam.model_validate(
+            {"role": "assistant", "content": "a"}
+        )
+        assert message.reasoning_content is None
