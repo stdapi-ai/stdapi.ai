@@ -129,7 +129,8 @@ async def stream_generator(
     usage: Usage | None = None
     async for result in image_stream:
         if result.partial:
-            index = indexes[result.index] = indexes.get(result.index, 0) + 1
+            # 0-based, as the OpenAI event declares it.
+            index = indexes[result.index] = indexes.get(result.index, -1) + 1
             yield JSONServerSentEvent(
                 data=partial_event(
                     partial_image_index=index,

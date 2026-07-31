@@ -1610,12 +1610,12 @@ class TestImageGenerationJobParameters:
 
 @pytest.mark.local
 class TestStreamGeneratorPartialImages:
-    """stream_generator: partial images are numbered per source image, starting at 1.
+    """stream_generator: partial images are numbered per source image, from 0.
 
     No Bedrock backend sets ``partial=True`` today, so the branch is only
-    reachable from a stubbed stream. The emitted ``partial_image_index`` starts
-    at 1 even though ``ImageGenPartialImageEvent`` documents a 0-based index;
-    this test pins the implemented numbering.
+    reachable from a stubbed stream — which is exactly why the numbering needs
+    pinning: the first backend that streams previews would otherwise ship an
+    off-by-one index to every OpenAI SDK client.
 
     Ref: stdapi/routes/openai_images_generations.py:stream_generator
          stdapi/types/openai_images.py:ImageGenPartialImageEvent
@@ -1661,7 +1661,7 @@ class TestStreamGeneratorPartialImages:
         ]
         assert [event["b64_json"] for event in partials] == ["p0a", "p0b", "p1a"]
         # The counter restarts for every source image index.
-        assert [event["partial_image_index"] for event in partials] == [1, 2, 1]
+        assert [event["partial_image_index"] for event in partials] == [0, 1, 0]
         assert all(event["created_at"] == 11 for event in partials)
         assert all(event["size"] == "512x512" for event in partials)
         assert all(event["output_format"] == "png" for event in partials)

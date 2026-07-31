@@ -598,7 +598,7 @@ No release ships without the full suite passing against a real deployment of the
 - **Security scanning** of dependencies and container images, with the commercial image validated against AWS Security Hub's Foundational Security Best Practices
 
 !!! tip "Found something anyway?"
-    No suite catches everything. If you hit a compatibility difference between stdapi.ai and the API it mirrors, [tell us](contact.md) — that class of bug is treated as a defect, not as expected behaviour.
+    No suite catches everything. If you hit a compatibility difference between stdapi.ai and the API it mirrors, open an issue on [GitHub](https://github.com/stdapi-ai/stdapi.ai/issues) — or [email us](contact.md) if you would rather not report it publicly. That class of bug is treated as a defect, not as expected behaviour.
 
 ---
 

@@ -984,6 +984,32 @@ class TestAddPartNumberingUnit:
             "both parts must reach S3 under distinct part numbers"
         )
 
+    async def test_a_part_never_crosses_into_a_sibling_session(
+        self, stub_s3: _StubAddPartS3Client
+    ) -> None:
+        """Two sessions created back to back do not accept each other's parts.
+
+        The part id carries a fingerprint of its session, and that is the only
+        thing stopping a part from being completed against the wrong upload. The
+        session id opens with a millisecond timestamp, so a fingerprint sliced
+        off its front is identical for any two sessions created inside the same
+        millisecond -- which is what creating them back to back does.
+
+        Ref: stdapi/files/_multipart.py:_upload_fingerprint
+        """
+        first = await _multipart.create_multipart_session(
+            "a.bin", "text/plain", "assistants", 8
+        )
+        second = await _multipart.create_multipart_session(
+            "b.bin", "text/plain", "assistants", 8
+        )
+
+        part_of_second = _multipart._make_part_id(second.upload_id, 3)  # noqa: SLF001
+
+        with pytest.raises(ApiError, match="does not belong to upload"):
+            _multipart._extract_part_number(part_of_second, first.upload_id)  # noqa: SLF001
+        assert _multipart._extract_part_number(part_of_second, second.upload_id) == 3  # noqa: SLF001
+
     async def test_part_uploaded_by_another_instance_advances_the_number(
         self, stub_s3: _StubAddPartS3Client
     ) -> None:
@@ -1907,3 +1933,830 @@ class TestOpenAIFilesJsonBody:
         assert body["object"] == "file"
         assert body["bytes"] == 11
         openai_client.files.delete(body["id"])
+
+
+def _recording_upload_file(calls: list[dict[str, Any]]) -> Any:  # noqa: ANN401
+    """Build a fake ``upload_file`` that records every call instead of reaching S3.
+
+    Args:
+        calls: List each call appends its ``file``/``purpose``/``expires_after`` to.
+
+    Returns:
+        A replacement for ``stdapi.routes.openai_files.upload_file``.
+    """
+
+    async def fake_upload_file(
+        file: object, purpose: str | None = None, expires_after: int | None = None
+    ) -> FileRecord:
+        calls.append({"file": file, "purpose": purpose, "expires_after": expires_after})
+        return FileRecord(
+            file_id="a" * 32,
+            filename="t.txt",
+            content_type="text/plain",
+            purpose=purpose or "",
+            size=5,
+            created_at=datetime.now(UTC),
+            expires_at=None,
+        )
+
+    return fake_upload_file
+
+
+class _StubListS3Client:
+    """Stub S3 client serving a fixed key set to the listing scan and its HeadObject fan-out.
+
+    ``list_objects_v2`` honours ``StartAfter`` (the ascending fast path) and always
+    reports a single non-truncated page, which is enough for the listing paths that
+    scan every key before slicing in Python.
+    """
+
+    def __init__(self, keys: list[str], purposes: dict[str, str] | None = None) -> None:
+        self.keys = sorted(keys)
+        self.purposes = purposes or {}
+
+    async def list_objects_v2(self, **kwargs: object) -> dict[str, Any]:
+        start_after = cast("str | None", kwargs.get("StartAfter"))
+        return {
+            "Contents": [
+                {"Key": key}
+                for key in self.keys
+                if start_after is None or key > start_after
+            ],
+            "IsTruncated": False,
+        }
+
+    async def head_object(self, **kwargs: object) -> dict[str, Any]:
+        key = cast("str", kwargs["Key"])
+        return {
+            "ContentLength": 3,
+            "LastModified": datetime.now(UTC),
+            "Metadata": {
+                "purpose": self.purposes.get(key, "user_data"),
+                "expires-at": "",
+            },
+            "ContentDisposition": 'attachment; filename="f.txt"',
+            "ContentType": "text/plain",
+        }
+
+
+@pytest.mark.local
+class TestListFilesDescendingCursorUnit:
+    """The ``after`` cursor under the default ``order=desc`` (unit, stubbed S3).
+
+    ``desc`` is the default order and the one the OpenAI SDK auto-paginates with,
+    yet it takes a different branch from ``asc``: instead of handing the cursor to
+    the storage scan, it scans everything and keeps only the keys sorting strictly
+    below the cursor. A wrong comparison there re-returns the cursor file or drops
+    a page silently rather than failing.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/files/_core.py:list_files
+    """
+
+    @pytest.fixture
+    def stored(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[_StubListS3Client, list[str]]:
+        """Store three files, oldest first, behind a stubbed S3 client.
+
+        Returns:
+            The stub client and the three bare payloads in creation order.
+        """
+        payloads = sorted(_core.encode_id_payload("bucket") for _ in range(3))
+        stub = _StubListS3Client([_core.file_id_s3_key(p) for p in payloads])
+        monkeypatch.setattr(_core, "get_client", lambda *_: stub)
+        monkeypatch.setattr(_core, "_require_bucket", lambda: "bucket")
+        monkeypatch.setattr(_core, "BUCKET_TO_REGION", {"bucket": "us-east-1"})
+        return stub, payloads
+
+    async def test_desc_after_returns_the_older_files_newest_first(
+        self, stored: tuple[_StubListS3Client, list[str]]
+    ) -> None:
+        """``after`` excludes the cursor itself and yields only files created before it.
+
+        The cursor is the newest of the three, so a correct descending page is the
+        two older ones, newest first; returning the cursor or reversing the pair
+        would both fail here.
+
+        Ref: stdapi/files/_core.py:list_files
+        """
+        _stub, payloads = stored
+
+        records, has_more = await _core.list_files(payloads[2], None, 100, "desc", None)
+
+        assert [r.file_id for r in records] == [payloads[1], payloads[0]]
+        assert has_more is False
+
+    async def test_desc_after_reports_has_more_on_a_truncated_page(
+        self, stored: tuple[_StubListS3Client, list[str]]
+    ) -> None:
+        """``has_more`` counts the files left below the cursor, not the whole bucket.
+
+        Two files sit below the cursor and only one fits the page, so ``has_more``
+        must be true; a count taken before the cursor filter would be true here too,
+        which is why the complementary full-page case above asserts it is false.
+
+        Ref: stdapi/files/_core.py:list_files
+        """
+        _stub, payloads = stored
+
+        records, has_more = await _core.list_files(payloads[2], None, 1, "desc", None)
+
+        assert [r.file_id for r in records] == [payloads[1]]
+        assert has_more is True
+
+    async def test_desc_after_combined_with_the_purpose_filter(
+        self, stored: tuple[_StubListS3Client, list[str]]
+    ) -> None:
+        """The purpose filter and the ``after`` cursor both apply, still newest first.
+
+        A purpose filter routes the page through a separate slice, so the cursor
+        exclusion has to survive it: the newest ``batch`` file is the cursor and
+        must not come back.
+
+        Ref: stdapi/files/_core.py:list_files
+        """
+        stub, payloads = stored
+        stub.purposes = {
+            _core.file_id_s3_key(payloads[0]): "batch",
+            _core.file_id_s3_key(payloads[1]): "user_data",
+            _core.file_id_s3_key(payloads[2]): "batch",
+        }
+
+        records, _has_more = await _core.list_files(
+            payloads[2], None, 100, "desc", "batch"
+        )
+
+        assert [r.file_id for r in records] == [payloads[0]]
+
+
+@pytest.mark.local
+class TestListFilesEnvelopeCursorsUnit:
+    """GET /v1/files reports the page's edge IDs (unit, stubbed storage).
+
+    ``first_id``/``last_id`` are what a client feeds back as the next ``after``
+    cursor, so they must be the prefixed IDs of the page's own first and last
+    entries, and a defined empty-string sentinel when the page is empty.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/routes/openai_files.py:list_files_endpoint
+    """
+
+    @staticmethod
+    def _stub_list_files(
+        monkeypatch: pytest.MonkeyPatch, payloads: list[str], *, has_more: bool = False
+    ) -> dict[str, Any]:
+        """Return the records for *payloads* from the route's storage call.
+
+        Returns:
+            The dict the stub records the received query arguments into.
+        """
+        captured: dict[str, Any] = {}
+
+        async def fake_list_files(
+            after: str | None,
+            before: str | None,
+            limit: int,
+            order: str,
+            purpose: str | None,
+        ) -> tuple[list[FileRecord], bool]:
+            captured.update(
+                after=after, before=before, limit=limit, order=order, purpose=purpose
+            )
+            return [
+                FileRecord(
+                    file_id=payload,
+                    filename="f.txt",
+                    content_type="text/plain",
+                    purpose="user_data",
+                    size=3,
+                    created_at=datetime.now(UTC),
+                    expires_at=None,
+                )
+                for payload in payloads
+            ], has_more
+
+        monkeypatch.setattr(openai_files_routes, "list_files", fake_list_files)
+        return captured
+
+    def test_cursors_are_the_first_and_last_ids_of_the_page(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A populated page advertises its own edge IDs and echoes ``has_more``.
+
+        Ref: stdapi/routes/openai_files.py:list_files_endpoint
+        """
+        payloads = ["a" * 32, "b" * 32, "c" * 32]
+        self._stub_list_files(monkeypatch, payloads, has_more=True)
+
+        response = app_client.get("/v1/files")
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [f["id"] for f in body["data"]] == [f"file-{p}" for p in payloads]
+        assert body["first_id"] == body["data"][0]["id"]
+        assert body["last_id"] == body["data"][-1]["id"]
+        assert body["has_more"] is True
+
+    def test_empty_page_reports_empty_string_cursors(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An empty page still carries both cursor fields, as empty strings.
+
+        The fields are declared non-nullable, so omitting them or sending null
+        would break a client that reads them unconditionally.
+
+        Ref: stdapi/types/openai_files.py:ListFilesResponse
+        """
+        self._stub_list_files(monkeypatch, [])
+
+        response = app_client.get("/v1/files")
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["data"] == []
+        assert body["first_id"] == ""
+        assert body["last_id"] == ""
+
+
+@pytest.mark.local
+class TestListFilesQueryValidationUnit:
+    """GET /v1/files query bounds and defaults (unit, storage never reached).
+
+    ``limit`` is bounded at both ends and the cursor is pattern-checked, so a bad
+    page request is refused with an OpenAI-shaped 400 before any listing work.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/routes/openai_files.py:list_files_endpoint
+    """
+
+    @staticmethod
+    def _reject(app_client: TestClient, params: dict[str, Any]) -> str:
+        """Return the error message of a rejected listing request.
+
+        Returns:
+            The ``error.message`` string of the 400 response.
+        """
+        response = app_client.get("/v1/files", params=params)
+        assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        return str(error["message"])
+
+    def test_limit_below_one_is_rejected(self, app_client: TestClient) -> None:
+        """``limit=0`` is refused: a page has to hold at least one object.
+
+        Ref: stdapi/routes/openai_files.py:list_files_endpoint
+        """
+        assert "greater than or equal to 1" in self._reject(app_client, {"limit": 0})
+
+    def test_limit_above_the_maximum_is_rejected(self, app_client: TestClient) -> None:
+        """``limit=10001`` is refused rather than silently clamped.
+
+        Ref: stdapi/routes/openai_files.py:list_files_endpoint
+        """
+        assert "less than or equal to 10000" in self._reject(
+            app_client, {"limit": 10001}
+        )
+
+    def test_malformed_cursor_is_rejected(self, app_client: TestClient) -> None:
+        """An ``after`` value that is not a file ID is refused before any listing.
+
+        Ref: stdapi/types/__init__.py:FILE_ID_PATTERN
+        """
+        assert "pattern" in self._reject(app_client, {"after": "not-a-file-id"})
+
+    @pytest.mark.parametrize("limit", [1, 10000])
+    def test_limit_bounds_themselves_are_accepted(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch, limit: int
+    ) -> None:
+        """Both ends of the accepted range are inclusive and reach the listing.
+
+        Ref: stdapi/routes/openai_files.py:list_files_endpoint
+        """
+        captured = TestListFilesEnvelopeCursorsUnit._stub_list_files(monkeypatch, [])  # noqa: SLF001
+
+        response = app_client.get("/v1/files", params={"limit": limit})
+
+        assert response.status_code == 200, response.text
+        assert captured["limit"] == limit
+
+    def test_defaults_are_the_maximum_page_and_descending_order(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Omitting both knobs lists the newest files first, up to the full 10 000.
+
+        Ref: stdapi/routes/openai_files.py:list_files_endpoint
+        """
+        captured = TestListFilesEnvelopeCursorsUnit._stub_list_files(monkeypatch, [])  # noqa: SLF001
+
+        response = app_client.get("/v1/files")
+
+        assert response.status_code == 200, response.text
+        assert captured["limit"] == 10000
+        assert captured["order"] == "desc"
+        assert captured["after"] is None
+        assert captured["purpose"] is None
+
+
+@pytest.mark.local
+class TestOpenAIFilesPurposeValidationUnit:
+    """POST /v1/files validates ``purpose`` against the OpenAI enum (unit, no AWS).
+
+    The stored purpose is what the listing filter matches on, so an unrecognised
+    value would produce a file no ``purpose`` filter can ever return.
+
+    Ref: https://developers.openai.com/api/reference/resources/files
+         stdapi/types/openai_files.py:FilePurpose
+    """
+
+    @pytest.mark.parametrize(
+        "purpose", ["assistants", "batch", "fine-tune", "vision", "user_data", "evals"]
+    )
+    def test_every_documented_purpose_is_accepted(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch, purpose: str
+    ) -> None:
+        """All six upstream purposes reach storage and are echoed back unchanged.
+
+        Ref: stdapi/types/openai_files.py:FilePurpose
+        """
+        calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            openai_files_routes, "upload_file", _recording_upload_file(calls)
+        )
+
+        response = app_client.post(
+            "/v1/files",
+            files={"file": ("t.txt", b"hello", "text/plain")},
+            data={"purpose": purpose},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["purpose"] == purpose
+        assert [call["purpose"] for call in calls] == [purpose]
+
+    def test_unknown_purpose_is_rejected_on_the_multipart_form(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unrecognised form ``purpose`` is refused, and nothing is stored.
+
+        The message lists the accepted values so the caller can correct the
+        request without consulting the schema.
+
+        Ref: stdapi/routes/openai_files.py:upload
+        """
+        calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            openai_files_routes, "upload_file", _recording_upload_file(calls)
+        )
+
+        response = app_client.post(
+            "/v1/files",
+            files={"file": ("t.txt", b"hello", "text/plain")},
+            data={"purpose": "not_a_purpose"},
+        )
+
+        assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "purpose" in error["message"]
+        assert "'user_data'" in error["message"], error
+        assert calls == [], "a rejected purpose must not reach storage"
+
+    def test_unknown_purpose_is_rejected_on_the_json_body(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The JSON body enforces the same enum as the multipart form.
+
+        Ref: stdapi/types/openai_files.py:FileUploadJsonBody
+        """
+        calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            openai_files_routes, "upload_file", _recording_upload_file(calls)
+        )
+
+        response = app_client.post(
+            "/v1/files",
+            json={
+                "file": "data:text/plain;base64,aGVsbG8=",
+                "purpose": "not_a_purpose",
+            },
+        )
+
+        assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "purpose" in error["message"]
+        assert calls == [], "a rejected purpose must not reach storage"
+
+    def test_omitted_purpose_defaults_to_assistants(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A body with no ``purpose`` stores ``assistants``, matching upstream's default.
+
+        Ref: stdapi/routes/openai_files.py:upload
+        """
+        calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            openai_files_routes, "upload_file", _recording_upload_file(calls)
+        )
+
+        response = app_client.post(
+            "/v1/files", files={"file": ("t.txt", b"hello", "text/plain")}
+        )
+
+        assert response.status_code == 200, response.text
+        assert [call["purpose"] for call in calls] == ["assistants"]
+
+
+@pytest.mark.local
+class TestOpenAIFilesExpiresAfterAnchorUnit:
+    """POST /v1/files accepts ``created_at`` as the only expiry anchor (unit, no AWS).
+
+    The anchor names what the TTL is counted from; the gateway only ever counts
+    from creation time, so any other anchor would silently change the meaning of
+    ``expires_after[seconds]``. Both spellings are checked: the OpenAI SDK sends
+    the bracketed ``expires_after[anchor]``, which FastAPI's Form aliasing does
+    not bind, so the route reads it back off the parsed form itself.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/routes/openai_files.py:upload
+    """
+
+    def test_unsupported_anchor_is_rejected_on_the_multipart_form(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``updated_at`` is refused, naming the anchor the API does support.
+
+        Ref: stdapi/routes/openai_files.py:upload
+        """
+        calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            openai_files_routes, "upload_file", _recording_upload_file(calls)
+        )
+
+        response = app_client.post(
+            "/v1/files",
+            files={"file": ("t.txt", b"hello", "text/plain")},
+            data={
+                "purpose": "assistants",
+                "expires_after_anchor": "updated_at",
+                "expires_after_seconds": "3600",
+            },
+        )
+
+        assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "expires_after_anchor" in error["message"]
+        assert "'created_at'" in error["message"], error
+        assert calls == [], "a rejected anchor must not reach storage"
+
+    def test_unsupported_anchor_is_rejected_in_the_sdk_bracketed_form(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``expires_after[anchor]`` — the only spelling a real client sends — is validated.
+
+        FastAPI's ``Form(validation_alias=...)`` does not bind the bracketed name,
+        so without the route's own fallback this request is accepted with any
+        anchor at all and the file quietly expires from the wrong instant.
+
+        Ref: stdapi/routes/openai_files.py:upload
+        """
+        calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            openai_files_routes, "upload_file", _recording_upload_file(calls)
+        )
+
+        response = app_client.post(
+            "/v1/files",
+            files={"file": ("t.txt", b"hello", "text/plain")},
+            data={
+                "purpose": "assistants",
+                "expires_after[anchor]": "updated_at",
+                "expires_after[seconds]": "3600",
+            },
+        )
+
+        assert response.status_code == 400, response.text
+        assert "'created_at'" in response.json()["error"]["message"]
+        assert calls == [], "a rejected anchor must not reach storage"
+
+    def test_supported_anchor_is_accepted_in_the_sdk_bracketed_form(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The bracketed anchor the API does support still goes through with its TTL.
+
+        Ref: stdapi/routes/openai_files.py:upload
+        """
+        calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            openai_files_routes, "upload_file", _recording_upload_file(calls)
+        )
+
+        response = app_client.post(
+            "/v1/files",
+            files={"file": ("t.txt", b"hello", "text/plain")},
+            data={
+                "purpose": "assistants",
+                "expires_after[anchor]": "created_at",
+                "expires_after[seconds]": "3600",
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert calls
+        assert calls[0]["expires_after"] == 3600
+
+    def test_unsupported_anchor_is_rejected_on_the_json_body(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The JSON body enforces the same single anchor as the multipart form.
+
+        Ref: stdapi/types/openai_files.py:FileUploadJsonBody
+        """
+        calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            openai_files_routes, "upload_file", _recording_upload_file(calls)
+        )
+
+        response = app_client.post(
+            "/v1/files",
+            json={
+                "file": "data:text/plain;base64,aGVsbG8=",
+                "expires_after_anchor": "updated_at",
+                "expires_after_seconds": 3600,
+            },
+        )
+
+        assert response.status_code == 400, response.text
+        assert "expires_after_anchor" in response.json()["error"]["message"]
+        assert calls == []
+
+    def test_created_at_anchor_is_accepted_with_its_ttl(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The supported anchor is not rejected, and the TTL beside it is honoured.
+
+        Ref: stdapi/routes/openai_files.py:upload
+        """
+        calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            openai_files_routes, "upload_file", _recording_upload_file(calls)
+        )
+
+        response = app_client.post(
+            "/v1/files",
+            json={
+                "file": "data:text/plain;base64,aGVsbG8=",
+                "expires_after_anchor": "created_at",
+                "expires_after_seconds": 3600,
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert [call["expires_after"] for call in calls] == [3600]
+
+
+@pytest.mark.local
+class TestOpenAIFilesJsonBodyReferenceSourcesUnit:
+    """POST /v1/files with a URL-shaped ``file`` value (unit, nothing is fetched).
+
+    A JSON ``file`` may reference remote content instead of carrying it inline;
+    the reference has to be recognised as such (a URL fetched server-side, an S3
+    URI checked against the allowlist) rather than mistaken for inline base64.
+
+    Ref: https://stdapi.ai/api_openai_files/
+         stdapi/types/openai_files.py:FileUploadJsonBody
+    """
+
+    def test_https_url_reaches_storage_as_a_url_reference(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An HTTPS URL is kept as a remote reference, not decoded as base64.
+
+        The upload receives an input whose representation is the URL itself, with
+        the query string redacted so a signed URL never reaches a log.
+
+        Ref: stdapi/input_file.py:InputFile._normalize_and_detect_origin
+        """
+        calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            openai_files_routes, "upload_file", _recording_upload_file(calls)
+        )
+
+        response = app_client.post(
+            "/v1/files",
+            json={
+                "file": "https://example.com/document.pdf?signature=secret",
+                "purpose": "assistants",
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        (call,) = calls
+        assert repr(call["file"]).startswith("https://example.com/document.pdf")
+        assert "secret" not in repr(call["file"])
+
+    def test_s3_uri_outside_the_allowlist_is_rejected(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An ``s3://`` URI naming an unlisted bucket is refused with a 400.
+
+        This is the SSRF guard for S3 references: without it any caller could have
+        the gateway read an arbitrary bucket with the server's own credentials.
+
+        Ref: stdapi/input_file.py:InputFile._normalize_and_detect_origin
+        """
+        calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            openai_files_routes, "upload_file", _recording_upload_file(calls)
+        )
+
+        response = app_client.post(
+            "/v1/files",
+            json={"file": "s3://an-unconfigured-external-bucket-xyz/key.pdf"},
+        )
+
+        assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "an-unconfigured-external-bucket-xyz" in error["message"], error
+        assert calls == []
+
+
+@pytest.mark.local
+class TestMultipartIdDerivationUnit:
+    """An upload session and the file it produces share one payload (unit, stubbed S3).
+
+    ``upload_<payload>`` becomes ``file-<payload>``, which is what lets any
+    instance resolve the finished file's storage location from the upload ID alone
+    with no shared state; a session whose file ID were minted independently would
+    break that.
+
+    Ref: https://developers.openai.com/api/reference/resources/uploads
+         stdapi/files/_multipart.py:_multipart_ids_from_bucket
+    """
+
+    @pytest.fixture
+    def stub_s3(self, monkeypatch: pytest.MonkeyPatch) -> _StubCompleteS3Client:
+        """Patch the S3 client, bucket resolution, and bucket lookup with stubs."""
+        stub = _StubCompleteS3Client()
+        monkeypatch.setattr(_multipart, "get_client", lambda *_: stub)
+        monkeypatch.setattr(_multipart, "_require_bucket", lambda: "bucket")
+        monkeypatch.setattr(
+            _multipart, "resolve_file_bucket", lambda _payload: "bucket"
+        )
+        monkeypatch.setattr(_multipart, "track_temporary_s3_objects", lambda *_: None)
+        return stub
+
+    def test_the_pair_is_one_payload_under_two_prefixes(self) -> None:
+        """The generated upload ID is the file payload with an ``upload_`` prefix.
+
+        Ref: stdapi/files/_multipart.py:_multipart_ids_from_bucket
+        """
+        upload_id, payload = _multipart._multipart_ids_from_bucket("bucket")  # noqa: SLF001
+
+        assert upload_id == f"upload_{payload}"
+        assert len(payload) == 32
+        assert _multipart._file_id_from_upload_id(upload_id) == payload  # noqa: SLF001
+
+    async def test_a_session_exposes_the_derived_file_id_and_key(
+        self, stub_s3: _StubCompleteS3Client
+    ) -> None:
+        """A created session already knows the ID and storage key of its future file.
+
+        Ref: stdapi/files/_multipart.py:create_multipart_session
+        """
+        session = await _multipart.create_multipart_session(
+            "f.bin", "text/plain", "assistants", 1
+        )
+
+        assert session.upload_id.startswith("upload_")
+        assert session.file_id == session.upload_id.removeprefix("upload_")
+        assert session.s3_key == _core.file_id_s3_key(session.file_id)
+
+    async def test_completion_returns_the_file_derived_from_the_upload_id(
+        self, stub_s3: _StubCompleteS3Client
+    ) -> None:
+        """The assembled file carries the session's payload, so ``upload_X`` gives ``file-X``.
+
+        Ref: stdapi/files/_multipart.py:complete_multipart_session
+        """
+        session = await _multipart.create_multipart_session(
+            "f.bin", "text/plain", "assistants", 7
+        )
+        part_1 = _multipart._make_part_id(session.upload_id, 1)  # noqa: SLF001
+        stub_s3.parts = {1: ("etag-1", 7)}
+
+        completed_session, record = await _multipart.complete_multipart_session(
+            session.upload_id, [part_1]
+        )
+
+        assert completed_session.upload_id == session.upload_id
+        assert record.file_id == _multipart._file_id_from_upload_id(session.upload_id)  # noqa: SLF001
+
+    async def test_a_part_id_from_another_fingerprint_is_refused(
+        self, stub_s3: _StubCompleteS3Client
+    ) -> None:
+        """A part ID whose embedded fingerprint is not this session's is refused.
+
+        The rejection names both the part and the upload it was offered to, and
+        happens before the assembly call, so a mis-addressed part can never join
+        another session's file.
+
+        Ref: stdapi/files/_multipart.py:_extract_part_number
+        """
+        session = await _multipart.create_multipart_session(
+            "f.bin", "text/plain", "assistants", 7
+        )
+        foreign_part = "part_" + "a" * 32
+        stub_s3.parts = {1: ("etag-1", 7)}
+
+        with pytest.raises(ApiError) as exc_info:
+            await _multipart.complete_multipart_session(
+                session.upload_id, [foreign_part]
+            )
+
+        assert exc_info.value.status == 400
+        message = str(exc_info.value)
+        assert foreign_part in message
+        assert session.upload_id in message
+        assert stub_s3.complete_called is False
+
+
+@pytest.mark.local
+class TestCompleteMultipartSessionMissingPartUnit:
+    """Completing with a part number that was never uploaded (unit, stubbed S3).
+
+    A part ID can carry this session's own fingerprint and still name a part the
+    session does not hold — a caller that dropped an ``add part`` response, or
+    retried one that never landed. It has to be a 400 naming the part rather than
+    an assembly attempt that fails deeper down.
+
+    Ref: https://developers.openai.com/api/reference/resources/uploads
+         stdapi/files/_multipart.py:complete_multipart_session
+    """
+
+    @pytest.fixture
+    def stub_s3(self, monkeypatch: pytest.MonkeyPatch) -> _StubCompleteS3Client:
+        """Patch the S3 client, bucket resolution, and bucket lookup with stubs."""
+        stub = _StubCompleteS3Client()
+        monkeypatch.setattr(_multipart, "get_client", lambda *_: stub)
+        monkeypatch.setattr(_multipart, "_require_bucket", lambda: "bucket")
+        monkeypatch.setattr(
+            _multipart, "resolve_file_bucket", lambda _payload: "bucket"
+        )
+        monkeypatch.setattr(_multipart, "track_temporary_s3_objects", lambda *_: None)
+        return stub
+
+    async def test_never_uploaded_part_number_is_rejected(
+        self, stub_s3: _StubCompleteS3Client
+    ) -> None:
+        """A valid part ID for a number the session never received is refused.
+
+        The fingerprint check passes, so this exercises the missing-part branch
+        rather than the "does not belong to this upload" one: the message says the
+        part was not uploaded and names its number.
+
+        Ref: stdapi/files/_multipart.py:complete_multipart_session
+        """
+        min_size = _multipart._MIN_PART_SIZE  # noqa: SLF001
+        session = await _multipart.create_multipart_session(
+            "f.bin", "text/plain", "assistants", min_size + 10
+        )
+        part_1 = _multipart._make_part_id(session.upload_id, 1)  # noqa: SLF001
+        part_2 = _multipart._make_part_id(session.upload_id, 2)  # noqa: SLF001
+        stub_s3.parts = {1: ("etag-1", min_size)}
+
+        with pytest.raises(ApiError) as exc_info:
+            await _multipart.complete_multipart_session(
+                session.upload_id, [part_1, part_2]
+            )
+
+        assert exc_info.value.status == 400
+        message = str(exc_info.value)
+        assert "not uploaded" in message
+        assert part_2 in message, "the rejection must name the missing part"
+        assert "does not belong" not in message
+        assert stub_s3.complete_called is False
+
+    async def test_a_held_part_still_completes(
+        self, stub_s3: _StubCompleteS3Client
+    ) -> None:
+        """The same session completes once the part it names is actually held.
+
+        Without this counterpart the rejection above could come from any unrelated
+        failure in the completion path.
+
+        Ref: stdapi/files/_multipart.py:complete_multipart_session
+        """
+        session = await _multipart.create_multipart_session(
+            "f.bin", "text/plain", "assistants", 10
+        )
+        part_1 = _multipart._make_part_id(session.upload_id, 1)  # noqa: SLF001
+        stub_s3.parts = {1: ("etag-1", 10)}
+
+        await _multipart.complete_multipart_session(session.upload_id, [part_1])
+
+        assert stub_s3.complete_called is True

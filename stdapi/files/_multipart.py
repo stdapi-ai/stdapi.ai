@@ -8,11 +8,11 @@ does not expose ``ContentType``, ``ContentDisposition``, or ``Metadata``).
 ``upload_id``; ``expires_at`` reflects the S3 lifecycle cleanup window (1 day).
 The marker is deleted in the background on completion or cancellation.
 
-The S3 multipart upload ID is resolved via a per-process LRU cache
-(``upload_id → (s3_upload_id, part_count)``), making the happy path for
-:func:`add_part` a single S3 ``upload_part`` call.  ALB sticky sessions
-maximise cache hits across sequential parts.  Concurrent calls from different
-pods may race on the part number (last writer wins); sequential use is safe.
+The S3 multipart upload ID is resolved via a per-process cache
+(``upload_id → (s3_upload_id, expiry)``), sparing :func:`add_part` a
+``list_multipart_uploads`` call; ALB sticky sessions maximise cache hits across
+sequential parts.  Concurrent calls from different pods may race on the part
+number (last writer wins); sequential use is safe.
 
 ID formats
 ----------
@@ -24,6 +24,7 @@ ID formats
 from asyncio import gather
 from contextlib import suppress
 from dataclasses import dataclass
+from hashlib import sha256
 from time import monotonic
 from typing import TYPE_CHECKING, Never
 from uuid import uuid4
@@ -104,8 +105,14 @@ def _multipart_ids_from_bucket(bucket: str) -> tuple[str, str]:
 
 
 def _upload_fingerprint(upload_id: str) -> str:
-    """Return the 16-hex-char fingerprint for *upload_id* (first 8 bytes of its payload)."""
-    return decode_id_payload(upload_id[7:])[:8].hex()
+    """Return the 16-hex-char fingerprint for *upload_id*.
+
+    Digested from the whole payload rather than sliced out of it: the payload
+    opens with the uuid7 millisecond timestamp, so two sessions created in the
+    same millisecond share every leading byte and would share a fingerprint,
+    letting a part addressed to one session pass the ownership check of the other.
+    """
+    return sha256(decode_id_payload(upload_id[7:])).digest()[:8].hex()
 
 
 def _multipart_meta_key(upload_id: str) -> str:
@@ -402,9 +409,8 @@ async def add_part(upload_id: str, data: bytes) -> tuple[str, int]:
     s3: S3Client = get_client("s3", BUCKET_TO_REGION.get(bucket))
 
     s3_upload_id = await _require_s3_upload_id(upload_id, bucket, s3_key, s3)
-    # Numbering from the parts S3 holds rather than from a process-local
-    # counter: another instance may have served the previous part, and reusing
-    # its number would overwrite it.
+    # Numbering from the parts S3 holds: another instance may have served the
+    # previous part, and reusing its number would overwrite it.
     parts = await _list_all_parts(s3, bucket, s3_key, s3_upload_id)
     part_number = max(parts, default=0) + 1
     if part_number > _MAX_PART_NUMBER:

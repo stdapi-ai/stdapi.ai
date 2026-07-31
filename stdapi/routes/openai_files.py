@@ -35,6 +35,8 @@ from stdapi.utils import missing_file_error, validation_error_handler
 _EXPIRES_AFTER_SECONDS_MIN = 3600
 #: Maximum accepted value (seconds) for ``expires_after[seconds]`` (30 days).
 _EXPIRES_AFTER_SECONDS_MAX = 2592000
+#: The only anchor ``expires_after[anchor]`` accepts.
+_EXPIRES_AFTER_ANCHOR = "created_at"
 
 
 def _strip(fid: str) -> str:
@@ -199,7 +201,7 @@ async def upload(
             )
         ),
     ] = "assistants",
-    expires_after_anchor: Annotated[  # noqa: ARG001
+    expires_after_anchor: Annotated[
         Literal["created_at"] | None,
         Form(
             validation_alias=AliasChoices(
@@ -253,6 +255,16 @@ async def upload(
         )
     if file is None:
         missing_file_error()
+    # The bracketed names are what the OpenAI SDK sends and what FastAPI's Form
+    # aliasing does not bind, so both are read back off the parsed form.
+    if (
+        expires_after_anchor is None
+        and (raw_anchor := (await http_request.form()).get("expires_after[anchor]"))
+        is not None
+        and str(raw_anchor) != _EXPIRES_AFTER_ANCHOR
+    ):
+        msg = f"Input should be '{_EXPIRES_AFTER_ANCHOR}'"
+        raise ApiError(msg)
     if expires_after_seconds is None and (
         raw := (await http_request.form()).get("expires_after[seconds]")
     ):
