@@ -7,12 +7,25 @@ on:
     tags-ignore: ["**"]
   pull_request:
     branches: ["**"]
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: Which credentialed lane to run
+        type: choice
+        default: official
+        options: [official, aws, both]
+      pytest_args:
+        description: Extra pytest arguments (e.g. "-k cohere" or "--expensive")
+        type: string
+        default: ""
 permissions:
   contents: read
 
 jobs:
   offline:
     name: Offline test suite
+    # Skipped on manual runs, which exist to reach the credentialed lanes.
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
       FORCE_COLOR: "1"
@@ -52,3 +65,112 @@ jobs:
           path: coverage.xml
           if-no-files-found: error
           retention-days: 14
+
+  docs:
+    name: Documentation build
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      FORCE_COLOR: "1"
+      AWS_DEFAULT_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+          activate-environment: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --group docs
+
+      # --strict promotes broken internal links and missing nav entries to
+      # errors, which the deploy workflow would otherwise publish silently.
+      - name: Build the documentation
+        run: mkdocs build --strict
+
+  official-api:
+    name: Cross-validation against the vendor APIs
+    # Manual only: this lane spends real money on the OpenAI/Anthropic/Cohere
+    # APIs. It never runs on pull_request, so a fork can never reach the key.
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      contains(fromJSON('["official", "both"]'), inputs.lane)
+    runs-on: ubuntu-latest
+    # Holds the vendor API keys and gates the run behind a required reviewer.
+    environment: vendor-apis
+    env:
+      FORCE_COLOR: "1"
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CO_API_KEY: ${{ secrets.CO_API_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+          activate-environment: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --group test
+
+      # These tests assert that the gateway's behavior matches the vendors', so
+      # a failure here means upstream moved, not that the gateway regressed.
+      # PYTEST_ARGS reaches the shell through the environment rather than being
+      # interpolated into the script body, so the input cannot inject commands.
+      - name: Run the official-API lane
+        env:
+          PYTEST_ARGS: ${{ inputs.pytest_args }}
+        run: pytest --use-official-api -n 16 ${PYTEST_ARGS}
+
+  aws:
+    name: Live AWS test suite
+    # Manual only: every test issues billable Bedrock/Polly/Transcribe calls.
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      contains(fromJSON('["aws", "both"]'), inputs.lane)
+    runs-on: ubuntu-latest
+    environment: aws-test
+    permissions:
+      contents: read
+      # Required to mint the OIDC token exchanged for the test role.
+      id-token: write
+    env:
+      FORCE_COLOR: "1"
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      # Short-lived OIDC credentials: no long-lived access key is ever stored.
+      - name: Assume the test role
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_TEST_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-duration-seconds: 3600
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+          activate-environment: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --group test
+
+      # -n 16 matters: the suite is I/O-bound, and a low worker count turns a
+      # 90-second run into hours.
+      - name: Run the live suite
+        env:
+          PYTEST_ARGS: ${{ inputs.pytest_args }}
+        run: pytest -n 16 ${PYTEST_ARGS}
