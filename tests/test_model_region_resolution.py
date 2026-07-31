@@ -380,7 +380,10 @@ class TestRouteAndExecuteFailover:
             )
 
         assert excinfo.value.status == 400
-        assert str(excinfo.value) == "no profile"
+        assert "no profile" not in str(excinfo.value), (
+            "the routing diagnostic must stay server-side"
+        )
+        assert "not available" in str(excinfo.value)
         assert isinstance(excinfo.value.__cause__, ModelRegionUnavailableError)
 
 

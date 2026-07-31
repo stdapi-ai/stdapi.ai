@@ -337,10 +337,8 @@ async def create_video(
     description=(
         "Returns a paginated list of video generation jobs, newest first by "
         "default (OpenAI Videos API).\n\n"
-        "Jobs from every configured AWS region are merged into a single "
-        "listing. A job stays listed while AWS Bedrock retains its async "
-        "invocation record, independently of whether its video content still "
-        "exists."
+        "A job stays listed for as long as its generation record is "
+        "retained, independently of whether its video content still exists."
     ),
     response_description="A paginated list of Video objects.",
     response_model_exclude_none=True,

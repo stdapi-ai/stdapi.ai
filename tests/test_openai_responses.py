@@ -12,13 +12,15 @@ from itertools import pairwise
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from botocore.exceptions import ConnectionError as BotocoreConnectionError
 from openai import BadRequestError, NotFoundError, OpenAI
 
 from stdapi import usage
 from stdapi.config import SETTINGS
 from stdapi.models.chat._adapters._openai_common import JSON_OBJECT_SYSTEM_INSTRUCTION
+from stdapi.models.chat._adapters._openai_responses import _classify_stream_error
 from stdapi.models.chat._default import ChatModel
-from stdapi.types.openai_responses import ResponseCreateParams
+from stdapi.types.openai_responses import Response, ResponseCreateParams
 from stdapi.usage import record_bedrock_usage
 
 if TYPE_CHECKING:
@@ -116,8 +118,11 @@ class TestResponses:
     The gateway maps every request onto Bedrock Converse/ConverseStream, so the
     request-shaped fields of the returned Response object (``temperature``,
     ``top_p``, ``tool_choice``, ``tools``, ``text``, ``metadata``,
-    ``instructions``, ``service_tier``, ``parallel_tool_calls``) are echoed
-    from the request rather than computed by the backend.
+    ``instructions``, ``parallel_tool_calls``) are echoed from the request
+    rather than computed by the backend. ``service_tier`` is the exception: it
+    reports the tier actually served, which for ``"default"`` coincides with
+    the request but need not in general (see
+    ``TestServiceTierEchoesTheEffectiveTier``).
 
     Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
          stdapi/models/chat/_adapters/_openai_responses.py:_build_response_object
@@ -2237,7 +2242,7 @@ class TestInputTokensMantleRejection:
 
         assert response.status_code == 400, response.text
         error = response.json()["error"]
-        assert "Bedrock Mantle" in error["message"]
+        assert "not supported" in error["message"]
         assert error["type"] == "invalid_request_error"
         assert not counted, "CountTokens ran for a model it cannot resolve"
 
@@ -2732,4 +2737,131 @@ class TestJsonObjectSystemInstruction:
         assert (
             await self._captured_system_blocks(monkeypatch, request, request_log)
             is None
+        )
+
+
+@pytest.mark.local
+class TestServiceTierEchoesTheEffectiveTier:
+    """The response ``service_tier`` reports the tier actually used, not the request.
+
+    ``openai.types.responses.Response.service_tier`` documents that the response
+    body carries the tier the request was actually served with, which may differ
+    from the requested value -- ``"auto"`` (and any other value the gateway does
+    not map to a Bedrock tier) is always served as ``"default"``. This must match
+    what ``/v1/chat/completions`` and ``/v1/completions`` already report for the
+    same request.
+
+    Ref: installed ``openai`` package: openai.types.responses.response.Response.service_tier
+         stdapi/models/chat/_adapters/_openai_responses.py:_build_response_object
+    """
+
+    async def test_auto_is_reported_back_as_default(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """``service_tier="auto"`` is echoed as ``"default"``, the tier Bedrock served."""
+        del request_log
+
+        async def fake_converse(
+            _self: ChatModel, _bedrock_request: dict[str, Any]
+        ) -> dict[str, Any]:
+            return {
+                "output": {"message": {"role": "assistant", "content": []}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            }
+
+        monkeypatch.setattr(ChatModel, "converse", fake_converse)
+        request = ResponseCreateParams.model_validate(
+            {"model": "test-model", "input": "hi", "service_tier": "auto"}
+        )
+
+        response = await ChatModel("amazon.nova-2-lite-v1:0").create_response(
+            request, "resp-1", 0.0
+        )
+
+        assert isinstance(response, Response)
+        assert response.service_tier == "default"
+
+
+@pytest.mark.local
+class TestTopLogprobsReachesTheModel:
+    """``top_logprobs`` must reach the Bedrock request, not only the echoed response.
+
+    ``/v1/chat/completions`` forwards ``top_logprobs`` into
+    ``additionalModelRequestFields`` and lets Bedrock reject it as a 400 on
+    models that do not declare the field, rather than dropping it silently
+    (``test_unsupported_top_logprobs_error``). ``/v1/responses`` must do the
+    same instead of echoing a value the model never saw.
+
+    Ref: stdapi/models/chat/_adapters/_openai_responses.py:translate_request
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:translate_request
+    """
+
+    async def test_top_logprobs_is_forwarded_to_additional_request_fields(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """``top_logprobs`` lands in the Converse request's ``additionalModelRequestFields``."""
+        del request_log
+        captured: dict[str, Any] = {}
+
+        async def fake_converse(
+            _self: ChatModel, bedrock_request: dict[str, Any]
+        ) -> dict[str, Any]:
+            captured.update(bedrock_request)
+            return {
+                "output": {"message": {"role": "assistant", "content": []}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            }
+
+        monkeypatch.setattr(ChatModel, "converse", fake_converse)
+        request = ResponseCreateParams.model_validate(
+            {"model": "test-model", "input": "hi", "top_logprobs": 5}
+        )
+
+        await ChatModel("amazon.nova-2-lite-v1:0").create_response(
+            request, "resp-1", 0.0
+        )
+
+        assert captured["additionalModelRequestFields"]["top_logprobs"] == 5, (
+            "top_logprobs must reach the model, exactly as on /v1/chat/completions"
+        )
+
+
+@pytest.mark.local
+class TestStreamErrorHidesTheEndpointHost:
+    """A mid-stream connection error never leaks the Bedrock endpoint host.
+
+    ``botocore.exceptions.ConnectionError``/``HTTPClientError`` messages embed
+    the request's endpoint URL, so only a fixed, generic message may reach the
+    client; the raw text is still returned for server-side logging. Mirrors the
+    non-streaming path's handling of the same exception classes.
+
+    Ref: stdapi/models/chat/_adapters/_openai_responses.py:_classify_stream_error
+    """
+
+    def test_connection_error_message_is_not_sent_to_the_client(self) -> None:
+        """The client-facing message carries no endpoint URL, unlike the log message."""
+        exc = BotocoreConnectionError(
+            error=OSError(
+                'Connect timeout on endpoint URL: "https://bedrock-runtime.'
+                'us-east-1.amazonaws.com/model/test/converse"'
+            )
+        )
+
+        status, client_message, param, code, log_message, _level = (
+            _classify_stream_error(exc)
+        )
+
+        assert status == 503
+        assert "bedrock-runtime" not in client_message
+        assert "amazonaws.com" not in client_message
+        assert (
+            client_message
+            == "The service is temporarily unavailable. Retry the request."
+        )
+        assert param is None
+        assert code == "server_error"
+        assert "bedrock-runtime.us-east-1.amazonaws.com" in log_message, (
+            "the raw endpoint detail must still reach the server-side log"
         )

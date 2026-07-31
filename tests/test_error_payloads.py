@@ -610,8 +610,10 @@ class TestBotocoreClientErrorEnvelope:
     """``handle_botocore_client_error`` maps an AWS error code onto the OpenAI envelope.
 
     Regression coverage for BUG-2 (bogus ``param``) and BUG-3 (S3 multipart
-    errors falling through to 502). The AWS error code is surfaced as ``code``,
-    never as ``param``, which OpenAI clients read as a request-field name.
+    errors falling through to 502). The raw AWS error code is never surfaced
+    to the client, neither as ``param`` (which OpenAI clients read as a
+    request-field name) nor as ``code`` (an AWS-internal identifier upstream
+    never emits there); ``code`` stays null.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
          stdapi/main.py:handle_botocore_client_error
@@ -619,11 +621,12 @@ class TestBotocoreClientErrorEnvelope:
     """
 
     async def test_client_error_param_is_not_the_internal_error_type(self) -> None:
-        """``ThrottlingException`` becomes a 429 whose ``param`` stays null.
+        """``ThrottlingException`` becomes a 429 whose ``param``/``code`` stay null.
 
         The second element of the ``AWS_ERROR_MAP`` entry is the gateway's
         internal error type, not a request field; leaking it as ``param`` would
-        make OpenAI clients report a non-existent parameter.
+        make OpenAI clients report a non-existent parameter. The AWS exception
+        code itself must not reach ``code`` either.
         """
         response = await handle_botocore_client_error(
             _openai_request(), make_client_error("ThrottlingException", message="boom")
@@ -632,7 +635,7 @@ class TestBotocoreClientErrorEnvelope:
         assert response.status_code == 429
         assert err["type"] == "rate_limit_error"
         assert err["param"] is None
-        assert err["code"] == "ThrottlingException"
+        assert err["code"] is None
 
     @pytest.mark.parametrize("code", ["EntityTooSmall", "InvalidPart"])
     async def test_s3_multipart_client_errors_map_to_400(self, code: str) -> None:
@@ -640,6 +643,7 @@ class TestBotocoreClientErrorEnvelope:
 
         These codes mean the *client* sent bad part data, so they must not fall
         through to the ``(502, "server_error")`` default for unmapped AWS codes.
+        The raw S3 code is never surfaced as ``code``.
 
         Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
         """
@@ -650,7 +654,7 @@ class TestBotocoreClientErrorEnvelope:
         assert response.status_code == 400
         assert err["type"] == "invalid_request_error"
         assert err["param"] is None
-        assert err["code"] == code
+        assert err["code"] is None
 
 
 def _tagged_request(tag: str) -> Request:

@@ -2363,7 +2363,14 @@ async def route_and_execute[T](
         try:
             return await fn(candidates[0])
         except ModelRegionUnavailableError as exc:
-            raise ApiError(str(exc)) from exc
+            # The exception text is a routing diagnostic naming regions and
+            # profiles; it belongs in the log, not in the client's response.
+            log_error_details(str(exc), level="warning")
+            msg = (
+                "The requested model is not available. Select a different model, "
+                "or check that access to this one has been granted."
+            )
+            raise ApiError(msg) from exc
 
     last_exc: (
         ClientError
@@ -3097,5 +3104,7 @@ async def _wait_for_async_invocation_completion(
                     .split("/", 1)[1]
                 )
             case "Failed":
-                raise ApiError(response["failureMessage"])
+                log_error_details(response["failureMessage"], status=502)
+                msg = "The request could not be completed. Retry the request."
+                raise ApiError(msg, status=502)
         await sleep(0.5)

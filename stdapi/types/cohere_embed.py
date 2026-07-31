@@ -59,7 +59,7 @@ class _EmbedRequestBase(BaseModelRequestWithExtra):
         default=None,
         description=(
             "Embedding types to return. `int8`/`uint8`/`binary`/`ubinary` are "
-            "supported by Bedrock Cohere Embed models, `binary` also by Titan "
+            "supported by Cohere Embed models, `binary` also by Titan "
             "Embed v2; other combinations return 400. `base64` is always "
             "accepted and computed client-side (little-endian float32 bytes) "
             "from the `float` embedding."
@@ -99,7 +99,7 @@ class EmbedRequest(_EmbedRequestBase):
         ...,
         description=(
             "Specifies the type of input passed to the model. Applied to Cohere "
-            "models; other Bedrock embedding models have no equivalent and the "
+            "models; other embedding models have no equivalent and the "
             "value is ignored."
         ),
     )
@@ -125,7 +125,7 @@ class EmbedRequest(_EmbedRequestBase):
         ge=0,
         description=(
             "Accepted for compatibility and ignored. Cohere API request "
-            "scheduling priority is not applicable on AWS Bedrock."
+            "scheduling priority is not applicable on this implementation."
         ),
     )
 
@@ -137,9 +137,9 @@ class EmbedV1Request(_EmbedRequestBase):
         default=None,
         description=(
             "Specifies the type of input passed to the model. Optional in the "
-            "v1 API: forwarded to Cohere models when provided (the backend "
-            "defaults to `search_document` otherwise); other Bedrock embedding "
-            "models have no equivalent and the value is ignored."
+            "v1 API: forwarded to Cohere models when provided (defaults to "
+            "`search_document` otherwise); other embedding models have no "
+            "equivalent and the value is ignored."
         ),
     )
 

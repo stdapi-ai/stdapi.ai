@@ -56,7 +56,7 @@ Generate images with Amazon Bedrock image models like Stability AI and Amazon No
 | `moderation`                   | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Only the default `auto` is accepted; other values are rejected with an error |
 | Extra model-specific params    | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra model-specific parameters via JSON body                       |
 | **Output**                     |                                          |                                                                     |
-| URL response format            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Temporary presigned URLs, valid for 60 minutes (requires AWS_S3_BUCKET) |
+| URL response format            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Temporary download URLs, valid for 60 minutes (requires AWS_S3_BUCKET) |
 | Base64 JSON format             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Inline base64-encoded images                                        |
 | PNG format                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Lossless image output                                               |
 | JPEG format                    |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Lossy compression (model-specific)                                  |

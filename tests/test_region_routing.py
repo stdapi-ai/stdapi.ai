@@ -374,7 +374,9 @@ class TestOrderedRouting:
         assert excinfo.value.status_code == 400
         error = excinfo.value.response.json()["error"]
         assert error["type"] == "invalid_request_error"
-        assert error["code"] == "ValidationException"
+        # The backend exception name is deliberately not exposed; the status
+        # and type carry everything a client can act on.
+        assert error["code"] is None
         # Primary remains usable — validation errors do not trigger backoff.
         assert routing_ordered.get_state(MODEL, ROUTING_PRIMARY).is_usable
         # Only the primary was stubbed: had the router failed over, the live
@@ -405,7 +407,7 @@ class TestOrderedRouting:
         assert excinfo.value.status_code == 429
         error = excinfo.value.response.json()["error"]
         assert error["type"] == "rate_limit_error"
-        assert error["code"] == "ThrottlingException"
+        assert error["code"] is None
         assert excinfo.value.response.headers["retry-after"] == str(_QUOTA_BACKOFF_BASE)
         assert not routing_ordered.get_state(MODEL, ROUTING_PRIMARY).is_usable
         assert not routing_ordered.get_state(MODEL, ROUTING_SECONDARY).is_usable

@@ -771,9 +771,8 @@ def _handle_system_tool(
         ):
             msg = (
                 "web_search allowed_domains, blocked_domains, max_uses, and "
-                "user_location are not supported by this model's system-tool "
-                "web search (e.g. Amazon Nova grounding); remove them or use "
-                "an Anthropic Claude model instead."
+                "user_location are not supported by this model. Remove them, "
+                "or use a model whose web search supports them."
             )
             raise ApiError(msg)
         bedrock_name: str = tool_name_map[tool.name]  # type: ignore[index]

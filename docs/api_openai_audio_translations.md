@@ -79,9 +79,6 @@ Translate audio from any language to English text with Amazon Transcribe + Trans
 |-------------------|---------------------|------------------------------------------------------------------------------------------------------------|
 | amazon.transcribe | 100+                | Full-featured transcription with speaker diarization and subtitle generation at the cost of higher latency |
 
-!!! info "How the Pipeline Works"
-    `amazon.transcribe` performs translation in two steps: audio is transcribed to text in the source language with Amazon Transcribe, then that text is translated to English with Amazon Translate. The two calls are chained internally — your request and response use the same OpenAI `/v1/audio/translations` interface.
-
 !!! warning "Configuration Required"
     You must configure the `AWS_S3_BUCKET` or `AWS_TRANSCRIBE_S3_BUCKET` environment variable with a bucket in the main AWS region to use this model. This bucket is used for temporary storage during transcription processing.
 

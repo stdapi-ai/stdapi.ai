@@ -9,18 +9,27 @@ Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-referenc
      stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel
 """
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
 from stdapi.models.chat import get_chat_model
+from stdapi.models.chat._default import ChatModel
 from stdapi.monitoring import REQUEST
+from stdapi.types.anthropic_messages import (
+    CacheControlEphemeralParam,
+    MessageCreateParams,
+    MessageParam,
+    TextBlockParam,
+    ToolResultBlockParam,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from fastapi import Request
 
+    from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
     from stdapi.models.chat._anthropic_claude import AnthropicClaudeChatModel
     from stdapi.monitoring import EventLog
     from stdapi.types import JsonMapping
@@ -721,3 +730,77 @@ class TestSystemMessageAsMessages:
     def test_unsupported_models_fold_system_messages(self, model_id: str) -> None:
         """Models rejecting system-role messages keep them folded into `system`."""
         assert _claude_model(model_id).SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED is False
+
+
+class _ToolCacheUnsupportedModel(ChatModel):
+    """Chat model with prompt caching but no tool-turn caching (``PROMPT_CACHING_TOOL_SUPPORTED`` stays False)."""
+
+    PROMPT_CACHING_SUPPORTED = True
+
+
+class TestCreateMessageCachePointLimiting:
+    """``create_message`` must enforce cache-point limits like its sibling routes.
+
+    ``create_completion`` and ``create_response`` both call
+    ``_req_limit_cache_points`` after placing cache points, which strips any
+    ``cachePoint`` from a whole message turn that also carries a ``toolUse``/
+    ``toolResult`` block on models without tool caching. The Anthropic adapter's
+    own per-block check only inspects the block actually carrying
+    ``cache_control``, so a breakpoint on a text block sharing a message with a
+    ``tool_result`` block survives unless ``create_message`` makes the same call.
+
+    Ref: stdapi/models/chat/_default.py:ChatModel.create_message
+         stdapi/models/chat/_default.py:ChatModel._req_limit_cache_points
+    """
+
+    async def test_tool_turn_cache_point_is_stripped_like_the_other_routes(
+        self, request_log: EventLog
+    ) -> None:
+        """A text-block breakpoint sharing a turn with a ``tool_result`` is dropped."""
+        del request_log
+        model = _ToolCacheUnsupportedModel("model")
+        request = MessageCreateParams.model_validate(
+            {
+                "model": "model",
+                "max_tokens": 16,
+                "messages": [
+                    MessageParam(
+                        role="user",
+                        content=[
+                            ToolResultBlockParam(
+                                type="tool_result",
+                                tool_use_id="tooluse_1",
+                                content="ok",
+                            ),
+                            TextBlockParam(
+                                type="text",
+                                text="continue",
+                                cache_control=CacheControlEphemeralParam(),
+                            ),
+                        ],
+                    )
+                ],
+            }
+        )
+        captured: dict[str, Any] = {}
+
+        async def fake_converse(
+            _self: ChatModel, bedrock_request: ConverseRequestBaseTypeDef
+        ) -> dict[str, Any]:
+            captured.update(bedrock_request)
+            return {
+                "output": {"message": {"role": "assistant", "content": []}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            }
+
+        model.converse = fake_converse.__get__(model, _ToolCacheUnsupportedModel)  # type: ignore[method-assign]
+
+        await model.create_message(request, "msg_1")
+
+        content = captured["messages"][0]["content"]
+        assert not any("cachePoint" in block for block in content), (
+            "a cache point sharing a turn with a tool_result must be dropped on "
+            "a model without tool caching, exactly as create_completion and "
+            "create_response already do"
+        )

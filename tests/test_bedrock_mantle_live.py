@@ -1013,7 +1013,7 @@ class TestMantleResponsesSiblingGuards:
         with pytest.raises(BadRequestError) as bad_request:
             openai_client.responses.input_tokens.count(model=_GEMMA3, input="Hello")
         assert bad_request.value.status_code == 400
-        assert "not supported for Bedrock Mantle" in str(bad_request.value)
+        assert "Token counting is not supported" in str(bad_request.value)
         with pytest.raises(NotFoundError) as undecodable:
             openai_client.responses.retrieve("resp_notdecodable")
         assert undecodable.value.status_code == 404

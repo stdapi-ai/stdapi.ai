@@ -142,6 +142,12 @@ def translate_request(
             top_p=request.top_p,
             max_tokens=request.max_tokens,
             stop_sequences=request.stop,
+            # frequency_penalty, presence_penalty, logit_bias and seed are
+            # accepted and dropped rather than forwarded like the Chat
+            # Completions twin does: the text-completion models reject them
+            # outright ("extraneous key [frequency_penalty] is not permitted",
+            # measured live 2026-07-31), so forwarding them turns a working
+            # request into a 400.
             **(request.model_extra or {}),
         ),
         additional_request_fields,

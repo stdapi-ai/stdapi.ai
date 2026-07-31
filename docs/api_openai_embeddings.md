@@ -236,13 +236,13 @@ curl -X POST "$BASE/v1/embeddings" \
   }"
 ```
 
-!!! info "Automatic S3 Upload and Asynchronous Invocation"
-    When you provide Base64-encoded data that exceeds the model's size limit (or Bedrock's 25 MB quota), the server automatically uploads it to S3 and selects the appropriate invocation method (synchronous or asynchronous).
+!!! info "Automatic S3 Upload"
+    When you provide Base64-encoded data that exceeds the model's size limit (or Bedrock's 25 MB quota), the server automatically stages it in S3 so the request still succeeds.
 
     To allow this behavior, configure regional S3 buckets via `AWS_S3_REGIONAL_BUCKETS` in the same region as your Bedrock model. See [configuration guide](operations_configuration.md#aws-s3-regional-buckets).
 
-!!! warning "Usage Not Available with Asynchronous Invocation"
-    Amazon Nova models do not return token usage information when the asynchronous Bedrock invocation API is used internally (e.g., for large files processed via S3). The `usage` field in the response will report zero tokens in those cases.
+!!! warning "Usage Not Available for Large Inputs"
+    Amazon Nova models report no token usage for large inputs (those exceeding the model's inline size limit): the `usage` field then reports zero tokens.
 
 !!! warning "Large Base64 Files and Memory Configuration"
     While passing large files as Base64 is supported, ensure your server has sufficient memory configured. Large Base64-encoded files (especially videos) can consume significant memory during processing. Consider using S3 URLs directly for very large files, or adjust your server's memory limits accordingly.

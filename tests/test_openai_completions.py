@@ -361,13 +361,15 @@ class TestCompletions:
     ) -> None:
         """Upstream-only legacy params are accepted instead of returning a 400.
 
-        ``best_of``, ``logprobs``, ``suffix``, the penalties and ``logit_bias``
-        have no Bedrock Converse equivalent.  The gateway declares them
-        UNSUPPORTED but keeps them valid so unmodified OpenAI clients work, and
-        silently ignores them — ``logprobs`` in particular never produces a
-        ``logprobs`` object on a choice.
+        ``best_of``, ``logprobs`` and ``suffix`` have no Bedrock Converse
+        equivalent and are silently ignored -- ``logprobs`` in particular
+        never produces a ``logprobs`` object on a choice. The penalties and
+        ``logit_bias`` do reach the model, via ``additionalModelRequestFields``,
+        exactly like on ``/v1/chat/completions``; a model that honors them
+        accepts the in-range values used here without error.
 
         Ref: stdapi/types/openai_completions.py:CompletionCreateParams
+             stdapi/models/chat/_adapters/_openai_completion.py:translate_request
         """
         response = openai_client.completions.create(
             model=completion_model,
@@ -654,6 +656,28 @@ class TestLegacyRequestTranslation:
              https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
         """
         assert self._translate(**fields)[5] == expected
+
+    def test_sampling_knobs_are_accepted_and_dropped(self) -> None:
+        """``frequency_penalty``, ``presence_penalty``, ``logit_bias`` and ``seed`` drop.
+
+        None of the four has a Bedrock ``inferenceConfig`` slot, so forwarding
+        them would mean putting them in ``additionalModelRequestFields``, where
+        the text-completion models reject them outright: measured live on
+        2026-07-31, a request carrying ``frequency_penalty`` returns
+        ``400 Malformed input request: #: extraneous key [frequency_penalty] is
+        not permitted``. The route therefore accepts and drops them, which keeps
+        an otherwise-valid request working. This diverges from the twin
+        ``/v1/chat/completions`` adapter on purpose; the divergence is the
+        backend's, not the gateway's.
+
+        Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+             stdapi/models/chat/_adapters/_openai_completion.py:translate_request
+        """
+        additional_request_fields = self._translate(
+            frequency_penalty=0.5, presence_penalty=-0.5, logit_bias={100: 5}, seed=42
+        )[1]
+        for knob in ("frequency_penalty", "presence_penalty", "logit_bias", "seed"):
+            assert knob not in additional_request_fields
 
 
 class TestLegacyPromptFanOut:

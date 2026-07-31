@@ -492,7 +492,9 @@ def _handle_transcription_error(language: str | None) -> Generator[None]:
                 msg = f"Language '{language}' is not supported by the model"
                 raise InvalidLanguageFormatError(msg) from error
             if "file" in error_message:
-                raise ApiError(error_message) from error
+                log_error_details(error_message, status=400)
+                msg = "The provided audio file could not be accessed."
+                raise ApiError(msg) from error
         raise  # pragma: no cover
     except ParamValidationError as error:
         # botocore validates some Settings/ContentRedaction/ToxicityDetection
@@ -542,7 +544,16 @@ async def _wait_for_transcription_completion(
         if job["TranscriptionJobStatus"] == "COMPLETED":
             break
         if job["TranscriptionJobStatus"] == "FAILED":
-            raise ApiError(job["FailureReason"])
+            # A job fails on the submitted audio -- unsupported container, empty
+            # or corrupt stream -- so this is the caller's input, not an outage.
+            # The failure reason names the backend and its storage, and stays in
+            # the log.
+            log_error_details(job["FailureReason"], status=400)
+            msg = (
+                "The audio could not be transcribed. Check that the file is a "
+                "supported, non-empty audio format and retry."
+            )
+            raise ApiError(msg)
         await sleep(0.5)
 
     transcript = job["Transcript"]

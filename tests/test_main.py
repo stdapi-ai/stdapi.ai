@@ -20,7 +20,7 @@ from starlette.datastructures import UploadFile
 from starlette.requests import Request
 
 from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile
-from stdapi.main import _upstream_service_name, handle_exception_group
+from stdapi.main import handle_exception_group
 from stdapi.routes import openai_chat_completions
 from stdapi.types.openai_chat_completions import ChatCompletion
 from tests._helpers import make_model_details
@@ -28,54 +28,6 @@ from tests._helpers import make_model_details
 #: All tests in this module exercise the local implementation in-process, and log
 #: outside request scope, so they need the shared request-log context.
 pytestmark = [pytest.mark.local, pytest.mark.usefixtures("request_log")]
-
-
-class _FakeConnectionError:
-    """Minimal stand-in for a botocore connection error carrying ``kwargs``."""
-
-    def __init__(self, endpoint_url: str) -> None:
-        self.kwargs = {"endpoint_url": endpoint_url}
-
-
-@pytest.mark.parametrize(
-    ("endpoint", "expected"),
-    [
-        ("https://bedrock-runtime.us-east-1.amazonaws.com", "Bedrock"),
-        ("https://s3.eu-west-1.amazonaws.com", "S3"),
-        ("https://polly.us-east-1.amazonaws.com", "Polly"),
-    ],
-)
-def test_upstream_service_name_maps_known_services(
-    endpoint: str, expected: str
-) -> None:
-    """A recognised AWS endpoint host yields its friendly service name.
-
-    ``bedrock-runtime`` and ``bedrock`` both resolve to "Bedrock" so clients see
-    one service name regardless of which plane failed.
-
-    Ref: stdapi/main.py:_upstream_service_name
-    """
-    assert _upstream_service_name(_FakeConnectionError(endpoint)) == expected  # type: ignore[arg-type]
-
-
-def test_upstream_service_name_hides_unknown_endpoint() -> None:
-    """A custom/VPC endpoint host is not disclosed; a generic name is returned.
-
-    Only tokens present in ``_AWS_SERVICE_NAMES`` are ever echoed, so a private
-    endpoint ID cannot reach a client through the 503 message.
-
-    Ref: stdapi/main.py:_AWS_SERVICE_NAMES
-    """
-    exc = _FakeConnectionError("https://vpce-0abc123def.execute-api.example")
-    assert _upstream_service_name(exc) == "The upstream service"  # type: ignore[arg-type]
-
-
-def test_upstream_service_name_handles_missing_endpoint() -> None:
-    """An error without an endpoint URL yields the generic name.
-
-    Ref: stdapi/main.py:_upstream_service_name
-    """
-    assert _upstream_service_name(_FakeConnectionError("")) == "The upstream service"  # type: ignore[arg-type]
 
 
 def _request() -> Request:
@@ -233,10 +185,11 @@ class TestBotocoreConnectionErrorHandler:
     async def test_generic_body_while_endpoint_stays_in_logs(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Clients see a generic per-service 503; the endpoint URL is logged only.
+        """Clients see a fixed generic 503; the endpoint URL is logged only.
 
         The endpoint is needed for operators, so it must appear in the structured
-        log while being absent from the response body.
+        log while being absent from the response body. No AWS service name or
+        endpoint host is ever echoed back, regardless of which service failed.
         """
         from botocore.exceptions import EndpointConnectionError  # noqa: PLC0415
 
@@ -256,29 +209,10 @@ class TestBotocoreConnectionErrorHandler:
 
         assert response.status_code == 503
         body = bytes(response.body).decode()
-        assert "Bedrock is temporarily unavailable." in body
+        assert "The service is temporarily unavailable." in body
         assert endpoint not in body
+        assert "Bedrock" not in body
         assert any(endpoint in entry for entry in logged)
-
-    async def test_unknown_endpoint_is_not_disclosed(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A custom/VPC endpoint is never named or disclosed in the 503 body."""
-        from botocore.exceptions import EndpointConnectionError  # noqa: PLC0415
-
-        from stdapi import main  # noqa: PLC0415
-
-        endpoint = "https://vpce-0abc123.execute-api.internal"
-        monkeypatch.setattr(main, "log_error_details", lambda *_a, **_k: None)
-
-        response = await main.handle_botocore_connection_error(
-            _request(), EndpointConnectionError(endpoint_url=endpoint)
-        )
-
-        assert response.status_code == 503
-        body = bytes(response.body).decode()
-        assert "The upstream service is temporarily unavailable." in body
-        assert "vpce-0abc123" not in body
 
 
 class TestSharedPrefixRouterOptOut:

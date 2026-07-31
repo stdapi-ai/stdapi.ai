@@ -77,7 +77,7 @@ class PromptCacheBreakpoint(BaseModelRequest):
     mode: Literal["explicit"] = Field(
         default="explicit",
         description="Breakpoint mode. Always `explicit`: the prompt prefix ending "
-        "with this content part is cached (AWS Bedrock `cachePoint`).",
+        "with this content part is cached.",
     )
 
 
@@ -658,7 +658,7 @@ class PromptCacheOptions(BaseModelRequest):
     )
     ttl: PromptCacheOptionsTTL | None = Field(
         default=None,
-        description="Cache retention: `30m` -> 1h (AWS Bedrock mapping). Ignored when `prompt_cache_retention` is set.",
+        description="Cache retention: `30m` is applied as 1h. Ignored when `prompt_cache_retention` is set.",
     )
 
 
@@ -995,7 +995,7 @@ class PromptTokensDetails(BaseModelResponse):
     cache_write_tokens: int | None = Field(
         default=None,
         description="Extra feature: Tokens written to the prompt cache "
-        "(reported by some AWS Bedrock models).",
+        "(reported by some models).",
     )
 
 
@@ -1176,12 +1176,12 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
     prompt_cache_options: PromptCacheOptions | None = Field(
         default=None,
-        description="Prompt caching options. `ttl` `30m` maps to the closest Bedrock "
-        "cache TTL (1h) unless `prompt_cache_retention` is set.",
+        description="Prompt caching options. `ttl` `30m` is applied as 1h "
+        "unless `prompt_cache_retention` is set.",
     )
     prompt_cache_retention: PromptCacheRetention | None = Field(
         default=None,
-        description="Cache retention: `in_memory` -> 5m, `24h` -> 1h (AWS Bedrock mapping).",
+        description="Cache retention: `in_memory` is applied as 5m, `24h` as 1h.",
     )
     reasoning_effort: ReasoningEffort | None = Field(
         default=None,
@@ -1219,10 +1219,10 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
     store: bool | None = Field(
         default=None,
-        description="Persist the chat completion in AWS Bedrock session "
-        "storage for later retrieval. Defaults to false on this "
-        "implementation. Ignored (with a request-log warning) when streaming "
-        "or when session storage is not enabled on the server.",
+        description="Persist the chat completion for later retrieval. "
+        "Defaults to false on this implementation. Ignored (with a "
+        "request-log warning) when streaming or when storage is not "
+        "enabled on the server.",
     )
     stream_options: ChatCompletionStreamOptionsParam | None = Field(
         default=None,
@@ -1410,13 +1410,10 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
             raise ValueError(msg)
 
     def _validate_stop_sequences(self) -> None:
-        """Validate stop sequences are not whitespace-only (AWS Bedrock rejects blank ones)."""
+        """Validate stop sequences are not whitespace-only."""
         sequences = [self.stop] if isinstance(self.stop, str) else self.stop or []
         if any(not sequence.strip() for sequence in sequences):
-            msg = (
-                "Stop sequences must contain at least one non-whitespace "
-                "character (not supported by AWS Bedrock)."
-            )
+            msg = "Stop sequences must contain at least one non-whitespace character."
             raise ValueError(msg)
 
 

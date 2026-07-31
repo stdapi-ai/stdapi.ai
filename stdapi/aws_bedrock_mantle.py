@@ -308,7 +308,7 @@ def _map_error(status: int, body: str, region: RegionName) -> MantleError:
     if raw_message is not None and not isinstance(raw_message, str):
         # Some upstream errors nest structured content in the message field.
         raw_message = dumps(raw_message)
-    message = raw_message or f"Bedrock Mantle error (HTTP {status})."
+    message = raw_message or f"The request could not be completed (HTTP {status})."
     error: MantleError
     if _UNSUPPORTED_API_RE.search(message):
         error = MantleApiUnsupportedError(message, status=400)
@@ -333,7 +333,7 @@ def _map_error(status: int, body: str, region: RegionName) -> MantleError:
 
         log_error_details(message, level="warning")
         error = MantleError(
-            "Bedrock Mantle credential or permission error.", status=500
+            "The request could not be completed. Retry the request.", status=500
         )
     else:
         error = MantleError(message, status=status)
@@ -381,7 +381,12 @@ async def _request(
             },
         )
     except (AiohttpClientError, TimeoutError) as error:
-        msg = f"Unable to reach the Bedrock Mantle endpoint in {region}."
+        # Imported here: stdapi.monitoring imports stdapi.aws_bedrock, which
+        # imports stdapi.aws, which imports this module (import cycle).
+        from stdapi.monitoring import log_error_details  # noqa: PLC0415
+
+        log_error_details(f"Unable to reach the Bedrock Mantle endpoint in {region}.")
+        msg = "The service is temporarily unavailable. Retry the request."
         raise MantleError(msg, status=503, failover=True) from error
     if response.status >= 400:
         try:

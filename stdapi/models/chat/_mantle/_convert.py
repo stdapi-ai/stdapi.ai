@@ -288,10 +288,7 @@ def _ensure_single_choice(payload: dict[str, Any]) -> None:
         ApiError: When the payload requests more than one choice.
     """
     if (n := payload.get("n")) is not None and n != 1:
-        msg = (
-            "Multiple choices (n>1) are only supported by the Chat Completions "
-            "API on Bedrock Mantle models."
-        )
+        msg = "Multiple choices (n>1) are not supported by this model."
         raise ApiError(msg, status=400)
 
 
@@ -710,10 +707,8 @@ def _reject_moderation_param(moderation: object) -> None:
     """
     if moderation is not None:
         msg = (
-            "The 'moderation' parameter is not available on Bedrock "
-            "Mantle-served models: guardrails cannot be applied to "
-            "passthrough requests. Remove the parameter or use a "
-            "Bedrock-served model."
+            "The 'moderation' parameter is not available with this model. "
+            "Remove the parameter, or use a model that supports moderation."
         )
         raise ApiError(msg, status=400)
 
@@ -742,10 +737,9 @@ def _reject_local_compaction_items(input_value: object) -> None:
             )
         ):
             msg = (
-                "Locally-produced compaction items cannot be continued on a "
-                "Bedrock Mantle-served model: compact the conversation again "
-                "with a Bedrock-served model, or use a compaction item "
-                "produced upstream."
+                "This compaction item is not compatible with the selected "
+                "model. Compact the conversation again, or select a "
+                "different model."
             )
             raise ApiError(msg, status=400)
 
@@ -769,8 +763,8 @@ def _pin_previous_response(payload: dict[str, Any]) -> RegionName | None:
         return None
     if (decoded := decode_mantle_response_id(previous_id)) is None:
         msg = (
-            "Unknown or non-Mantle previous_response_id: only responses "
-            "created by this server on Bedrock Mantle can be chained."
+            "Unknown previous_response_id: only responses created by this "
+            "server can be chained."
         )
         raise ApiError(msg, status=400)
     region, native_id = decoded
@@ -3120,16 +3114,16 @@ async def text_completion_as_chat_payload(
     """
     for name in ("echo", "suffix", "logprobs"):
         if getattr(request, name):
-            msg = f"`{name}` is not supported for Bedrock Mantle models."
+            msg = f"`{name}` is not supported by this model."
             raise ApiError(msg, status=400)
     prompt = request.prompt
     if isinstance(prompt, list):
         if len(prompt) != 1:
-            msg = "Multiple prompts are not supported for Bedrock Mantle models."
+            msg = "Multiple prompts are not supported by this model."
             raise ApiError(msg, status=400)
         prompt = prompt[0]
     if not isinstance(prompt, str):
-        msg = "File prompts are not supported for Bedrock Mantle models."
+        msg = "File prompts are not supported by this model."
         raise ApiError(msg, status=400)
     payload: dict[str, Any] = {
         "model": model_id,

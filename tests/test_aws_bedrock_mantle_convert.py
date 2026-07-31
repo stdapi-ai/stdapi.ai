@@ -2883,7 +2883,7 @@ class TestResponsesPayloadBuilder:
             {"model": "ignored", "previous_response_id": "resp_@@@invalid@@@"}
         )
         with pytest.raises(
-            ApiError, match="non-Mantle previous_response_id"
+            ApiError, match="only responses created by this server"
         ) as exc_info:
             await mantle_convert.responses_payload(request, "model-id")
         assert exc_info.value.status == 400

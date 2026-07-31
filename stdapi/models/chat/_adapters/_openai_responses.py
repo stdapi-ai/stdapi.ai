@@ -162,6 +162,7 @@ if TYPE_CHECKING:
         ResponseTextConfig,
         ToolChoice,
     )
+    from stdapi.types.openai_responses import ServiceTiers as ResponsesServiceTiers
 
 #: Empty tool schema for Bedrock tool configuration.
 _EMPTY_TOOL: dict[str, str] = {"type": "object"}
@@ -455,8 +456,8 @@ async def _generate_image_b64(
     """
     if not (model_id := args.get("model") or tool.model or fallback_model):
         msg = (
-            "No image model configured for the image_generation tool. "
-            "Set IMAGE_GENERATION_MODEL or specify a model in the tool definition."
+            "No image model is available for the image_generation tool. "
+            "Specify a model in the tool definition, or contact the administrator."
         )
         raise ApiError(msg, status=400)
     validated = await validate_model(
@@ -730,6 +731,7 @@ def translate_request(
             temperature=request.temperature,
             top_p=request.top_p,
             max_tokens=request.max_output_tokens,
+            top_logprobs=request.top_logprobs,
         ),
         additional_request_fields,
         _build_tool_config(request, tool_name_map),
@@ -1797,7 +1799,13 @@ def _build_response_object(
         prompt_cache_options=request.prompt_cache_options,
         prompt_cache_retention=request.prompt_cache_retention,
         reasoning=request.reasoning,
-        service_tier=request.service_tier,
+        # Responses' own ServiceTiers excludes the Bedrock-only "reserved" value,
+        # which map_service_tier's wider (Chat Completions) signature allows for;
+        # a Responses request can never actually carry it (rejected upstream).
+        service_tier=cast(
+            "ResponsesServiceTiers | None",
+            _openai_common.map_service_tier(request.service_tier)[1],
+        ),
         text=request.text,
         top_logprobs=request.top_logprobs,
         usage=usage,
@@ -2624,25 +2632,33 @@ def _classify_stream_error(
         error = exc.response["Error"]
         status = AWS_ERROR_MAP.get(error["Code"], (502, "server_error"))[0]
         message = error["Message"]
-    elif isinstance(exc, HTTPClientError | BotocoreConnectionError):
-        status = AWS_ERROR_MAP.get(exc.__class__.__name__, (503, "server_error"))[0]
-        message = str(exc)
-    else:
         return (
-            500,
-            "Internal Server Error",
+            status,
+            hide_security_details(status, message),
             None,
             "server_error",
-            "\n".join(format_exception(exc)),
-            "critical",
+            message,
+            None,
+        )
+    if isinstance(exc, HTTPClientError | BotocoreConnectionError):
+        # The raw exception text embeds the request endpoint host, so only a
+        # fixed message reaches the client; the raw text is still logged.
+        status = AWS_ERROR_MAP.get(exc.__class__.__name__, (503, "server_error"))[0]
+        return (
+            status,
+            "The service is temporarily unavailable. Retry the request.",
+            None,
+            "server_error",
+            str(exc),
+            None,
         )
     return (
-        status,
-        hide_security_details(status, message),
+        500,
+        "Internal Server Error",
         None,
         "server_error",
-        message,
-        None,
+        "\n".join(format_exception(exc)),
+        "critical",
     )
 
 

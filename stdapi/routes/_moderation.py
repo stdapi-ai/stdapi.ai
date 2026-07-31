@@ -44,8 +44,8 @@ def apply_request_moderation(moderation: RequestModeration | None) -> None:
         return
     if is_comprehend_moderation_model(moderation.model):
         msg = (
-            "Amazon Comprehend moderation is only available on the Moderations "
-            "API; the 'moderation' parameter requires an AWS Bedrock guardrail."
+            "The selected moderation model can only be used on the Moderations "
+            "API; the 'moderation' parameter requires an Amazon Bedrock guardrail."
         )
         raise ApiError(msg)
     identifier, version = resolve_guardrail_model(moderation.model)

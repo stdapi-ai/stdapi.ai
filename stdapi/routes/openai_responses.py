@@ -246,8 +246,8 @@ async def _apply_previous_response(
         return merged.model_copy(update={"previous_response_id": previous_response_id})
     if not native_supported:
         msg = (
-            "previous_response_id belongs to a Bedrock Mantle stored "
-            "conversation and cannot be continued with this model."
+            "previous_response_id cannot be continued with this model. "
+            "Retry with the model that created it."
         )
         raise ApiError(msg, status=404)
     return request
@@ -697,10 +697,7 @@ async def count_input_tokens(
         request.model, input_modality="TEXT", output_modality="TEXT", error_status=400
     )
     if serves_via_mantle(model.get_id()):
-        msg = (
-            "Token counting is not supported for Bedrock Mantle models "
-            "on this endpoint."
-        )
+        msg = "Token counting is not supported for this model on this endpoint."
         raise ApiError(msg, status=400)
     return log_response_params(
         InputTokenCountResponse(
@@ -898,9 +895,8 @@ async def _mantle_stored_response(
     description=(
         "Returns a model response previously persisted with `store=true` "
         "(OpenAI Responses API).\n\n"
-        "Stored responses live in AWS Bedrock session storage; pass their ID "
-        "as `previous_response_id` in `openai_response` to continue the "
-        "conversation."
+        "Pass the response ID as `previous_response_id` in `openai_response` "
+        "to continue the conversation."
     ),
     response_description="The stored response.",
     responses={
@@ -978,10 +974,9 @@ async def retrieve_response(
     operation_id="openai_response_cancel",
     description=(
         "Cancels a model response (OpenAI Responses API). Only responses "
-        "created with `background=true` can be cancelled. Responses stored "
-        "natively on AWS Bedrock Mantle are cancelled upstream; locally "
-        "stored responses are always synchronous, so cancelling them fails "
-        "with the OpenAI error for synchronous responses."
+        "created with `background=true` can be cancelled; cancelling any "
+        "other response fails with the OpenAI error for synchronous "
+        "responses."
     ),
     response_description="The cancelled response.",
     responses={
@@ -1028,7 +1023,7 @@ async def cancel_response(
     operation_id="openai_response_delete",
     description=(
         "Deletes a model response previously persisted with `store=true`, "
-        "along with its AWS Bedrock session (OpenAI Responses API)."
+        "along with its stored conversation state (OpenAI Responses API)."
     ),
     response_description="Deletion confirmation.",
     responses={

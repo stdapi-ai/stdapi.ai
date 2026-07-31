@@ -121,7 +121,7 @@ async def create_translation(
         Form(
             description=(
                 "The transcription model to use.\n"
-                "`amazon.transcribe` or a Bedrock speech-to-text model (e.g. Mistral Voxtral)."
+                "`amazon.transcribe` or a speech-to-text model (e.g. Mistral Voxtral)."
             )
         ),
     ] = AWS_TRANSCRIBE_MODEL_ID,
@@ -131,7 +131,7 @@ async def create_translation(
             description=(
                 "An optional text to guide the model's style or continue a previous audio segment.\n"
                 "The prompt should be in English.\n"
-                "Supported by Bedrock models (e.g. Mistral Voxtral); rejected by `amazon.transcribe`."
+                "Supported by speech-to-text models such as Mistral Voxtral; rejected by `amazon.transcribe`."
             )
         ),
     ] = None,
@@ -158,12 +158,12 @@ async def create_translation(
         http_request: FastAPI request object used to detect content-type.
         file: The audio file to translate (multipart only).
         model: The transcription model to use: ``amazon.transcribe`` or a
-            Bedrock speech-to-text model (e.g. Mistral Voxtral).
-        prompt: Optional style guidance for the model. Supported by Bedrock
-            models (e.g. Mistral Voxtral); rejected by ``amazon.transcribe``.
+            speech-to-text model (e.g. Mistral Voxtral).
+        prompt: Optional style guidance for the model. Supported by
+            speech-to-text models such as Mistral Voxtral; rejected by ``amazon.transcribe``.
         response_format: Output format: `json`, `text`, `srt`, `verbose_json`, or `vtt`.
-        temperature: Sampling temperature. Supported by Bedrock models
-            (e.g. Mistral Voxtral); rejected by ``amazon.transcribe``.
+        temperature: Sampling temperature. Supported by speech-to-text models
+            such as Mistral Voxtral; rejected by ``amazon.transcribe``.
 
     Returns:
         The translated text in English in the requested format.

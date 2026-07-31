@@ -36,7 +36,7 @@ class RerankRequest(BaseModelRequestWithExtra):
         default=None,
         description=(
             "Accepted for compatibility and ignored. Cohere API request "
-            "scheduling priority is not applicable on AWS Bedrock."
+            "scheduling priority is not applicable on this implementation."
         ),
     )
     return_documents: bool | None = Field(
@@ -90,7 +90,7 @@ class RerankV1Request(BaseModelRequestWithExtra):
         ge=1,
         description=(
             "Maximum number of chunks to produce per document. "
-            "Not supported on this implementation (no AWS Bedrock equivalent)."
+            "Not supported on this implementation."
         ),
     )
 

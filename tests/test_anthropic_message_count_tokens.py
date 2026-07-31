@@ -223,24 +223,23 @@ async def test_count_tokens_claude_server_tool_with_custom_tool_history_no_dupli
     assert not (native_names & config_names)
 
 
-async def test_count_tokens_server_tool_only_history_sends_no_toolconfig(
+async def test_count_tokens_server_tool_only_history_keeps_the_stub(
     fake_client: _FakeCountTokensClient,
 ) -> None:
-    """A server-tool-*only* turn 2 sends no ``toolConfig`` -- not a duplicate one.
+    """A server-tool-*only* turn 2 keeps the stub and skips native promotion.
 
-    History references only ``bash``, the tool ``_req_configure_tools`` just
-    natively promoted to ``additionalModelRequestFields``. The counted
-    request's own synthesis fallback must exclude that name, since Bedrock
-    already receives ``bash``'s definition through
-    ``additionalModelRequestFields`` -- re-adding it as a ``toolConfig`` stub
-    would collide with the native entry (issue #97's duplicate-name failure
-    mode). This leaves unverified, unchanged from before this fallback
-    existed, whether Bedrock's CountTokens API accepts a ``toolUse``/
-    ``toolResult`` pair with no ``toolConfig`` at all when the referenced tool
-    is defined only natively; a live run is needed to confirm either way (see
-    module docstring for how to target this file against a live gateway).
+    History references only ``bash``, so nothing else is left to populate a
+    ``toolConfig``.  Two backend rules meet here and cannot both be satisfied:
+    Bedrock rejects a request whose history carries ``toolUse``/``toolResult``
+    blocks unless a ``toolConfig`` is present, and Anthropic rejects the same
+    tool name appearing in both the ``toolConfig`` and the native tool list.
+    Sending only the native definition was measured against a live gateway on
+    2026-07-31 and returned ``400 The toolConfig field must be defined when
+    using toolUse and toolResult content blocks``, so the stub wins this turn
+    and the native definition is deferred; the count must reflect that exactly,
+    or it would bill for a request shape Bedrock never accepts.
 
-    Ref: stdapi/models/chat/_adapters/_anthropic_message.py:_synthesize_tool_config_from_history
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
          stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
     """
     request = MessageCountTokensParams(
@@ -278,9 +277,14 @@ async def test_count_tokens_server_tool_only_history_sends_no_toolconfig(
         tool["name"]
         for tool in converse.get("additionalModelRequestFields", {}).get("tools", [])
     }
-    assert native_names == {"bash"}
-    assert "toolConfig" not in converse, (
-        "no toolConfig stub may duplicate the natively-promoted bash tool"
+    assert not native_names, (
+        "bash cannot be promoted natively: nothing else would populate toolConfig"
+    )
+    config_names = {
+        entry["toolSpec"]["name"] for entry in converse["toolConfig"]["tools"]
+    }
+    assert config_names == {"bash"}, (
+        "the stub must stay so Bedrock sees a toolConfig for the tool in history"
     )
 
 

@@ -78,8 +78,28 @@ if TYPE_CHECKING:
     from stdapi.types.openai_responses import Response, ResponseCreateParams
 
 
+def _native_tool_names(additional_request_fields: JsonMapping) -> set[str]:
+    """Return the tool names already declared in the model's native tool list.
+
+    Args:
+        additional_request_fields: ``additionalModelRequestFields`` being built.
+
+    Returns:
+        Names under ``tools``, or an empty set when the model declares none.
+    """
+    tools = additional_request_fields.get("tools")
+    if not isinstance(tools, list):
+        return set()
+    return {
+        name
+        for tool in tools
+        if isinstance(tool, dict) and isinstance(name := tool.get("name"), str)
+    }
+
+
 def _synthesize_tool_config_from_history(
     messages: list[MessageTypeDef],
+    exclude: set[str] = frozenset(),  # type: ignore[assignment]
 ) -> ToolConfigurationTypeDef | None:
     """Synthesize a permissive tool config from ``toolUse`` blocks in history.
 
@@ -92,10 +112,13 @@ def _synthesize_tool_config_from_history(
 
     Args:
         messages: Converted Bedrock message history.
+        exclude: Tool names the model already declares natively.  Synthesizing a
+            stub for one of these would send the same name twice, which Anthropic
+            rejects outright with "Tool names must be unique".
 
     Returns:
         A synthesized tool configuration, or ``None`` if history contains no
-        ``toolUse`` blocks.
+        ``toolUse`` blocks other than the excluded ones.
     """
     names = sorted(
         {
@@ -104,6 +127,7 @@ def _synthesize_tool_config_from_history(
             for block in message.get("content", ())
             if "toolUse" in block
         }
+        - exclude
     )
     if not names:
         return None
@@ -416,6 +440,7 @@ class ChatModel(ChatModelBase[Any, Any]):
                 if self.PROMPT_CACHING_TTL_SUPPORTED
                 else None,
             )
+        self._req_limit_cache_points(system_blocks, tool_config, bedrock_messages)
 
         forced_tool = (
             request.tool_choice.name
@@ -742,7 +767,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         if tool_config:
             request["toolConfig"] = tool_config
         elif synthesized_tool_config := _synthesize_tool_config_from_history(
-            bedrock_messages
+            bedrock_messages, _native_tool_names(additional_request_fields)
         ):
             request["toolConfig"] = synthesized_tool_config
         if additional_request_fields := self._prepare_additional_request_fields(

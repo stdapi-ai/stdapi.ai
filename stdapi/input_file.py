@@ -1302,7 +1302,9 @@ class InputFile:
                     format_from_mime, format_from_mime
                 )
                 if bedrock_format not in _BEDROCK_DOCUMENT_FORMATS:
-                    msg = f"Unsupported MIME type for Bedrock document: {await self.get_content_type()!r}"
+                    msg = (
+                        f"Unsupported document type: {await self.get_content_type()!r}."
+                    )
                     raise ApiError(msg)
                 self._is_document = True
                 document_source: DocumentSourceTypeDef = self._bedrock_source  # type: ignore[assignment]

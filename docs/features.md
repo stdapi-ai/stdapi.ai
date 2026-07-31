@@ -320,7 +320,7 @@ stdapi.ai serves models from the **Amazon Bedrock Mantle** endpoint alongside th
 - **Every text API, every model** — All four text APIs (chat completions, responses, messages, legacy completions) work with every Mantle model: served natively (passthrough) when the model supports the API upstream, converted automatically otherwise, with an automatic fallback order (responses → chat completions → messages) learned at runtime
 - **Predictable routing** — Models available on both the classic endpoint and Mantle are served by the classic endpoint by default; Mantle serves Mantle-only models. Dual-homed models can be routed through Mantle globally or per request (`x-stdapi-service: bedrock-mantle` header) to tap Mantle's separate throughput quotas
 - **Automatic failover** — Region failover and quota backoff work exactly like classic Bedrock region routing; requests chained via `previous_response_id` are pinned to their origin region
-- **No static secrets** — Short-term bearer tokens are derived automatically (SigV4-presigned) from the same AWS credential chain the server already uses, and refreshed transparently
+- **No static secrets** — Mantle access uses the same AWS credential chain as the rest of the server; there is no separate API key to issue, store or rotate
 - **Native stored conversations** — `/v1/responses` with `store`, `previous_response_id`, and `GET`/`DELETE /v1/responses/{id}` use Mantle's native server-side storage: 30-day retention, region-local, project-scoped
 - **Usage & billing** — Token usage (including cached tokens and standard/flex/priority service tiers) is recorded and priced at bedrock-mantle rates, like all other models
 

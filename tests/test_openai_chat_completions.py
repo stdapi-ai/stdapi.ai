@@ -1722,18 +1722,21 @@ class TestChatCompletions:
         )
         assert body["code"] is None
 
-    @pytest.mark.gateway("Project-specific restriction: parallel_tool_calls=False")
-    def test_validation_parallel_tool_calls_false_error(
+    def test_parallel_tool_calls_false_is_accepted(
         self, openai_client: OpenAI, chat_model: str
     ) -> None:
-        """``parallel_tool_calls=False`` is rejected with a 400 on this backend.
+        """``parallel_tool_calls=False`` completes rather than failing the request.
 
-        Upstream documents it as the switch that forces at most one tool call, but
-        Bedrock Converse has no equivalent, so the gateway refuses rather than
-        accepting a guarantee it cannot keep. The field defaults to ``True``.
+        Upstream never rejects the flag, and the Responses API here has always
+        accepted it, so refusing it on Chat Completions alone broke requests that
+        are valid upstream. Models able to constrain tool use honor it; the others
+        ignore it, and the response still reports the tool calls actually made, so
+        a client depending on sequential tool use can detect that it did not get
+        it. Runs on the official lane too, which is what pins the upstream half of
+        that claim.
 
         Ref: https://developers.openai.com/api/docs/guides/function-calling#parallel-function-calling
-             stdapi/types/openai_chat_completions.py:CompletionCreateParams._unsupported
+             stdapi/types/openai_chat_completions.py:CompletionCreateParams
         """
         response = openai_client.chat.completions.create(
             model=chat_model,
@@ -1849,7 +1852,7 @@ class TestChatCompletions:
         body = exc_info.value.body
         assert isinstance(body, dict)
         assert body["type"] == "invalid_request_error"
-        assert body["code"] == "ValidationException", (
+        assert "the model returned" in str(body["message"]).lower(), (
             "The rejection must come from the model, not from request validation"
         )
 
@@ -1928,7 +1931,7 @@ class TestChatCompletions:
         body = exc_info.value.body
         assert isinstance(body, dict)
         assert body["type"] == "invalid_request_error"
-        assert body["code"] == "ValidationException", (
+        assert "the model returned" in str(body["message"]).lower(), (
             "The rejection must come from the model, not from request validation"
         )
 
@@ -2138,7 +2141,7 @@ class TestChatCompletions:
         too_many_body = too_many.value.body
         assert isinstance(too_many_body, dict)
         assert too_many_body["type"] == "invalid_request_error"
-        assert too_many_body["code"] == "ValidationException"
+        assert "validation error detected" in str(too_many_body["message"]).lower()
 
         with pytest.raises(BadRequestError) as bad_charset:
             openai_client.chat.completions.create(
@@ -2150,7 +2153,7 @@ class TestChatCompletions:
         bad_charset_body = bad_charset.value.body
         assert isinstance(bad_charset_body, dict)
         assert bad_charset_body["type"] == "invalid_request_error"
-        assert bad_charset_body["code"] == "ValidationException"
+        assert "validation error detected" in str(bad_charset_body["message"]).lower()
 
     @pytest.mark.gateway(
         "gpt-5-nano rejects reasoning_effort='max' with an "

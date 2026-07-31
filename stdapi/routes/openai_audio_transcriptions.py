@@ -173,7 +173,7 @@ async def create_transcription(
         Form(
             description=(
                 "The transcription model to use.\n"
-                "`amazon.transcribe` or a Bedrock speech-to-text model (e.g. Mistral Voxtral)."
+                "`amazon.transcribe` or a speech-to-text model (e.g. Mistral Voxtral)."
             )
         ),
     ] = AWS_TRANSCRIBE_MODEL_ID,
@@ -320,7 +320,7 @@ async def create_transcription(
         http_request: FastAPI request object used to detect content-type.
         file: The audio file to transcribe (multipart only).
         model: The transcription model to use: ``amazon.transcribe`` or a
-            Bedrock speech-to-text model (e.g. Mistral Voxtral).
+            speech-to-text model (e.g. Mistral Voxtral).
         language: The language of the input audio (ISO-639-1 code, e.g. `en`). Improves accuracy and latency when provided.
         prompt: Optional style guidance for the model. Supported by Bedrock
             models (e.g. Mistral Voxtral); rejected by ``amazon.transcribe``.

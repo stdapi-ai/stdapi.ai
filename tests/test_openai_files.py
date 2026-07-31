@@ -171,7 +171,10 @@ class TestOpenAIFiles:
             retrieved = openai_client.files.retrieve(created.id)
             assert retrieved.purpose == "user_data"
             listed = openai_client.files.list(purpose="user_data", limit=100)
-            assert created.id in {f.id for f in listed.data}, (
+            # Each surface prefixes the same 32-char payload its own way --
+            # "file_" for Anthropic, "file-" for OpenAI -- so compare payloads.
+            payload = created.id.split("_", 1)[1]
+            assert payload in {f.id.split("-", 1)[1] for f in listed.data}, (
                 "a purposeless file must match the purpose=user_data list filter "
                 "the same way its displayed purpose does"
             )

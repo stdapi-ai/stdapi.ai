@@ -685,11 +685,13 @@ async def log_request_sse_stream_event(
         error = exc.response["Error"]
         status = AWS_ERROR_MAP.get(error["Code"], (502, "server_error"))[0]
         log_error_details(error["Message"], status=status)
+        message = (
+            "The request could not be completed. Retry the request."
+            if status >= 500
+            else hide_security_details(status, error["Message"])
+        )
         yield JSONServerSentEvent(
-            data=format_http_error(
-                REQUEST.get(), status, hide_security_details(status, error["Message"])
-            )[0],
-            event="error",
+            data=format_http_error(REQUEST.get(), status, message)[0], event="error"
         )
     except (HTTPClientError, BotocoreConnectionError) as exc:
         message = str(exc)
@@ -697,7 +699,9 @@ async def log_request_sse_stream_event(
         log_error_details(message, status=status)
         yield JSONServerSentEvent(
             data=format_http_error(
-                REQUEST.get(), status, hide_security_details(status, message)
+                REQUEST.get(),
+                status,
+                "The service is temporarily unavailable. Retry the request.",
             )[0],
             event="error",
         )

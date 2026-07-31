@@ -308,7 +308,7 @@ class TestChatModerationParam:
         error = response.json()["error"]
         assert error["type"] == "invalid_request_error"
         assert "guardrail" in error["message"]
-        assert "Comprehend" in error["message"]
+        assert "Moderations API" in error["message"]
         assert not chat_backend.guardrail_configs, "no generation must have happened"
 
     def test_default_guardrail_model_id(
@@ -362,7 +362,7 @@ class TestChatModerationParam:
         error = response.json()["error"]
         assert error["type"] == "invalid_request_error"
         assert "guardrail" in error["message"]
-        assert "Comprehend" in error["message"]
+        assert "Moderations API" in error["message"]
         assert not chat_backend.guardrail_configs
 
     def test_no_guardrail_configured_hides_settings(

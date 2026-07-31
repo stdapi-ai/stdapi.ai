@@ -763,8 +763,8 @@ class ApplyPatchTool(BaseModelRequest):
 class ProgrammaticToolCalling(BaseModelRequest):
     """Lets the model call other tools from generated code.
 
-    Accepted and dropped on Bedrock Converse models (the model calls tools
-    directly); forwarded as-is to Bedrock Mantle models.
+    Honored only by models that support programmatic tool calling;
+    accepted and ignored on all others.
     """
 
     type: Literal["programmatic_tool_calling"] = Field(
@@ -869,8 +869,8 @@ class ToolChoiceShell(BaseModelRequest):
 class ToolChoiceProgrammaticToolCalling(BaseModelRequest):
     """Forces the model to use programmatic tool calling.
 
-    Accepted and dropped on Bedrock Converse models (the default tool choice
-    applies); forwarded as-is to Bedrock Mantle models.
+    Honored only by models that support programmatic tool calling;
+    accepted and ignored on all others (the default tool choice applies).
     """
 
     type: Literal["programmatic_tool_calling"] = Field(
@@ -914,13 +914,13 @@ class Reasoning(BaseModelRequest):
     )
     context: Literal["auto", "current_turn", "all_turns"] | None = Field(
         default=None,
-        description="Reasoning context scope. Ignored on Bedrock Converse-served "
-        "models; forwarded verbatim to Bedrock Mantle native models.",
+        description="Reasoning context scope. Honored only by models that "
+        "support it; ignored otherwise.",
     )
     mode: str | None = Field(
         default=None,
-        description="Reasoning mode, such as `standard` or `pro`. Ignored on Bedrock "
-        "Converse-served models; forwarded verbatim to Bedrock Mantle native models.",
+        description="Reasoning mode, such as `standard` or `pro`. Honored only "
+        "by models that support it; ignored otherwise.",
     )
 
 
@@ -936,7 +936,7 @@ class PromptCacheBreakpoint(BaseModelRequest):
     mode: Literal["explicit"] = Field(
         default="explicit",
         description="Breakpoint mode. Always `explicit`: the prompt prefix ending "
-        "with this content part is cached (AWS Bedrock `cachePoint`).",
+        "with this content part is cached.",
     )
 
 
@@ -4147,7 +4147,7 @@ class PromptCacheOptions(BaseModelRequest):
     )
     ttl: PromptCacheOptionsTTL | None = Field(
         default=None,
-        description="Cache retention: `30m` -> 1h (AWS Bedrock mapping). "
+        description="Cache retention: `30m` is applied as 1h. "
         "Ignored when `prompt_cache_retention` is set.",
     )
 
@@ -4246,10 +4246,10 @@ class ResponseCreateParams(BaseModelRequest):
     )
     store: bool | None = Field(
         default=None,
-        description="Persist the response in AWS Bedrock session storage for "
-        "later retrieval and multi-turn continuation. Defaults to false on "
-        "this implementation. Ignored (with a request-log warning) when "
-        "streaming or when session storage is not enabled on the server.",
+        description="Persist the response for later retrieval and multi-turn "
+        "continuation. Defaults to false on this implementation. Ignored "
+        "(with a request-log warning) when streaming or when storage is "
+        "not enabled on the server.",
     )
     stream: bool | None = Field(
         default=None, description="Stream response as it is generated."

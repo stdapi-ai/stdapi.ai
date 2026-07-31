@@ -383,10 +383,8 @@ async def _load_completion_candidate(completion_id: str) -> ChatCompletion | Non
         "Returns the chat completions persisted with `store=true`, sorted by "
         "creation time (OpenAI Chat Completions API).\n\n"
         "Filter by `model` and by metadata pairs passed as "
-        "`metadata[key]=value` query parameters. Stored chat completions live "
-        "in AWS Bedrock session storage; listings scan a capped number of "
-        "sessions (1,000) in the primary Bedrock region; accounts beyond the "
-        "cap may see incomplete listings."
+        "`metadata[key]=value` query parameters. Listings cover the most "
+        "recent 1,000 stored chat completions; older ones may not appear."
     ),
     response_description="A paginated list of stored chat completions.",
     responses={200: {"description": "The stored chat completions."}},
@@ -551,8 +549,7 @@ async def update_chat_completion(
     operation_id="openai_chat_completion_get",
     description=(
         "Returns a chat completion previously persisted with `store=true` "
-        "(OpenAI Chat Completions API).\n\n"
-        "Stored chat completions live in AWS Bedrock session storage."
+        "(OpenAI Chat Completions API)."
     ),
     response_description="The stored chat completion.",
     responses={
@@ -590,7 +587,7 @@ async def retrieve_chat_completion(
     operation_id="openai_chat_completion_delete",
     description=(
         "Deletes a chat completion previously persisted with `store=true`, "
-        "along with its AWS Bedrock session (OpenAI Chat Completions API)."
+        "along with its stored messages (OpenAI Chat Completions API)."
     ),
     response_description="Deletion confirmation.",
     responses={

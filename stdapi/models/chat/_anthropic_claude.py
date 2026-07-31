@@ -215,8 +215,35 @@ class AnthropicClaudeChatModel(_BaseChatModel):
         if not server_tools:
             return
 
-        # Move all server tools to additionalModelRequestFields native format.
         native_tool_names = {tool["name"] for tool in server_tools}
+
+        # Two constraints meet here and cannot both be satisfied in every case:
+        # Bedrock rejects a request whose history carries toolUse/toolResult
+        # blocks unless a toolConfig is present, and Anthropic rejects the same
+        # tool name appearing in both the toolConfig and the native tool list.
+        # Promoting is therefore only possible while something else is left to
+        # populate the toolConfig -- another declared tool, or another tool name
+        # in history.  When nothing is, the stub has to stay and the native
+        # definition cannot be sent for this turn; only the beta flags are.
+        history_names = _history_tool_use_names(bedrock_messages)
+        surviving_stubs = [
+            entry
+            for entry in (tool_config["tools"] if tool_config else [])
+            if not (
+                isinstance(entry, dict)
+                and isinstance(spec := entry.get("toolSpec"), dict)
+                and spec.get("name") in native_tool_names
+            )
+        ]
+        if (
+            history_names
+            and not surviving_stubs
+            and not history_names - native_tool_names
+        ):
+            self._req_configure_anthropic_beta(additional_request_fields, server_tools)
+            return
+
+        # Move all server tools to additionalModelRequestFields native format.
         existing_tools: list[JsonMapping] = additional_request_fields.get(  # type: ignore[assignment]
             "tools", []
         )
@@ -280,7 +307,17 @@ class AnthropicClaudeChatModel(_BaseChatModel):
                         )
                     tool_config.clear()  # type: ignore[attr-defined]
 
-        # Inject anthropic_beta flags for all server tools.
+        self._req_configure_anthropic_beta(additional_request_fields, server_tools)
+
+    def _req_configure_anthropic_beta(
+        self, additional_request_fields: JsonMapping, server_tools: list[JsonMapping]
+    ) -> None:
+        """Add the ``anthropic_beta`` flags the given server tools require.
+
+        Args:
+            additional_request_fields: Mutable ``additionalModelRequestFields`` dict.
+            server_tools: Per-tool dicts, as passed to ``_req_configure_tools``.
+        """
         if required_flags := {
             flag
             for tool in server_tools

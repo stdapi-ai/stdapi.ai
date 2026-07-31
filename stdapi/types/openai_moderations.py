@@ -47,8 +47,8 @@ class ModerationCreateParams(BaseModelRequest):
         ]
     ) = Field(
         description="Text or image inputs to classify (at most "
-        f"{_MAX_INPUT_ITEMS}). Each element yields one result, classified by a "
-        "separate AWS call."
+        f"{_MAX_INPUT_ITEMS}). Each element yields one result and is billed "
+        "separately."
     )
     model: str | None = Field(
         default=None,

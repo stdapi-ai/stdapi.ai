@@ -2100,10 +2100,9 @@ class MessageCreateParams(BaseModelRequestWithExtra):
         default=None,
         validation_alias=AliasChoices("stop_sequences", "stopSequences"),
         description="Custom sequences that stop generation when encountered. "
-        "The response `stop_reason` becomes `stop_sequence`. On native "
-        "passthrough models, the response `stop_sequence` holds the matched "
-        "value; on Converse-served models, Bedrock does not expose the "
-        "matched sequence, so it is `null`.",
+        "The response `stop_reason` becomes `stop_sequence`. The response "
+        "`stop_sequence` holds the matched value on models that report it, "
+        "and is `null` otherwise.",
     )
     stream: bool = Field(
         default=False,
@@ -2147,9 +2146,9 @@ class MessageCreateParams(BaseModelRequestWithExtra):
         ge=0,
         description="Sample only from the top K most likely tokens per step, "
         "removing low-probability outliers. Advanced use only; prefer "
-        "`temperature`. Not supported by the AWS Bedrock Converse API, where it "
-        "is passed as an extra argument; some models require a different "
-        "argument name for it.",
+        "`temperature`. Not supported by every model; where it is "
+        "unsupported, pass it through the extra model parameters under the "
+        "name that model expects.",
     )
     top_p: float | None = Field(
         default=None,

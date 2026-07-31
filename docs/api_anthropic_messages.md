@@ -445,7 +445,7 @@ curl -X POST "$BASE/v1/messages" \
 
 #### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Claude Server Tools
 
-Anthropic Claude models support server-side tools that are executed by the model provider. These tools are passed through to Bedrock via `additionalModelRequestFields` in their native Anthropic JSON format.
+Anthropic Claude models support server-side tools that are executed by the model provider. Declare them in their native Anthropic JSON format.
 
 **Supported Tools by Model:**
 

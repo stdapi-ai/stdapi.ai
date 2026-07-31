@@ -641,6 +641,9 @@ def handle_bedrock_client_error() -> Generator[None]:
     try:
         yield
     except ClientError as error:
+        # Imported here: stdapi.monitoring imports stdapi.aws_bedrock (import cycle).
+        from stdapi.monitoring import log_error_details  # noqa: PLC0415
+
         error_message = error.response["Error"]["Message"]
         match error.response["Error"]["Code"]:
             case "ValidationException" if "Invalid S3 credentials" in error_message:
@@ -650,9 +653,13 @@ def handle_bedrock_client_error() -> Generator[None]:
                 )
                 raise ApiError(msg) from error
             case code if code in _BEDROCK_MODEL_ERROR_CODES:  # pragma: no cover
-                raise ApiError(error_message, status=500) from error
+                log_error_details(error_message, status=500)
+                msg = "The model failed to process the request."
+                raise ApiError(msg, status=500) from error
             case "ModelNotReadyException":  # pragma: no cover
-                raise ApiError(error_message, status=503) from error
+                log_error_details(error_message, status=503)
+                msg = "The model is not ready yet. Retry the request in a few moments."
+                raise ApiError(msg, status=503) from error
             case _:  # pragma: no cover
                 raise
 

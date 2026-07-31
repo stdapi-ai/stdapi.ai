@@ -1634,7 +1634,7 @@ class TestMantleCompactionItemGuard:
                 ],
             }
         )
-        with pytest.raises(ApiError, match="compact the conversation again") as exc:
+        with pytest.raises(ApiError, match="Compact the conversation again") as exc:
             await mantle_convert.responses_payload(request, "model-id")
         assert exc.value.status == 400
 
@@ -1675,7 +1675,7 @@ class TestMantleModerationParamGuard:
                 "moderation": {"model": "gr123"},
             }
         )
-        with pytest.raises(ApiError, match="not available on Bedrock") as exc:
+        with pytest.raises(ApiError, match="not available with this model") as exc:
             await mantle_convert.chat_completions_payload(request, "model-id")
         assert exc.value.status == 400
 
@@ -1684,7 +1684,7 @@ class TestMantleModerationParamGuard:
         request = ResponseCreateParams.model_validate(
             {"model": "ignored", "input": "hi", "moderation": {"model": "gr123"}}
         )
-        with pytest.raises(ApiError, match="not available on Bedrock") as exc:
+        with pytest.raises(ApiError, match="not available with this model") as exc:
             await mantle_convert.responses_payload(request, "model-id")
         assert exc.value.status == 400
 

@@ -110,6 +110,7 @@ class TestTranslateFailover:
 
         ``UnsupportedLanguagePairException`` would fail identically everywhere,
         so it must abort the failover loop instead of consuming every region.
+        The raw AWS error code is not forwarded to the client.
         """
         clients = {
             "us-east-1": _StubTranslateClient(
@@ -123,7 +124,7 @@ class TestTranslateFailover:
             await translate("hej", "xx")
 
         assert excinfo.value.status == 400
-        assert "UnsupportedLanguagePairException" in str(excinfo.value)
+        assert "UnsupportedLanguagePairException" not in str(excinfo.value)
         assert clients["us-east-1"].calls == 1
         assert clients["eu-west-1"].calls == 0
 
@@ -242,6 +243,7 @@ class TestTranslateExtraParams:
         assert "Settings" not in request
         assert "TerminologyNames" not in request
 
+    @pytest.mark.usefixtures("request_log")
     async def test_param_validation_error_becomes_a_400(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -249,7 +251,8 @@ class TestTranslateExtraParams:
 
         ``ParamValidationError`` is a ``BotoCoreError``, so the failover loop
         treats it as region-level and exhausts every candidate before the last
-        one's error is converted; the botocore report is kept as the message.
+        one's error is converted. The raw botocore field-path report is logged
+        server-side only; the client gets a generic message.
 
         Ref: https://docs.aws.amazon.com/translate/latest/APIReference/API_TranslateText.html
              stdapi/aws.py:is_failover_error
@@ -264,10 +267,11 @@ class TestTranslateExtraParams:
         }
         _patch_clients(monkeypatch, clients)
 
-        with pytest.raises(ApiError, match="Invalid Formality value") as excinfo:
+        with pytest.raises(ApiError, match="Invalid translation settings") as excinfo:
             await translate("bonjour", "fr", settings={"Formality": "BAD"})
 
         assert excinfo.value.status == 400, "a client-side rejection must not be a 500"
         assert excinfo.value.code is None
+        assert "Invalid Formality value" not in str(excinfo.value)
         assert clients["us-east-1"].calls == 1
         assert clients["eu-west-1"].calls == 1

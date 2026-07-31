@@ -139,7 +139,7 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     prompt_cache_retention: PromptCacheRetention | None = Field(
         default=None,
         description="The retention policy for the prompt cache. "
-        "OpenAI values are mapped to Bedrock: in_memory -> 5m, 24h -> 1h.",
+        "`in_memory` is applied as 5m, `24h` as 1h.",
     )
     best_of: int | None = Field(
         default=None,
@@ -213,13 +213,10 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         return self
 
     def _validate_stop_sequences(self) -> None:
-        """Validate stop sequences are not whitespace-only (AWS Bedrock rejects blank ones)."""
+        """Validate stop sequences are not whitespace-only."""
         sequences = [self.stop] if isinstance(self.stop, str) else self.stop or []
         if any(not sequence.strip() for sequence in sequences):
-            msg = (
-                "Stop sequences must contain at least one non-whitespace "
-                "character (not supported by AWS Bedrock)."
-            )
+            msg = "Stop sequences must contain at least one non-whitespace character."
             raise ValueError(msg)
 
 

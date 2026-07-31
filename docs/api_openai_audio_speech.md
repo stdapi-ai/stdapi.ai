@@ -101,14 +101,14 @@ Each engine supports a different subset of voices and languages — see the [Pol
 ### ![Amazon Polly](styles/logo_amazon_polly.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Polly Features
 
 - **SSML Support** :material-star-circle:{ .highlight }: Fine-grained control over pronunciation, emphasis, pauses, and prosody — [SSML docs](https://docs.aws.amazon.com/polly/latest/dg/ssml.html). With SSML input, the `speed` parameter is rejected: set the speaking rate with SSML `<prosody>` instead.
-- **Flexible Formats**: mp3, ogg, wav, flac, aac, opus, pcm — non-native formats are transcoded server-side
+- **Flexible Formats**: mp3, ogg, wav, flac, aac, opus, pcm
 - **Streaming Options**: Raw bytes (default) or SSE events with `stream_format: "sse"`
 - **Speed Control**: Adjust playback from 0.2x to 2.0x
 - **Speech Marks**: Word, sentence, viseme, and SSML timing metadata with `SpeechMarkTypes` (returned as JSON instead of audio)
 - **Character-Based Billing**: Usage tracks character counts—the native billing unit for Amazon Polly and Amazon Comprehend—rather than OpenAI-style tokens
 
 !!! tip "Performance Tips: Optimize Speed & Cost"
-    - **Use native Polly formats** (mp3, ogg) to skip server-side conversion. `pcm` is resampled server-side by default (see [Sample Rate](#provider-specific-parameters)) unless a Polly-native `SampleRate` is explicitly requested
+    - **Prefer mp3 or ogg** for the lowest latency; `pcm` is returned at OpenAI's 24 kHz contract unless you request an explicit `SampleRate` (see [Sample Rate](#provider-specific-parameters))
     - **Specify a Polly voice ID** to bypass language detection—faster responses, no Amazon Comprehend charges
     - **Configure a default language** via `DEFAULT_TTS_LANGUAGE` environment variable to skip language detection for all requests using OpenAI voice names
 
@@ -202,7 +202,7 @@ Request word, sentence, viseme, or SSML timing marks instead of audio (useful fo
 !!! warning "Speech marks return JSON, not audio"
     When `SpeechMarkTypes` is set, Polly returns timing metadata only. The response is a stream of JSON objects (one per line) with the `application/x-json-stream` content type:
 
-    - `response_format` is ignored — no audio is generated or transcoded.
+    - `response_format` is ignored — no audio is returned.
     - `stream_format: "sse"` is rejected with HTTP 400, since the payload is not audio events.
     - The `ssml` mark type requires SSML input (`<speak>…</speak>`); requesting it with plain text returns HTTP 400.
 

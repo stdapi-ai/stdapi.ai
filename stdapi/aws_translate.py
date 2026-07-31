@@ -10,6 +10,7 @@ from botocore.exceptions import ClientError, ParamValidationError
 from stdapi.api_errors import ApiError
 from stdapi.aws import call_with_region_failover, service_regions
 from stdapi.config import SETTINGS
+from stdapi.monitoring import log_error_details
 from stdapi.usage import record_translate_usage
 from stdapi.utils import language_code_to_name
 
@@ -89,14 +90,17 @@ async def translate(
         if error.response["Error"]["Code"] == "UnsupportedLanguagePairException":
             msg = (
                 f"Translation from {language_code_to_name(source_language_code).capitalize()} "
-                f"is not supported: {error.response['Error']['Message']}"
+                f"to {language_code_to_name(target_language_code).capitalize()} is not "
+                "supported. Choose a supported language pair."
             )
             raise ApiError(msg) from None
         raise
     except ParamValidationError as error:
         # botocore validates Settings/TerminologyNames client-side; surface it
         # as a caller 400 instead of an unhandled 500.
-        raise ApiError(str(error)) from error
+        log_error_details(str(error))
+        msg = "Invalid translation settings or terminology names."
+        raise ApiError(msg) from error
 
 
 async def translate_subtitle(
