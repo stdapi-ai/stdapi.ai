@@ -629,6 +629,10 @@ class TestChatCompletions:
         assert final_choice.message.tool_calls is None
         assert final_choice.finish_reason in ("stop", "length")
 
+    @pytest.mark.retry(
+        "A forced call is a model decision: the model may spend its budget on "
+        "reasoning tokens and stop on length before emitting the call"
+    )
     def test_legacy_functions_streaming(
         self, openai_client: OpenAI, chat_vision_model: str, use_official_api: bool
     ) -> None:
@@ -1553,6 +1557,10 @@ class TestChatCompletions:
         assert response.usage is not None
         assert response.usage.prompt_tokens > 0
 
+    @pytest.mark.retry(
+        "The assertion depends on a DNS lookup for a random host failing the way "
+        "the gateway expects; a resolver hiccup reports a different status"
+    )
     def test_multimodal_with_http_image_url_error(
         self, openai_client: OpenAI, chat_vision_model: str
     ) -> None:
@@ -1935,6 +1943,11 @@ class TestChatCompletions:
             "The rejection must come from the model, not from request validation"
         )
 
+    @pytest.mark.retry(
+        "A prompt cache is written asynchronously: the first request of a cold "
+        "session can return before the entry is readable, so the second one "
+        "legitimately reports no cached tokens"
+    )
     def test_prompt_cache_key_with_long_system_prompt(
         self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
@@ -1990,6 +2003,10 @@ class TestChatCompletions:
             "prompt_tokens must include the cached prefix"
         )
 
+    @pytest.mark.retry(
+        "Same cold-cache race as the non-streaming twin: the cache entry may not "
+        "be readable yet when the second request is sent"
+    )
     def test_prompt_cache_key_with_long_system_prompt_streaming(
         self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:

@@ -445,6 +445,10 @@ _OPENAI_ORGANIZATION = "tests_stdapi.ai"
 _OPT_IN_MARKERS = ("expensive", "agentic", "slow", "video")
 #: Fallback skip reason for a ``gateway`` marker that names none of its own.
 _GATEWAY_SKIP_REASON = "Exercises a gateway-only capability (official API selected)"
+#: Extra attempts a ``retry`` test gets when it names no count of its own.
+_DEFAULT_RERUNS = 2
+#: Seconds between two attempts, long enough for a written cache entry to be visible.
+_DEFAULT_RERUN_DELAY = 3.0
 #: Root fixtures reaching a live service; a test whose closure holds one cannot run offline.
 _LIVE_FIXTURES = frozenset(
     {
@@ -537,6 +541,13 @@ def pytest_collection_modifyitems(
     ``_LIVE_FIXTURES``. Deriving the set from the closure rather than a marker
     means a new test is classified by the fixtures it requests, with nothing to
     remember to annotate.
+
+    ``retry`` is translated into the rerun plugin's own marker here rather than
+    used directly, so that every retried test has to state why it is allowed to
+    fail once. A retry hides a real regression if it is ever added without one.
+
+    Raises:
+        pytest.UsageError: If a ``retry`` marker states no reason.
     """
 
     def skip(reason: str, matches: Callable[[pytest.Item], bool]) -> None:
@@ -562,6 +573,22 @@ def pytest_collection_modifyitems(
                 reason = str(marker.args[0]) if marker.args else _GATEWAY_SKIP_REASON
                 item.add_marker(pytest.mark.skip(reason=reason))
 
+    def apply_retries() -> None:
+        """Rewrite every ``retry`` marker as the rerun plugin's ``flaky``."""
+        for item in items:
+            marker = item.get_closest_marker("retry")
+            if marker is None:
+                continue
+            if not marker.args or not str(marker.args[0]).strip():
+                msg = f"{item.nodeid}: @pytest.mark.retry must state a reason"
+                raise pytest.UsageError(msg)
+            item.add_marker(
+                pytest.mark.flaky(
+                    reruns=marker.kwargs.get("reruns", _DEFAULT_RERUNS),
+                    reruns_delay=marker.kwargs.get("delay", _DEFAULT_RERUN_DELAY),
+                )
+            )
+
     if config.getoption("--server-url") or config.getoption("--use-official-api"):
         skip("Tests the local implementation (remote target selected)", marked("local"))
     if config.getoption("--use-official-api"):
@@ -571,6 +598,7 @@ def pytest_collection_modifyitems(
     for opt_in in _OPT_IN_MARKERS:
         if not config.getoption(f"--{opt_in}"):
             skip(f"Need --{opt_in} option to run this test", marked(opt_in))
+    apply_retries()
 
 
 @pytest.fixture(scope="session")

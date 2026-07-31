@@ -1643,6 +1643,10 @@ class TestResponses:
         "gpt-5-nano rejects prompt_cache_options: 'prompt_cache_options "
         "is not supported on this model'"
     )
+    @pytest.mark.retry(
+        "A prompt cache is written asynchronously: the marked prefix may not be "
+        "readable yet when the second, identical call is sent"
+    )
     def test_explicit_prompt_cache_breakpoint(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:

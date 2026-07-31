@@ -516,6 +516,10 @@ class TestResponsesCompactLive:
          https://developers.openai.com/api/docs/guides/compaction
     """
 
+    @pytest.mark.retry(
+        "What survives compaction is the model's own summarization choice: it "
+        "may drop the fact the continuation is asked to recall"
+    )
     def test_compact_and_continue(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
