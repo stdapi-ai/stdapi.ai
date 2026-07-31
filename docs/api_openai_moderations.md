@@ -67,21 +67,21 @@ curl -X POST "$BASE/v1/moderations" \
 | Feature                          |                 Status                  | Notes                                                                    |
 |----------------------------------|:---------------------------------------:|---------------------------------------------------------------------------|
 | **Input**                        |                                         |                                                                           |
-| `input` string / array of strings |  :material-check-circle:{ .success }   | Each element yields one independent result                                |
-| `input` text parts               |   :material-check-circle:{ .success }   | `{"type": "text", "text": ...}`                                           |
-| `input` image parts              |      :material-cog:{ .model-dep }       | Guardrail models only; PNG and JPEG                                       |
-| Empty string input               |   :material-check-circle:{ .success }   | Returns an unflagged result without calling AWS (OpenAI parity); whitespace-only strings are **not** covered by this shortcut and are classified normally (billed Comprehend call) |
-| `model`                          |   :material-check-circle:{ .success }   | Guardrail, Comprehend, or an OpenAI moderation model alias (see below)    |
+| `input` string / array of strings |  :material-check-circle:{ .success role="img" aria-label="Supported" }   | Each element yields one independent result                                |
+| `input` text parts               |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | `{"type": "text", "text": ...}`                                           |
+| `input` image parts              |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Guardrail models only; PNG and JPEG                                       |
+| Empty string input               |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Returns an unflagged result without calling AWS (OpenAI parity); whitespace-only strings are **not** covered by this shortcut and are classified normally (billed Comprehend call) |
+| `model`                          |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Guardrail, Comprehend, or an OpenAI moderation model alias (see below)    |
 | **Output**                       |                                         |                                                                           |
-| `flagged`                        |   :material-check-circle:{ .success }   | Also raised by guardrail policies without a mapped category, and on Comprehend by the overall toxicity score or unmapped labels such as profanity |
-| `categories` / `category_scores` |   :material-minus-circle:{ .partial }   | Mapped categories only; OpenAI categories without a counterpart stay `false` / `0.0` |
-| `category_applied_input_types`   |   :material-check-circle:{ .success }   | Reflects each classified element's modality                               |
+| `flagged`                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Also raised by guardrail policies without a mapped category, and on Comprehend by the overall toxicity score or unmapped labels such as profanity |
+| `categories` / `category_scores` |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }   | Mapped categories only; OpenAI categories without a counterpart stay `false` / `0.0` |
+| `category_applied_input_types`   |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Reflects each classified element's modality                               |
 | **Usage tracking**               |                                         |                                                                           |
-| Guardrail text units / images    |   :material-check-circle:{ .success }   | Billing units (one text unit per 1,000 characters per input; one unit per image) |
-| Comprehend units                 |   :material-check-circle:{ .success }   | Billing unit (100 characters, minimum 3 per call)                         |
+| Guardrail text units / images    |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Billing units (one text unit per 1,000 characters per input; one unit per image) |
+| Comprehend units                 |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Billing unit (100 characters, minimum 3 per call)                         |
 | **Other**                        |                                         |                                                                           |
-| Model discovery                  | :material-plus-circle:{ .extra-feature } | Moderation models and their aliases appear in the [model listings](api_search_models.md) |
-| Long text inputs                 | :material-plus-circle:{ .extra-feature } | Comprehend inputs of any length are split into API-sized segments transparently |
+| Model discovery                  | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Moderation models and their aliases appear in the [model listings](api_search_models.md) |
+| Long text inputs                 | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Comprehend inputs of any length are split into API-sized segments transparently |
 
 </div>
 
@@ -89,11 +89,11 @@ curl -X POST "$BASE/v1/moderations" \
 
 **Legend:**
 
-* :material-check-circle:{ .success } **Supported** — Fully compatible with OpenAI API
-* :material-cog:{ .model-dep } **Model-Dependent** — Behavior depends on the model or backend; check the Notes column
-* :material-minus-circle:{ .partial } **Partial** — Supported with limitations
-* :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
-* :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
+* :material-check-circle:{ .success role="img" aria-label="Supported" } **Supported** — Fully compatible with OpenAI API
+* :material-cog:{ .model-dep role="img" aria-label="Model-dependent" } **Model-Dependent** — Behavior depends on the model or backend; check the Notes column
+* :material-minus-circle:{ .partial role="img" aria-label="Partial" } **Partial** — Supported with limitations
+* :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } **Unsupported** — Not available in this implementation
+* :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } **Extra Feature** — Enhanced capability beyond OpenAI API
 
 </div>
 
@@ -119,13 +119,13 @@ Both moderation models appear in the [`/v1/models`](api_openai_models.md) and [`
 | Capability                | Amazon Bedrock Guardrails                                                  | Amazon Comprehend                                     |
 |---------------------------|-----------------------------------------------------------------------------|--------------------------------------------------------|
 | Setup                     | Create and configure a guardrail in Amazon Bedrock                         | None — works out of the box                            |
-| Text inputs               | :material-check-circle:{ .success } Any language supported by the guardrail | :material-check-circle:{ .success } English only       |
-| Image inputs              | :material-check-circle:{ .success } PNG and JPEG                           | :material-close-circle:{ .unsupported } Not supported  |
+| Text inputs               | :material-check-circle:{ .success role="img" aria-label="Supported" } Any language supported by the guardrail | :material-check-circle:{ .success role="img" aria-label="Supported" } English only       |
+| Image inputs              | :material-check-circle:{ .success role="img" aria-label="Supported" } PNG and JPEG                           | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } Not supported  |
 | Mapped categories         | `hate`, `harassment`, `sexual`, `violence`, `illicit`                       | `hate`, `harassment`, `sexual`, `violence`, `violence/graphic` |
 | Category scores           | Quantized confidence levels (`0.0` / `0.25` / `0.5` / `0.75`)               | Continuous scores (`0.0` – `1.0`)                       |
-| Custom policies           | Denied topics, word filters, PII, prompt attacks, contextual grounding      | :material-close-circle:{ .unsupported } Fixed toxicity labels |
+| Custom policies           | Denied topics, word filters, PII, prompt attacks, contextual grounding      | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } Fixed toxicity labels |
 | Tunable thresholds        | Per-filter strengths configured on the guardrail                            | Fixed flagging threshold (score ≥ 0.5)                 |
-| `moderation` request parameter | :material-check-circle:{ .success } Applied to generations natively    | :material-close-circle:{ .unsupported } Moderations API only |
+| `moderation` request parameter | :material-check-circle:{ .success role="img" aria-label="Supported" } Applied to generations natively    | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } Moderations API only |
 | Input length              | ApplyGuardrail text unit limits                                             | Unlimited (split into 1 KB segments transparently)     |
 
 ## Selecting the Model

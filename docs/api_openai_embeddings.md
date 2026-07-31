@@ -39,19 +39,19 @@ Generate vector embeddings for semantic search and RAG applications with Amazon 
 | Feature                      |                  Status                  | Notes                                                           |
 |------------------------------|:----------------------------------------:|-----------------------------------------------------------------|
 | **Input Types**              |                                          |                                                                 |
-| Text input (single string)   |   :material-check-circle:{ .success }    | Full support for text embeddings                                |
-| Multimodal input             | :material-plus-circle:{ .extra-feature } | Image, audio, video, document (image + text)                    |
-| Multiple input (batch array) |   :material-check-circle:{ .success }    | Process multiple inputs efficiently                             |
-| Token array input            | :material-close-circle:{ .unsupported }  | Array of token integers not supported                           |
+| Text input (single string)   |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Full support for text embeddings                                |
+| Multimodal input             | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Image, audio, video, document (image + text)                    |
+| Multiple input (batch array) |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Process multiple inputs efficiently                             |
+| Token array input            | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Array of token integers not supported                           |
 | **Output Formats**           |                                          |                                                                 |
-| Float vectors                |   :material-check-circle:{ .success }    | Standard floating-point arrays                                  |
-| Base64 encoding              |   :material-check-circle:{ .success }    | Base64-encoded float32 arrays                                   |
+| Float vectors                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Standard floating-point arrays                                  |
+| Base64 encoding              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Base64-encoded float32 arrays                                   |
 | **Model Parameters**         |                                          |                                                                 |
-| `dimensions` override        |       :material-cog:{ .model-dep }       | Some models support dimension reduction                         |
-| `encoding_format`            |   :material-check-circle:{ .success }    | Choose `float` or `base64`                                      |
-| Extra model-specific params  | :material-plus-circle:{ .extra-feature } | Extra model-specific parameters not supported by the OpenAI API |
+| `dimensions` override        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Some models support dimension reduction                         |
+| `encoding_format`            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Choose `float` or `base64`                                      |
+| Extra model-specific params  | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra model-specific parameters not supported by the OpenAI API |
 | **Usage tracking**           |                                          |                                                                 |
-| Input text tokens            |       :material-cog:{ .model-dep }       | Estimated on some models                                        |
+| Input text tokens            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Estimated on some models                                        |
 
 </div>
 
@@ -59,10 +59,10 @@ Generate vector embeddings for semantic search and RAG applications with Amazon 
 
 **Legend:**
 
-* :material-check-circle:{ .success } **Supported** — Fully compatible with OpenAI API
-* :material-cog:{ .model-dep } **Model-Dependent** — Behavior depends on the model or backend; check the Notes column
-* :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
-* :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
+* :material-check-circle:{ .success role="img" aria-label="Supported" } **Supported** — Fully compatible with OpenAI API
+* :material-cog:{ .model-dep role="img" aria-label="Model-dependent" } **Model-Dependent** — Behavior depends on the model or backend; check the Notes column
+* :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } **Unsupported** — Not available in this implementation
+* :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } **Extra Feature** — Enhanced capability beyond OpenAI API
 
 </div>
 
@@ -121,7 +121,7 @@ export DEFAULT_MODEL_PARAMS='{
 
 **Behavior:**
 
-- :material-check-circle:{ .success } **Compatible parameters**: Forwarded to the model and applied
+- :material-check-circle:{ .success role="img" aria-label="Supported" } **Compatible parameters**: Forwarded to the model and applied
 - :material-alert-circle:{ .warning } **Unsupported parameters**: Return HTTP 400 with an error message
 
 ## Available Request Headers

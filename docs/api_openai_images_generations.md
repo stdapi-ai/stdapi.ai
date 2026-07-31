@@ -39,36 +39,36 @@ Generate images with Amazon Bedrock image models like Stability AI and Amazon No
 | Feature                        |                  Status                  | Notes                                                               |
 |--------------------------------|:----------------------------------------:|---------------------------------------------------------------------|
 | **Generation**                 |                                          |                                                                     |
-| Text-to-image (`/generations`) |   :material-check-circle:{ .success }    | Generate images from prompts                                        |
+| Text-to-image (`/generations`) |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Generate images from prompts                                        |
 | **Parameters**                 |                                          |                                                                     |
-| `prompt`                       |   :material-check-circle:{ .success }    | Text description for generation (required, min 1 char)              |
-| `model`                        |   :material-check-circle:{ .success }    | Required parameter                                                  |
-| `n` (number of images)         |   :material-check-circle:{ .success }    | Multiple images per request; accepted range is 1-10 (default: 1), but the effective maximum is model-dependent (e.g. Amazon Titan and Nova Canvas cap at 5) |
-| `size` (WIDTHxHEIGHT)          |   :material-check-circle:{ .success }    | Output dimensions (default: 1024x1024, format validated)            |
-| `response_format`              |   :material-check-circle:{ .success }    | `url` or `b64_json` (default: `url`)                                |
-| `quality`                      |       :material-cog:{ .model-dep }       | Quality setting (default: `auto`, supports OpenAI & model-specific) |
-| `style`                        |       :material-cog:{ .model-dep }       | Model-specific style parameters                                     |
-| `output_format`                |   :material-check-circle:{ .success }    | `png`, `jpeg`, or `webp` (model-specific)                           |
-| `output_compression`           |   :material-check-circle:{ .success }    | Compression level 1-100% (default: 100)                             |
-| `stream`                       |   :material-check-circle:{ .success }    | Generate images in streaming mode with partial results              |
-| `partial_images`               | :material-close-circle:{ .unsupported }  | Accepted (0-3) but ignored — no available model currently streams partial images; the final image is always sent as a single event |
-| `background`                   |   :material-minus-circle:{ .partial }    | Accepts `auto` (default) and `opaque`; `transparent` is unsupported — responses report `opaque` |
-| `moderation`                   | :material-close-circle:{ .unsupported }  | Only the default `auto` is accepted; other values are rejected with an error |
-| Extra model-specific params    | :material-plus-circle:{ .extra-feature } | Extra model-specific parameters via JSON body                       |
+| `prompt`                       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Text description for generation (required, min 1 char)              |
+| `model`                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Required parameter                                                  |
+| `n` (number of images)         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Multiple images per request; accepted range is 1-10 (default: 1), but the effective maximum is model-dependent (e.g. Amazon Titan and Nova Canvas cap at 5) |
+| `size` (WIDTHxHEIGHT)          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Output dimensions (default: 1024x1024, format validated)            |
+| `response_format`              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `url` or `b64_json` (default: `url`)                                |
+| `quality`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Quality setting (default: `auto`, supports OpenAI & model-specific) |
+| `style`                        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Model-specific style parameters                                     |
+| `output_format`                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `png`, `jpeg`, or `webp` (model-specific)                           |
+| `output_compression`           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Compression level 1-100% (default: 100)                             |
+| `stream`                       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Generate images in streaming mode with partial results              |
+| `partial_images`               | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted (0-3) but ignored — no available model currently streams partial images; the final image is always sent as a single event |
+| `background`                   |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Accepts `auto` (default) and `opaque`; `transparent` is unsupported — responses report `opaque` |
+| `moderation`                   | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Only the default `auto` is accepted; other values are rejected with an error |
+| Extra model-specific params    | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra model-specific parameters via JSON body                       |
 | **Output**                     |                                          |                                                                     |
-| URL response format            |   :material-check-circle:{ .success }    | Temporary presigned URLs, valid for 60 minutes (requires AWS_S3_BUCKET) |
-| Base64 JSON format             |   :material-check-circle:{ .success }    | Inline base64-encoded images                                        |
-| PNG format                     |   :material-check-circle:{ .success }    | Lossless image output                                               |
-| JPEG format                    |       :material-cog:{ .model-dep }       | Lossy compression (model-specific)                                  |
-| WebP format                    |       :material-cog:{ .model-dep }       | Modern format with compression (model-specific)                     |
+| URL response format            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Temporary presigned URLs, valid for 60 minutes (requires AWS_S3_BUCKET) |
+| Base64 JSON format             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Inline base64-encoded images                                        |
+| PNG format                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Lossless image output                                               |
+| JPEG format                    |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Lossy compression (model-specific)                                  |
+| WebP format                    |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Modern format with compression (model-specific)                     |
 | **Streaming**                  |                                          |                                                                     |
-| SSE streaming                  |   :material-check-circle:{ .success }    | Server-sent events with final images (no partial previews)          |
-| Partial images                 | :material-close-circle:{ .unsupported }  | Accepted but ignored — no available model streams partial images    |
+| SSE streaming                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Server-sent events with final images (no partial previews)          |
+| Partial images                 | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted but ignored — no available model streams partial images    |
 | **Usage tracking**             |                                          |                                                                     |
-| Input text tokens              |   :material-check-circle:{ .success }    | Sourced from AWS billing when available                             |
-| Output image tokens            |   :material-check-circle:{ .success }    | Sourced from AWS billing data when available; falls back to the image count (`n`) |
+| Input text tokens              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Sourced from AWS billing when available                             |
+| Output image tokens            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Sourced from AWS billing data when available; falls back to the image count (`n`) |
 | **Other**                      |                                          |                                                                     |
-| `user`                         |   :material-minus-circle:{ .partial }    | Logged but not used for abuse monitoring                            |
+| `user`                         |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Logged but not used for abuse monitoring                            |
 
 </div>
 
@@ -76,11 +76,11 @@ Generate images with Amazon Bedrock image models like Stability AI and Amazon No
 
 **Legend:**
 
-* :material-check-circle:{ .success } **Supported** — Fully compatible with OpenAI API
-* :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
-* :material-minus-circle:{ .partial } **Partial** — Supported with limitations
-* :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
-* :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
+* :material-check-circle:{ .success role="img" aria-label="Supported" } **Supported** — Fully compatible with OpenAI API
+* :material-cog:{ .model-dep role="img" aria-label="Model-dependent" } **Available on Select Models** — Check your model's capabilities
+* :material-minus-circle:{ .partial role="img" aria-label="Partial" } **Partial** — Supported with limitations
+* :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } **Unsupported** — Not available in this implementation
+* :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } **Extra Feature** — Enhanced capability beyond OpenAI API
 
 </div>
 

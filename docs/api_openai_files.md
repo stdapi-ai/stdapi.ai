@@ -50,20 +50,20 @@ Upload and manage files via an OpenAI-compatible interface. Files are stored in 
 | Feature                    |                  Status                  | Notes                                                                                         |
 |----------------------------|:----------------------------------------:|-----------------------------------------------------------------------------------------------|
 | **Upload**                 |                                          |                                                                                               |
-| `file` (multipart)         |   :material-check-circle:{ .success }    | Required binary form field                                                                    |
-| `file` (JSON body)         | :material-plus-circle:{ .extra-feature } | Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents                                  |
-| `purpose`                  |   :material-minus-circle:{ .partial }    | Strictly validated against `assistants`, `batch`, `fine-tune`, `vision`, `user_data`, `evals` (others rejected); has no behavioral effect on storage or processing |
-| `expires_after[anchor]`    |   :material-check-circle:{ .success }    | Only `"created_at"` is accepted; expiry is computed from `expires_after[seconds]`             |
-| `expires_after[seconds]`   |   :material-check-circle:{ .success }    | Range: 3 600 – 2 592 000 (1 hour – 30 days)                                                   |
+| `file` (multipart)         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Required binary form field                                                                    |
+| `file` (JSON body)         | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents                                  |
+| `purpose`                  |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Strictly validated against `assistants`, `batch`, `fine-tune`, `vision`, `user_data`, `evals` (others rejected); has no behavioral effect on storage or processing |
+| `expires_after[anchor]`    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Only `"created_at"` is accepted; expiry is computed from `expires_after[seconds]`             |
+| `expires_after[seconds]`   |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Range: 3 600 – 2 592 000 (1 hour – 30 days)                                                   |
 | **Listing**                |                                          |                                                                                               |
-| `order=asc` / `order=desc` |   :material-check-circle:{ .success }    | Ascending and descending supported; default `desc`                                            |
-| `after` cursor             |   :material-check-circle:{ .success }    | Forward cursor pagination                                                                     |
-| `limit`                    |   :material-check-circle:{ .success }    | 1 – 10 000; default 10 000                                                                    |
-| `purpose` filter           |   :material-check-circle:{ .success }    | Filter results by uploaded purpose                                                            |
-| **File size cap**          | :material-plus-circle:{ .extra-feature } | No artificial limit; S3 object limit (~5 TB)                                                  |
-| **Expiry enforcement**     |   :material-check-circle:{ .success }    | Expired files return 404 at read time; S3 Lifecycle as backstop                               |
-| **Chat integration**       |   :material-check-circle:{ .success }    | Use `file_id` in `type: "file"` content parts                                                 |
-| `status` field             |   :material-check-circle:{ .success }    | Always `"processed"` — no async processing pipeline                                           |
+| `order=asc` / `order=desc` |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Ascending and descending supported; default `desc`                                            |
+| `after` cursor             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Forward cursor pagination                                                                     |
+| `limit`                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 1 – 10 000; default 10 000                                                                    |
+| `purpose` filter           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Filter results by uploaded purpose                                                            |
+| **File size cap**          | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | No artificial limit; S3 object limit (~5 TB)                                                  |
+| **Expiry enforcement**     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Expired files return 404 at read time; S3 Lifecycle as backstop                               |
+| **Chat integration**       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Use `file_id` in `type: "file"` content parts                                                 |
+| `status` field             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Always `"processed"` — no async processing pipeline                                           |
 
 </div>
 
@@ -71,10 +71,10 @@ Upload and manage files via an OpenAI-compatible interface. Files are stored in 
 
 **Legend:**
 
-* :material-check-circle:{ .success } **Supported** — Fully compatible with OpenAI API
-* :material-minus-circle:{ .partial } **Partial** — Supported with limitations or differences
-* :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
-* :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
+* :material-check-circle:{ .success role="img" aria-label="Supported" } **Supported** — Fully compatible with OpenAI API
+* :material-minus-circle:{ .partial role="img" aria-label="Partial" } **Partial** — Supported with limitations or differences
+* :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } **Unsupported** — Not available in this implementation
+* :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } **Extra Feature** — Enhanced capability beyond OpenAI API
 
 </div>
 
@@ -344,15 +344,15 @@ curl -X POST "$BASE/v1/uploads/upload_0190c51c7de7455d9b8c2efe27dfbf67/cancel" \
 
 | Feature                  |                  Status                  | Notes                                                        |
 |--------------------------|:----------------------------------------:|--------------------------------------------------------------|
-| `bytes` (declared size)  |   :material-check-circle:{ .success }    | Validated at completion against actual assembled size        |
-| `filename`               |   :material-check-circle:{ .success }    | Carried through to the final file object                     |
-| `mime_type`              |   :material-check-circle:{ .success }    | Set as the S3 `ContentType` for the assembled object         |
-| `purpose`                |   :material-check-circle:{ .success }    | Echoed to the final file object                              |
-| Part data (binary)       |   :material-check-circle:{ .success }    | Standard `multipart/form-data` binary upload via the `data` field |
-| Part data (JSON body)    | :material-plus-circle:{ .extra-feature } | Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents |
-| Part ordering            |   :material-minus-circle:{ .partial }    | `part_ids` must be listed in ascending upload order; S3 cannot reassemble out of order |
-| `md5` checksum           | :material-close-circle:{ .unsupported }  | Accepted but not validated                                   |
-| Session TTL              |   :material-check-circle:{ .success }    | 1 day from creation                                          |
+| `bytes` (declared size)  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Validated at completion against actual assembled size        |
+| `filename`               |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Carried through to the final file object                     |
+| `mime_type`              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Set as the S3 `ContentType` for the assembled object         |
+| `purpose`                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Echoed to the final file object                              |
+| Part data (binary)       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Standard `multipart/form-data` binary upload via the `data` field |
+| Part data (JSON body)    | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents |
+| Part ordering            |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | `part_ids` must be listed in ascending upload order; S3 cannot reassemble out of order |
+| `md5` checksum           | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted but not validated                                   |
+| Session TTL              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 1 day from creation                                          |
 
 </div>
 

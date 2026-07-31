@@ -39,32 +39,32 @@ Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable 
 | Feature                    |                  Status                  | Notes                                                            |
 |----------------------------|:----------------------------------------:|------------------------------------------------------------------|
 | **Input**                  |                                          |                                                                  |
-| Audio file upload          |   :material-check-circle:{ .success }    | Multipart file upload                                            |
-| JSON body input            | :material-plus-circle:{ .extra-feature } | Base64, data URI, HTTPS URL, S3 URI, or `file-id:` reference — for MCP / AI agents |
+| Audio file upload          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Multipart file upload                                            |
+| JSON body input            | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Base64, data URI, HTTPS URL, S3 URI, or `file-id:` reference — for MCP / AI agents |
 | **Output Formats**         |                                          |                                                                  |
-| `json`                     |   :material-check-circle:{ .success }    | Structured transcription                                         |
-| `text`                     |   :material-check-circle:{ .success }    | Plain text output                                                |
-| `verbose_json`             |       :material-cog:{ .model-dep }       | With timestamps and details (Amazon Transcribe; not Bedrock models) |
-| `diarized_json`            |       :material-cog:{ .model-dep }       | With speaker identification (Amazon Transcribe; not Bedrock models) |
-| `srt`                      |       :material-cog:{ .model-dep }       | Subtitle format with timing (Amazon Transcribe; not Bedrock models) |
-| `vtt`                      |       :material-cog:{ .model-dep }       | WebVTT subtitle format (Amazon Transcribe; not Bedrock models)   |
+| `json`                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Structured transcription                                         |
+| `text`                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Plain text output                                                |
+| `verbose_json`             |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | With timestamps and details (Amazon Transcribe; not Bedrock models) |
+| `diarized_json`            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | With speaker identification (Amazon Transcribe; not Bedrock models) |
+| `srt`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Subtitle format with timing (Amazon Transcribe; not Bedrock models) |
+| `vtt`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | WebVTT subtitle format (Amazon Transcribe; not Bedrock models)   |
 | **Language**               |                                          |                                                                  |
-| Language specification     |       :material-cog:{ .model-dep }       | ISO-639-1 language codes                                         |
-| Auto language detection    |   :material-check-circle:{ .success }    | Automatic identification                                         |
+| Language specification     |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | ISO-639-1 language codes                                         |
+| Auto language detection    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Automatic identification                                         |
 | **Streaming**              |                                          |                                                                  |
-| `stream` (SSE streaming)   |   :material-check-circle:{ .success }    | Set `stream: true` to receive incremental results as server-sent events |
+| `stream` (SSE streaming)   |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Set `stream: true` to receive incremental results as server-sent events |
 | **Advanced**               |                                          |                                                                  |
-| `timestamp_granularities`  |       :material-cog:{ .model-dep }       | Word or segment level; requires `response_format=verbose_json` (Amazon Transcribe only) |
-| Speaker diarization        |       :material-cog:{ .model-dep }       | Automatic speaker separation; requires `response_format=diarized_json` (Amazon Transcribe only) |
-| `known_speaker_names`      | :material-close-circle:{ .unsupported }  | Rejected with an error if provided                               |
-| `known_speaker_references` | :material-close-circle:{ .unsupported }  | Rejected with an error if provided                               |
-| `chunking_strategy`        |   :material-minus-circle:{ .partial }    | Only `auto` is accepted; other values are rejected               |
-| `temperature`              |       :material-cog:{ .model-dep }       | Bedrock models only; rejected by Amazon Transcribe               |
-| `prompt`                   |       :material-cog:{ .model-dep }       | Bedrock models only; rejected by Amazon Transcribe               |
-| `include` (`logprobs`)     |       :material-cog:{ .model-dep }       | Bedrock models only; requires `response_format=json`; rejected by Amazon Transcribe |
+| `timestamp_granularities`  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Word or segment level; requires `response_format=verbose_json` (Amazon Transcribe only) |
+| Speaker diarization        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Automatic speaker separation; requires `response_format=diarized_json` (Amazon Transcribe only) |
+| `known_speaker_names`      | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Rejected with an error if provided                               |
+| `known_speaker_references` | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Rejected with an error if provided                               |
+| `chunking_strategy`        |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Only `auto` is accepted; other values are rejected               |
+| `temperature`              |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bedrock models only; rejected by Amazon Transcribe               |
+| `prompt`                   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bedrock models only; rejected by Amazon Transcribe               |
+| `include` (`logprobs`)     |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bedrock models only; requires `response_format=json`; rejected by Amazon Transcribe |
 | **Usage tracking**         |                                          |                                                                  |
-| Input audio duration       |   :material-check-circle:{ .success }    | Seconds (billing unit on Amazon Transcribe)                      |
-| Output text tokens         |       :material-cog:{ .model-dep }       | On models from Bedrock                                           |
+| Input audio duration       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Seconds (billing unit on Amazon Transcribe)                      |
+| Output text tokens         |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | On models from Bedrock                                           |
 
 </div>
 
@@ -72,11 +72,11 @@ Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable 
 
 **Legend:**
 
-* :material-check-circle:{ .success } **Supported** — Fully compatible with OpenAI API
-* :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
-* :material-minus-circle:{ .partial } **Partial** — Supported with limitations
-* :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
-* :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
+* :material-check-circle:{ .success role="img" aria-label="Supported" } **Supported** — Fully compatible with OpenAI API
+* :material-cog:{ .model-dep role="img" aria-label="Model-dependent" } **Available on Select Models** — Check your model's capabilities
+* :material-minus-circle:{ .partial role="img" aria-label="Partial" } **Partial** — Supported with limitations
+* :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } **Unsupported** — Not available in this implementation
+* :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } **Extra Feature** — Enhanced capability beyond OpenAI API
 
 </div>
 

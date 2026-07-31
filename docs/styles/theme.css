@@ -232,16 +232,6 @@
 }
 
 
-/* Green check icon for feature summary */
-.green-check {
-  color: #4caf50;
-}
-
-/* Yellow/orange check icon for partial support */
-.yellow-check {
-  color: #ff9800;
-}
-
 /* Coming soon indicator */
 .coming-soon {
   color: #2196f3;

@@ -97,20 +97,20 @@ curl -X POST "https://your-host/v1/videos" \
 | Feature                     |                  Status                  | Notes                                                                  |
 |-----------------------------|:----------------------------------------:|------------------------------------------------------------------------|
 | **Creation**                |                                          |                                                                        |
-| `prompt`                    |   :material-check-circle:{ .success }    | Full support                                                           |
-| `model`                     |   :material-minus-circle:{ .partial }    | Required — this gateway has no implicit default video model            |
-| `seconds` / `size`          |       :material-cog:{ .model-dep }       | Supported values depend on the model (see table below)                 |
-| `input_reference`           |   :material-check-circle:{ .success }    | First-frame image; also accepts URLs/S3/Files API IDs in JSON requests |
-| Extra model-specific params | :material-plus-circle:{ .extra-feature } | Extra fields are forwarded to the model (e.g. `seed`, `loop`)          |
+| `prompt`                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Full support                                                           |
+| `model`                     |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Required — this gateway has no implicit default video model            |
+| `seconds` / `size`          |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Supported values depend on the model (see table below)                 |
+| `input_reference`           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | First-frame image; also accepts URLs/S3/Files API IDs in JSON requests |
+| Extra model-specific params | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra fields are forwarded to the model (e.g. `seed`, `loop`)          |
 | **Lifecycle**               |                                          |                                                                        |
-| Retrieve / poll job         |   :material-check-circle:{ .success }    | `progress` is `0` while running and `100` when completed               |
-| Download content (`video`)  |   :material-check-circle:{ .success }    | Streamed MP4                                                           |
-| Delete video                |   :material-check-circle:{ .success }    | Removes the stored output from S3                                      |
-| `variant=thumbnail/spritesheet` | :material-close-circle:{ .unsupported } | Amazon Bedrock generates only the video asset                      |
-| List videos (`GET /v1/videos`) | :material-check-circle:{ .success }   | Merged across regions; listed while AWS retains the job record        |
-| Remix video                 | :material-close-circle:{ .unsupported }  | Not available on Amazon Bedrock                                        |
-| Edits / extensions / characters | :material-close-circle:{ .unsupported } | `/v1/videos/edits`, `/videos/extensions`, and `/videos/characters` are not available on Amazon Bedrock |
-| `expires_at`                |   :material-minus-circle:{ .partial }    | Reported only when a [retention period](operations_configuration.md#aws-s3-videos-expires-after) is configured |
+| Retrieve / poll job         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `progress` is `0` while running and `100` when completed               |
+| Download content (`video`)  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Streamed MP4                                                           |
+| Delete video                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Removes the stored output from S3                                      |
+| `variant=thumbnail/spritesheet` | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Amazon Bedrock generates only the video asset                      |
+| List videos (`GET /v1/videos`) | :material-check-circle:{ .success role="img" aria-label="Supported" }   | Merged across regions; listed while AWS retains the job record        |
+| Remix video                 | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Not available on Amazon Bedrock                                        |
+| Edits / extensions / characters | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | `/v1/videos/edits`, `/videos/extensions`, and `/videos/characters` are not available on Amazon Bedrock |
+| `expires_at`                |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Reported only when a [retention period](operations_configuration.md#aws-s3-videos-expires-after) is configured |
 
 </div>
 
@@ -118,11 +118,11 @@ curl -X POST "https://your-host/v1/videos" \
 
 **Legend:**
 
-* :material-check-circle:{ .success } **Supported** — Fully compatible with OpenAI API
-* :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
-* :material-minus-circle:{ .partial } **Partial** — Supported with limitations
-* :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
-* :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
+* :material-check-circle:{ .success role="img" aria-label="Supported" } **Supported** — Fully compatible with OpenAI API
+* :material-cog:{ .model-dep role="img" aria-label="Model-dependent" } **Available on Select Models** — Check your model's capabilities
+* :material-minus-circle:{ .partial role="img" aria-label="Partial" } **Partial** — Supported with limitations
+* :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } **Unsupported** — Not available in this implementation
+* :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } **Extra Feature** — Enhanced capability beyond OpenAI API
 
 </div>
 

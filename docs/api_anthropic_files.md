@@ -50,15 +50,15 @@ Upload and manage files via an Anthropic-compatible interface. Files are stored 
 | Feature                  |                  Status                  | Notes                                                            |
 |--------------------------|:----------------------------------------:|------------------------------------------------------------------|
 | **Upload**               |                                          |                                                                  |
-| `file` (multipart)       |   :material-check-circle:{ .success }    | Required binary form field                                       |
-| `file` (JSON body)       | :material-plus-circle:{ .extra-feature } | Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents    |
+| `file` (multipart)       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Required binary form field                                       |
+| `file` (JSON body)       | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents    |
 | **Listing**              |                                          |                                                                  |
-| `after_id` cursor        |   :material-check-circle:{ .success }    | Forward cursor: returns files newer than the given ID            |
-| `before_id` cursor       |   :material-check-circle:{ .success }    | Backward cursor: returns files older than the given ID           |
-| `limit`                  |   :material-check-circle:{ .success }    | 1 – 1 000; default 20                                            |
-| **File size cap**        | :material-plus-circle:{ .extra-feature } | No artificial limit; S3 object limit (~5 TB)                     |
-| **Messages integration** |   :material-check-circle:{ .success }    | `"source": {"type": "file", "file_id": "..."}` in document/image |
-| `downloadable` field     |   :material-minus-circle:{ .partial }    | Always `true`; spec default is `false` for user-uploaded files   |
+| `after_id` cursor        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Forward cursor: returns files newer than the given ID            |
+| `before_id` cursor       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Backward cursor: returns files older than the given ID           |
+| `limit`                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 1 – 1 000; default 20                                            |
+| **File size cap**        | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | No artificial limit; S3 object limit (~5 TB)                     |
+| **Messages integration** |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `"source": {"type": "file", "file_id": "..."}` in document/image |
+| `downloadable` field     |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Always `true`; spec default is `false` for user-uploaded files   |
 
 </div>
 
@@ -66,9 +66,9 @@ Upload and manage files via an Anthropic-compatible interface. Files are stored 
 
 **Legend:**
 
-* :material-check-circle:{ .success } **Supported** — Fully compatible with Anthropic API
-* :material-minus-circle:{ .partial } **Partial** — Implemented with minor deviations from spec
-* :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond Anthropic API
+* :material-check-circle:{ .success role="img" aria-label="Supported" } **Supported** — Fully compatible with Anthropic API
+* :material-minus-circle:{ .partial role="img" aria-label="Partial" } **Partial** — Implemented with minor deviations from spec
+* :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } **Extra Feature** — Enhanced capability beyond Anthropic API
 
 </div>
 

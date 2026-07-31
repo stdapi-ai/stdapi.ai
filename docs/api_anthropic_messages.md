@@ -49,43 +49,43 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 | Feature                               |                  Status                  | Notes                                                                                        |
 |---------------------------------------|:----------------------------------------:|----------------------------------------------------------------------------------------------|
 | **Messages & Roles**                  |                                          |                                                                                              |
-| Text messages                         |   :material-check-circle:{ .success }    | Full support for all text content                                                            |
-| Image input (`image`)                 |       :material-cog:{ .model-dep }       | HTTP URLs, data URIs, base64                                                                 |
-| Document input (`document`)           |       :material-cog:{ .model-dep }       | PDF (base64/URL), plain text, content blocks                                                 |
-| Document citations                    |       :material-cog:{ .model-dep }       | Citation locations in responses (PDF only on some models)                                    |
-| Search result input (`search_result`) |   :material-check-circle:{ .success }    | Pass search results as context                                                               |
-| System messages                       |       :material-cog:{ .model-dep }       | System prompts                                                                               |
-| Image & Document input from S3        | :material-plus-circle:{ .extra-feature } | S3 URLs                                                                                      |
-| Files API (`file_id`)                 |   :material-check-circle:{ .success }    | Reference uploaded files in document/image sources — see [Files API](api_anthropic_files.md) |
+| Text messages                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Full support for all text content                                                            |
+| Image input (`image`)                 |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | HTTP URLs, data URIs, base64                                                                 |
+| Document input (`document`)           |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | PDF (base64/URL), plain text, content blocks                                                 |
+| Document citations                    |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Citation locations in responses (PDF only on some models)                                    |
+| Search result input (`search_result`) |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Pass search results as context                                                               |
+| System messages                       |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | System prompts                                                                               |
+| Image & Document input from S3        | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | S3 URLs                                                                                      |
+| Files API (`file_id`)                 |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Reference uploaded files in document/image sources — see [Files API](api_anthropic_files.md) |
 | **Tool Calling**                      |                                          |                                                                                              |
-| Tool use (`tools`)                    |       :material-cog:{ .model-dep }       | Full Anthropic-compatible schema                                                             |
-| Tool choice (`auto`, `any`, `tool`)   |       :material-cog:{ .model-dep }       | Control tool selection behavior                                                              |
-| Tool choice `none`                    |   :material-minus-circle:{ .partial }    | Remove tools from request instead                                                            |
-| Parallel tool calls                   |       :material-cog:{ .model-dep }       | Multiple tools in one turn                                                                   |
-| Web search tool (`web_search`)        |       :material-cog:{ .model-dep }       | Available on models with system tool support (e.g., Amazon Nova 2)                           |
-| Claude server tools                   |       :material-cog:{ .model-dep }       | Bash, text editor, computer use (Claude 3.5+), memory (Claude 3.7+)                          |
+| Tool use (`tools`)                    |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Full Anthropic-compatible schema                                                             |
+| Tool choice (`auto`, `any`, `tool`)   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Control tool selection behavior                                                              |
+| Tool choice `none`                    |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Remove tools from request instead                                                            |
+| Parallel tool calls                   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Multiple tools in one turn                                                                   |
+| Web search tool (`web_search`)        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Available on models with system tool support (e.g., Amazon Nova 2)                           |
+| Claude server tools                   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bash, text editor, computer use (Claude 3.5+), memory (Claude 3.7+)                          |
 | **Generation Control**                |                                          |                                                                                              |
-| `max_tokens`                          |   :material-check-circle:{ .success }    | Output length limits. Optional on this gateway (divergence from the Anthropic API, which requires it): the model's default output limit applies when omitted |
-| `temperature`                         |       :material-cog:{ .model-dep }       | Mapped to Bedrock inference params                                                           |
-| `top_p`                               |       :material-cog:{ .model-dep }       | Nucleus sampling control                                                                     |
-| `top_k`                               |       :material-cog:{ .model-dep }       | Top-k sampling control                                                                       |
-| `stop_sequences`                      |       :material-cog:{ .model-dep }       | Custom stop strings                                                                          |
-| Thinking                              |       :material-cog:{ .model-dep }       |                                                                                              |
-| Prompt caching                        |       :material-cog:{ .model-dep }       | Cache prompts to reduce costs and latency                                                    |
-| Extra model-specific params           | :material-plus-circle:{ .extra-feature } | Extra model-specific parameters not supported by the Anthropic API                           |
+| `max_tokens`                          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Output length limits. Optional on this gateway (divergence from the Anthropic API, which requires it): the model's default output limit applies when omitted |
+| `temperature`                         |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Mapped to Bedrock inference params                                                           |
+| `top_p`                               |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Nucleus sampling control                                                                     |
+| `top_k`                               |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Top-k sampling control                                                                       |
+| `stop_sequences`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Custom stop strings                                                                          |
+| Thinking                              |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       |                                                                                              |
+| Prompt caching                        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Cache prompts to reduce costs and latency                                                    |
+| Extra model-specific params           | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra model-specific parameters not supported by the Anthropic API                           |
 | **Streaming & Output**                |                                          |                                                                                              |
-| Text                                  |   :material-check-circle:{ .success }    | Text messages                                                                                |
-| Streaming (`stream: true`)            |   :material-check-circle:{ .success }    | Server-Sent Events (SSE)                                                                     |
-| Thinking content                      |       :material-cog:{ .model-dep }       | Extended thinking output in content blocks                                                   |
+| Text                                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Text messages                                                                                |
+| Streaming (`stream: true`)            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Server-Sent Events (SSE)                                                                     |
+| Thinking content                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Extended thinking output in content blocks                                                   |
 | **Usage tracking**                    |                                          |                                                                                              |
-| Input text tokens                     |   :material-check-circle:{ .success }    | Billing unit                                                                                 |
-| Output tokens                         |   :material-check-circle:{ .success }    | Billing unit                                                                                 |
-| Cache creation tokens                 |   :material-check-circle:{ .success }    | Prompt caching metrics (streaming and non-streaming)                                         |
-| Cache read tokens                     |   :material-check-circle:{ .success }    | Prompt caching metrics                                                                       |
+| Input text tokens                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Billing unit                                                                                 |
+| Output tokens                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Billing unit                                                                                 |
+| Cache creation tokens                 |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Prompt caching metrics (streaming and non-streaming)                                         |
+| Cache read tokens                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Prompt caching metrics                                                                       |
 | **Other**                             |                                          |                                                                                              |
-| Metadata                              |   :material-minus-circle:{ .partial }    | Converse path: logged only. Mantle path: `metadata.user_id` is forwarded upstream            |
-| Bedrock Guardrails                    | :material-plus-circle:{ .extra-feature } | Content safety policies                                                                      |
-| Service tiers                         |   :material-check-circle:{ .success }    | Mapped to Bedrock service tiers and latency options                                          |
+| Metadata                              |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Converse path: logged only. Mantle path: `metadata.user_id` is forwarded upstream            |
+| Bedrock Guardrails                    | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Content safety policies                                                                      |
+| Service tiers                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Mapped to Bedrock service tiers and latency options                                          |
 
 </div>
 
@@ -93,11 +93,11 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 
 **Legend:**
 
-* :material-check-circle:{ .success } **Supported** — Fully compatible with Anthropic API
-* :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
-* :material-minus-circle:{ .partial } **Partial** — Supported with limitations
-* :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
-* :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond Anthropic API
+* :material-check-circle:{ .success role="img" aria-label="Supported" } **Supported** — Fully compatible with Anthropic API
+* :material-cog:{ .model-dep role="img" aria-label="Model-dependent" } **Available on Select Models** — Check your model's capabilities
+* :material-minus-circle:{ .partial role="img" aria-label="Partial" } **Partial** — Supported with limitations
+* :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } **Unsupported** — Not available in this implementation
+* :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } **Extra Feature** — Enhanced capability beyond Anthropic API
 
 </div>
 
@@ -348,8 +348,8 @@ Server tools are built-in capabilities that foundation models can use directly w
 
 | Tool | Anthropic Tool Name | Amazon Nova 2 | Amazon Nova Premier (legacy) |
 |------|---------------------|:-------------:|:-------------------:|
-| Web Grounding | `web_search` | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
-| Code Interpreter | `code_execution` | :material-check-circle:{ .success } | :material-close-circle:{ .unsupported } |
+| Web Grounding | `web_search` | :material-check-circle:{ .success role="img" aria-label="Supported" } | :material-check-circle:{ .success role="img" aria-label="Supported" } |
+| Code Interpreter | `code_execution` | :material-check-circle:{ .success role="img" aria-label="Supported" } | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } |
 
 ##### Web Grounding
 
@@ -424,10 +424,10 @@ Anthropic Claude models support server-side tools that are executed by the model
 
 | Tool | Claude 3.5 Sonnet v2 | Claude 3.7 – 4.5 | Claude 4.6+ |
 |------|:---------------------:|:----------------:|:-----------:|
-| `bash` | :material-check-circle:{ .success } | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
-| `text_editor` (`str_replace_based_edit_tool` or `str_replace_editor`) | :material-check-circle:{ .success } | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
-| `computer` | :material-check-circle:{ .success } | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
-| `memory` | :material-close-circle:{ .unsupported } | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
+| `bash` | :material-check-circle:{ .success role="img" aria-label="Supported" } | :material-check-circle:{ .success role="img" aria-label="Supported" } | :material-check-circle:{ .success role="img" aria-label="Supported" } |
+| `text_editor` (`str_replace_based_edit_tool` or `str_replace_editor`) | :material-check-circle:{ .success role="img" aria-label="Supported" } | :material-check-circle:{ .success role="img" aria-label="Supported" } | :material-check-circle:{ .success role="img" aria-label="Supported" } |
+| `computer` | :material-check-circle:{ .success role="img" aria-label="Supported" } | :material-check-circle:{ .success role="img" aria-label="Supported" } | :material-check-circle:{ .success role="img" aria-label="Supported" } |
+| `memory` | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | :material-check-circle:{ .success role="img" aria-label="Supported" } | :material-check-circle:{ .success role="img" aria-label="Supported" } |
 
 On Claude 4.6 and later, a bare `computer` tool is promoted to the newer `computer_20251124` tool type — except on Claude Opus 5 and later, which support no computer-use tool version: there, `computer` is passed through as a regular custom tool instead of a server tool.
 
@@ -509,8 +509,8 @@ export DEFAULT_MODEL_PARAMS='{
 
 **Behavior:**
 
-- :material-check-circle:{ .success } **Compatible parameters**: Forwarded to the model and applied
-- :material-close-circle:{ .unsupported } **Unsupported parameters**: Return HTTP 400 with an error message
+- :material-check-circle:{ .success role="img" aria-label="Supported" } **Compatible parameters**: Forwarded to the model and applied
+- :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } **Unsupported parameters**: Return HTTP 400 with an error message
 
 #### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic Claude Features
 

@@ -39,26 +39,26 @@ Create variations of existing images using Amazon Bedrock image models through a
 | Feature                        |                  Status                  | Notes                                                                                                                                                           |
 |--------------------------------|:----------------------------------------:|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **Variations**                 |                                          |                                                                                                                                                                 |
-| Image-to-image (`/variations`) |   :material-check-circle:{ .success }    | Create variations of existing images                                                                                                                            |
+| Image-to-image (`/variations`) |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Create variations of existing images                                                                                                                            |
 | **Parameters**                 |                                          |                                                                                                                                                                 |
-| `image`                        |   :material-check-circle:{ .success }    | Source image file (required)                                                                                                                                    |
-| `model`                        |   :material-check-circle:{ .success }    | Required parameter                                                                                                                                              |
-| `n` (number of images)         |   :material-check-circle:{ .success }    | Multiple variations per request; accepted range is 1-10 (default: 1), but the effective maximum is model-dependent (e.g. Amazon Titan and Nova Canvas cap at 5) |
-| `size` (WIDTHxHEIGHT)          |   :material-check-circle:{ .success }    | Output dimensions (default: 1024x1024, format validated)                                                                                                        |
-| `response_format`              |   :material-check-circle:{ .success }    | `url` or `b64_json` (default: `url`)                                                                                                                            |
+| `image`                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Source image file (required)                                                                                                                                    |
+| `model`                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Required parameter                                                                                                                                              |
+| `n` (number of images)         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Multiple variations per request; accepted range is 1-10 (default: 1), but the effective maximum is model-dependent (e.g. Amazon Titan and Nova Canvas cap at 5) |
+| `size` (WIDTHxHEIGHT)          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Output dimensions (default: 1024x1024, format validated)                                                                                                        |
+| `response_format`              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `url` or `b64_json` (default: `url`)                                                                                                                            |
 | **Output**                     |                                          |                                                                                                                                                                 |
-| URL response format            |   :material-check-circle:{ .success }    | Temporary presigned URLs, valid for 60 minutes (requires AWS_S3_BUCKET)                                                                                         |
-| Base64 JSON format             |   :material-check-circle:{ .success }    | Inline base64-encoded images                                                                                                                                    |
-| PNG format                     |   :material-check-circle:{ .success }    | Default output format                                                                                                                                           |
-| JPEG format                    |       :material-cog:{ .model-dep }       | Via the provider-specific `output_format` extra parameter on supporting models (`/variations` has no `output_format` parameter)                                 |
-| WebP format                    |       :material-cog:{ .model-dep }       | Via the provider-specific `output_format` extra parameter on supporting models (`/variations` has no `output_format` parameter)                                 |
+| URL response format            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Temporary presigned URLs, valid for 60 minutes (requires AWS_S3_BUCKET)                                                                                         |
+| Base64 JSON format             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Inline base64-encoded images                                                                                                                                    |
+| PNG format                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Default output format                                                                                                                                           |
+| JPEG format                    |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Via the provider-specific `output_format` extra parameter on supporting models (`/variations` has no `output_format` parameter)                                 |
+| WebP format                    |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Via the provider-specific `output_format` extra parameter on supporting models (`/variations` has no `output_format` parameter)                                 |
 | **Usage tracking**             |                                          |                                                                                                                                                                 |
-| Input image tokens             |   :material-check-circle:{ .success }    | Count of input images (always 1 for variations)                                                                                                                 |
-| Output image tokens            |   :material-check-circle:{ .success }    | Sourced from AWS billing data when available; falls back to the image count (`n`)                                                                               |
+| Input image tokens             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Count of input images (always 1 for variations)                                                                                                                 |
+| Output image tokens            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Sourced from AWS billing data when available; falls back to the image count (`n`)                                                                               |
 | **Other**                      |                                          |                                                                                                                                                                 |
-| `user`                         |   :material-minus-circle:{ .partial }    | Logged but not used for abuse monitoring                                                                                                                        |
-| Extra parameters via form data | :material-plus-circle:{ .extra-feature } | Provider-specific parameters passed through                                                                                                                     |
-| JSON body request format       | :material-plus-circle:{ .extra-feature } | Reference images via Files API ID or URL instead of file upload                                                                                                 |
+| `user`                         |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Logged but not used for abuse monitoring                                                                                                                        |
+| Extra parameters via form data | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Provider-specific parameters passed through                                                                                                                     |
+| JSON body request format       | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Reference images via Files API ID or URL instead of file upload                                                                                                 |
 
 </div>
 
@@ -66,10 +66,10 @@ Create variations of existing images using Amazon Bedrock image models through a
 
 **Legend:**
 
-* :material-check-circle:{ .success } **Supported** — Fully compatible with OpenAI API
-* :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
-* :material-minus-circle:{ .partial } **Partial** — Supported with limitations
-* :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
+* :material-check-circle:{ .success role="img" aria-label="Supported" } **Supported** — Fully compatible with OpenAI API
+* :material-cog:{ .model-dep role="img" aria-label="Model-dependent" } **Available on Select Models** — Check your model's capabilities
+* :material-minus-circle:{ .partial role="img" aria-label="Partial" } **Partial** — Supported with limitations
+* :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } **Extra Feature** — Enhanced capability beyond OpenAI API
 
 </div>
 
@@ -115,7 +115,7 @@ curl -X POST "$BASE/v1/images/variations" \
   -F model="amazon.nova-canvas-v1:0"
 ```
 
-#### JSON Body (Files API or URL References) :material-plus-circle:{ .extra-feature }
+#### JSON Body (Files API or URL References) :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" }
 
 Reference an image already stored in the Files API or accessible via URL. Send `Content-Type: application/json` with an `image` object containing either `file_id` or `image_url`:
 

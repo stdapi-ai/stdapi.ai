@@ -1075,6 +1075,9 @@ export AWS_BEDROCK_MANTLE_ENABLED=false
 !!! warning "Guardrails Not Supported"
     Amazon Bedrock Guardrails are not supported on Mantle-served requests. When guardrails are configured while Mantle models are exposed, a startup warning reports how many models are affected; set `AWS_BEDROCK_MANTLE_ENABLED=false` to disable them.
 
+!!! note "Cross-Region Inference Profiles Not Available"
+    Bedrock cross-region inference profiles do not exist on the Mantle endpoint. Mantle relies on [multi-region failover](#bedrock-mantle-regions) and its own separate throughput quotas instead.
+
 !!! warning "Required IAM Permissions"
     Enabling this setting requires the `bedrock-mantle` IAM permissions — see [Bedrock Mantle IAM Permissions](operations_iam_permissions.md#bedrock-mantle-iam).
 

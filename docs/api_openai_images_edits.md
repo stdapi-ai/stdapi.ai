@@ -39,40 +39,40 @@ Edit images using inpainting with Amazon Bedrock image models through an OpenAI-
 | Feature                        |                  Status                  | Notes                                                                                                                                          |
 |--------------------------------|:----------------------------------------:|------------------------------------------------------------------------------------------------------------------------------------------------|
 | **Editing**                    |                                          |                                                                                                                                                |
-| Image-to-image (`/edits`)      |   :material-check-circle:{ .success }    | Edit images with prompts and masks                                                                                                             |
+| Image-to-image (`/edits`)      |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Edit images with prompts and masks                                                                                                             |
 | **Request Formats**            |                                          |                                                                                                                                                |
-| Multipart form-data            |   :material-check-circle:{ .success }    | Binary file uploads via `image` / `image[]` / `mask` fields                                                                                    |
-| JSON body                      | :material-plus-circle:{ .extra-feature } | Structured `images` array with Files API IDs or URLs (the OpenAI edits API is multipart-only)                                                  |
+| Multipart form-data            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Binary file uploads via `image` / `image[]` / `mask` fields                                                                                    |
+| JSON body                      | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Structured `images` array with Files API IDs or URLs (the OpenAI edits API is multipart-only)                                                  |
 | **Parameters**                 |                                          |                                                                                                                                                |
-| `image` / `image[]`            |   :material-check-circle:{ .success }    | PNG image(s) to edit; most models accept exactly one source image and reject requests providing more with an error                             |
-| `images` (JSON)                |   :material-check-circle:{ .success }    | Array of `{file_id}` or `{image_url}` references (JSON body)                                                                                   |
-| `prompt`                       |   :material-check-circle:{ .success }    | Text description of desired changes                                                                                                            |
-| `mask`                         |   :material-check-circle:{ .success }    | Optional mask defining edit regions; models that do not use a mask reject requests that include one                                            |
-| `n` (number of images)         |   :material-check-circle:{ .success }    | Multiple images per request; accepted range is 1-10, but the effective maximum is model-dependent (e.g. Amazon Titan and Nova Canvas cap at 5) |
-| `size` (WIDTHxHEIGHT)          |   :material-check-circle:{ .success }    | Output dimensions (default: 1024x1024, format validated)                                                                                       |
-| `model`                        |   :material-check-circle:{ .success }    | Required parameter                                                                                                                             |
-| `response_format`              |   :material-check-circle:{ .success }    | `url` or `b64_json` (default: `url`)                                                                                                           |
-| `output_format`                |   :material-check-circle:{ .success }    | `png`, `jpeg`, or `webp` (model-specific)                                                                                                      |
-| `output_compression`           |   :material-check-circle:{ .success }    | Compression level 1-100% (default: 100)                                                                                                        |
-| `quality`                      |       :material-cog:{ .model-dep }       | Quality setting (default: `auto`, supports OpenAI & model-specific)                                                                            |
-| `stream`                       |   :material-check-circle:{ .success }    | Generate images in streaming mode with partial results                                                                                         |
-| `partial_images`               | :material-close-circle:{ .unsupported }  | Accepted (0-3) but ignored — no available model currently streams partial images; the final image is always sent as a single event             |
-| `background`                   |   :material-minus-circle:{ .partial }    | Accepts `auto` (default) and `opaque`; `transparent` is unsupported — responses report `opaque`                                                |
-| `input_fidelity`               | :material-close-circle:{ .unsupported }  | Accepted for OpenAI API compatibility and ignored (always behaves as `low`)                                                                    |
+| `image` / `image[]`            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | PNG image(s) to edit; most models accept exactly one source image and reject requests providing more with an error                             |
+| `images` (JSON)                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Array of `{file_id}` or `{image_url}` references (JSON body)                                                                                   |
+| `prompt`                       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Text description of desired changes                                                                                                            |
+| `mask`                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Optional mask defining edit regions; models that do not use a mask reject requests that include one                                            |
+| `n` (number of images)         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Multiple images per request; accepted range is 1-10, but the effective maximum is model-dependent (e.g. Amazon Titan and Nova Canvas cap at 5) |
+| `size` (WIDTHxHEIGHT)          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Output dimensions (default: 1024x1024, format validated)                                                                                       |
+| `model`                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Required parameter                                                                                                                             |
+| `response_format`              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `url` or `b64_json` (default: `url`)                                                                                                           |
+| `output_format`                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `png`, `jpeg`, or `webp` (model-specific)                                                                                                      |
+| `output_compression`           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Compression level 1-100% (default: 100)                                                                                                        |
+| `quality`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Quality setting (default: `auto`, supports OpenAI & model-specific)                                                                            |
+| `stream`                       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Generate images in streaming mode with partial results                                                                                         |
+| `partial_images`               | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted (0-3) but ignored — no available model currently streams partial images; the final image is always sent as a single event             |
+| `background`                   |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Accepts `auto` (default) and `opaque`; `transparent` is unsupported — responses report `opaque`                                                |
+| `input_fidelity`               | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted for OpenAI API compatibility and ignored (always behaves as `low`)                                                                    |
 | **Output**                     |                                          |                                                                                                                                                |
-| URL response format            |   :material-check-circle:{ .success }    | Temporary presigned URLs, valid for 60 minutes (requires AWS_S3_BUCKET)                                                                        |
-| Base64 JSON format             |   :material-check-circle:{ .success }    | Inline base64-encoded images                                                                                                                   |
-| PNG format                     |   :material-check-circle:{ .success }    | Lossless image output                                                                                                                          |
-| JPEG format                    |       :material-cog:{ .model-dep }       | Lossy compression (model-specific)                                                                                                             |
-| WebP format                    |       :material-cog:{ .model-dep }       | Modern format with compression (model-specific)                                                                                                |
-| Streaming response             |   :material-check-circle:{ .success }    | Server-sent events with final images (no partial previews)                                                                                     |
+| URL response format            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Temporary presigned URLs, valid for 60 minutes (requires AWS_S3_BUCKET)                                                                        |
+| Base64 JSON format             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Inline base64-encoded images                                                                                                                   |
+| PNG format                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Lossless image output                                                                                                                          |
+| JPEG format                    |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Lossy compression (model-specific)                                                                                                             |
+| WebP format                    |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Modern format with compression (model-specific)                                                                                                |
+| Streaming response             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Server-sent events with final images (no partial previews)                                                                                     |
 | **Usage tracking**             |                                          |                                                                                                                                                |
-| Input text tokens              |   :material-check-circle:{ .success }    | Sourced from AWS billing data when available; remainder after subtracting image tokens                                                         |
-| Input image tokens             |   :material-check-circle:{ .success }    | Count of input images (image files + mask file), capped at the billed input tokens                                                             |
-| Output image tokens            |   :material-check-circle:{ .success }    | Sourced from AWS billing data when available; falls back to the image count (`n`)                                                              |
+| Input text tokens              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Sourced from AWS billing data when available; remainder after subtracting image tokens                                                         |
+| Input image tokens             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Count of input images (image files + mask file), capped at the billed input tokens                                                             |
+| Output image tokens            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Sourced from AWS billing data when available; falls back to the image count (`n`)                                                              |
 | **Other**                      |                                          |                                                                                                                                                |
-| `user`                         |   :material-minus-circle:{ .partial }    | Logged but not used for abuse monitoring                                                                                                       |
-| Extra parameters via form data | :material-plus-circle:{ .extra-feature } | Provider-specific parameters passed through                                                                                                    |
+| `user`                         |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Logged but not used for abuse monitoring                                                                                                       |
+| Extra parameters via form data | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Provider-specific parameters passed through                                                                                                    |
 
 </div>
 
@@ -80,11 +80,11 @@ Edit images using inpainting with Amazon Bedrock image models through an OpenAI-
 
 **Legend:**
 
-* :material-check-circle:{ .success } **Supported** — Fully compatible with OpenAI API
-* :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
-* :material-minus-circle:{ .partial } **Partial** — Supported with limitations
-* :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
-* :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
+* :material-check-circle:{ .success role="img" aria-label="Supported" } **Supported** — Fully compatible with OpenAI API
+* :material-cog:{ .model-dep role="img" aria-label="Model-dependent" } **Available on Select Models** — Check your model's capabilities
+* :material-minus-circle:{ .partial role="img" aria-label="Partial" } **Partial** — Supported with limitations
+* :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } **Unsupported** — Not available in this implementation
+* :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } **Extra Feature** — Enhanced capability beyond OpenAI API
 
 </div>
 
@@ -199,7 +199,7 @@ curl -X POST "$BASE/v1/images/edits" \
   -F model="amazon.nova-canvas-v1:0"
 ```
 
-#### JSON Body (Files API or URL References) :material-plus-circle:{ .extra-feature }
+#### JSON Body (Files API or URL References) :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" }
 
 The modern format — reference images already stored in the Files API or accessible via URL. Send `Content-Type: application/json` with an `images` array, where each element has either `file_id` or `image_url`:
 

@@ -44,62 +44,62 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 | Feature                                  |                  Status                  | Notes                                                           |
 |------------------------------------------|:----------------------------------------:|-----------------------------------------------------------------|
 | **Messages & Roles**                     |                                          |                                                                 |
-| Text messages                            |   :material-check-circle:{ .success }    | Full support for all text content                               |
-| Image input (`image_url`)                |       :material-cog:{ .model-dep }       | HTTP, data URIs                                                 |
-| Image input from S3                      | :material-plus-circle:{ .extra-feature } | S3 URLs                                                         |
-| Video input                              |       :material-cog:{ .model-dep }       | Supported by select models                                      |
-| Audio input                              |       :material-cog:{ .model-dep }       | Supported by select models                                      |
-| Document input (`file`)                  |       :material-cog:{ .model-dep }       | PDF and document support varies by model                        |
-| Files API (`file_id`)                    |   :material-check-circle:{ .success }    | Reference uploaded files via `type: "file"` — see [Files API](api_openai_files.md) |
-| System messages                          |       :material-cog:{ .model-dep }       | Includes `developer` role                                       |
+| Text messages                            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Full support for all text content                               |
+| Image input (`image_url`)                |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | HTTP, data URIs                                                 |
+| Image input from S3                      | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | S3 URLs                                                         |
+| Video input                              |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Supported by select models                                      |
+| Audio input                              |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Supported by select models                                      |
+| Document input (`file`)                  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | PDF and document support varies by model                        |
+| Files API (`file_id`)                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Reference uploaded files via `type: "file"` — see [Files API](api_openai_files.md) |
+| System messages                          |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Includes `developer` role                                       |
 | **Tool Calling**                         |                                          |                                                                 |
-| Function calling (`tools`)               |       :material-cog:{ .model-dep }       | Full OpenAI-compatible schema                                   |
-| Legacy `function_call`                   |       :material-cog:{ .model-dep }       | Backward compatibility maintained                               |
-| Parallel tool calls                      |       :material-cog:{ .model-dep }       | Multiple tools in one turn                                      |
-| Disable parallel tool calls              | :material-close-circle:{ .unsupported }  | `parallel_tool_calls: false` returns `400`; not supported        |
-| Server tools                             | :material-plus-circle:{ .extra-feature } | Provider system tools and Claude server tools                   |
+| Function calling (`tools`)               |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Full OpenAI-compatible schema                                   |
+| Legacy `function_call`                   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Backward compatibility maintained                               |
+| Parallel tool calls                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Multiple tools in one turn                                      |
+| Disable parallel tool calls              | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | `parallel_tool_calls: false` returns `400`; not supported        |
+| Server tools                             | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Provider system tools and Claude server tools                   |
 | **Generation Control**                   |                                          |                                                                 |
-| `max_tokens` / `max_completion_tokens`   |   :material-check-circle:{ .success }    | Output length limits                                            |
-| `temperature`                            |       :material-cog:{ .model-dep }       | Mapped to Bedrock inference params                              |
-| `top_p`                                  |       :material-cog:{ .model-dep }       | Nucleus sampling control                                        |
-| `stop` sequences                         |       :material-cog:{ .model-dep }       | Custom stop strings. Whitespace-only sequences are rejected with `400` (Amazon Bedrock limitation) |
-| `frequency_penalty` / `presence_penalty` |       :material-cog:{ .model-dep }       | Repetition control                                              |
-| `seed`                                   |       :material-cog:{ .model-dep }       | Deterministic generation                                        |
-| `logit_bias`                             |       :material-cog:{ .model-dep }       | Not all models support biasing                                  |
-| `top_logprobs`                           |       :material-cog:{ .model-dep }       | Forwarded to the model as a provider-specific field; honored only by models that support it. Usable even though `logprobs` is rejected |
-| `top_k` (From Qwen API)                  |       :material-cog:{ .model-dep }       | Candidate token set size for sampling                           |
-| `reasoning_effort` (OpenAI API-compatible) |       :material-cog:{ .model-dep }       | Reasoning control: none/minimal/low/medium/high/xhigh (accepted for all models) |
-| `enable_thinking` (Qwen API-compatible)  |       :material-cog:{ .model-dep }       | Enable/disable thinking mode (accepted for all reasoning models) |
-| `thinking_budget` (Qwen API-compatible)  |       :material-cog:{ .model-dep }       | Thinking token budget (accepted for all reasoning models)      |
-| `thinking` (Moonshot API-compatible)     |       :material-cog:{ .model-dep }       | Thinking config: {"type": "enabled"/"disabled"} (accepted for all models) |
-| `n` (multiple choices)                   |   :material-minus-circle:{ .partial }    | Generate multiple responses, not supported with streaming       |
-| `logprobs`                               | :material-close-circle:{ .unsupported }  | Rejected with `400`; `top_logprobs` (above) remains usable      |
-| `prediction`                             | :material-close-circle:{ .unsupported }  | Static predicted output content                                 |
-| `response_format`                        |       :material-cog:{ .model-dep }       | JSON object or JSON schema output                               |
-| `verbosity`                              | :material-close-circle:{ .unsupported }  | Model verbosity                                                 |
-| `web_search_options`                     | :material-close-circle:{ .unsupported }  | Web search tool                                                 |
-| `prompt_cache_key`                       |       :material-cog:{ .model-dep }       | Cache prompts to reduce costs and latency                       |
-| Extra model-specific params              | :material-plus-circle:{ .extra-feature } | Extra model-specific parameters not supported by the OpenAI API |
+| `max_tokens` / `max_completion_tokens`   |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Output length limits                                            |
+| `temperature`                            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Mapped to Bedrock inference params                              |
+| `top_p`                                  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Nucleus sampling control                                        |
+| `stop` sequences                         |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Custom stop strings. Whitespace-only sequences are rejected with `400` (Amazon Bedrock limitation) |
+| `frequency_penalty` / `presence_penalty` |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Repetition control                                              |
+| `seed`                                   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Deterministic generation                                        |
+| `logit_bias`                             |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Not all models support biasing                                  |
+| `top_logprobs`                           |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Forwarded to the model as a provider-specific field; honored only by models that support it. Usable even though `logprobs` is rejected |
+| `top_k` (From Qwen API)                  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Candidate token set size for sampling                           |
+| `reasoning_effort` (OpenAI API-compatible) |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Reasoning control: none/minimal/low/medium/high/xhigh (accepted for all models) |
+| `enable_thinking` (Qwen API-compatible)  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Enable/disable thinking mode (accepted for all reasoning models) |
+| `thinking_budget` (Qwen API-compatible)  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Thinking token budget (accepted for all reasoning models)      |
+| `thinking` (Moonshot API-compatible)     |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Thinking config: {"type": "enabled"/"disabled"} (accepted for all models) |
+| `n` (multiple choices)                   |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Generate multiple responses, not supported with streaming       |
+| `logprobs`                               | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Rejected with `400`; `top_logprobs` (above) remains usable      |
+| `prediction`                             | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Static predicted output content                                 |
+| `response_format`                        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | JSON object or JSON schema output                               |
+| `verbosity`                              | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Model verbosity                                                 |
+| `web_search_options`                     | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Web search tool                                                 |
+| `prompt_cache_key`                       |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Cache prompts to reduce costs and latency                       |
+| Extra model-specific params              | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra model-specific parameters not supported by the OpenAI API |
 | **Streaming & Output**                   |                                          |                                                                 |
-| Text                                     |   :material-check-circle:{ .success }    | Text messages                                                   |
-| Streaming (`stream: true`)               |   :material-check-circle:{ .success }    | Server-Sent Events (SSE)                                        |
-| Streaming obfuscation                    | :material-close-circle:{ .unsupported }  | Unsupported                                                     |
-| Audio                                    |   :material-check-circle:{ .success }    | Model output or synthesis from text output (synthesis is Converse-only — not performed for Mantle-served requests) |
-| `response_format` (JSON mode)            |       :material-cog:{ .model-dep }       | Model-specific JSON support                                     |
-| `reasoning_content` (From Deepseek API)  |       :material-cog:{ .model-dep }       | Text reasoning messages                                         |
-| `annotations` (URL citations)            |   :material-check-circle:{ .success }    | URL citations from system tools (non-streaming only)            |
+| Text                                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Text messages                                                   |
+| Streaming (`stream: true`)               |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Server-Sent Events (SSE)                                        |
+| Streaming obfuscation                    | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Unsupported                                                     |
+| Audio                                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Model output or synthesis from text output (synthesis is Converse-only — not performed for Mantle-served requests) |
+| `response_format` (JSON mode)            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Model-specific JSON support                                     |
+| `reasoning_content` (From Deepseek API)  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Text reasoning messages                                         |
+| `annotations` (URL citations)            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | URL citations from system tools (non-streaming only)            |
 | **Usage tracking**                       |                                          |                                                                 |
-| Input text tokens                        |   :material-check-circle:{ .success }    | Billing unit                                                    |
-| Output tokens                            |   :material-check-circle:{ .success }    | Billing unit                                                    |
-| Reasoning tokens                         |   :material-minus-circle:{ .partial }    | Estimated                                                       |
+| Input text tokens                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Billing unit                                                    |
+| Output tokens                            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Billing unit                                                    |
+| Reasoning tokens                         |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Estimated                                                       |
 | **Other**                                |                                          |                                                                 |
-| Service tiers                            |   :material-check-circle:{ .success }    | Mapped to Bedrock service tiers and latency options             |
-| `metadata`                               |   :material-check-circle:{ .success }    | Echoed in the response, updatable on stored completions, and usable to filter the Bedrock invocation log. Also forwarded to Bedrock `requestMetadata`, whose limits apply: max 16 pairs, values ≤256 characters, restricted character set |
-| `store`                                  |   :material-check-circle:{ .success }    | Persists the completion in Amazon Bedrock session storage (non-streaming) |
-| List / update stored completions         |   :material-check-circle:{ .success }    | List with `model`/`metadata` filters; metadata update            |
-| `safety_identifier` / `user`             |   :material-minus-circle:{ .partial }    | Logged                                                          |
-| Bedrock Guardrails                       | :material-plus-circle:{ .extra-feature } | Content safety policies — not applied to Mantle-served requests |
-| `moderation`                             |   :material-check-circle:{ .success }    | Applies an Amazon Bedrock guardrail; results in the response (non-streaming) — rejected (`400`) on Mantle-served models |
+| Service tiers                            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Mapped to Bedrock service tiers and latency options             |
+| `metadata`                               |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Echoed in the response, updatable on stored completions, and usable to filter the Bedrock invocation log. Also forwarded to Bedrock `requestMetadata`, whose limits apply: max 16 pairs, values ≤256 characters, restricted character set |
+| `store`                                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Persists the completion in Amazon Bedrock session storage (non-streaming) |
+| List / update stored completions         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | List with `model`/`metadata` filters; metadata update            |
+| `safety_identifier` / `user`             |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Logged                                                          |
+| Bedrock Guardrails                       | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Content safety policies — not applied to Mantle-served requests |
+| `moderation`                             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Applies an Amazon Bedrock guardrail; results in the response (non-streaming) — rejected (`400`) on Mantle-served models |
 
 </div>
 
@@ -107,11 +107,11 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 
 **Legend:**
 
-* :material-check-circle:{ .success } **Supported** — Fully compatible with OpenAI API
-* :material-cog:{ .model-dep } **Model-Dependent** — Behavior depends on the model or backend; check the Notes column
-* :material-minus-circle:{ .partial } **Partial** — Supported with limitations
-* :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
-* :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
+* :material-check-circle:{ .success role="img" aria-label="Supported" } **Supported** — Fully compatible with OpenAI API
+* :material-cog:{ .model-dep role="img" aria-label="Model-dependent" } **Model-Dependent** — Behavior depends on the model or backend; check the Notes column
+* :material-minus-circle:{ .partial role="img" aria-label="Partial" } **Partial** — Supported with limitations
+* :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } **Unsupported** — Not available in this implementation
+* :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } **Extra Feature** — Enhanced capability beyond OpenAI API
 
 </div>
 
@@ -356,8 +356,8 @@ Add system tools to your `tools` array as normal. System tools don't require par
 
 | Tool | `function.name` | Amazon Nova 2 | Amazon Nova Premier (legacy) | API Support |
 |------|-----------------|:-------------:|:-------------------:|:-----------:|
-| Web Grounding | `nova_grounding` | :material-check-circle:{ .success } | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
-| Code Interpreter | `nova_code_interpreter` | :material-check-circle:{ .success } | :material-close-circle:{ .unsupported } | :material-close-circle:{ .unsupported } |
+| Web Grounding | `nova_grounding` | :material-check-circle:{ .success role="img" aria-label="Supported" } | :material-check-circle:{ .success role="img" aria-label="Supported" } | :material-check-circle:{ .success role="img" aria-label="Supported" } |
+| Code Interpreter | `nova_code_interpreter` | :material-check-circle:{ .success role="img" aria-label="Supported" } | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } |
 
 !!! danger "Code Interpreter Not Compatible"
     **`nova_code_interpreter` cannot be used via this API.** The code execution result cannot be surfaced in the OpenAI Chat Completions response format.
@@ -441,10 +441,10 @@ Anthropic Claude models support server-side tools (bash, text editor, memory) th
 
 | Tool | `function.name` | Claude 3.5 Sonnet v2 | Claude 3.7+ |
 |------|-----------------|:--------------------:|:-----------:|
-| Bash | `bash` | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
-| Text Editor | `str_replace_based_edit_tool` | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
-| Computer | `computer` | :material-close-circle:{ .unsupported } | :material-close-circle:{ .unsupported } |
-| Memory | `memory` | :material-close-circle:{ .unsupported } | :material-check-circle:{ .success } |
+| Bash | `bash` | :material-check-circle:{ .success role="img" aria-label="Supported" } | :material-check-circle:{ .success role="img" aria-label="Supported" } |
+| Text Editor | `str_replace_based_edit_tool` | :material-check-circle:{ .success role="img" aria-label="Supported" } | :material-check-circle:{ .success role="img" aria-label="Supported" } |
+| Computer | `computer` | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } |
+| Memory | `memory` | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | :material-check-circle:{ .success role="img" aria-label="Supported" } |
 
 !!! warning "Computer Use Not Supported"
     The computer use workflow requires screenshots to be returned as images inside tool results. The OpenAI Chat Completions API does not support image content in `role: "tool"` messages, so the complete agent loop cannot be implemented. **`computer` is not usable via this route.**
@@ -544,7 +544,7 @@ export DEFAULT_MODEL_PARAMS='{
 
 **Behavior:**
 
-- :material-check-circle:{ .success } **Compatible parameters**: Forwarded to the model and applied
+- :material-check-circle:{ .success role="img" aria-label="Supported" } **Compatible parameters**: Forwarded to the model and applied
 - :material-alert-circle:{ .warning } **Unsupported parameters**: Return HTTP 400 with an error message
 
 #### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic Claude Features

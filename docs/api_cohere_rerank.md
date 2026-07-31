@@ -83,15 +83,15 @@ curl -X POST "$BASE/v2/rerank" \
 | Feature                     |                  Status                  | Notes                                                             |
 |-----------------------------|:----------------------------------------:|-------------------------------------------------------------------|
 | **Input**                   |                                          |                                                                   |
-| `query` + `documents` (strings) | :material-check-circle:{ .success } | Full support                                                      |
-| `top_n`                     |   :material-check-circle:{ .success }    | Limits the number of returned results                             |
-| `max_tokens_per_doc`        |       :material-cog:{ .model-dep }       | Forwarded to the model; support depends on the model              |
-| `priority`                  | :material-close-circle:{ .unsupported }  | Accepted but ignored — request scheduling priority is not applicable on Bedrock |
-| `return_documents`          | :material-close-circle:{ .unsupported }  | Accepted but ignored — v2 results reference input documents by `index` |
-| Extra model-specific params | :material-plus-circle:{ .extra-feature } | Extra fields are forwarded as additional model request parameters |
+| `query` + `documents` (strings) | :material-check-circle:{ .success role="img" aria-label="Supported" } | Full support                                                      |
+| `top_n`                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Limits the number of returned results                             |
+| `max_tokens_per_doc`        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Forwarded to the model; support depends on the model              |
+| `priority`                  | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted but ignored — request scheduling priority is not applicable on Bedrock |
+| `return_documents`          | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted but ignored — v2 results reference input documents by `index` |
+| Extra model-specific params | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra fields are forwarded as additional model request parameters |
 | **Output**                  |                                          |                                                                   |
-| `results` (index + score)   |   :material-check-circle:{ .success }    | Ordered by decreasing relevance                                   |
-| `meta.billed_units`         |   :material-check-circle:{ .success }    | One search unit per started batch of 100 documents                |
+| `results` (index + score)   |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Ordered by decreasing relevance                                   |
+| `meta.billed_units`         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | One search unit per started batch of 100 documents                |
 
 </div>
 
@@ -99,11 +99,11 @@ curl -X POST "$BASE/v2/rerank" \
 
 **Legend:**
 
-* :material-check-circle:{ .success } **Supported** — Fully compatible with the Cohere API
-* :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
-* :material-minus-circle:{ .partial } **Partial** — Supported with limitations
-* :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
-* :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond the Cohere API
+* :material-check-circle:{ .success role="img" aria-label="Supported" } **Supported** — Fully compatible with the Cohere API
+* :material-cog:{ .model-dep role="img" aria-label="Model-dependent" } **Available on Select Models** — Check your model's capabilities
+* :material-minus-circle:{ .partial role="img" aria-label="Partial" } **Partial** — Supported with limitations
+* :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } **Unsupported** — Not available in this implementation
+* :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } **Extra Feature** — Enhanced capability beyond the Cohere API
 
 </div>
 
@@ -135,11 +135,11 @@ The legacy `/v1/rerank` endpoint is also available for older Cohere SDKs (`coher
 
 | Feature                     |                  Status                  | Notes                                                             |
 |-----------------------------|:----------------------------------------:|-------------------------------------------------------------------|
-| `documents` as objects      |   :material-check-circle:{ .success }    | Each document is a string or an object with a `text` field        |
-| `return_documents`          |   :material-check-circle:{ .success }    | When `true`, each result echoes back the document text            |
-| `rank_fields`               |   :material-minus-circle:{ .partial }    | Only the default `["text"]` is accepted; other values return 400  |
-| `max_chunks_per_doc`        | :material-close-circle:{ .unsupported }  | Rejected with 400 — no Bedrock equivalent                         |
-| `meta.api_version.version`  |   :material-check-circle:{ .success }    | Reported as `"1"`                                                 |
+| `documents` as objects      |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Each document is a string or an object with a `text` field        |
+| `return_documents`          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | When `true`, each result echoes back the document text            |
+| `rank_fields`               |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Only the default `["text"]` is accepted; other values return 400  |
+| `max_chunks_per_doc`        | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Rejected with 400 — no Bedrock equivalent                         |
+| `meta.api_version.version`  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Reported as `"1"`                                                 |
 
 </div>
 

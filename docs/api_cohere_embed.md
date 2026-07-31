@@ -81,20 +81,20 @@ curl -X POST "$BASE/v2/embed" \
 | Feature                       |                  Status                  | Notes                                                              |
 |-------------------------------|:----------------------------------------:|--------------------------------------------------------------------|
 | **Input**                     |                                          |                                                                    |
-| `texts`                       |   :material-check-circle:{ .success }    | Full support                                                       |
-| `images`                      |       :material-cog:{ .model-dep }       | Multimodal models only; data URIs, plus URLs and S3 URIs           |
-| `inputs` (fused text + image) | :material-close-circle:{ .unsupported }  | Rejected with 400 — use `texts` or `images` instead                |
+| `texts`                       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Full support                                                       |
+| `images`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Multimodal models only; data URIs, plus URLs and S3 URIs           |
+| `inputs` (fused text + image) | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Rejected with 400 — use `texts` or `images` instead                |
 | **Model Parameters**          |                                          |                                                                    |
-| `input_type`                  |       :material-cog:{ .model-dep }       | Applied to Cohere models; no equivalent on other providers         |
-| `output_dimension`            |       :material-cog:{ .model-dep }       | Some models support dimension reduction                            |
-| `truncate`, `max_tokens`      |       :material-cog:{ .model-dep }       | Cohere models only                                                 |
-| `embedding_types`             |   :material-minus-circle:{ .partial }    | Only `["float"]` is accepted; other types return 400               |
-| `priority`                    | :material-close-circle:{ .unsupported }  | Accepted but ignored — request scheduling priority is not applicable on Bedrock |
-| Extra model-specific params   | :material-plus-circle:{ .extra-feature } | Extra fields are forwarded as additional model request parameters  |
+| `input_type`                  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Applied to Cohere models; no equivalent on other providers         |
+| `output_dimension`            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Some models support dimension reduction                            |
+| `truncate`, `max_tokens`      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Cohere models only                                                 |
+| `embedding_types`             |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Only `["float"]` is accepted; other types return 400               |
+| `priority`                    | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted but ignored — request scheduling priority is not applicable on Bedrock |
+| Extra model-specific params   | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra fields are forwarded as additional model request parameters  |
 | **Output**                    |                                          |                                                                    |
-| `images` metadata array       | :material-close-circle:{ .unsupported }  | Image dimensions are not echoed in the response                    |
+| `images` metadata array       | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Image dimensions are not echoed in the response                    |
 | **Usage tracking**            |                                          |                                                                    |
-| `billed_units.input_tokens`   |       :material-cog:{ .model-dep }       | Estimated on some models                                           |
+| `billed_units.input_tokens`   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Estimated on some models                                           |
 
 </div>
 
@@ -102,11 +102,11 @@ curl -X POST "$BASE/v2/embed" \
 
 **Legend:**
 
-* :material-check-circle:{ .success } **Supported** — Fully compatible with the Cohere API
-* :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
-* :material-minus-circle:{ .partial } **Partial** — Supported with limitations
-* :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
-* :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond the Cohere API
+* :material-check-circle:{ .success role="img" aria-label="Supported" } **Supported** — Fully compatible with the Cohere API
+* :material-cog:{ .model-dep role="img" aria-label="Model-dependent" } **Available on Select Models** — Check your model's capabilities
+* :material-minus-circle:{ .partial role="img" aria-label="Partial" } **Partial** — Supported with limitations
+* :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } **Unsupported** — Not available in this implementation
+* :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } **Extra Feature** — Enhanced capability beyond the Cohere API
 
 </div>
 
@@ -120,10 +120,10 @@ The legacy `/v1/embed` endpoint is also available for older Cohere SDKs (`cohere
 
 | Feature                    |                 Status                  | Notes                                                                          |
 |----------------------------|:---------------------------------------:|---------------------------------------------------------------------------------|
-| Default response shape     |   :material-check-circle:{ .success }   | Legacy `embeddings_floats`: a plain list of float vectors                      |
-| `embedding_types`          |   :material-check-circle:{ .success }   | `["float"]` switches to the `embeddings_by_type` shape; other types return 400 |
-| `input_type`               |   :material-check-circle:{ .success }   | Optional — forwarded to Cohere models when provided; the backend defaults to `search_document` otherwise |
-| `meta.api_version.version` |   :material-check-circle:{ .success }   | Reported as `"1"`                                                              |
+| Default response shape     |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Legacy `embeddings_floats`: a plain list of float vectors                      |
+| `embedding_types`          |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | `["float"]` switches to the `embeddings_by_type` shape; other types return 400 |
+| `input_type`               |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Optional — forwarded to Cohere models when provided; the backend defaults to `search_document` otherwise |
+| `meta.api_version.version` |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Reported as `"1"`                                                              |
 
 </div>
 

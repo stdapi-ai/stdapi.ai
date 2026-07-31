@@ -39,39 +39,39 @@ Generate natural-sounding speech from text with Amazon Polly through an OpenAI-c
 | Feature                     |                  Status                  | Notes                                                           |
 |-----------------------------|:----------------------------------------:|-----------------------------------------------------------------|
 | **Voice Selection**         |                                          |                                                                 |
-| OpenAI voice names          |   :material-check-circle:{ .success }    | Mapped to Polly voices                                          |
-| Polly voice IDs             | :material-plus-circle:{ .extra-feature } | 60+ voices across 30+ languages                                 |
-| Dynamic voice selection     | :material-plus-circle:{ .extra-feature } | Select best Polly voice based on the detected language          |
+| OpenAI voice names          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Mapped to Polly voices                                          |
+| Polly voice IDs             | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | 60+ voices across 30+ languages                                 |
+| Dynamic voice selection     | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Select best Polly voice based on the detected language          |
 | **Input**                   |                                          |                                                                 |
-| Plain text                  |   :material-check-circle:{ .success }    | Standard text input                                             |
-| SSML markup                 | :material-plus-circle:{ .extra-feature } | Fine-grained speech control                                     |
+| Plain text                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Standard text input                                             |
+| SSML markup                 | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Fine-grained speech control                                     |
 | **Output Formats**          |                                          |                                                                 |
-| MP3                         |   :material-check-circle:{ .success }    | Native Polly format                                             |
-| PCM                         |   :material-check-circle:{ .success }    | Native Polly format                                             |
-| Opus                        |   :material-check-circle:{ .success }    | Native Polly format                                             |
-| AAC                         |   :material-check-circle:{ .success }    | Encoded from PCM                                                |
-| FLAC                        |   :material-check-circle:{ .success }    | Encoded from PCM                                                |
-| WAV                         |   :material-check-circle:{ .success }    | Encoded from PCM                                                |
-| OGG (Vorbis)                | :material-plus-circle:{ .extra-feature } | Native Polly format                                             |
+| MP3                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Native Polly format                                             |
+| PCM                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Native Polly format                                             |
+| Opus                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Native Polly format                                             |
+| AAC                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Encoded from PCM                                                |
+| FLAC                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Encoded from PCM                                                |
+| WAV                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Encoded from PCM                                                |
+| OGG (Vorbis)                | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Native Polly format                                             |
 | **Control**                 |                                          |                                                                 |
-| `speed` parameter           |   :material-check-circle:{ .success }    | 0.2x to 2.0x playback speed; rejected with SSML input (set the speed in SSML instead) |
-| `instructions` parameter    | :material-close-circle:{ .unsupported }  | Accepted for OpenAI API compatibility and ignored (no Amazon Polly equivalent) |
-| Extra model-specific params | :material-plus-circle:{ .extra-feature } | Extra model-specific parameters via JSON body                   |
+| `speed` parameter           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 0.2x to 2.0x playback speed; rejected with SSML input (set the speed in SSML instead) |
+| `instructions` parameter    | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted for OpenAI API compatibility and ignored (no Amazon Polly equivalent) |
+| Extra model-specific params | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra model-specific parameters via JSON body                   |
 | **Streaming**               |                                          |                                                                 |
-| Byte streaming              |   :material-check-circle:{ .success }    | Default streaming mode                                          |
-| SSE streaming               |   :material-check-circle:{ .success }    | Event-based streaming                                           |
+| Byte streaming              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Default streaming mode                                          |
+| SSE streaming               |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Event-based streaming                                           |
 | **Usage tracking**          |                                          |                                                                 |
-| Input text tokens           |   :material-check-circle:{ .success }    | Characters count (billing unit)                                 |
-| Output tokens               | :material-close-circle:{ .unsupported }  | Not available                                                   |
+| Input text tokens           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Characters count (billing unit)                                 |
+| Output tokens               | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Not available                                                   |
 </div>
 
 <div class="feature-table" markdown>
 
 **Legend:**
 
-* :material-check-circle:{ .success } **Supported** — Fully compatible with OpenAI API
-* :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
-* :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
+* :material-check-circle:{ .success role="img" aria-label="Supported" } **Supported** — Fully compatible with OpenAI API
+* :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } **Extra Feature** — Enhanced capability beyond OpenAI API
+* :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } **Unsupported** — Not available in this implementation
 
 </div>
 

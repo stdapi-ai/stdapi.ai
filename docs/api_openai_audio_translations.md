@@ -39,24 +39,24 @@ Translate audio from any language to English text with Amazon Transcribe + Trans
 | Feature                 |                 Status                  | Notes                         |
 |-------------------------|:---------------------------------------:|-------------------------------|
 | **Input**               |                                         |                               |
-| Audio file upload       |   :material-check-circle:{ .success }   | Multipart file upload         |
-| JSON body input         | :material-plus-circle:{ .extra-feature }| Base64, data URI, HTTPS URL, S3 URI, or `file-id:` reference — for MCP / AI agents |
+| Audio file upload       |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Multipart file upload         |
+| JSON body input         | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" }| Base64, data URI, HTTPS URL, S3 URI, or `file-id:` reference — for MCP / AI agents |
 | **Output Formats**      |                                         |                               |
-| `json`                  |   :material-check-circle:{ .success }   | Structured translation        |
-| `text`                  |   :material-check-circle:{ .success }   | Plain English text            |
-| `verbose_json`          |      :material-cog:{ .model-dep }       | With timestamps (Amazon Transcribe; not Bedrock models) |
-| `srt`                   |      :material-cog:{ .model-dep }       | English subtitles with timing (Amazon Transcribe; not Bedrock models) |
-| `vtt`                   |      :material-cog:{ .model-dep }       | English WebVTT subtitles (Amazon Transcribe; not Bedrock models) |
+| `json`                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Structured translation        |
+| `text`                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Plain English text            |
+| `verbose_json`          |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | With timestamps (Amazon Transcribe; not Bedrock models) |
+| `srt`                   |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | English subtitles with timing (Amazon Transcribe; not Bedrock models) |
+| `vtt`                   |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | English WebVTT subtitles (Amazon Transcribe; not Bedrock models) |
 | **Language**            |                                         |                               |
-| Auto language detection |   :material-check-circle:{ .success }   | Automatic source detection    |
+| Auto language detection |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Automatic source detection    |
 | **Translation**         |                                         |                               |
-| Translation to English  |   :material-check-circle:{ .success }   | Amazon Translate (with `amazon.transcribe`) or native model translation (Bedrock models) |
+| Translation to English  |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Amazon Translate (with `amazon.transcribe`) or native model translation (Bedrock models) |
 | **Advanced**            |                                         |                               |
-| `prompt`                |      :material-cog:{ .model-dep }       | Bedrock models only; rejected by Amazon Transcribe |
-| `temperature`           |      :material-cog:{ .model-dep }       | Bedrock models only; rejected by Amazon Transcribe |
+| `prompt`                |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bedrock models only; rejected by Amazon Transcribe |
+| `temperature`           |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bedrock models only; rejected by Amazon Transcribe |
 | **Usage tracking**      |                                         |                               |
-| Input audio duration    |   :material-check-circle:{ .success }   | Seconds (billing unit on Amazon Transcribe) |
-| Output text tokens      |      :material-cog:{ .model-dep }       | On models from Bedrock        |
+| Input audio duration    |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Seconds (billing unit on Amazon Transcribe) |
+| Output text tokens      |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | On models from Bedrock        |
 
 </div>
 
@@ -64,9 +64,9 @@ Translate audio from any language to English text with Amazon Transcribe + Trans
 
 **Legend:**
 
-* :material-check-circle:{ .success } **Supported** — Fully compatible with OpenAI API
-* :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
-* :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
+* :material-check-circle:{ .success role="img" aria-label="Supported" } **Supported** — Fully compatible with OpenAI API
+* :material-cog:{ .model-dep role="img" aria-label="Model-dependent" } **Available on Select Models** — Check your model's capabilities
+* :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } **Extra Feature** — Enhanced capability beyond OpenAI API
 
 </div>
 
