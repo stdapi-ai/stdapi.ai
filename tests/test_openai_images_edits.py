@@ -380,12 +380,12 @@ class TestImagesEditsBasic:
     def test_edit_with_streaming(
         self, openai_client: OpenAI, sample_image_file: bytes, sample_mask_file: bytes
     ) -> None:
-        """Streaming an edit emits a single ``image_generation.completed`` SSE event.
+        """Streaming an edit emits a single ``image_edit.completed`` SSE event.
 
-        The edits route reuses the generations stream serializer, so it emits
-        OpenAI's ``image_generation.*`` event names instead of the
-        ``image_edit.*`` names the OpenAI schema documents for this endpoint,
-        and Stability backends never produce preview frames.
+        The edits endpoint has its own event names, and the OpenAI client
+        discriminates its edit stream union on them: an ``image_generation.*``
+        name here leaves ``usage`` an unparsed dict on the client side. Stability
+        backends never produce preview frames, so one event is the whole stream.
 
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/routes/openai_images_generations.py:stream_generator
@@ -402,8 +402,8 @@ class TestImagesEditsBasic:
 
         events = list(response)
         # Validate the streaming response structure
-        validate_streaming_image_response(events)
-        assert [str(event.type) for event in events] == ["image_generation.completed"]
+        validate_streaming_image_response(events, prefix="image_edit")
+        assert [str(event.type) for event in events] == ["image_edit.completed"]
         assert validate_base64_image(events[-1].b64_json) == "png"
 
     @pytest.mark.expensive
@@ -415,7 +415,7 @@ class TestImagesEditsBasic:
 
         ``partial_images`` (0-3, streaming only) is validated and forwarded, but
         no available backend emits preview frames, so the stream carries exactly
-        one ``image_generation.completed`` event and no ``partial_image`` event
+        one ``image_edit.completed`` event and no ``partial_image`` event
         whatever the requested preview count.
 
         Ref: stdapi/types/openai_images.py:_ImageEditCommonParams
@@ -431,8 +431,8 @@ class TestImagesEditsBasic:
         )
 
         events = list(response)
-        validate_streaming_image_response(events)
-        assert [str(event.type) for event in events] == ["image_generation.completed"]
+        validate_streaming_image_response(events, prefix="image_edit")
+        assert [str(event.type) for event in events] == ["image_edit.completed"]
 
     @pytest.mark.expensive
     def test_image_parameter_aliases(

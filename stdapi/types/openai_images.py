@@ -22,8 +22,10 @@ __all__ = [
     "Image",
     "ImageBackground",
     "ImageBackgroundAuto",
+    "ImageEditCompletedEvent",
     "ImageEditJsonBody",
     "ImageEditParams",
+    "ImageEditPartialImageEvent",
     "ImageGenCompletedEvent",
     "ImageGenPartialImageEvent",
     "ImageGenerateParams",
@@ -185,7 +187,8 @@ class ImageGenCompletedEvent(BaseModelResponse):
     )
     size: str | None = Field(default=None, description="Size of the generated image.")
     type: Literal["image_generation.completed"] = Field(
-        description="Event type. Always `image_generation.completed`."
+        default="image_generation.completed",
+        description="Event type. Always `image_generation.completed`.",
     )
     usage: Usage = Field(description="Token usage for the image generation.")
 
@@ -212,7 +215,33 @@ class ImageGenPartialImageEvent(BaseModelResponse):
     )
     size: str | None = Field(default=None, description="Size of the generated image.")
     type: Literal["image_generation.partial_image"] = Field(
-        description="Event type. Always `image_generation.partial_image`."
+        default="image_generation.partial_image",
+        description="Event type. Always `image_generation.partial_image`.",
+    )
+
+
+# Ref: openai.types.image_edit_completed_event.ImageEditCompletedEvent
+class ImageEditCompletedEvent(ImageGenCompletedEvent):
+    """Streaming event emitted when an image edit completes.
+
+    Identical to the generation event but for its ``type``: the edits endpoint
+    has its own event names, and the OpenAI client discriminates its edit stream
+    union on them.
+    """
+
+    type: Literal["image_edit.completed"] = Field(  # type: ignore[assignment]
+        default="image_edit.completed",
+        description="Event type. Always `image_edit.completed`.",
+    )
+
+
+# Ref: openai.types.image_edit_partial_image_event.ImageEditPartialImageEvent
+class ImageEditPartialImageEvent(ImageGenPartialImageEvent):
+    """Streaming event emitted for partial images during an image edit."""
+
+    type: Literal["image_edit.partial_image"] = Field(  # type: ignore[assignment]
+        default="image_edit.partial_image",
+        description="Event type. Always `image_edit.partial_image`.",
     )
 
 

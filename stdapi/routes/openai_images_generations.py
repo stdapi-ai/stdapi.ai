@@ -29,6 +29,8 @@ from stdapi.monitoring import (
 )
 from stdapi.routes._images_common import build_images_response
 from stdapi.types.openai_images import (
+    ImageEditCompletedEvent,
+    ImageEditPartialImageEvent,
     ImageGenCompletedEvent,
     ImageGenerateParams,
     ImageGenPartialImageEvent,
@@ -102,6 +104,8 @@ async def stream_generator(
     job: ImageGenerationJobBase[Any],
     created: int,
     input_image_count: int = 0,
+    *,
+    edit: bool = False,
 ) -> AsyncGenerator[JSONServerSentEvent]:
     """Stream server-sent events for an image generation or editing request.
 
@@ -110,18 +114,24 @@ async def stream_generator(
         job: The image generation/edit job containing metadata (dimensions, format, etc).
         created: Unix timestamp used as the creation time for each event.
         input_image_count: Number of input images (0 for text-to-image).
+        edit: Whether to emit the edits endpoint's ``image_edit.*`` event names
+            instead of the generations endpoint's ``image_generation.*`` ones.
 
     Yields:
         JSONServerSentEvent containing partial image data or the final completed image.
     """
+    partial_event, completed_event = (
+        (ImageEditPartialImageEvent, ImageEditCompletedEvent)
+        if edit
+        else (ImageGenPartialImageEvent, ImageGenCompletedEvent)
+    )
     indexes: dict[int, int] = {}
     usage: Usage | None = None
     async for result in image_stream:
         if result.partial:
             index = indexes[result.index] = indexes.get(result.index, 0) + 1
             yield JSONServerSentEvent(
-                data=ImageGenPartialImageEvent(
-                    type="image_generation.partial_image",
+                data=partial_event(
                     partial_image_index=index,
                     b64_json=result.image,
                     created_at=created,
@@ -136,8 +146,7 @@ async def stream_generator(
             # only final once every image has been generated.
             usage = _stream_event_usage(job, input_image_count)
             yield JSONServerSentEvent(
-                data=ImageGenCompletedEvent(
-                    type="image_generation.completed",
+                data=completed_event(
                     b64_json=result.image,
                     created_at=created,
                     output_format=job.output_format,

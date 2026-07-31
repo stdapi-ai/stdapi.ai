@@ -205,7 +205,7 @@ def _skip_retired_official_image_model(
 
 
 def validate_streaming_image_response(
-    response: Iterable[ImageStreamEvent],
+    response: Iterable[ImageStreamEvent], prefix: str = "image_generation"
 ) -> list[ImageStreamEvent]:
     """Validate a streaming image generation response and return its events.
 
@@ -214,6 +214,8 @@ def validate_streaming_image_response(
 
     Args:
         response: The streaming response returned by ``images.generate``.
+        prefix: Event-name family the endpoint emits — ``image_generation`` for
+            generations, ``image_edit`` for edits.
 
     Returns:
         The events collected from the stream.
@@ -240,7 +242,7 @@ def validate_streaming_image_response(
         event_types_seen.add(event.type)
 
         # Validate event type-specific attributes
-        if event.type == "image_generation.completed":
+        if event.type == f"{prefix}.completed":
             # Final completion event should have all metadata
             assert hasattr(event, "output_format"), (
                 f"Completion event missing 'output_format': {event}"
@@ -274,7 +276,7 @@ def validate_streaming_image_response(
                 == event.usage.input_tokens
             ), f"Input token details do not sum to input_tokens: {event.usage}"
 
-        elif event.type == "image_generation.partial_image":
+        elif event.type == f"{prefix}.partial_image":
             # Partial events carry a 0-based index and the announced format
             assert hasattr(event, "output_format"), (
                 f"Partial event missing 'output_format': {event}"
@@ -282,8 +284,11 @@ def validate_streaming_image_response(
             assert event.output_format in ["png", "jpeg", "webp"], (
                 f"Invalid output_format: {event.output_format}"
             )
-            assert event.partial_image_index >= 0, (
-                f"Partial index must be 0-based: {event.partial_image_index}"
+            partial = cast(
+                "ImageGenPartialImageEvent | ImageEditPartialImageEvent", event
+            )
+            assert partial.partial_image_index >= 0, (
+                f"Partial index must be 0-based: {partial.partial_image_index}"
             )
 
         # Validate created_at is a reasonable timestamp
@@ -297,7 +302,7 @@ def validate_streaming_image_response(
     assert len(events) > 0, "Streaming response should contain at least one event"
 
     # Should have a completion event for successful generation
-    assert "image_generation.completed" in event_types_seen, (
+    assert f"{prefix}.completed" in event_types_seen, (
         f"Missing completion event. Event types seen: {event_types_seen}"
     )
     return events
@@ -1180,6 +1185,96 @@ class TestStreamGeneratorUsageMatchesNonStream:
                 completed[-1]["usage"]["output_tokens"]
                 == non_stream.usage.output_tokens
             )
+        finally:
+            REQUEST_LOG.reset(log_token)
+
+
+class TestStreamGeneratorEventNames:
+    """stream_generator: each endpoint emits its own SSE event family.
+
+    OpenAI gives the edits endpoint ``image_edit.*`` event names and the
+    generations endpoint ``image_generation.*`` ones, and the client
+    discriminates each stream union on them: an event named for the wrong
+    endpoint parses into the wrong model, leaving ``usage`` an unconverted dict.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/routes/openai_images_generations.py:stream_generator
+    """
+
+    @staticmethod
+    def _job() -> ImageGenerationJobBase[Any]:
+        """Build a minimal job whose counters are already final."""
+        job = object.__new__(ImageGenerationJobBase)
+        job._count = 1  # noqa: SLF001
+        job._response_width = 512  # noqa: SLF001
+        job._response_height = 512  # noqa: SLF001
+        job._response_quality = "medium"  # noqa: SLF001
+        job._output_format = "png"  # noqa: SLF001
+        job._response_output_format = "png"  # noqa: SLF001
+        job._input_tokens = 3  # noqa: SLF001
+        job._output_tokens = 1  # noqa: SLF001
+        return job
+
+    @pytest.mark.local
+    @pytest.mark.parametrize(
+        ("edit", "prefix"), [(False, "image_generation"), (True, "image_edit")]
+    )
+    async def test_event_names_follow_the_endpoint(
+        self, edit: bool, prefix: str
+    ) -> None:
+        """A partial and a completed event both carry the endpoint's own prefix."""
+        REQUEST_TIME.set(datetime.now(UTC))
+        log_token = REQUEST_LOG.set(cast("EventLog", {"level": "info"}))
+        try:
+            job = self._job()
+
+            async def image_stream() -> AsyncGenerator[ImageGenerationResponse]:
+                """Yield one preview frame and then the final image."""
+                yield ImageGenerationResponse(image="aaa", index=0, partial=True)
+                yield ImageGenerationResponse(image="bbb", index=0)
+
+            events = []
+            async for event in stream_generator(
+                image_stream(), job, created=0, input_image_count=1, edit=edit
+            ):
+                assert event.data is not None
+                events.append(json.loads(event.data))
+
+            assert [e["type"] for e in events] == [
+                f"{prefix}.partial_image",
+                f"{prefix}.completed",
+            ]
+        finally:
+            REQUEST_LOG.reset(log_token)
+
+    @pytest.mark.local
+    async def test_input_images_are_counted_in_stream_usage(self) -> None:
+        """Streamed usage attributes the input images the edit consumed.
+
+        The non-streaming edits path reports the source image and mask as input
+        image tokens; a stream that leaves them out under-reports the same edit.
+        """
+        REQUEST_TIME.set(datetime.now(UTC))
+        log_token = REQUEST_LOG.set(cast("EventLog", {"level": "info"}))
+        try:
+            job = self._job()
+
+            async def image_stream() -> AsyncGenerator[ImageGenerationResponse]:
+                """Yield the single edited image."""
+                yield ImageGenerationResponse(image="bbb", index=0)
+
+            events = []
+            async for event in stream_generator(
+                image_stream(), job, created=0, input_image_count=2, edit=True
+            ):
+                assert event.data is not None
+                events.append(json.loads(event.data))
+
+            usage = events[-1]["usage"]
+            assert usage["input_tokens_details"] == {
+                "image_tokens": 2,
+                "text_tokens": 1,
+            }
         finally:
             REQUEST_LOG.reset(log_token)
 

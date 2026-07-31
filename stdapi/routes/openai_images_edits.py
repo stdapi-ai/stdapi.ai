@@ -415,6 +415,9 @@ async def edit_images(
                     ),
                     job=job,
                     created=int(REQUEST_TIME.get().timestamp()),
+                    input_image_count=len(input_images)
+                    + (0 if input_mask is None else 1),
+                    edit=True,
                 )
             )
         )
