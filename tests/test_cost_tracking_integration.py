@@ -31,14 +31,6 @@ if TYPE_CHECKING:
 _CHAT_MODEL = "amazon.nova-micro-v1:0"
 
 
-@pytest.fixture
-def client(test_client: TestClient | None) -> TestClient:
-    """Return the session test client, skipping if not running locally."""
-    if test_client is None:
-        pytest.skip("Requires local test server")
-    return test_client
-
-
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def price_catalog(
     test_client: TestClient | None,
@@ -93,7 +85,9 @@ class TestCostTrackingIntegration:
          stdapi/pricing.py:resolve_price
     """
 
-    def test_search_then_price_workflow(self, client: TestClient, api_key: str) -> None:
+    def test_search_then_price_workflow(
+        self, local_test_client: TestClient, api_key: str
+    ) -> None:
         """search_models then model_pricing returns the shortlist in order, priced per Region.
 
         The documented agent workflow: discover models for a route, then price
@@ -104,7 +98,7 @@ class TestCostTrackingIntegration:
         Ref: stdapi/routes/core_models.py:search_models
         """
         headers = {"Authorization": f"Bearer {api_key}"}
-        found = client.get(
+        found = local_test_client.get(
             "/search_models",
             params={
                 "route": "openai_chat_completion",
@@ -117,7 +111,7 @@ class TestCostTrackingIntegration:
         shortlist = [m["id"] for m in found.json()][:3]
         assert shortlist
 
-        response = client.get(
+        response = local_test_client.get(
             "/model_pricing",
             params={
                 "model": shortlist,
@@ -140,7 +134,7 @@ class TestCostTrackingIntegration:
             assert Decimal(row["unit_price"]) > 0
 
     def test_api_prices_match_resolve_price(
-        self, client: TestClient, api_key: str
+        self, local_test_client: TestClient, api_key: str
     ) -> None:
         """A published price row is byte-identical to the price request billing resolves.
 
@@ -150,7 +144,7 @@ class TestCostTrackingIntegration:
 
         Ref: stdapi/usage.py:format_cost
         """
-        response = client.get(
+        response = local_test_client.get(
             "/model_pricing",
             params={
                 "model": _CHAT_MODEL,
@@ -172,7 +166,10 @@ class TestCostTrackingIntegration:
         assert row["currency"] == billed.currency
 
     def test_chat_completion_records_usage_and_cost(
-        self, client: TestClient, api_key: str, monkeypatch: pytest.MonkeyPatch
+        self,
+        local_test_client: TestClient,
+        api_key: str,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A real Bedrock call logs one bedrock-runtime usage entry with a priced cost.
 
@@ -185,7 +182,7 @@ class TestCostTrackingIntegration:
         written: list[EventLog] = []
         monkeypatch.setattr(monitoring, "write_log_event", written.append)
 
-        response = client.post(
+        response = local_test_client.post(
             "/v1/chat/completions",
             json={
                 "model": _CHAT_MODEL,

@@ -22,13 +22,13 @@ from typing import TYPE_CHECKING
 import pytest
 from anthropic import Anthropic, BadRequestError
 
+from tests.conftest import PEGASUS_MODEL
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 #: Skip the module when a remote Anthropic-compatible target is selected.
 pytestmark = pytest.mark.gateway("Pegasus is not supported on the official API")
-
-PEGASUS_MODEL = "twelvelabs.pegasus-1-2-v1:0"
 
 #: Anthropic stop_reason values reachable from Pegasus's ``finishReason`` (stop, length).
 _PEGASUS_STOP_REASONS = frozenset({"end_turn", "max_tokens"})
@@ -36,13 +36,11 @@ _PEGASUS_STOP_REASONS = frozenset({"end_turn", "max_tokens"})
 
 @pytest.fixture
 def video_message(sample_video_file_base64: str) -> Callable[..., dict[str, object]]:
-    """Build the user message carrying the sample video, skipping when it is absent.
+    """Build the user message carrying the sample video.
 
     Videos travel as an ``image`` block with ``media_type: "video/mp4"``; the
     optional prompt becomes the trailing text block Pegasus uses as ``inputPrompt``.
     """
-    if not sample_video_file_base64:
-        pytest.skip("No sample video available")
 
     def _build(prompt: str | None = None) -> dict[str, object]:
         content: list[dict[str, object]] = [

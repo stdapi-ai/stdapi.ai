@@ -678,12 +678,6 @@ class TestOpenAIVideoAuthRejection:
          stdapi/api_providers/openai.py:_format_error
     """
 
-    @pytest.fixture(autouse=True)
-    def _skip_non_local(self, test_client: TestClient | None) -> None:
-        """Skip when running against a remote server instead of the in-process app."""
-        if not test_client:
-            pytest.skip("Unit test only for local, in-process runs.")
-
     @pytest.mark.parametrize(
         ("method", "path"),
         [

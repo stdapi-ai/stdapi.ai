@@ -1113,7 +1113,7 @@ class TestAnthropicMessages:
         self,
         anthropic_client: Anthropic,
         anthropic_chat_basic_model: str,
-        use_anthropic_api: bool,
+        use_official_api: bool,
     ) -> None:
         """An empty ``messages`` array is rejected with HTTP 400.
 
@@ -1132,11 +1132,11 @@ class TestAnthropicMessages:
             )
 
         assert excinfo.value.status_code == 400
-        if not use_anthropic_api:
+        if not use_official_api:
             assert excinfo.value.type == "invalid_request_error"
 
     def test_invalid_model_error(
-        self, anthropic_client: Anthropic, use_anthropic_api: bool
+        self, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
         """An unknown model id is rejected, as ``not_found_error`` on this gateway.
 
@@ -1157,7 +1157,7 @@ class TestAnthropicMessages:
 
         assert excinfo.value.status_code in (400, 404)
         assert "nonexistent-model-xyz" in str(excinfo.value)
-        if not use_anthropic_api:
+        if not use_official_api:
             assert excinfo.value.status_code == 404
             assert excinfo.value.type == "not_found_error"
 
@@ -1165,7 +1165,7 @@ class TestAnthropicMessages:
         self,
         anthropic_client: Anthropic,
         anthropic_chat_basic_model: str,
-        use_anthropic_api: bool,
+        use_official_api: bool,
     ) -> None:
         """``temperature`` above the documented 1.0 ceiling is rejected with HTTP 400.
 
@@ -1183,7 +1183,7 @@ class TestAnthropicMessages:
 
         assert excinfo.value.status_code == 400
         assert "temperature" in str(excinfo.value).lower()
-        if not use_anthropic_api:
+        if not use_official_api:
             assert excinfo.value.type == "invalid_request_error"
 
     @pytest.mark.gateway("the AWS-hosted official endpoint accepts max_tokens=0")
@@ -1216,7 +1216,7 @@ class TestAnthropicMessages:
         self,
         anthropic_client: Anthropic,
         anthropic_chat_basic_model: str,
-        use_anthropic_api: bool,
+        use_official_api: bool,
     ) -> None:
         """``top_p`` above 1.0 is rejected with HTTP 400.
 
@@ -1234,7 +1234,7 @@ class TestAnthropicMessages:
 
         assert excinfo.value.status_code == 400
         assert "top_p" in str(excinfo.value).lower()
-        if not use_anthropic_api:
+        if not use_official_api:
             assert excinfo.value.type == "invalid_request_error"
 
     # --- Multiple content blocks in response ---
@@ -1689,7 +1689,7 @@ class TestAnthropicMessages:
         self,
         anthropic_client: Anthropic,
         anthropic_chat_basic_model: str,
-        use_anthropic_api: bool,
+        use_official_api: bool,
     ) -> None:
         """The response ``model`` echoes the requested identifier verbatim.
 
@@ -1708,7 +1708,7 @@ class TestAnthropicMessages:
 
         assert response.model is not None
         assert len(response.model) > 0
-        if not use_anthropic_api:
+        if not use_official_api:
             # Our gateway must echo back the exact requested model name
             assert response.model == anthropic_chat_basic_model
 
@@ -2821,7 +2821,7 @@ class TestAnthropicMessages:
     # --- Error format validation ---
 
     def test_invalid_model_error_format(
-        self, anthropic_client: Anthropic, use_anthropic_api: bool
+        self, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
         """Errors use Anthropic's envelope: ``type``, nested ``error`` and ``request_id``.
 
@@ -2833,7 +2833,7 @@ class TestAnthropicMessages:
              stdapi/api_providers/anthropic.py:_format_error
              stdapi/api_providers/anthropic.py:_STATUS
         """
-        if use_anthropic_api:
+        if use_official_api:
             pytest.skip("Error format varies on official API")
 
         with pytest.raises(AnthropicError) as exc_info:
@@ -2862,7 +2862,7 @@ class TestAnthropicMessages:
         self,
         anthropic_client: Anthropic,
         anthropic_chat_basic_model: str,
-        use_anthropic_api: bool,
+        use_official_api: bool,
     ) -> None:
         """A negative ``temperature`` is rejected with HTTP 400.
 
@@ -2880,7 +2880,7 @@ class TestAnthropicMessages:
 
         assert excinfo.value.status_code == 400
         assert "temperature" in str(excinfo.value).lower()
-        if not use_anthropic_api:
+        if not use_official_api:
             assert excinfo.value.type == "invalid_request_error"
 
     # --- Thinking disabled explicitly ---
@@ -2915,7 +2915,7 @@ class TestAnthropicMessages:
     # --- Model alias resolution ---
 
     def test_model_alias_resolution(
-        self, anthropic_client: Anthropic, use_anthropic_api: bool
+        self, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
         """An Anthropic-style model alias resolves to its Bedrock model and is echoed back.
 
@@ -2927,7 +2927,7 @@ class TestAnthropicMessages:
              stdapi/models/__init__.py:validate_model
              stdapi/models/chat/_adapters/_anthropic_message.py:format_response
         """
-        if use_anthropic_api:
+        if use_official_api:
             pytest.skip("Alias resolution is a local gateway feature")
 
         response = anthropic_client.messages.create(

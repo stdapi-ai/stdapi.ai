@@ -15,13 +15,6 @@ from openai.types.responses import ResponseInputMessageItem, ResponseInputText
 from sse_starlette import EventSourceResponse
 
 from stdapi.api_errors import ApiError
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
-
-    from openai import OpenAI
-    from starlette.testclient import TestClient
-from stdapi.models import ModelDetails
 from stdapi.routes import openai_responses
 from stdapi.types.openai_responses import (
     EasyInputMessage,
@@ -33,6 +26,15 @@ from stdapi.types.openai_responses import (
     ResponseOutputText,
     ResponseUsage,
 )
+from tests._helpers import make_model_details
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from openai import OpenAI
+    from starlette.testclient import TestClient
+
+    from stdapi.models import ModelDetails
 
 
 def _sse_events(text: str) -> list[dict[str, Any]]:
@@ -207,14 +209,7 @@ def backend(monkeypatch: pytest.MonkeyPatch) -> _StubChatBackend:
     async def _validate_model(
         model_id: str, *_args: object, **_kwargs: object
     ) -> ModelDetails:
-        return ModelDetails(
-            id=model_id,
-            name=model_id,
-            provider="Vendor",
-            input_modalities=["TEXT"],
-            output_modalities=["TEXT"],
-            regions=["us-east-1"],
-        )
+        return make_model_details(model_id)
 
     stub = _StubChatBackend()
     monkeypatch.setattr(openai_responses, "validate_model", _validate_model)
@@ -1385,12 +1380,6 @@ class TestStoredResponseRoutesAuthRejection:
     Ref: https://developers.openai.com/api/docs/guides/error-codes
          stdapi/auth.py:authenticate
     """
-
-    @pytest.fixture(autouse=True)
-    def _skip_non_local(self, test_client: TestClient | None) -> None:
-        """Skip when running against a remote server instead of the in-process app."""
-        if not test_client:
-            pytest.skip("Unit test only for local, in-process runs.")
 
     @pytest.mark.parametrize(
         ("method", "path"),

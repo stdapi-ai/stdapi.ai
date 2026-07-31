@@ -17,7 +17,7 @@ import pytest
 import stdapi.models
 from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, GUARDRAIL_TRACE_VAR
 from stdapi.config import SETTINGS
-from stdapi.models import ModelBase, ModelDetails
+from stdapi.models import ModelBase
 from stdapi.models.chat._adapters import _openai_chat_completion as chat_adapter
 from stdapi.monitoring import REQUEST_LOG
 from stdapi.routes import openai_chat_completions, openai_responses
@@ -30,6 +30,7 @@ from stdapi.types.openai_responses import (
     Response,
     ResponseUsage,
 )
+from tests._helpers import make_model_details
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -67,14 +68,7 @@ _TRACE: dict[str, Any] = {
 
 
 async def _validate_model(model_id: str, *_args: object, **_kwargs: object) -> Any:  # noqa: ANN401
-    return ModelDetails(
-        id=model_id,
-        name=model_id,
-        provider="Vendor",
-        input_modalities=["TEXT"],
-        output_modalities=["TEXT"],
-        regions=["us-east-1"],
-    )
+    return make_model_details(model_id)
 
 
 @pytest.fixture

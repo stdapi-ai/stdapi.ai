@@ -4,8 +4,6 @@ Ref: https://docs.aws.amazon.com/translate/latest/APIReference/API_TranslateText
      stdapi/aws_translate.py:translate
 """
 
-from typing import TYPE_CHECKING
-
 import pytest
 from botocore.exceptions import ParamValidationError
 
@@ -16,10 +14,6 @@ from stdapi.aws_translate import translate
 from stdapi.config import SETTINGS
 from stdapi.pricing import Dimension, Service
 from tests._helpers import make_client_error
-
-if TYPE_CHECKING:
-    from collections.abc import Generator
-
 
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
@@ -49,14 +43,6 @@ def _two_candidate_regions(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1", "eu-west-1"])
 
 
-@pytest.fixture
-def _usage_scope() -> Generator[None]:
-    """Install a fresh usage accumulator for the test."""
-    token = usage.init_usage()
-    yield
-    usage.USAGE.reset(token)
-
-
 def _patch_clients(
     monkeypatch: pytest.MonkeyPatch, clients: dict[str, _StubTranslateClient]
 ) -> None:
@@ -72,7 +58,7 @@ class TestTranslateFailover:
          stdapi/aws.py:is_failover_error
     """
 
-    @pytest.mark.usefixtures("_usage_scope")
+    @pytest.mark.usefixtures("usage_scope")
     async def test_failover_serves_and_records_the_second_region(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

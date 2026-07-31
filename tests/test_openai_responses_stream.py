@@ -67,13 +67,8 @@ if TYPE_CHECKING:
 
     from stdapi.types.openai_chat_completions import ChatCompletion
 
-#: Mark the whole module as local (in-process, no AWS calls).
-pytestmark = pytest.mark.local
-
-
-@pytest.fixture(autouse=True)
-def _request_log(request_log: dict[str, Any]) -> None:
-    """Bind the shared request-log context required by response logging."""
+#: Local, in-process tests with the request-log context response logging requires.
+pytestmark = [pytest.mark.local, pytest.mark.usefixtures("request_log")]
 
 
 def _request(**kwargs: object) -> ResponseCreateParams:

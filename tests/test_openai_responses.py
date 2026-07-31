@@ -22,6 +22,7 @@ from stdapi.models.chat._adapters._openai_responses import _classify_stream_erro
 from stdapi.models.chat._default import ChatModel
 from stdapi.types.openai_responses import Response, ResponseCreateParams
 from stdapi.usage import record_bedrock_usage
+from tests._helpers import strip_code_fence
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -39,24 +40,6 @@ _CACHEABLE_CONTEXT = (
     "single API, with the capabilities needed to build generative AI "
     "applications with security, privacy and responsible AI. "
 ) * 150
-
-
-def _strip_code_fence(text: str) -> str:
-    """Strip a wrapping Markdown code fence (e.g. ` ```json `) from model output.
-
-    Args:
-        text: Raw model output, possibly fenced.
-
-    Returns:
-        ``text`` with a leading/trailing triple-backtick fence removed, or
-        ``text`` stripped of surrounding whitespace when it is not fenced.
-    """
-    stripped = text.strip()
-    if not stripped.startswith("```"):
-        return stripped
-    lines = stripped.splitlines()
-    lines = lines[1:-1] if len(lines) > 1 and lines[-1].strip() == "```" else lines[1:]
-    return "\n".join(lines).strip()
 
 
 def _emf_lines(captured_out: str) -> list[dict[str, Any]]:
@@ -555,7 +538,7 @@ class TestResponses:
         output_text = (
             response.output_text
             if use_official_api
-            else _strip_code_fence(response.output_text)
+            else strip_code_fence(response.output_text)
         )
         assert output_text.startswith("{"), (
             f"json_object output must not be wrapped in prose: {response.output_text!r}"
@@ -2389,7 +2372,7 @@ class TestUsageLogging:
     """
 
     def test_response_usage_logged(
-        self, test_client: TestClientType | None, responses_model: str, api_key: str
+        self, local_test_client: TestClientType, responses_model: str, api_key: str
     ) -> None:
         """The raw ``/v1/responses`` body carries a consistent ``usage`` object.
 
@@ -2400,10 +2383,7 @@ class TestUsageLogging:
         Ref: https://developers.openai.com/api/reference/resources/responses/methods/retrieve
              stdapi/usage.py:record_bedrock_usage
         """
-        if test_client is None:
-            pytest.skip("Requires local test server")
-
-        response = test_client.post(
+        response = local_test_client.post(
             "/v1/responses",
             json={"model": responses_model, "input": "Say hello."},
             headers={"Authorization": f"Bearer {api_key}"},
@@ -2433,7 +2413,7 @@ class TestUsageAggregation:
     """
 
     def test_multiple_requests_aggregate_usage(
-        self, test_client: TestClientType | None, chat_legacy_model: str, api_key: str
+        self, local_test_client: TestClientType, chat_legacy_model: str, api_key: str
     ) -> None:
         """Usage counters are per-request and never accumulate across requests.
 
@@ -2445,12 +2425,9 @@ class TestUsageAggregation:
         Ref: stdapi/usage.py:init_usage
              stdapi/usage.py:record_bedrock_usage
         """
-        if test_client is None:
-            pytest.skip("Requires local test server")
-
         input_token_counts = []
         for _ in range(3):
-            response = test_client.post(
+            response = local_test_client.post(
                 "/v1/responses",
                 json={"model": chat_legacy_model, "input": "Say hi."},
                 headers={"Authorization": f"Bearer {api_key}"},
@@ -2532,7 +2509,7 @@ class TestUsageEMF:
 
     def test_emf_metrics_emitted_when_enabled(
         self,
-        test_client: TestClientType | None,
+        local_test_client: TestClientType,
         responses_model: str,
         api_key: str,
         capfd: pytest.CaptureFixture[str],
@@ -2545,12 +2522,9 @@ class TestUsageEMF:
 
         Ref: stdapi/usage.py:emit_usage_metrics
         """
-        if test_client is None:
-            pytest.skip("Requires local test server")
-
         capfd.readouterr()
 
-        response = test_client.post(
+        response = local_test_client.post(
             "/v1/responses",
             json={"model": responses_model, "input": "Hello."},
             headers={"Authorization": f"Bearer {api_key}"},

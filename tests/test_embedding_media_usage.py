@@ -37,27 +37,15 @@ from stdapi.models.embedding.twelvelabs_marengo_embed import (
 from stdapi.pricing import Dimension
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
-
     from stdapi.usage import UsageRecord
 
 
-#: All tests in this module exercise the local implementation in-process.
-pytestmark = pytest.mark.local
+#: Local, in-process tests metering into the per-request usage scopes.
+pytestmark = [pytest.mark.local, pytest.mark.usefixtures("usage_scope")]
 
 
 _NOVA_MODEL_ID = "amazon.nova-2-multimodal-embeddings-v1:0"
 _MARENGO_MODEL_ID = "twelvelabs.marengo-embed-3-0-v1:0"
-
-
-@pytest.fixture(autouse=True)
-def _usage_scope() -> Generator[None]:
-    """Install fresh per-request usage/model-state scopes for each test."""
-    usage_token = usage.init_usage()
-    state_token = usage.init_model_state()
-    yield
-    usage.USAGE.reset(usage_token)
-    usage.MODEL_STATE.reset(state_token)
 
 
 def _only_record() -> UsageRecord:

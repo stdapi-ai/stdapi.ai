@@ -1043,7 +1043,7 @@ class TestImageGenerationUsage:
     @pytest.mark.expensive
     def test_image_generation_usage_logged(
         self,
-        test_client: TestClientType | None,
+        local_test_client: TestClientType,
         image_generation_model: str,
         image_generation_size: str,
         api_key: str,
@@ -1058,10 +1058,8 @@ class TestImageGenerationUsage:
         Ref: stdapi/usage.py:IMAGE_SPEC
              stdapi/routes/_images_common.py:build_images_response
         """
-        if test_client is None:
-            pytest.skip("Requires local test server")
         capfd.readouterr()
-        response = test_client.post(
+        response = local_test_client.post(
             "/v1/images/generations",
             json={
                 "model": image_generation_model,

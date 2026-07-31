@@ -14,6 +14,7 @@ import pytest
 
 from stdapi.models import _find_model_class
 from stdapi.models.chat.kimi_k25 import ChatModel as KimiChatModel
+from tests.conftest import FINISH_REASONS
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -22,9 +23,6 @@ KIMI_K2_5 = "moonshotai.kimi-k2.5"
 KIMI_K2_THINKING = "moonshot.kimi-k2-thinking"
 
 KIMI_ALL = (KIMI_K2_5, KIMI_K2_THINKING)
-
-#: finish_reason values the OpenAI Chat Completions reference defines.
-_FINISH_REASONS = frozenset({"stop", "length", "content_filter", "tool_calls"})
 
 
 @pytest.mark.local
@@ -71,7 +69,7 @@ class TestKimiK25ChatCompletions:
         assert resp.object == "chat.completion"
         assert len(resp.choices) >= 1
         choice = resp.choices[0]
-        assert choice.finish_reason in _FINISH_REASONS
+        assert choice.finish_reason in FINISH_REASONS
         msg = choice.message
         assert msg.role == "assistant"
         assert msg.content
@@ -100,7 +98,7 @@ class TestKimiK25ChatCompletions:
         assert resp.object == "chat.completion"
         assert len(resp.choices) >= 1
         choice = resp.choices[0]
-        assert choice.finish_reason in _FINISH_REASONS
+        assert choice.finish_reason in FINISH_REASONS
         msg = choice.message
         assert msg.role == "assistant"
         assert msg.content
@@ -141,7 +139,7 @@ class TestKimiK25ChatCompletions:
         assert resp.object == "chat.completion"
         assert len(resp.choices) >= 1
         choice = resp.choices[0]
-        assert choice.finish_reason in _FINISH_REASONS
+        assert choice.finish_reason in FINISH_REASONS
         msg = choice.message
         assert msg.role == "assistant"
         assert getattr(msg, "reasoning_content", None), (

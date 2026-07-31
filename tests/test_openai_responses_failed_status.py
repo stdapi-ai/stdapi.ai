@@ -10,13 +10,15 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from stdapi.models import ModelDetails
 from stdapi.routes import openai_responses
 from stdapi.types.openai_responses import Response, ResponseCreateParams, ResponseError
+from tests._helpers import make_model_details
 
 if TYPE_CHECKING:
     from sse_starlette import EventSourceResponse
     from starlette.testclient import TestClient
+
+    from stdapi.models import ModelDetails
 
 pytestmark = pytest.mark.local
 
@@ -60,14 +62,7 @@ def failed_chat_backend(monkeypatch: pytest.MonkeyPatch) -> _StubFailedChatModel
     async def _validate_model(
         model_id: str, *_args: object, **_kwargs: object
     ) -> ModelDetails:
-        return ModelDetails(
-            id=model_id,
-            name=model_id,
-            provider="Vendor",
-            input_modalities=["TEXT"],
-            output_modalities=["TEXT"],
-            regions=["us-east-1"],
-        )
+        return make_model_details(model_id)
 
     stub = _StubFailedChatModel()
     monkeypatch.setattr(openai_responses, "validate_model", _validate_model)

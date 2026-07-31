@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from openai import BadRequestError
 
-from tests.conftest import smallest_image_size
+from tests.conftest import TITAN_ALL, TITAN_SAMPLE, TITAN_V2, smallest_image_size
 
 #: Every test in this module is reported as skipped: the model is deprecated.
 pytestmark = pytest.mark.skip(reason="Amazon Titan Image Generator is deprecated")
@@ -21,11 +21,6 @@ if TYPE_CHECKING:
     from typing import Literal
 
     from openai import OpenAI
-
-TITAN_V2 = "amazon.titan-image-generator-v2:0"
-
-TITAN_ALL = (TITAN_V2,)
-TITAN_SAMPLE = (TITAN_V2,)
 
 #: Cheapest size accepted by Titan, typed as the variations client expects it.
 TITAN_SIZE = cast(

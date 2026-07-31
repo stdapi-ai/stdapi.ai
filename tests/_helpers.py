@@ -1,4 +1,4 @@
-"""Factories and assertions shared by more than one test module.
+"""Factories, normalizers and assertions shared by more than one test module.
 
 Anything used by a single module belongs in that module; this is for the shapes
 that were being copy-pasted, where a drifting copy is the real risk. Fixtures
@@ -72,6 +72,24 @@ def decoded_png(b64_json: str | None) -> bytes:
     data = b64decode(b64_json)
     assert data.startswith(b"\x89PNG\r\n\x1a\n"), "payload is not a PNG"
     return data
+
+
+def strip_code_fence(text: str) -> str:
+    """Strip a wrapping Markdown code fence (e.g. ` ```json `) from model output.
+
+    Args:
+        text: Raw model output, possibly fenced.
+
+    Returns:
+        ``text`` with a leading/trailing triple-backtick fence removed, or
+        ``text`` stripped of surrounding whitespace when it is not fenced.
+    """
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    lines = stripped.splitlines()
+    lines = lines[1:-1] if len(lines) > 1 and lines[-1].strip() == "```" else lines[1:]
+    return "\n".join(lines).strip()
 
 
 def make_event_log(**overrides: Any) -> EventLog:  # noqa: ANN401

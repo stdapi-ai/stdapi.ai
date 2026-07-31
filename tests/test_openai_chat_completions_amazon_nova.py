@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from tests.conftest import FINISH_REASONS
+
 if TYPE_CHECKING:
     from openai import OpenAI
 
@@ -27,9 +29,6 @@ _NOVA_MODEL = "amazon.nova-2-lite-v1:0"
 _GROUNDING_TOOL: list[dict[str, object]] = [
     {"type": "function", "function": {"name": "nova_grounding"}}
 ]
-
-#: finish_reason values the OpenAI Chat Completions reference defines.
-_FINISH_REASONS = frozenset({"stop", "length", "content_filter", "tool_calls"})
 
 
 @pytest.mark.gateway("Amazon Nova is not supported on the official API")
@@ -60,7 +59,7 @@ class TestNovaChatCompletions:
         assert resp.object == "chat.completion"
         assert len(resp.choices) >= 1
         choice = resp.choices[0]
-        assert choice.finish_reason in _FINISH_REASONS
+        assert choice.finish_reason in FINISH_REASONS
         msg = choice.message
         assert msg.role == "assistant"
         assert msg.reasoning_content  # type: ignore[attr-defined]
@@ -88,7 +87,7 @@ class TestNovaChatCompletions:
         assert resp.object == "chat.completion"
         assert len(resp.choices) >= 1
         choice = resp.choices[0]
-        assert choice.finish_reason in _FINISH_REASONS
+        assert choice.finish_reason in FINISH_REASONS
         msg = choice.message
         assert msg.role == "assistant"
         assert msg.content
@@ -148,7 +147,6 @@ class TestNovaChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_SystemTool.html
              stdapi/models/chat/_default.py:ChatModel._req_promote_system_tools
         """
-        # web_search passed as a regular toolSpec: Nova treats it as a custom tool
         resp = openai_client.chat.completions.create(
             model=_NOVA_MODEL,
             messages=[{"role": "user", "content": "Reply with OK."}],
@@ -172,12 +170,13 @@ class TestNovaChatCompletions:
                 }
             ],
         )
-        # Model receives web_search as a regular toolSpec — it may or may not call it
         assert resp.object == "chat.completion"
         assert len(resp.choices) >= 1
         choice = resp.choices[0]
         assert choice.message.role == "assistant"
-        assert choice.finish_reason in _FINISH_REASONS
+        assert choice.finish_reason in FINISH_REASONS
+        # The model gets web_search as an ordinary toolSpec, so it is free to
+        # call it or answer directly.
         assert choice.message.content or choice.message.tool_calls
         assert all(
             call.function.name == "web_search"  # type: ignore[union-attr]

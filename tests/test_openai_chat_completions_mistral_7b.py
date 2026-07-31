@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from tests.conftest import FINISH_REASONS
+
 if TYPE_CHECKING:
     from openai import OpenAI
 
@@ -17,9 +19,6 @@ MISTRAL_7B_MODELS = (
     "mistral.mistral-7b-instruct-v0:2",
     "mistral.mixtral-8x7b-instruct-v0:1",
 )
-
-#: finish_reason values the OpenAI Chat Completions reference defines.
-_FINISH_REASONS = frozenset({"stop", "length", "content_filter", "tool_calls"})
 
 
 @pytest.mark.gateway("Mistral 7b models are not supported on the official OpenAI API")
@@ -57,7 +56,7 @@ class TestMistral7bChatCompletions:
         assert len(resp.choices) >= 1
         choice = resp.choices[0]
         assert choice.index == 0
-        assert choice.finish_reason in _FINISH_REASONS
+        assert choice.finish_reason in FINISH_REASONS
         msg = choice.message
         assert msg.role == "assistant"
         assert msg.content

@@ -12,7 +12,12 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from openai import BadRequestError
 
-from tests.conftest import smallest_image_size
+from tests.conftest import (
+    NOVA_CANVAS_ALL,
+    NOVA_CANVAS_SAMPLE,
+    NOVA_CANVAS_V1,
+    smallest_image_size,
+)
 
 #: Every test in this module is reported as skipped: the model is deprecated.
 pytestmark = pytest.mark.skip(reason="Amazon Nova Canvas is deprecated")
@@ -21,11 +26,6 @@ if TYPE_CHECKING:
     from typing import Literal
 
     from openai import OpenAI
-
-NOVA_CANVAS_V1 = "amazon.nova-canvas-v1:0"
-
-NOVA_CANVAS_ALL = (NOVA_CANVAS_V1,)
-NOVA_CANVAS_SAMPLE = (NOVA_CANVAS_V1,)
 
 #: Cheapest size accepted by Nova Canvas, typed as the variations client expects it.
 NOVA_CANVAS_SIZE = cast(

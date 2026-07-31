@@ -16,13 +16,13 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 from openai import BadRequestError, OpenAI
 
+from tests.conftest import PEGASUS_MODEL
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from openai import OpenAI, Stream
     from openai.types.responses import ResponseStreamEvent
-
-PEGASUS_MODEL = "twelvelabs.pegasus-1-2-v1:0"
 
 #: Pegasus is Bedrock-only: skip the whole module against the official API.
 pytestmark = pytest.mark.gateway("Pegasus is not supported on the official API")
@@ -35,13 +35,11 @@ def pegasus_video_input(
     """Build the video-plus-text input every Pegasus generation test sends.
 
     The Responses input union has no video part, so the sample video rides an
-    ``input_image`` data URL. Skips when the sample video is unavailable.
+    ``input_image`` data URL.
 
     Returns:
         A factory taking the prompt text and returning the ``input`` list.
     """
-    if not sample_video_file_base64:
-        pytest.skip("No sample video available")
 
     def _build(prompt: str) -> list[dict[str, Any]]:
         return [

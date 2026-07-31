@@ -7,8 +7,8 @@ the Converse adapter, while Bedrock Mantle models answer on the Chat Completions
 or Messages API and their responses are composed into the Responses shape, which
 drops the echo of request parameters.
 
-All tests require live Bedrock access and are marked both ``expensive`` and
-``slow``; the markers are conjunctive, so run with::
+The 85 live calls here are billed and issued sequentially, so every test is
+``expensive`` and the whole file is ``slow``.  The markers are conjunctive::
 
     pytest --expensive --slow tests/test_openai_responses_multi_model.py
 
@@ -39,7 +39,8 @@ if TYPE_CHECKING:
     from openai import OpenAI
     from openai.types.responses import ResponseFunctionToolCall, ResponseStreamEvent
 
-#: ~87 sequential live calls across many model families; requires --expensive --slow.
+
+#: 85 sequential live calls across many model families; requires --expensive --slow.
 pytestmark = pytest.mark.slow
 
 

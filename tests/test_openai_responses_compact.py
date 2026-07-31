@@ -20,11 +20,6 @@ from openai._models import construct_type
 from openai.types.responses import CompactedResponse as SdkCompactedResponse
 
 from stdapi.api_errors import ApiError
-
-if TYPE_CHECKING:
-    from openai import OpenAI
-    from starlette.testclient import TestClient
-from stdapi.models import ModelDetails
 from stdapi.models.chat._adapters._openai_responses import (
     COMPACTION_CONTENT_PREFIX,
     encode_compaction_content,
@@ -43,6 +38,13 @@ from stdapi.types.openai_responses import (
     ResponseOutputText,
     ResponseUsage,
 )
+from tests._helpers import make_model_details
+
+if TYPE_CHECKING:
+    from openai import OpenAI
+    from starlette.testclient import TestClient
+
+    from stdapi.models import ModelDetails
 
 
 def _usage() -> ResponseUsage:
@@ -99,14 +101,7 @@ def chat_backend(monkeypatch: pytest.MonkeyPatch) -> _StubChatModel:
     async def _validate_model(
         model_id: str, *_args: object, **_kwargs: object
     ) -> ModelDetails:
-        return ModelDetails(
-            id=model_id,
-            name=model_id,
-            provider="Vendor",
-            input_modalities=["TEXT"],
-            output_modalities=["TEXT"],
-            regions=["us-east-1"],
-        )
+        return make_model_details(model_id)
 
     stub = _StubChatModel()
     monkeypatch.setattr(openai_responses, "validate_model", _validate_model)

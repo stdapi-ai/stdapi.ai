@@ -19,6 +19,7 @@ Ref: stdapi/config.py:_Settings
 from __future__ import annotations
 
 import base64
+import re
 import sys
 from io import BytesIO
 from json import JSONDecodeError, dumps, loads
@@ -356,6 +357,31 @@ MODEL_MAPPINGS = {
         "video_generation": "sora-2",  # Cheapest video model
     },
 }
+
+#: finish_reason values the OpenAI Chat Completions reference defines.
+FINISH_REASONS = frozenset({"stop", "length", "content_filter", "tool_calls"})
+
+#: Amazon Nova Canvas, the only Bedrock image model mapping OpenAI quality/style.
+NOVA_CANVAS_V1 = "amazon.nova-canvas-v1:0"
+
+#: Nova Canvas roster for the sweeps that must cover every Nova Canvas image model.
+NOVA_CANVAS_ALL = (NOVA_CANVAS_V1,)
+
+#: Nova Canvas roster for the cases where one representative model is enough.
+NOVA_CANVAS_SAMPLE = (NOVA_CANVAS_V1,)
+
+#: Amazon Titan Image Generator V2, the image backend the Titan tests exercise.
+TITAN_V2 = "amazon.titan-image-generator-v2:0"
+
+#: Titan roster for the sweeps that must cover every Titan image model.
+TITAN_ALL = (TITAN_V2,)
+
+#: Titan roster for the cases where one representative model is enough.
+TITAN_SAMPLE = (TITAN_V2,)
+
+#: TwelveLabs Pegasus, the Bedrock-only video understanding model.
+PEGASUS_MODEL = "twelvelabs.pegasus-1-2-v1:0"
+
 #: Smallest image size each model accepts, within its cheapest billing tier.
 #:
 #: Bedrock image models bill per resolution tier -- Titan's low tier is anything up
@@ -435,6 +461,8 @@ def smallest_image_size(model: str) -> str:
 
 
 _CACHE_DIR = Path(__file__).parent / ".cache"
+#: Runs of characters replaced by a dash in a model ID used inside a cache filename.
+_UNSAFE_CACHE_NAME_CHARS = re.compile(r"[^A-Za-z0-9]+")
 #: Repository checkout root, for tests that must reference real source paths.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SAMPLES_DIR = Path(__file__).parent / "samples"
@@ -608,9 +636,20 @@ def use_official_api(request: pytest.FixtureRequest) -> bool:
 
 
 @pytest.fixture(scope="session")
+def server_url(request: pytest.FixtureRequest) -> str | None:
+    """Base URL of the remote gateway under test, or None when none was selected.
+
+    Normalised once here (trailing slash stripped) so every client fixture can
+    append its own route prefix.
+    """
+    url: str | None = request.config.getoption("--server-url")
+    return url.rstrip("/") if url else None
+
+
+@pytest.fixture(scope="session")
 def models(use_official_api: bool) -> dict[str, str]:
     """Per-capability model IDs for the selected target (Bedrock IDs, or OpenAI IDs)."""
-    return MODEL_MAPPINGS["openai" if use_official_api else "local"].copy()
+    return MODEL_MAPPINGS["openai" if use_official_api else "local"]
 
 
 @pytest.fixture(scope="session")
@@ -772,7 +811,9 @@ def api_key() -> str:
 
 
 @pytest.fixture(scope="session")
-def test_client(request: pytest.FixtureRequest) -> Generator[TestClient | None]:
+def test_client(
+    use_official_api: bool, server_url: str | None
+) -> Generator[TestClient | None]:
     """In-process ASGI test client, or None when a remote target was selected.
 
     Yielding None (rather than skipping) lets every dependent fixture and test
@@ -780,15 +821,30 @@ def test_client(request: pytest.FixtureRequest) -> Generator[TestClient | None]:
     ``TestClient`` context runs the app's lifespan, so startup work such as
     authentication initialisation and MCP mounting happens exactly once per session.
     """
-    if not request.config.getoption(
-        "--use-official-api"
-    ) and not request.config.getoption("--server-url"):
+    if not use_official_api and not server_url:
         from stdapi.main import app  # noqa: PLC0415
 
         with TestClient(app) as test_client:
             yield test_client
     else:
         yield None
+
+
+@pytest.fixture(scope="session")
+def local_test_client(test_client: TestClient | None) -> TestClient:
+    """``test_client``, skipping the test when a remote target was selected.
+
+    For tests that reach a real backend yet still need the in-process app -- to
+    read the gateway's own usage log, or to patch its process state. The
+    ``local`` marker cannot express that: it also exempts a test from the
+    unavailable-model xfail mask, which only holds for tests that call nothing.
+
+    Returns:
+        The in-process ASGI test client.
+    """
+    if test_client is None:
+        pytest.skip("Requires the in-process app (remote target selected)")
+    return test_client
 
 
 @pytest.fixture
@@ -834,9 +890,30 @@ def request_log() -> Generator[dict[str, Any]]:
     REQUEST_LOG.reset(token)
 
 
+@pytest.fixture
+def usage_scope() -> Generator[None]:
+    """Install fresh per-request usage, model-state and image-spec scopes.
+
+    Metering accumulates into context variables that only exist inside a real
+    request; calling the recorders directly raises ``LookupError`` without this.
+    """
+    from stdapi import usage  # noqa: PLC0415
+
+    usage_token = usage.init_usage()
+    state_token = usage.init_model_state()
+    image_spec_token = usage.IMAGE_SPEC.set("")
+    yield
+    usage.USAGE.reset(usage_token)
+    usage.MODEL_STATE.reset(state_token)
+    usage.IMAGE_SPEC.reset(image_spec_token)
+
+
 @pytest.fixture(scope="session")
 def openai_client(
-    request: pytest.FixtureRequest, test_client: TestClient | None, api_key: str
+    use_official_api: bool,
+    server_url: str | None,
+    test_client: TestClient | None,
+    api_key: str,
 ) -> OpenAI:
     """OpenAI SDK client bound to the selected target.
 
@@ -855,25 +932,40 @@ def openai_client(
         )
 
     # Official API test
-    if request.config.getoption("--use-official-api"):
+    if use_official_api:
         return OpenAI(max_retries=5)
 
     # Remote server test
     return OpenAI(
-        base_url=f"{request.config.getoption('--server-url').rstrip('/')}/v1",
-        max_retries=0,
-        organization=_OPENAI_ORGANIZATION,
+        base_url=f"{server_url}/v1", max_retries=0, organization=_OPENAI_ORGANIZATION
     )
+
+
+def _sample_cache_file(name: str, model: str, suffix: str) -> Path:
+    """Return the on-disk cache path of a sample produced by *model*.
+
+    The producing model differs per target, so it is part of the file name: an
+    artefact synthesized by one target is never reused by another.
+
+    Args:
+        name: Sample name, e.g. ``"audio"``.
+        model: ID of the model producing the sample.
+        suffix: File extension, without the leading dot.
+
+    Returns:
+        Path under ``tests/.cache``.
+    """
+    return _CACHE_DIR / f"{name}-{_UNSAFE_CACHE_NAME_CHARS.sub('-', model)}.{suffix}"
 
 
 @pytest.fixture(scope="session")
 def sample_audio_file(openai_client: OpenAI, speech_standard_model: str) -> bytes:
     """Short WAV snippet produced once by the speech endpoint and cached on disk.
 
-    Cached under ``tests/.cache/audio.wav`` so the whole suite costs a single
-    synthesis call, and survives across sessions.
+    Cached under ``tests/.cache`` per producing model so the whole suite costs a
+    single synthesis call, and survives across sessions.
     """
-    audio_file = _CACHE_DIR / "audio.wav"
+    audio_file = _sample_cache_file("audio", speech_standard_model, "wav")
     if audio_file.exists():
         with audio_file.open("rb") as file:
             return file.read()
@@ -898,7 +990,7 @@ def sample_audio_file_base64(sample_audio_file: bytes) -> str:
 @pytest.fixture(scope="session")
 def sample_audio_mp3_file(openai_client: OpenAI, speech_standard_model: str) -> bytes:
     """Short MP3 snippet produced once by the speech endpoint and cached on disk."""
-    audio_file = _CACHE_DIR / "audio.mp3"
+    audio_file = _sample_cache_file("audio", speech_standard_model, "mp3")
     if audio_file.exists():
         with audio_file.open("rb") as file:
             return file.read()
@@ -930,7 +1022,7 @@ def sample_image_file(
     presigned link. ``response_format`` is only sent to models that accept it:
     ``gpt-image-1`` always answers with base64 and rejects the parameter outright.
     """
-    image_file = _CACHE_DIR / "image.png"
+    image_file = _sample_cache_file("image", image_generation_model, "png")
     if image_file.exists():
         with image_file.open("rb") as file:
             return file.read()
@@ -1015,20 +1107,22 @@ def sample_alpha_mask_file(sample_image_file: bytes) -> bytes:
 
 @pytest.fixture(scope="session")
 def sample_video_file() -> bytes:
-    """Locally cached mp4 sample, or empty bytes when tests/.cache/video.mp4 is absent."""
+    """Locally provided mp4 sample, skipping the test when it is absent.
+
+    The clip cannot be synthesized cheaply, so it is supplied by hand; skipping
+    here propagates to every dependent test instead of each one re-checking.
+    """
     video_file = _CACHE_DIR / "video.mp4"
     if not video_file.exists():
-        return b""
+        pytest.skip("Missing sample video: add an MP4 at tests/.cache/video.mp4")
     with video_file.open("rb") as file:
         return file.read()
 
 
 @pytest.fixture(scope="session")
 def sample_video_file_base64(sample_video_file: bytes) -> str:
-    """The mp4 sample as a ``data:video/mp4;base64,`` URL, or "" when unavailable."""
-    if sample_video_file:
-        return f"data:video/mp4;base64,{b64encode(sample_video_file).decode('utf-8')}"
-    return ""
+    """The mp4 sample as a ``data:video/mp4;base64,`` URL."""
+    return f"data:video/mp4;base64,{b64encode(sample_video_file).decode('utf-8')}"
 
 
 @pytest.fixture(scope="session")
@@ -1133,13 +1227,7 @@ ANTHROPIC_MODEL_MAPPINGS["bedrock"]["count_tokens"] = (
 
 
 @pytest.fixture(scope="session")
-def use_anthropic_api(request: pytest.FixtureRequest) -> bool:
-    """True when the Anthropic tests target the official API (or Bedrock directly)."""
-    return request.config.getoption("--use-official-api")  # type: ignore[no-any-return]
-
-
-@pytest.fixture(scope="session")
-def anthropic_models(use_anthropic_api: bool) -> dict[str, str]:
+def anthropic_models(use_official_api: bool) -> dict[str, str]:
     """Per-capability Anthropic model IDs for the selected target."""
     return (
         (
@@ -1147,7 +1235,7 @@ def anthropic_models(use_anthropic_api: bool) -> dict[str, str]:
             if getenv("ANTHROPIC_API_KEY")
             else ANTHROPIC_MODEL_MAPPINGS["bedrock"]
         )
-        if use_anthropic_api
+        if use_official_api
         else ANTHROPIC_MODEL_MAPPINGS["local"]
     )
 
@@ -1190,7 +1278,10 @@ def anthropic_count_tokens_model(anthropic_models: dict[str, str]) -> str:
 
 @pytest.fixture(scope="session")
 def anthropic_client(
-    request: pytest.FixtureRequest, test_client: TestClient | None, api_key: str
+    use_official_api: bool,
+    server_url: str | None,
+    test_client: TestClient | None,
+    api_key: str,
 ) -> Anthropic | AnthropicBedrock:
     """Anthropic SDK client bound to the selected target.
 
@@ -1205,7 +1296,7 @@ def anthropic_client(
             max_retries=0,
             http_client=test_client,
         )
-    if request.config.getoption("--use-official-api"):
+    if use_official_api:
         if getenv("ANTHROPIC_API_KEY"):
             # AWS-hosted Anthropic endpoints scope requests to a workspace.
             workspace_id = getenv("ANTHROPIC_WORKSPACE_ID")
@@ -1217,7 +1308,7 @@ def anthropic_client(
             )
         return AnthropicBedrock(max_retries=5)
     return Anthropic(
-        base_url=f"{request.config.getoption('--server-url').rstrip('/')}/anthropic/",
+        base_url=f"{server_url}/anthropic/",
         max_retries=0,
         api_key=getenv("OPENAI_API_KEY"),
     )
@@ -1276,24 +1367,63 @@ def cohere_rerank_model(cohere_models: dict[str, str]) -> str:
     return cohere_models["rerank"]
 
 
-@pytest.fixture(scope="session")
-def cohere_client(
-    request: pytest.FixtureRequest, test_client: TestClient | None, api_key: str
-) -> cohere.ClientV2:
-    """Cohere SDK client bound to the selected target."""
+def _build_cohere_client[ClientT: cohere.Client](
+    client_class: type[ClientT],
+    use_official_api: bool,
+    server_url: str | None,
+    test_client: TestClient | None,
+    api_key: str,
+) -> ClientT:
+    """Build a Cohere SDK client of *client_class* bound to the selected target.
+
+    Args:
+        client_class: Cohere SDK client class (``Client`` for v1, ``ClientV2`` for v2).
+        use_official_api: Whether the official Cohere API is the selected target.
+        server_url: Base URL of the remote gateway, when one is selected.
+        test_client: In-process ASGI client, when the gateway runs in-process.
+        api_key: API key shared by the test server and its clients.
+
+    Returns:
+        Client pointed at the in-process app, the remote gateway or Cohere itself.
+    """
     if test_client:
-        return cohere.ClientV2(
+        return client_class(
             api_key=api_key,
             base_url="http://testserver/cohere",
             httpx_client=test_client,
         )
-    if request.config.getoption("--use-official-api"):
+    if use_official_api:
         if not getenv("CO_API_KEY"):
             pytest.skip("CO_API_KEY is required to test the official Cohere API")
-        return cohere.ClientV2()
-    return cohere.ClientV2(
-        api_key=getenv("OPENAI_API_KEY", ""),
-        base_url=f"{request.config.getoption('--server-url').rstrip('/')}/cohere",
+        return client_class()
+    return client_class(
+        api_key=getenv("OPENAI_API_KEY", ""), base_url=f"{server_url}/cohere"
+    )
+
+
+@pytest.fixture(scope="session")
+def cohere_client(
+    use_official_api: bool,
+    server_url: str | None,
+    test_client: TestClient | None,
+    api_key: str,
+) -> cohere.ClientV2:
+    """Cohere SDK client bound to the selected target."""
+    return _build_cohere_client(
+        cohere.ClientV2, use_official_api, server_url, test_client, api_key
+    )
+
+
+@pytest.fixture(scope="session")
+def cohere_client_v1(
+    use_official_api: bool,
+    server_url: str | None,
+    test_client: TestClient | None,
+    api_key: str,
+) -> cohere.Client:
+    """Create a Cohere v1 client for either local or official API testing."""
+    return _build_cohere_client(
+        cohere.Client, use_official_api, server_url, test_client, api_key
     )
 
 

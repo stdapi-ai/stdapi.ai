@@ -492,9 +492,8 @@ class TestOpenAIFiles:
         delete_message = str(_error_envelope(delete_exc.value, 404)["message"]).lower()
         assert "not found" in delete_message or "no such" in delete_message
 
-    def test_expired_file_returns_404(
-        self, openai_client: OpenAI, test_client: TestClient | None
-    ) -> None:
+    @pytest.mark.usefixtures("local_test_client")
+    def test_expired_file_returns_404(self, openai_client: OpenAI) -> None:
         """A file past its ``expires_at`` reads as ``not_found`` even though S3 still holds it.
 
         S3 Lifecycle deletion is asynchronous, so expiry is enforced in code on
@@ -505,8 +504,6 @@ class TestOpenAIFiles:
         Ref: https://stdapi.ai/api_openai_files/
              stdapi/files/_core.py:_get_file_impl
         """
-        if test_client is None:
-            pytest.skip("requires local time control")
         f = openai_client.files.create(
             file=("exp.txt", io.BytesIO(_TEXT_FILE), "text/plain"),
             purpose="assistants",

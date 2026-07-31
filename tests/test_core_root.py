@@ -26,13 +26,7 @@ _EXPECTED_DOC_TARGET = (
 #: Whether at least one MCP transport is enabled, which gates the server card.
 _MCP_ENABLED = SETTINGS.enable_mcp_streamable_http or SETTINGS.enable_mcp_sse
 
-
-@pytest.fixture(scope="module")
-def client(test_client: TestClient | None) -> TestClient:
-    """Return the session test client, skipping if not running locally."""
-    if test_client is None:
-        pytest.skip("Requires local test server")
-    return test_client
+pytestmark = pytest.mark.local
 
 
 class TestRoot:
@@ -42,17 +36,17 @@ class TestRoot:
          stdapi/routes/core_root.py:_WELCOME
     """
 
-    def test_returns_200(self, client: TestClient) -> None:
+    def test_returns_200(self, test_client: TestClient) -> None:
         """GET / returns HTTP 200."""
-        assert client.get("/").status_code == 200
+        assert test_client.get("/").status_code == 200
 
-    def test_response_has_message(self, client: TestClient) -> None:
+    def test_response_has_message(self, test_client: TestClient) -> None:
         """GET / returns a single ``message`` pointing at the enabled documentation target.
 
         The pointer is resolved once at import time: ``/docs`` when Swagger UI
         is enabled, otherwise ``/redoc``, otherwise the public documentation URL.
         """
-        body = client.get("/").json()
+        body = test_client.get("/").json()
         assert set(body) == {"message"}
         message = body["message"]
         assert isinstance(message, str)
@@ -61,13 +55,13 @@ class TestRoot:
             f"{_EXPECTED_DOC_TARGET}"
         )
 
-    def test_json_content_type(self, client: TestClient) -> None:
+    def test_json_content_type(self, test_client: TestClient) -> None:
         """GET / is served as ``application/json``."""
-        response = client.get("/")
+        response = test_client.get("/")
         assert "application/json" in response.headers["content-type"]
         assert "message" in response.json()
 
-    def test_no_auth_required(self, client: TestClient) -> None:
+    def test_no_auth_required(self, test_client: TestClient) -> None:
         """GET / succeeds with no credentials and with invalid ones alike.
 
         The metadata router declares no ``Depends(authenticate)``, so a wrong
@@ -75,15 +69,15 @@ class TestRoot:
 
         Ref: stdapi/auth.py:authenticate
         """
-        anonymous = client.get("/")
+        anonymous = test_client.get("/")
         assert anonymous.status_code == 200
 
-        bad_key = client.get("/", headers={"Authorization": "Bearer wrong-key"})
+        bad_key = test_client.get("/", headers={"Authorization": "Bearer wrong-key"})
         assert bad_key.status_code == 200
         assert bad_key.json() == anonymous.json()
 
     def test_link_header_absent_when_features_disabled(
-        self, client: TestClient
+        self, test_client: TestClient
     ) -> None:
         """GET / advertises exactly the enabled discovery resources in its ``Link`` header.
 
@@ -108,7 +102,7 @@ class TestRoot:
             if part is not None
         ]
 
-        response = client.get("/")
+        response = test_client.get("/")
         if not expected_parts:
             assert "link" not in response.headers
         else:
@@ -122,36 +116,38 @@ class TestApiCatalog:
          stdapi/routes/core_root.py:_API_CATALOG
     """
 
-    def test_returns_200(self, client: TestClient) -> None:
+    def test_returns_200(self, test_client: TestClient) -> None:
         """GET /.well-known/api-catalog returns HTTP 200."""
-        assert client.get("/.well-known/api-catalog").status_code == 200
+        assert test_client.get("/.well-known/api-catalog").status_code == 200
 
-    def test_content_type_linkset(self, client: TestClient) -> None:
+    def test_content_type_linkset(self, test_client: TestClient) -> None:
         """GET /.well-known/api-catalog is served as ``application/linkset+json``."""
-        ct = client.get("/.well-known/api-catalog").headers["content-type"]
+        ct = test_client.get("/.well-known/api-catalog").headers["content-type"]
         assert "application/linkset+json" in ct
 
-    def test_body_has_linkset_key(self, client: TestClient) -> None:
+    def test_body_has_linkset_key(self, test_client: TestClient) -> None:
         """The body is a ``linkset`` holding exactly one link context object."""
-        body = client.get("/.well-known/api-catalog").json()
+        body = test_client.get("/.well-known/api-catalog").json()
         assert set(body) == {"linkset"}
         assert isinstance(body["linkset"], list)
         assert len(body["linkset"]) == 1
 
-    def test_linkset_entry_has_anchor(self, client: TestClient) -> None:
+    def test_linkset_entry_has_anchor(self, test_client: TestClient) -> None:
         """The single linkset entry is anchored on the catalog's own path."""
-        body = client.get("/.well-known/api-catalog").json()
+        body = test_client.get("/.well-known/api-catalog").json()
         entry = body["linkset"][0]
         assert entry["anchor"] == "/.well-known/api-catalog"
 
-    def test_linkset_optional_sections_match_settings(self, client: TestClient) -> None:
+    def test_linkset_optional_sections_match_settings(
+        self, test_client: TestClient
+    ) -> None:
         """service-desc, service-doc and mcp-server-card appear only for enabled features.
 
         Each relation is derived from ``SETTINGS`` here rather than read back
         from ``_API_CATALOG``, so a wrong href or a relation advertised for a
         disabled feature fails the test.
         """
-        (entry,) = client.get("/.well-known/api-catalog").json()["linkset"]
+        (entry,) = test_client.get("/.well-known/api-catalog").json()["linkset"]
 
         if SETTINGS.enable_openapi_json:
             assert entry["service-desc"] == [
@@ -185,9 +181,9 @@ class TestMcpServerCard:
          stdapi/routes/core_root.py:MCP_SERVER_CARD
     """
 
-    def test_reflects_mcp_status(self, client: TestClient) -> None:
+    def test_reflects_mcp_status(self, test_client: TestClient) -> None:
         """The card is 200 when a transport is enabled and a 404 ``error`` payload otherwise."""
-        response = client.get("/.well-known/mcp/server-card.json")
+        response = test_client.get("/.well-known/mcp/server-card.json")
         body = response.json()
         if not _MCP_ENABLED:
             assert response.status_code == 404
@@ -199,7 +195,7 @@ class TestMcpServerCard:
             assert body["capabilities"] == {"tools": {}}
             assert body["transport"]["endpoint"] in {"/mcp", "/sse"}
 
-    def test_no_auth_required(self, client: TestClient) -> None:
+    def test_no_auth_required(self, test_client: TestClient) -> None:
         """Credentials never change the card's outcome, and it never answers 401.
 
         The route is reachable anonymously, so the "not enabled" 404 must not be
@@ -207,8 +203,8 @@ class TestMcpServerCard:
 
         Ref: stdapi/auth.py:authenticate
         """
-        anonymous = client.get("/.well-known/mcp/server-card.json")
-        bad_key = client.get(
+        anonymous = test_client.get("/.well-known/mcp/server-card.json")
+        bad_key = test_client.get(
             "/.well-known/mcp/server-card.json",
             headers={"Authorization": "Bearer wrong-key"},
         )
@@ -216,15 +212,15 @@ class TestMcpServerCard:
         assert bad_key.status_code == anonymous.status_code
         assert bad_key.json() == anonymous.json()
 
-    def test_mcp_disabled_returns_error_body(self, client: TestClient) -> None:
+    def test_mcp_disabled_returns_error_body(self, test_client: TestClient) -> None:
         """With every MCP transport off the route answers 404 ``MCP is not enabled``."""
         if _MCP_ENABLED:
             pytest.skip("MCP is enabled in this environment")
-        response = client.get("/.well-known/mcp/server-card.json")
+        response = test_client.get("/.well-known/mcp/server-card.json")
         assert response.status_code == 404
         assert response.json() == {"error": "MCP is not enabled"}
 
-    def test_mcp_enabled_body_structure(self, client: TestClient) -> None:
+    def test_mcp_enabled_body_structure(self, test_client: TestClient) -> None:
         """The card pins the SEP-1649 schema, version, protocol and the active transport.
 
         ``streamable-http`` on ``/mcp`` wins when it is enabled; the SSE
@@ -235,7 +231,7 @@ class TestMcpServerCard:
         from stdapi.metering import EDITION_TITLE  # noqa: PLC0415
         from stdapi.server import SERVER_VERSION  # noqa: PLC0415
 
-        body = client.get("/.well-known/mcp/server-card.json").json()
+        body = test_client.get("/.well-known/mcp/server-card.json").json()
         assert body["$schema"] == (
             "https://static.modelcontextprotocol.io/schemas/mcp-server-card/v1.json"
         )
@@ -256,15 +252,15 @@ class TestRobotsTxt:
          stdapi/routes/core_root.py:_ROBOTS_TXT
     """
 
-    def test_returns_200(self, client: TestClient) -> None:
+    def test_returns_200(self, test_client: TestClient) -> None:
         """GET /robots.txt returns HTTP 200."""
-        assert client.get("/robots.txt").status_code == 200
+        assert test_client.get("/robots.txt").status_code == 200
 
-    def test_plain_text_content_type(self, client: TestClient) -> None:
+    def test_plain_text_content_type(self, test_client: TestClient) -> None:
         """GET /robots.txt is served as ``text/plain``."""
-        assert "text/plain" in client.get("/robots.txt").headers["content-type"]
+        assert "text/plain" in test_client.get("/robots.txt").headers["content-type"]
 
-    def test_matches_settings(self, client: TestClient) -> None:
+    def test_matches_settings(self, test_client: TestClient) -> None:
         """The record lists exactly the doc paths the current settings enable.
 
         Built from ``SETTINGS`` rather than compared against ``_ROBOTS_TXT`` so a
@@ -287,4 +283,4 @@ class TestRobotsTxt:
             )
             if line is not None
         ]
-        assert client.get("/robots.txt").text.splitlines() == expected
+        assert test_client.get("/robots.txt").text.splitlines() == expected

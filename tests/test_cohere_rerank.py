@@ -10,7 +10,6 @@ Ref: https://docs.cohere.com/v2/reference/rerank
      stdapi/routes/cohere_rerank_v1.py:rerank_v1
 """
 
-from os import getenv
 from typing import TYPE_CHECKING, Any
 
 import cohere
@@ -866,27 +865,6 @@ class TestCohereRerankIntegration:
         assert response.meta is not None
         assert response.meta.billed_units is not None
         assert response.meta.billed_units.search_units == 2
-
-
-@pytest.fixture(scope="session")
-def cohere_client_v1(
-    request: pytest.FixtureRequest, test_client: TestClient | None, api_key: str
-) -> cohere.Client:
-    """Create a Cohere v1 client for either local or official API testing."""
-    if test_client:
-        return cohere.Client(
-            api_key=api_key,
-            base_url="http://testserver/cohere",
-            httpx_client=test_client,
-        )
-    if request.config.getoption("--use-official-api"):
-        if not getenv("CO_API_KEY"):
-            pytest.skip("CO_API_KEY is required to test the official Cohere API")
-        return cohere.Client()
-    return cohere.Client(
-        api_key=getenv("OPENAI_API_KEY", ""),
-        base_url=f"{request.config.getoption('--server-url').rstrip('/')}/cohere",
-    )
 
 
 class TestCohereRerankV1Integration:

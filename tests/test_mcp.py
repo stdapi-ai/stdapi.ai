@@ -194,7 +194,9 @@ class TestLogRequestEventIdPropagation:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.local
 @pytest.mark.skipif(not _MCP_ENABLED, reason="MCP is not enabled")
+@pytest.mark.usefixtures("test_client")
 class TestMcpLogHandler:
     """_McpLogHandler routes fastapi_mcp errors into the structured JSON logger.
 
@@ -204,14 +206,6 @@ class TestMcpLogHandler:
     Ref: stdapi/mcp.py:_McpLogHandler
          stdapi/monitoring.py:log_error_details
     """
-
-    @pytest.fixture(autouse=True)
-    def _ensure_app_loaded(self, test_client: TestClient | None) -> None:
-        """Ensure stdapi.main is imported (and the MCP handler registered) before each test."""
-        if test_client is None:
-            pytest.skip(
-                "Requires local test server (MCP handler registered at app load)"
-            )
 
     def _get_handler(self) -> logging.Handler:
         """Return the custom handler attached to the fastapi_mcp.server logger."""
@@ -325,17 +319,10 @@ class TestMCPIntegration:
     """
 
     @pytest.fixture(scope="class")
-    def client(self, test_client: TestClient | None) -> TestClient:
-        """Return the session test client, skipping if not running locally."""
-        if test_client is None:
-            pytest.skip("Requires local test server")
-        return test_client
-
-    @pytest.fixture(scope="class")
-    def mcp_session_id(self, client: TestClient, api_key: str) -> str:
+    def mcp_session_id(self, local_test_client: TestClient, api_key: str) -> str:
         """Initialize an MCP session and return the session ID."""
         response = _mcp_post(
-            client,
+            local_test_client,
             api_key,
             "initialize",
             {
@@ -349,7 +336,7 @@ class TestMCPIntegration:
         return response.headers["mcp-session-id"]  # type: ignore[no-any-return]
 
     def test_mcp_initialize_requires_authentication(
-        self, client: TestClient, api_key: str
+        self, local_test_client: TestClient, api_key: str
     ) -> None:
         """An unauthenticated ``initialize`` is rejected with 401 and no session is created.
 
@@ -360,7 +347,7 @@ class TestMCPIntegration:
         Ref: stdapi/auth.py:authenticate
         """
         response = _mcp_post(
-            client,
+            local_test_client,
             api_key,
             "initialize",
             {
@@ -376,7 +363,7 @@ class TestMCPIntegration:
 
     def test_failing_tool_call_produces_no_traceback(
         self,
-        client: TestClient,
+        local_test_client: TestClient,
         api_key: str,
         mcp_session_id: str,
         capsys: pytest.CaptureFixture[str],
@@ -392,7 +379,7 @@ class TestMCPIntegration:
         capsys.readouterr()
 
         response = _mcp_post(
-            client,
+            local_test_client,
             api_key,
             "tools/call",
             {"name": "search_models", "arguments": {"route": "/nonexistent/route"}},
@@ -405,7 +392,7 @@ class TestMCPIntegration:
         assert "Traceback" not in captured.err
 
     def test_tool_descriptions_have_no_response_docs_block(
-        self, client: TestClient, api_key: str, mcp_session_id: str
+        self, local_test_client: TestClient, api_key: str, mcp_session_id: str
     ) -> None:
         """No tool description carries fastapi_mcp's auto-generated '### Responses:' section.
 
@@ -415,7 +402,12 @@ class TestMCPIntegration:
         Ref: stdapi/mcp.py:_strip_response_docs
         """
         response = _mcp_post(
-            client, api_key, "tools/list", {}, request_id=40, session_id=mcp_session_id
+            local_test_client,
+            api_key,
+            "tools/list",
+            {},
+            request_id=40,
+            session_id=mcp_session_id,
         )
         assert response.status_code == 200
         tools = response.json()["result"]["tools"]
@@ -425,7 +417,7 @@ class TestMCPIntegration:
         )
 
     def test_mcp_response_has_request_id_header(
-        self, client: TestClient, api_key: str, mcp_session_id: str
+        self, local_test_client: TestClient, api_key: str, mcp_session_id: str
     ) -> None:
         """POST /mcp response carries the x-request-id header.
 
@@ -435,7 +427,7 @@ class TestMCPIntegration:
         Ref: stdapi/api_providers/__init__.py:get_request_id_header
         """
         response = _mcp_post(
-            client,
+            local_test_client,
             api_key,
             "tools/call",
             {"name": "openai_model_list", "arguments": {}},

@@ -54,14 +54,14 @@ _CLAUDE_SYSTEM_TOOLS = (
 
 
 @pytest.fixture(autouse=True)
-def _skip_on_official_api(use_anthropic_api: bool) -> None:
+def _skip_on_official_api(use_official_api: bool) -> None:
     """Skip all tests in this file when running against the official Anthropic API.
 
     These tests validate gateway behavior for Anthropic system tools. When
     ``--use-official-api`` is set, requests go directly to the Anthropic API,
     bypassing the gateway entirely, so there's nothing to test.
     """
-    if use_anthropic_api:
+    if use_official_api:
         pytest.skip(
             "These tests validate gateway behavior for Anthropic system tools, "
             "which require the local gateway (run without --use-official-api)"
@@ -202,7 +202,7 @@ def anthropic_chat_model(
     model_id: str,
     anthropic_models: dict[str, str],
     is_bedrock_direct: bool,
-    use_anthropic_api: bool,
+    use_official_api: bool,
 ) -> str:
     """Provide the Anthropic chat model for the current test.
 
@@ -221,7 +221,7 @@ def anthropic_chat_model(
     """
     if not model_id:
         return anthropic_models["chat"]
-    if not use_anthropic_api:
+    if not use_official_api:
         return model_id
     if is_bedrock_direct:
         return f"global.{model_id}"
@@ -783,14 +783,14 @@ class TestBashTool:
         self,
         anthropic_client: Anthropic,
         anthropic_chat_model: str,
-        use_anthropic_api: bool,
+        use_official_api: bool,
     ) -> None:
         """A ``bash_20250124`` definition is accepted and inference still completes.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
              stdapi/models/chat/_adapters/_anthropic_message.py:_handle_system_tool
         """
-        extra_headers = {"anthropic-beta": _BASH_BETA} if use_anthropic_api else {}
+        extra_headers = {"anthropic-beta": _BASH_BETA} if use_official_api else {}
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
             max_tokens=1024,
@@ -810,7 +810,7 @@ class TestBashTool:
         self,
         anthropic_client: Anthropic,
         anthropic_chat_model: str,
-        use_anthropic_api: bool,
+        use_official_api: bool,
     ) -> None:
         """The bash tool emits one ``tool_use`` block whose input carries the requested command.
 
@@ -821,7 +821,7 @@ class TestBashTool:
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
              stdapi/models/chat/_adapters/_anthropic_message.py:_map_tool_choice
         """
-        extra_headers = {"anthropic-beta": _BASH_BETA} if use_anthropic_api else {}
+        extra_headers = {"anthropic-beta": _BASH_BETA} if use_official_api else {}
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
             max_tokens=1024,
@@ -847,14 +847,14 @@ class TestBashTool:
         self,
         anthropic_client: Anthropic,
         anthropic_chat_model: str,
-        use_anthropic_api: bool,
+        use_official_api: bool,
     ) -> None:
         """A bash ``tool_result`` carrying stdout closes the turn with ``end_turn`` text.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
              stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
         """
-        extra_headers = {"anthropic-beta": _BASH_BETA} if use_anthropic_api else {}
+        extra_headers = {"anthropic-beta": _BASH_BETA} if use_official_api else {}
         tools = [_BASH_TOOL]
         user_prompt = "Run: echo hello_test"
 
@@ -892,14 +892,14 @@ class TestBashTool:
         self,
         anthropic_client: Anthropic,
         anthropic_chat_model: str,
-        use_anthropic_api: bool,
+        use_official_api: bool,
     ) -> None:
         """A bash ``tool_result`` with ``is_error=true`` and stderr text is accepted and answered.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
              https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
         """
-        extra_headers = {"anthropic-beta": _BASH_BETA} if use_anthropic_api else {}
+        extra_headers = {"anthropic-beta": _BASH_BETA} if use_official_api else {}
         tools = [_BASH_TOOL]
         user_prompt = "Run: cat /nonexistent_file.txt"
 
@@ -941,7 +941,7 @@ class TestBashTool:
         self,
         anthropic_client: Anthropic,
         anthropic_chat_model: str,
-        use_anthropic_api: bool,
+        use_official_api: bool,
     ) -> None:
         """A ``tool_result`` acknowledging a bash session restart is accepted and answered.
 
@@ -950,7 +950,7 @@ class TestBashTool:
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
         """
-        extra_headers = {"anthropic-beta": _BASH_BETA} if use_anthropic_api else {}
+        extra_headers = {"anthropic-beta": _BASH_BETA} if use_official_api else {}
         tools = [_BASH_TOOL]
         user_prompt = "Run: echo hello"
 
@@ -1013,7 +1013,7 @@ class TestMemoryTool:
         self,
         anthropic_client: Anthropic,
         anthropic_chat_model: str,
-        use_anthropic_api: bool,
+        use_official_api: bool,
     ) -> None:
         """A ``memory_20250818`` definition is accepted without the caller sending the beta flag.
 
@@ -1023,7 +1023,7 @@ class TestMemoryTool:
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
              stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
         """
-        extra_headers = {"anthropic-beta": _MEMORY_BETA} if use_anthropic_api else {}
+        extra_headers = {"anthropic-beta": _MEMORY_BETA} if use_official_api else {}
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
             max_tokens=1024,
@@ -1043,7 +1043,7 @@ class TestMemoryTool:
         self,
         anthropic_client: Anthropic,
         anthropic_chat_model: str,
-        use_anthropic_api: bool,
+        use_official_api: bool,
     ) -> None:
         """The first memory action is a ``view`` of ``/memories``.
 
@@ -1054,7 +1054,7 @@ class TestMemoryTool:
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
              stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
         """
-        extra_headers = {"anthropic-beta": _MEMORY_BETA} if use_anthropic_api else {}
+        extra_headers = {"anthropic-beta": _MEMORY_BETA} if use_official_api else {}
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
             max_tokens=1024,
@@ -1082,13 +1082,13 @@ class TestMemoryTool:
         self,
         anthropic_client: Anthropic,
         anthropic_chat_model: str,
-        use_anthropic_api: bool,
+        use_official_api: bool,
     ) -> None:
         """A memory write request produces a ``memory`` ``tool_use`` block with a file command.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
         """
-        extra_headers = {"anthropic-beta": _MEMORY_BETA} if use_anthropic_api else {}
+        extra_headers = {"anthropic-beta": _MEMORY_BETA} if use_official_api else {}
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
             max_tokens=1024,
@@ -1119,14 +1119,14 @@ class TestMemoryTool:
         self,
         anthropic_client: Anthropic,
         anthropic_chat_model: str,
-        use_anthropic_api: bool,
+        use_official_api: bool,
     ) -> None:
         """A ``/memories`` directory listing returned as ``tool_result`` is accepted and answered.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
              stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
         """
-        extra_headers = {"anthropic-beta": _MEMORY_BETA} if use_anthropic_api else {}
+        extra_headers = {"anthropic-beta": _MEMORY_BETA} if use_official_api else {}
         tools = [_MEMORY_TOOL]
         user_prompt = "Remember: project name is 'stdapi'"
 
@@ -1189,7 +1189,7 @@ class TestCodeExecutionTool:
         anthropic_client: Anthropic,
         anthropic_chat_model: str,
         is_bedrock_direct: bool,
-        use_anthropic_api: bool,
+        use_official_api: bool,
     ) -> None:
         """``code_execution`` on a Bedrock-backed Claude model is refused as a 400.
 
@@ -1201,7 +1201,7 @@ class TestCodeExecutionTool:
              https://platform.claude.com/docs/en/api/errors
              stdapi/api_providers/anthropic.py:_format_error
         """
-        if use_anthropic_api and not is_bedrock_direct:
+        if use_official_api and not is_bedrock_direct:
             pytest.skip("Error path only applies when Bedrock is the backend")
         with pytest.raises(BadRequestError) as excinfo:
             anthropic_client.messages.create(
@@ -1288,21 +1288,21 @@ class TestComputerUseTool:
         }
 
     @staticmethod
-    def _beta_headers(model: str, use_anthropic_api: bool) -> dict[str, str]:
+    def _beta_headers(model: str, use_official_api: bool) -> dict[str, str]:
         """Return the beta headers required for computer use.
 
         Uses ``computer-use-2025-11-24`` for the models on the newer tool type and
         the older ``computer-use-2025-01-24`` for all others.  On Bedrock
-        (``use_anthropic_api = False``) no beta header is required.
+        (``use_official_api = False``) no beta header is required.
 
         Args:
             model: The Bedrock or Anthropic model ID of the model under test.
-            use_anthropic_api: Whether tests run against the official API.
+            use_official_api: Whether tests run against the official API.
 
         Returns:
             Dict with ``anthropic-beta`` header when on the official API; empty otherwise.
         """
-        if not use_anthropic_api:
+        if not use_official_api:
             return {}
         beta = (
             _COMPUTER_USE_BETA_NEW
@@ -1342,7 +1342,7 @@ class TestComputerUseTool:
         self,
         anthropic_client: Anthropic,
         anthropic_chat_model: str,
-        use_anthropic_api: bool,
+        use_official_api: bool,
     ) -> None:
         """The model-appropriate ``computer`` tool type is accepted with its display params.
 
@@ -1357,7 +1357,7 @@ class TestComputerUseTool:
             max_tokens=1024,
             messages=[{"role": "user", "content": "Take a screenshot."}],
             tools=[self._computer_tool(anthropic_chat_model)],  # type: ignore[list-item]
-            extra_headers=self._beta_headers(anthropic_chat_model, use_anthropic_api),
+            extra_headers=self._beta_headers(anthropic_chat_model, use_official_api),
         )
         assert response.type == "message"
         assert response.role == "assistant"
@@ -1371,7 +1371,7 @@ class TestComputerUseTool:
         self,
         anthropic_client: Anthropic,
         anthropic_chat_model: str,
-        use_anthropic_api: bool,
+        use_official_api: bool,
     ) -> None:
         """The opening computer action is ``screenshot``.
 
@@ -1383,7 +1383,7 @@ class TestComputerUseTool:
             messages=[{"role": "user", "content": "Take a screenshot of the screen."}],
             tools=[self._computer_tool(anthropic_chat_model)],
             tool_choice={"type": "any"},
-            extra_headers=self._beta_headers(anthropic_chat_model, use_anthropic_api),
+            extra_headers=self._beta_headers(anthropic_chat_model, use_official_api),
         )
         tool_blocks = [b for b in response.content if isinstance(b, ToolUseBlock)]
         assert len(tool_blocks) >= 1
@@ -1399,7 +1399,7 @@ class TestComputerUseTool:
         self,
         anthropic_client: Anthropic,
         anthropic_chat_model: str,
-        use_anthropic_api: bool,
+        use_official_api: bool,
         desktop_screenshot_b64: str,
     ) -> None:
         """A JPEG screenshot returned as a ``tool_result`` image is accepted on the next turn.
@@ -1413,7 +1413,7 @@ class TestComputerUseTool:
         """
         tools = [self._computer_tool(anthropic_chat_model)]
         user_prompt = "What applications can you see on the desktop?"
-        extra_headers = self._beta_headers(anthropic_chat_model, use_anthropic_api)
+        extra_headers = self._beta_headers(anthropic_chat_model, use_official_api)
 
         resp1 = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -1449,7 +1449,7 @@ class TestComputerUseTool:
         self,
         anthropic_client: Anthropic,
         anthropic_chat_model: str,
-        use_anthropic_api: bool,
+        use_official_api: bool,
         desktop_screenshot_b64: str,
     ) -> None:
         """A coordinate-bearing computer action stays inside the declared display bounds.
@@ -1462,7 +1462,7 @@ class TestComputerUseTool:
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool
         """
         tools = [self._computer_tool(anthropic_chat_model)]
-        extra_headers = self._beta_headers(anthropic_chat_model, use_anthropic_api)
+        extra_headers = self._beta_headers(anthropic_chat_model, use_official_api)
         user_prompt = "Open Firefox by clicking on it."
 
         # Provide the screenshot up-front so Claude can see the desktop immediately
@@ -1530,7 +1530,7 @@ class TestWebSearchTool:
 
     @pytest.fixture(autouse=True)
     def _skip_nova_tests(
-        self, request: pytest.FixtureRequest, use_anthropic_api: bool
+        self, request: pytest.FixtureRequest, use_official_api: bool
     ) -> None:
         """Skip Nova Premier tests when running against the official Anthropic API.
 
@@ -1538,7 +1538,7 @@ class TestWebSearchTool:
         Nova Premier access.  ``test_unsupported_model_raises_error`` runs everywhere.
         """
         nova_tests = {"test_basic", "test_streaming"}
-        if use_anthropic_api and request.node.name in nova_tests:
+        if use_official_api and request.node.name in nova_tests:
             pytest.skip(
                 "Nova Premier web search tests require a local server; "
                 "these tests only run without --use-official-api"
@@ -1651,7 +1651,7 @@ class TestWebFetchTool:
         anthropic_client: Anthropic,
         anthropic_chat_model: str,
         is_bedrock_direct: bool,
-        use_anthropic_api: bool,
+        use_official_api: bool,
     ) -> None:
         """``web_fetch`` on a Bedrock-backed model is refused as a 400 ``invalid_request_error``.
 
@@ -1663,7 +1663,7 @@ class TestWebFetchTool:
              https://platform.claude.com/docs/en/api/errors
              stdapi/api_providers/anthropic.py:_format_error
         """
-        if use_anthropic_api and not is_bedrock_direct:
+        if use_official_api and not is_bedrock_direct:
             pytest.skip("Error path only applies when Bedrock is the backend")
         with pytest.raises(BadRequestError) as excinfo:
             anthropic_client.messages.create(

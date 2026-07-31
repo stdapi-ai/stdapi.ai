@@ -11,7 +11,6 @@ from os import getenv
 from struct import unpack
 from typing import TYPE_CHECKING, Any
 
-import cohere
 import httpx
 import pytest
 
@@ -25,6 +24,7 @@ from tests._helpers import make_model_details
 if TYPE_CHECKING:
     from collections.abc import Generator
 
+    import cohere
     from cohere.types import EmbedByTypeResponse
     from starlette.testclient import TestClient
 
@@ -1032,16 +1032,16 @@ class TestCohereEmbedV1Route:
 
 @pytest.fixture
 def live_client(
-    request: pytest.FixtureRequest, test_client: TestClient | None, api_key: str
+    server_url: str | None, test_client: TestClient | None, api_key: str
 ) -> Generator[httpx.Client]:
     """Authenticated client for the local live server or the --server-url target."""
     if test_client is not None:
         test_client.headers["authorization"] = f"Bearer {api_key}"
         yield test_client
         del test_client.headers["authorization"]
-    elif server_url := request.config.getoption("--server-url"):
+    elif server_url:
         with httpx.Client(
-            base_url=server_url.rstrip("/"),
+            base_url=server_url,
             headers={"authorization": f"Bearer {getenv('OPENAI_API_KEY', '')}"},
             timeout=60.0,
         ) as client:
@@ -1251,27 +1251,6 @@ class TestCohereEmbedIntegration:
             (vector,) = embedded.embeddings.float_
             assert len(vector) > 0, model_id
             assert embedded.texts == [_SAMPLE_TEXT], model_id
-
-
-@pytest.fixture(scope="session")
-def cohere_client_v1(
-    request: pytest.FixtureRequest, test_client: TestClient | None, api_key: str
-) -> cohere.Client:
-    """Create a Cohere v1 client for either local or official API testing."""
-    if test_client:
-        return cohere.Client(
-            api_key=api_key,
-            base_url="http://testserver/cohere",
-            httpx_client=test_client,
-        )
-    if request.config.getoption("--use-official-api"):
-        if not getenv("CO_API_KEY"):
-            pytest.skip("CO_API_KEY is required to test the official Cohere API")
-        return cohere.Client()
-    return cohere.Client(
-        api_key=getenv("OPENAI_API_KEY", ""),
-        base_url=f"{request.config.getoption('--server-url').rstrip('/')}/cohere",
-    )
 
 
 class TestCohereEmbedV1Integration:

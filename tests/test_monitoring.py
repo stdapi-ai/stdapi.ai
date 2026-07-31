@@ -141,19 +141,13 @@ class TestPublishedLogLevels:
         assert "info" not in levels
 
 
+@pytest.mark.usefixtures("usage_scope")
 class TestFinalizeUsage:
     """_finalize_usage() turns the request's usage accumulator into log usage/cost fields.
 
     Ref: stdapi/monitoring.py:_finalize_usage
          stdapi/usage.py:record_bedrock_usage
     """
-
-    @pytest.fixture(autouse=True)
-    def _usage_scope(self) -> Generator[None]:
-        """Install a fresh usage accumulator and reset it after each test."""
-        token = usage.init_usage()
-        yield
-        usage.USAGE.reset(token)
 
     def test_populates_usage_and_cost_from_a_single_record(
         self, monkeypatch: pytest.MonkeyPatch

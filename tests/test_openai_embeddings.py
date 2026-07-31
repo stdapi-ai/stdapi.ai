@@ -439,7 +439,7 @@ class TestEmbeddingsUsage:
 
     def test_embedding_usage_logged(
         self,
-        test_client: TestClientType | None,
+        local_test_client: TestClientType,
         embedding_model: str,
         api_key: str,
         capfd: pytest.CaptureFixture[str],
@@ -453,12 +453,9 @@ class TestEmbeddingsUsage:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
              stdapi/routes/openai_embeddings.py:create_embeddings
         """
-        if test_client is None:
-            pytest.skip("Requires local test server")
-
         capfd.readouterr()
 
-        response = test_client.post(
+        response = local_test_client.post(
             "/v1/embeddings",
             json={"model": embedding_model, "input": "Hello world"},
             headers={"Authorization": f"Bearer {api_key}"},
@@ -575,13 +572,12 @@ class TestEmbeddingsCohereUnsupportedEmbeddingType:
     pytestmark = pytest.mark.local
 
     @pytest.fixture
-    def client(self, api_key: str, monkeypatch: pytest.MonkeyPatch) -> TestClientType:
+    def client(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> TestClientType:
         """Test client with stubbed model validation and Bedrock invocation."""
         from unittest.mock import AsyncMock  # noqa: PLC0415
 
-        from starlette.testclient import TestClient  # noqa: PLC0415
-
-        from stdapi.main import app  # noqa: PLC0415
         from stdapi.models import InvokeResult  # noqa: PLC0415
         from stdapi.models.embedding.cohere_embed import EmbeddingModel  # noqa: PLC0415
 
@@ -608,7 +604,7 @@ class TestEmbeddingsCohereUnsupportedEmbeddingType:
                 )
             ),
         )
-        return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
+        return app_client
 
     def test_non_float_embedding_type_returns_400(self, client: TestClientType) -> None:
         """``embedding_types=["int8"]`` returns a 400 JSON envelope, not a 500.

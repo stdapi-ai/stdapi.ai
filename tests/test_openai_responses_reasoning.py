@@ -49,9 +49,8 @@ if TYPE_CHECKING:
     from stdapi.types.openai_responses import ResponseInputItem
 
 
-@pytest.fixture(autouse=True)
-def _request_log(request_log: dict[str, Any]) -> None:
-    """Bind the shared request-log context required by response logging."""
+#: Bind the request-log context that response logging requires.
+pytestmark = pytest.mark.usefixtures("request_log")
 
 
 #: Bedrock usage payload shared by fabricated Converse responses.

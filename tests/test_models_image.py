@@ -44,20 +44,8 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Generator
 
 
-#: All tests in this module exercise the local implementation in-process.
-pytestmark = pytest.mark.local
-
-
-@pytest.fixture(autouse=True)
-def _usage_scope() -> Generator[None]:
-    """Install fresh per-request usage/model-state/image-spec scopes for each test."""
-    usage_token = usage.init_usage()
-    state_token = usage.init_model_state()
-    image_spec_token = IMAGE_SPEC.set("")
-    yield
-    usage.USAGE.reset(usage_token)
-    usage.MODEL_STATE.reset(state_token)
-    IMAGE_SPEC.reset(image_spec_token)
+#: Local, in-process tests metering into the per-request usage scopes.
+pytestmark = [pytest.mark.local, pytest.mark.usefixtures("usage_scope")]
 
 
 class TestImageSpecTitanTiers:

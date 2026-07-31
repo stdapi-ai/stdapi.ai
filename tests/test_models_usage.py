@@ -52,7 +52,7 @@ from stdapi.usage import compute_costs
 from tests.conftest import set_test_price
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterable, AsyncIterator, Generator
+    from collections.abc import AsyncIterable, AsyncIterator
 
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_bedrock_runtime.type_defs import (
@@ -61,18 +61,8 @@ if TYPE_CHECKING:
     )
 
 
-#: All tests in this module exercise the local implementation in-process.
-pytestmark = pytest.mark.local
-
-
-@pytest.fixture(autouse=True)
-def _usage_scope() -> Generator[None]:
-    """Install fresh per-request usage/model-state scopes for each test."""
-    usage_token = usage.init_usage()
-    state_token = usage.init_model_state()
-    yield
-    usage.USAGE.reset(usage_token)
-    usage.MODEL_STATE.reset(state_token)
+#: Local, in-process tests metering into the per-request usage scopes.
+pytestmark = [pytest.mark.local, pytest.mark.usefixtures("usage_scope")]
 
 
 class TestCountGroundingToolUses:

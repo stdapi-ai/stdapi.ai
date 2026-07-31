@@ -17,7 +17,9 @@ from typing import Any
 import pytest
 from openai import BadRequestError, OpenAI
 
-PEGASUS_MODEL = "twelvelabs.pegasus-1-2-v1:0"
+from tests.conftest import PEGASUS_MODEL
+
+#: Raw video bytes above which the gateway uploads to S3 instead of inlining.
 PEGASUS_INLINE_BYTES = 18_874_368
 
 #: finish_reason values reachable from Pegasus' ``stop`` / ``length`` finishReason.
@@ -54,15 +56,10 @@ class TestTwelveLabsPegasusChatCompletions:
          stdapi/models/chat/twelvelabs_pegasus.py:ChatModel
     """
 
-    @pytest.fixture
-    def video_url(self, sample_video_file_base64: str) -> str:
-        """The shared sample video as a data URI, skipping when it is unavailable."""
-        if not sample_video_file_base64:
-            pytest.skip("No sample video available")
-        return sample_video_file_base64
-
     @pytest.mark.expensive
-    def test_video_basic(self, openai_client: OpenAI, video_url: str) -> None:
+    def test_video_basic(
+        self, openai_client: OpenAI, sample_video_file_base64: str
+    ) -> None:
         """A data-URI video plus a text part yields one assistant text choice.
 
         Pegasus returns a flat ``{"message", "finishReason"}`` body; ``_converse``
@@ -74,7 +71,9 @@ class TestTwelveLabsPegasusChatCompletions:
         """
         resp = openai_client.chat.completions.create(
             model=PEGASUS_MODEL,
-            messages=_video_messages(video_url, "Describe what happens in this video."),
+            messages=_video_messages(
+                sample_video_file_base64, "Describe what happens in this video."
+            ),
         )
         assert resp.object == "chat.completion"
         assert resp.id.startswith("chatcmpl-")
@@ -93,7 +92,9 @@ class TestTwelveLabsPegasusChatCompletions:
         )
 
     @pytest.mark.expensive
-    def test_video_streaming(self, openai_client: OpenAI, video_url: str) -> None:
+    def test_video_streaming(
+        self, openai_client: OpenAI, sample_video_file_base64: str
+    ) -> None:
         """Streaming a video prompt yields a role chunk, text deltas and one stop chunk.
 
         ``_format_converse_stream`` synthesises the Bedrock ``messageStart`` /
@@ -109,7 +110,7 @@ class TestTwelveLabsPegasusChatCompletions:
             openai_client.chat.completions.create(
                 model=PEGASUS_MODEL,
                 messages=_video_messages(
-                    video_url, "Describe what happens in this video."
+                    sample_video_file_base64, "Describe what happens in this video."
                 ),
                 stream=True,
             )
@@ -136,7 +137,7 @@ class TestTwelveLabsPegasusChatCompletions:
 
     @pytest.mark.expensive
     def test_video_in_assistant_history(
-        self, openai_client: OpenAI, video_url: str
+        self, openai_client: OpenAI, sample_video_file_base64: str
     ) -> None:
         """A video from an earlier turn is reused for a later text-only question.
 
@@ -154,7 +155,12 @@ class TestTwelveLabsPegasusChatCompletions:
             messages=[
                 {
                     "role": "user",
-                    "content": [{"type": "image_url", "image_url": {"url": video_url}}],
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": sample_video_file_base64},
+                        }
+                    ],
                 },
                 {"role": "assistant", "content": "I see a video."},
                 {"role": "user", "content": "What else do you notice?"},
@@ -170,7 +176,7 @@ class TestTwelveLabsPegasusChatCompletions:
 
     @pytest.mark.expensive
     def test_concat_consecutive_user_text(
-        self, openai_client: OpenAI, video_url: str
+        self, openai_client: OpenAI, sample_video_file_base64: str
     ) -> None:
         """Two trailing user messages are answered by a single Pegasus call.
 
@@ -185,7 +191,7 @@ class TestTwelveLabsPegasusChatCompletions:
         resp = openai_client.chat.completions.create(
             model=PEGASUS_MODEL,
             messages=[
-                *_video_messages(video_url, "Watch this video."),
+                *_video_messages(sample_video_file_base64, "Watch this video."),
                 {"role": "user", "content": "Summarize the video."},
             ],
         )
@@ -199,7 +205,7 @@ class TestTwelveLabsPegasusChatCompletions:
 
     @pytest.mark.expensive
     def test_temperature_and_max_tokens_forwarded(
-        self, openai_client: OpenAI, video_url: str
+        self, openai_client: OpenAI, sample_video_file_base64: str
     ) -> None:
         """``max_tokens`` caps the answer through ``maxOutputTokens``.
 
@@ -214,20 +220,21 @@ class TestTwelveLabsPegasusChatCompletions:
         """
         resp = openai_client.chat.completions.create(
             model=PEGASUS_MODEL,
-            messages=_video_messages(video_url, "Describe this video in detail."),
+            messages=_video_messages(
+                sample_video_file_base64, "Describe this video in detail."
+            ),
             temperature=0,
             max_tokens=8,
         )
         assert len(resp.choices) >= 1
         assert resp.choices[0].message.content
         assert resp.choices[0].finish_reason in _FINISH_REASONS
-        # Loose bound for estimation drift
         assert resp.usage is not None
         assert resp.usage.completion_tokens <= 16
 
     @pytest.mark.expensive
     def test_response_format_json_schema(
-        self, openai_client: OpenAI, video_url: str
+        self, openai_client: OpenAI, sample_video_file_base64: str
     ) -> None:
         """``response_format=json_schema`` reaches Pegasus as ``responseFormat.jsonSchema``.
 
@@ -241,7 +248,7 @@ class TestTwelveLabsPegasusChatCompletions:
         """
         resp = openai_client.chat.completions.create(
             model=PEGASUS_MODEL,
-            messages=_video_messages(video_url, "Describe this video."),
+            messages=_video_messages(sample_video_file_base64, "Describe this video."),
             extra_body={
                 "response_format": {
                     "type": "json_schema",
@@ -295,7 +302,7 @@ class TestTwelveLabsPegasusChatCompletions:
 
     @pytest.mark.expensive
     def test_system_prompt_silently_ignored(
-        self, openai_client: OpenAI, video_url: str
+        self, openai_client: OpenAI, sample_video_file_base64: str
     ) -> None:
         """A ``system`` message neither errors nor blocks the video answer.
 
@@ -310,7 +317,7 @@ class TestTwelveLabsPegasusChatCompletions:
             model=PEGASUS_MODEL,
             messages=[
                 {"role": "system", "content": "You are a test assistant."},
-                *_video_messages(video_url, "Describe this video."),
+                *_video_messages(sample_video_file_base64, "Describe this video."),
             ],
         )
         assert resp.object == "chat.completion"
@@ -323,7 +330,7 @@ class TestTwelveLabsPegasusChatCompletions:
 
     @pytest.mark.expensive
     def test_tools_silently_ignored(
-        self, openai_client: OpenAI, video_url: str
+        self, openai_client: OpenAI, sample_video_file_base64: str
     ) -> None:
         """A ``tools`` array is accepted but can never produce ``tool_calls``.
 
@@ -336,7 +343,7 @@ class TestTwelveLabsPegasusChatCompletions:
         """
         resp = openai_client.chat.completions.create(
             model=PEGASUS_MODEL,
-            messages=_video_messages(video_url, "Describe this video."),
+            messages=_video_messages(sample_video_file_base64, "Describe this video."),
             tools=[
                 {
                     "type": "function",
@@ -355,7 +362,9 @@ class TestTwelveLabsPegasusChatCompletions:
         assert resp.choices[0].finish_reason != "tool_calls"
 
     @pytest.mark.expensive
-    def test_large_video_auto_s3(self, openai_client: OpenAI, video_url: str) -> None:
+    def test_large_video_auto_s3(
+        self, openai_client: OpenAI, sample_video_file_base64: str
+    ) -> None:
         """A video above the inline limit is uploaded to S3 and passed by reference.
 
         Bedrock caps an invocation payload at 25 MB, i.e. ~18.75 MB of raw bytes once
@@ -366,15 +375,14 @@ class TestTwelveLabsPegasusChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus.html
              stdapi/models/chat/twelvelabs_pegasus.py:_video_to_media_source
         """
-        # Skip if raw bytes are under the threshold
         _prefix = "data:video/mp4;base64,"
-        raw_bytes = base64.b64decode(video_url[len(_prefix) :])
+        raw_bytes = base64.b64decode(sample_video_file_base64[len(_prefix) :])
         if len(raw_bytes) <= PEGASUS_INLINE_BYTES:
             pytest.skip("Sample video is too small to test auto-S3")
 
         resp = openai_client.chat.completions.create(
             model=PEGASUS_MODEL,
-            messages=_video_messages(video_url, "Describe this video."),
+            messages=_video_messages(sample_video_file_base64, "Describe this video."),
         )
         assert resp.object == "chat.completion"
         assert len(resp.choices) >= 1

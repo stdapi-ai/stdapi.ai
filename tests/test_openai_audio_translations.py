@@ -12,7 +12,6 @@ Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
 
 import io
 from base64 import b64encode
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -22,7 +21,7 @@ from starlette.responses import Response
 from stdapi.api_errors import ApiError
 from stdapi.input_file import InputFile
 from stdapi.models.audio.amazon_transcribe import AudioModel
-from tests.conftest import logged_usage_entries
+from tests.conftest import _sample_cache_file, logged_usage_entries
 from tests.test_openai_audio_transcriptions import _stub_transcribe
 
 if TYPE_CHECKING:
@@ -38,9 +37,9 @@ def sample_audio_fr_file(openai_client: OpenAI, speech_standard_model: str) -> b
     when the detected source language is English, so exercising the billing
     path requires non-English audio. Generated via the speech endpoint (same
     pattern as conftest's ``sample_audio_mp3_file``; MP3 is a native Polly
-    format) and cached under ``tests/.cache/audio_fr.mp3``.
+    format) and cached under ``tests/.cache`` per producing model.
     """
-    audio_file = Path(__file__).parent / ".cache" / "audio_fr.mp3"
+    audio_file = _sample_cache_file("audio_fr", speech_standard_model, "mp3")
     if audio_file.exists():
         with audio_file.open("rb") as file:
             return file.read()

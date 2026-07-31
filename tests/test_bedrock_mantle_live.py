@@ -79,17 +79,14 @@ class TestMantleModelDiscovery:
          stdapi/models/__init__.py:is_mantle_preferred
     """
 
-    def test_mantle_models_registered(
-        self, test_client: TestClientType | None, listed_model_ids: set[str]
-    ) -> None:
+    @pytest.mark.usefixtures("local_test_client")
+    def test_mantle_models_registered(self, listed_model_ids: set[str]) -> None:
         """Discovered Mantle models are Mantle-served and appear in ``GET /v1/models``.
 
         Gemma 3 is dual-homed (present on both endpoints), so it is Mantle-served
         only because the test environment lists it in
         ``aws_bedrock_mantle_preferred_models``.
         """
-        if test_client is None:
-            pytest.skip("Requires local test server")
         from stdapi.models import (  # noqa: PLC0415
             MANTLE_MODELS,
             is_mantle_preferred,
@@ -103,17 +100,14 @@ class TestMantleModelDiscovery:
             assert model_id in listed_model_ids
         assert is_mantle_preferred(_GEMMA3)
 
-    def test_dual_homed_models_stay_on_runtime(
-        self, test_client: TestClientType | None
-    ) -> None:
+    @pytest.mark.usefixtures("local_test_client")
+    def test_dual_homed_models_stay_on_runtime(self) -> None:
         """Models on both endpoints are served by bedrock-runtime by default.
 
         Mantle discovery must not steal a model that bedrock-runtime can serve:
         only an explicit ``aws_bedrock_mantle_preferred_models`` entry flips the
         priority, so every dual-homed entry left on runtime is non-preferred.
         """
-        if test_client is None:
-            pytest.skip("Requires local test server")
         from stdapi.models import (  # noqa: PLC0415
             MANTLE_MODELS,
             is_mantle_preferred,
@@ -174,11 +168,9 @@ class TestMantleChatCompletions:
         assert response.usage.prompt_tokens > 0
         assert response.usage.completion_tokens > 0
 
+    @pytest.mark.usefixtures("local_test_client")
     def test_gemma3_streaming_usage_stripped(
-        self,
-        openai_client: OpenAI,
-        test_client: TestClientType | None,
-        capfd: pytest.CaptureFixture[str],
+        self, openai_client: OpenAI, capfd: pytest.CaptureFixture[str]
     ) -> None:
         """Streaming without include_usage strips the forced usage chunk.
 
@@ -188,8 +180,6 @@ class TestMantleChatCompletions:
 
         Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
         """
-        if test_client is None:
-            pytest.skip("Requires local test server")
         capfd.readouterr()
         stream = openai_client.chat.completions.create(
             model=_GEMMA3,
@@ -214,18 +204,14 @@ class TestMantleChatCompletions:
         assert entries, "Expected a Mantle usage log entry for the stream"
         assert sum(entry["output_tokens"] for entry in entries) > 0
 
+    @pytest.mark.usefixtures("local_test_client")
     def test_gemma3_streaming_usage_included(
-        self,
-        openai_client: OpenAI,
-        test_client: TestClientType | None,
-        capfd: pytest.CaptureFixture[str],
+        self, openai_client: OpenAI, capfd: pytest.CaptureFixture[str]
     ) -> None:
         """Streaming with include_usage relays the final usage chunk exactly once.
 
         Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
         """
-        if test_client is None:
-            pytest.skip("Requires local test server")
         capfd.readouterr()
         stream = openai_client.chat.completions.create(
             model=_GEMMA3,
@@ -402,10 +388,10 @@ class TestMantleServiceHeader:
          stdapi/models/chat/__init__.py:serves_via_mantle
     """
 
+    @pytest.mark.usefixtures("local_test_client")
     def test_header_routes_dual_homed_model_to_mantle(
         self,
         openai_client: OpenAI,
-        test_client: TestClientType | None,
         monkeypatch: pytest.MonkeyPatch,
         capfd: pytest.CaptureFixture[str],
     ) -> None:
@@ -415,8 +401,6 @@ class TestMantleServiceHeader:
         that the header took effect is the service recorded on the billed usage
         entry, not merely a successful generation.
         """
-        if test_client is None:
-            pytest.skip("Requires local test server")
         from stdapi.config import SETTINGS  # noqa: PLC0415
         from stdapi.models import MANTLE_MODELS, is_mantle_served  # noqa: PLC0415
 
@@ -448,11 +432,9 @@ class TestMantleRecordedBilling:
          stdapi/aws_bedrock_mantle.py:usage_from_chat_completion
     """
 
+    @pytest.mark.usefixtures("local_test_client")
     def test_gemma3_streamed_conversion_records_usage(
-        self,
-        openai_client: OpenAI,
-        test_client: TestClientType | None,
-        capfd: pytest.CaptureFixture[str],
+        self, openai_client: OpenAI, capfd: pytest.CaptureFixture[str]
     ) -> None:
         """A streamed responses-to-chat conversion records billed usage.
 
@@ -460,8 +442,6 @@ class TestMantleRecordedBilling:
         usage in a trailing chunk, which the converter must consume even though
         the client only ever sees Responses events.
         """
-        if test_client is None:
-            pytest.skip("Requires local test server")
         capfd.readouterr()
         stream = openai_client.responses.create(
             model=_GEMMA3,
@@ -692,11 +672,9 @@ class TestMantleResponses:
         assert len(ids) == 1
         assert ids.pop().startswith("resp-")
 
+    @pytest.mark.usefixtures("local_test_client")
     def test_gemma3_store_dropped_on_api_fallback(
-        self,
-        openai_client: OpenAI,
-        test_client: TestClientType | None,
-        monkeypatch: pytest.MonkeyPatch,
+        self, openai_client: OpenAI, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """store=True on a Responses-to-chat fallback is served without storage.
 
@@ -707,8 +685,6 @@ class TestMantleResponses:
 
         Ref: stdapi/models/chat/_mantle/_default.py:ChatModel._select_api
         """
-        if test_client is None:
-            pytest.skip("Requires local test server")
         from stdapi.aws_bedrock_mantle import decode_mantle_response_id  # noqa: PLC0415
         from stdapi.models.chat._mantle import _default  # noqa: PLC0415
 
@@ -743,11 +719,9 @@ class TestMantleResponses:
         finally:
             openai_client.responses.delete(first.id)
 
+    @pytest.mark.usefixtures("local_test_client")
     def test_gemma4_surface_self_heal(
-        self,
-        openai_client: OpenAI,
-        test_client: TestClientType | None,
-        monkeypatch: pytest.MonkeyPatch,
+        self, openai_client: OpenAI, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A stale learned routing surface self-heals on the next request.
 
@@ -759,8 +733,6 @@ class TestMantleResponses:
         Ref: stdapi/aws_bedrock_mantle.py:_map_error
              stdapi/models/chat/_mantle/_default.py:ChatModel._api_paths
         """
-        if test_client is None:
-            pytest.skip("Requires local test server")
         from stdapi.models.chat._mantle import _default  # noqa: PLC0415
 
         monkeypatch.setitem(_default._LEARNED_SURFACE, _GEMMA4, "/v1")  # noqa: SLF001

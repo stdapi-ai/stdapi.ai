@@ -206,10 +206,6 @@ class TestAmazonNovaEmbeddings:
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
              stdapi/models/embedding/amazon_nova_embed.py:_DEFAULT_VIDEO_EMBEDDING_MODE
         """
-        if not sample_video_file_base64:
-            pytest.skip(
-                "Missing video sample file. Skipping test. Add a MP4 file to 'tests/.cache/video.mp4'."
-            )
         response = openai_client.embeddings.create(
             model=model_id, input=sample_video_file_base64
         )
@@ -360,11 +356,6 @@ class TestAmazonNovaEmbeddings:
         Ref: https://stdapi.ai/api_openai_embeddings/
              stdapi/models/embedding/amazon_nova_embed.py:_SYNC_LIMIT_SIZES
         """
-        if not sample_video_file_base64:
-            pytest.skip(
-                "Missing video sample file. Skipping test. Add a MP4 file to 'tests/.cache/video.mp4'."
-            )
-
         response = openai_client.embeddings.create(
             model=model_id,
             input=sample_video_file_base64,

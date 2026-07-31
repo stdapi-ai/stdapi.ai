@@ -32,6 +32,7 @@ from stdapi.models.chat._adapters._openai_common import (
 from stdapi.models.chat._default import ChatModel
 from stdapi.models.deprecation import DEPRECATED_MODELS
 from stdapi.types.openai_chat_completions import CompletionCreateParams
+from tests._helpers import strip_code_fence
 from tests.conftest import logged_usage_entries
 
 if TYPE_CHECKING:
@@ -41,24 +42,6 @@ if TYPE_CHECKING:
     from starlette.testclient import TestClient as TestClientType
 
     from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
-
-
-def _strip_code_fence(text: str) -> str:
-    """Strip a wrapping Markdown code fence (e.g. ` ```json `) from model output.
-
-    Args:
-        text: Raw model output, possibly fenced.
-
-    Returns:
-        ``text`` with a leading/trailing triple-backtick fence removed, or
-        ``text`` stripped of surrounding whitespace when it is not fenced.
-    """
-    stripped = text.strip()
-    if not stripped.startswith("```"):
-        return stripped
-    lines = stripped.splitlines()
-    lines = lines[1:-1] if len(lines) > 1 and lines[-1].strip() == "```" else lines[1:]
-    return "\n".join(lines).strip()
 
 
 #: Tool declaration reused verbatim so a repeated request can hit the prompt cache.
@@ -1829,7 +1812,7 @@ class TestChatCompletions:
         )
         content = response.choices[0].message.content
         assert content
-        unfenced = content if use_official_api else _strip_code_fence(content)
+        unfenced = content if use_official_api else strip_code_fence(content)
         assert unfenced.startswith("{"), (
             f"json_object output must not be wrapped in prose: {content!r}"
         )
@@ -3306,7 +3289,7 @@ class TestChatCompletionsUsage:
 
     def test_chat_completion_usage_logged(
         self,
-        test_client: TestClientType | None,
+        local_test_client: TestClientType,
         chat_model: str,
         api_key: str,
         capfd: pytest.CaptureFixture[str],
@@ -3319,10 +3302,8 @@ class TestChatCompletionsUsage:
         Ref: stdapi/usage.py:record_bedrock_usage
              stdapi/usage.py:usage_log_entries
         """
-        if test_client is None:
-            pytest.skip("Requires local test server")
         capfd.readouterr()
-        response = test_client.post(
+        response = local_test_client.post(
             "/v1/chat/completions",
             json={
                 "model": chat_model,
@@ -3349,7 +3330,7 @@ class TestChatCompletionsUsage:
 
     def test_chat_completion_streaming_usage_logged(
         self,
-        test_client: TestClientType | None,
+        local_test_client: TestClientType,
         chat_model: str,
         api_key: str,
         capfd: pytest.CaptureFixture[str],
@@ -3363,10 +3344,8 @@ class TestChatCompletionsUsage:
         Ref: stdapi/monitoring.py:log_request_sse_stream_event
              stdapi/routes/openai_chat_completions.py:create_chat_completion
         """
-        if test_client is None:
-            pytest.skip("Requires local test server")
         capfd.readouterr()
-        with test_client.stream(
+        with local_test_client.stream(
             "POST",
             "/v1/chat/completions",
             json={

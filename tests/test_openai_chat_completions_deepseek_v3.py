@@ -13,15 +13,14 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from tests.conftest import FINISH_REASONS
+
 if TYPE_CHECKING:
     from openai import OpenAI
 
 #: Newest DeepSeek V3 revision; the older ``deepseek.v3-v1:0`` shares its model class
 #: and is swept by the multi-model module, so the reasoning tests run on this one only.
 DEEPSEEK_SAMPLE = ("deepseek.v3.2",)
-
-#: finish_reason values the OpenAI Chat Completions reference defines.
-_FINISH_REASONS = frozenset({"stop", "length", "content_filter", "tool_calls"})
 
 
 @pytest.mark.gateway("Deepseek is not supported on the official API")
@@ -54,7 +53,7 @@ class TestDeepseekChatCompletions:
         assert resp.object == "chat.completion"
         assert len(resp.choices) >= 1
         choice = resp.choices[0]
-        assert choice.finish_reason in _FINISH_REASONS
+        assert choice.finish_reason in FINISH_REASONS
         msg = choice.message
         assert msg.role == "assistant"
         assert msg.content
@@ -85,7 +84,7 @@ class TestDeepseekChatCompletions:
         assert resp.object == "chat.completion"
         assert len(resp.choices) >= 1
         choice = resp.choices[0]
-        assert choice.finish_reason in _FINISH_REASONS
+        assert choice.finish_reason in FINISH_REASONS
         msg = choice.message
         assert msg.role == "assistant"
         assert msg.content

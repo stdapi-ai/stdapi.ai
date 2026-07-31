@@ -11,12 +11,12 @@ Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
 import pytest
 from openai import BadRequestError, OpenAI
 
-from tests.conftest import smallest_image_size
-
-NOVA_CANVAS_V1 = "amazon.nova-canvas-v1:0"
-
-NOVA_CANVAS_ALL = (NOVA_CANVAS_V1,)
-NOVA_CANVAS_SAMPLE = (NOVA_CANVAS_V1,)
+from tests.conftest import (
+    NOVA_CANVAS_ALL,
+    NOVA_CANVAS_SAMPLE,
+    NOVA_CANVAS_V1,
+    smallest_image_size,
+)
 
 #: Cheapest size accepted by Nova Canvas, requested wherever the size is incidental.
 NOVA_CANVAS_SIZE = smallest_image_size(NOVA_CANVAS_V1)

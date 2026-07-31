@@ -84,10 +84,6 @@ class TestTwelveLabsMarengoEmbeddings:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-marengo.html
              stdapi/models/embedding/twelvelabs_marengo_embed.py:_ASYNC_MEDIA_TYPES
         """
-        if not sample_video_file_base64:
-            pytest.skip(
-                "Missing video sample file. Skipping test. Add a MP4 file to 'tests/.cache/video.mp4'."
-            )
         response = openai_client.embeddings.create(
             model=model_id, input=sample_video_file_base64
         )
@@ -160,11 +156,6 @@ class TestTwelveLabsMarengoEmbeddings:
         Ref: https://stdapi.ai/api_openai_embeddings/
              stdapi/models/embedding/twelvelabs_marengo_embed.py:_media_source
         """
-        if not sample_video_file_base64:
-            pytest.skip(
-                "Missing video sample file. Skipping test. Add a MP4 file to 'tests/.cache/video.mp4'."
-            )
-
         response = openai_client.embeddings.create(
             model=model_id,
             input=sample_video_file_base64,
@@ -221,11 +212,6 @@ class TestTwelveLabsMarengoEmbeddings:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-marengo-3.html
              stdapi/models/embedding/twelvelabs_marengo_embed.py:_get_text_image_input
         """
-        if not sample_video_file_base64:
-            pytest.skip(
-                "Missing video sample file. Skipping test. Add a MP4 file to 'tests/.cache/video.mp4'."
-            )
-
         inputs = [
             "Text description.",
             sample_image_file_base64,

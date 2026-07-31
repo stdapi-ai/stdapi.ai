@@ -10,6 +10,11 @@ streaming with tools and Llama 3.3 70B emits raw JSON instead of ``toolUse`` blo
 Model-specific behaviour lives in the per-family modules; only vendor-neutral behaviour
 is asserted here, because live model text is not reproducible.
 
+Every test issues billed live calls, so the whole file is ``expensive``; the agentic
+loop carries ``agentic`` on top of it and the markers are conjunctive::
+
+    pytest --expensive tests/test_openai_chat_completions_multi_model.py
+
 Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
      https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
      stdapi/routes/openai_chat_completions.py:create_chat_completion
@@ -25,7 +30,7 @@ from openai import BadRequestError
 
 from tests._helpers import red_png_b64
 from tests._multi_model import VISION_MODELS_OPENAI, with_marks
-from tests.conftest import REPO_ROOT
+from tests.conftest import FINISH_REASONS, REPO_ROOT
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -136,9 +141,6 @@ _TOOLS: list[dict[str, object]] = [
 #: Directory the tool tests ask the models to list and read from.
 _PROJECT_ROOT = str(REPO_ROOT)
 
-#: finish_reason values the OpenAI Chat Completions reference defines.
-_FINISH_REASONS = frozenset({"stop", "length", "content_filter", "tool_calls"})
-
 #: Tool names declared in ``_TOOLS``.
 _TOOL_NAMES = frozenset({"list_directory", "read_file"})
 
@@ -233,7 +235,7 @@ class TestMultiModelChatCompletions:
         choice = completion.choices[0]
         assert choice.index == 0
         assert choice.message.role == "assistant"
-        assert choice.finish_reason in _FINISH_REASONS, (
+        assert choice.finish_reason in FINISH_REASONS, (
             f"Unexpected finish_reason for {model!r}: {choice.finish_reason!r}"
         )
         assert completion.usage is not None
@@ -297,7 +299,7 @@ class TestMultiModelChatCompletions:
         assert len(finish_reasons) == 1, (
             f"Expected exactly one finish chunk for {model!r}, got: {finish_reasons}"
         )
-        assert finish_reasons[0] in _FINISH_REASONS
+        assert finish_reasons[0] in FINISH_REASONS
 
     @pytest.mark.expensive
     @_BASIC_MODELS
@@ -332,7 +334,7 @@ class TestMultiModelChatCompletions:
             ],
         )
 
-        assert completion.choices[0].finish_reason in _FINISH_REASONS
+        assert completion.choices[0].finish_reason in FINISH_REASONS
         assert completion.usage is not None
         assert completion.usage.prompt_tokens > 0
         text = _message_text(completion)
@@ -648,7 +650,7 @@ class TestStructuredOutput:
                 f"Response is not valid JSON for {model!r}: {exc}\nRaw: {raw!r}"
             )
 
-        assert completion.choices[0].finish_reason in _FINISH_REASONS
+        assert completion.choices[0].finish_reason in FINISH_REASONS
         assert isinstance(data, dict), f"Expected JSON object, got {type(data)}"
         assert "language" in data or "version" in data, (
             f"Expected 'language' or 'version' key in JSON, got: {data}"
@@ -721,7 +723,7 @@ class TestVision:
             ],
         )
 
-        assert completion.choices[0].finish_reason in _FINISH_REASONS
+        assert completion.choices[0].finish_reason in FINISH_REASONS
         assert completion.usage is not None
         assert completion.usage.prompt_tokens > 0, (
             "image input must be billed as prompt tokens"

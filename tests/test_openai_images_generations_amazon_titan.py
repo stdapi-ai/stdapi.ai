@@ -12,12 +12,7 @@ Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
 import pytest
 from openai import BadRequestError, OpenAI
 
-from tests.conftest import smallest_image_size
-
-TITAN_V2 = "amazon.titan-image-generator-v2:0"
-
-TITAN_ALL = (TITAN_V2,)
-TITAN_SAMPLE = (TITAN_V2,)
+from tests.conftest import TITAN_ALL, TITAN_SAMPLE, TITAN_V2, smallest_image_size
 
 #: Cheapest size accepted by Titan, requested wherever the size is incidental.
 TITAN_SIZE = smallest_image_size(TITAN_V2)
