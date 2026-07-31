@@ -519,6 +519,9 @@ You can also specify image parameters in the tool definition:
 }
 ```
 
+!!! info "`partial_images` is accepted and ignored"
+    `partial_images` (0-3) is accepted for OpenAI API compatibility but never acts: no available model streams partial images, so no `response.image_generation_call.partial_image` event is emitted and the finished image always arrives in a single `response.image_generation_call.completed` event. The same applies to [image generations](api_openai_images_generations.md) and [image edits](api_openai_images_edits.md).
+
 #### Computer Use Not Supported
 
 !!! warning "Computer Use Not Supported"

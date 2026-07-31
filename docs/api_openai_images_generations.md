@@ -51,7 +51,7 @@ Generate images with Amazon Bedrock image models like Stability AI and Amazon No
 | `output_format`                |   :material-check-circle:{ .success }    | `png`, `jpeg`, or `webp` (model-specific)                           |
 | `output_compression`           |   :material-check-circle:{ .success }    | Compression level 1-100% (default: 100)                             |
 | `stream`                       |   :material-check-circle:{ .success }    | Generate images in streaming mode with partial results              |
-| `partial_images`               |       :material-cog:{ .model-dep }       | Number of partial images in stream (0-3, model-specific)            |
+| `partial_images`               | :material-close-circle:{ .unsupported }  | Accepted (0-3) but ignored — no available model currently streams partial images; the final image is always sent as a single event |
 | `background`                   |   :material-minus-circle:{ .partial }    | Accepts `auto` (default) and `opaque`; `transparent` is unsupported — responses report `opaque` |
 | `moderation`                   | :material-close-circle:{ .unsupported }  | Only the default `auto` is accepted; other values are rejected with an error |
 | Extra model-specific params    | :material-plus-circle:{ .extra-feature } | Extra model-specific parameters via JSON body                       |
@@ -62,8 +62,8 @@ Generate images with Amazon Bedrock image models like Stability AI and Amazon No
 | JPEG format                    |       :material-cog:{ .model-dep }       | Lossy compression (model-specific)                                  |
 | WebP format                    |       :material-cog:{ .model-dep }       | Modern format with compression (model-specific)                     |
 | **Streaming**                  |                                          |                                                                     |
-| SSE streaming                  |   :material-check-circle:{ .success }    | Server-sent events with partial and final images                    |
-| Partial images                 |       :material-cog:{ .model-dep }       | Progressive previews when available                                 |
+| SSE streaming                  |   :material-check-circle:{ .success }    | Server-sent events with final images (no partial previews)          |
+| Partial images                 | :material-close-circle:{ .unsupported }  | Accepted but ignored — no available model streams partial images    |
 | **Usage tracking**             |                                          |                                                                     |
 | Input text tokens              |   :material-check-circle:{ .success }    | Sourced from AWS billing when available                             |
 | Output image tokens            |   :material-check-circle:{ .success }    | Sourced from AWS billing data when available; falls back to the image count (`n`) |
@@ -387,7 +387,9 @@ curl -X POST "$BASE/v1/images/generations" \
   }'
 ```
 
-**Stream generation with partial previews:**
+**Stream generation:**
+
+Each image is sent as a single completed event; `partial_images` is accepted but never produces a preview.
 
 ```bash
 curl -N -X POST "$BASE/v1/images/generations" \
@@ -397,7 +399,7 @@ curl -N -X POST "$BASE/v1/images/generations" \
     "prompt": "An abstract watercolor painting of emotions",
     "model": "amazon.nova-canvas-v1:0",
     "stream": true,
-    "partial_images": 3
+    "n": 2
   }'
 ```
 
