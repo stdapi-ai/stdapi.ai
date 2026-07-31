@@ -3577,3 +3577,303 @@ class TestMessagesToChatDropList:
             {"model": "m", "messages": [], field: value}
         )
         assert field not in out
+
+
+# ---------------------------------------------------------------------------
+# 9. Reasoning text surfacing
+# ---------------------------------------------------------------------------
+
+
+class TestRenameReasoningField:
+    """Upstream ``reasoning`` text renamed to the ``reasoning_content`` field.
+
+    Reasoning models served upstream return their chain of thought under
+    ``reasoning``; the Chat Completions surface of this gateway exposes it as
+    ``reasoning_content``, the DeepSeek-compatible field, so the rename is what
+    keeps the text from being pruned out of the validated response.
+
+    Ref: https://api-docs.deepseek.com/api/create-chat-completion
+         stdapi/models/chat/_mantle/_convert.py:rename_reasoning_field
+    """
+
+    def test_a_non_text_reasoning_value_keeps_its_own_name(self) -> None:
+        """Only text is promoted; any other shape stays an unknown field.
+
+        ``reasoning_content`` is declared as text, so renaming a structured
+        value into it turns a field that was harmlessly pruned into a validation
+        failure -- and, mid-stream, into a response that dies after its headers.
+
+        Ref: stdapi/types/openai_chat_completions.py:ChatCompletionMessage
+        """
+        payload = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "hi",
+                        "reasoning": [{"type": "text", "text": "t"}],
+                    }
+                }
+            ]
+        }
+
+        mantle_convert.rename_reasoning_field(payload)
+
+        message = payload["choices"][0]["message"]
+        assert "reasoning_content" not in message
+        assert message["reasoning"] == [{"type": "text", "text": "t"}]
+
+    def test_reasoning_content_is_sent_back_under_the_upstream_name(self) -> None:
+        """A replayed assistant turn carries its thinking text upstream again.
+
+        The OpenAI SDK idiom for a follow-up turn is to append the message
+        object the API just returned, so the field the gateway emits is the
+        field the gateway receives -- and upstream only knows ``reasoning``.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_restore_reasoning_field
+        """
+        messages: list[dict[str, Any]] = [
+            {"role": "user", "content": "q"},
+            {
+                "role": "assistant",
+                "content": "45",
+                "reasoning_content": "Let total be T.",
+            },
+            {
+                "role": "assistant",
+                "content": "45",
+                "reasoning_content": [{"type": "text", "text": "in parts"}],
+            },
+        ]
+
+        mantle_convert._restore_reasoning_field({"messages": messages})  # noqa: SLF001
+
+        assert messages[1] == {
+            "role": "assistant",
+            "content": "45",
+            "reasoning": "Let total be T.",
+        }
+        assert messages[2]["reasoning"] == "in parts", (
+            "text split into parts is flattened, since upstream takes one string"
+        )
+        assert "reasoning_content" not in messages[2]
+
+    def test_non_streaming_message_renamed(self) -> None:
+        """``choices[].message.reasoning`` becomes ``reasoning_content``."""
+        payload = {
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": " 45",
+                        "reasoning": " Let total be T.",
+                    },
+                }
+            ]
+        }
+        out = mantle_convert.rename_reasoning_field(payload)
+        message = out["choices"][0]["message"]
+        assert message["reasoning_content"] == " Let total be T."
+        assert "reasoning" not in message
+
+    def test_streaming_delta_renamed(self) -> None:
+        """``choices[].delta.reasoning`` becomes ``reasoning_content``."""
+        payload = {"choices": [{"index": 0, "delta": {"reasoning": "step"}}]}
+        out = mantle_convert.rename_reasoning_field(payload)
+        delta = out["choices"][0]["delta"]
+        assert delta["reasoning_content"] == "step"
+        assert "reasoning" not in delta
+
+    def test_existing_reasoning_content_left_alone(self) -> None:
+        """An upstream ``reasoning_content`` is never overwritten by the rename."""
+        payload = {
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "hi",
+                        "reasoning": "ignored",
+                        "reasoning_content": "kept",
+                    },
+                }
+            ]
+        }
+        out = mantle_convert.rename_reasoning_field(payload)
+        message = out["choices"][0]["message"]
+        assert message["reasoning_content"] == "kept"
+        assert message["reasoning"] == "ignored"
+
+    def test_payload_without_reasoning_unchanged(self) -> None:
+        """A payload carrying no reasoning text is returned untouched."""
+        payload = {
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "hi"}}
+            ],
+            "usage": {"completion_tokens_details": {"reasoning_tokens": 3}},
+        }
+        assert mantle_convert.rename_reasoning_field(payload) == {
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "hi"}}
+            ],
+            "usage": {"completion_tokens_details": {"reasoning_tokens": 3}},
+        }
+
+    def test_malformed_choices_tolerated(self) -> None:
+        """Non-object choices and deltas are skipped instead of raising."""
+        payload: dict[str, Any] = {"choices": ["oops", {"message": None}]}
+        assert mantle_convert.rename_reasoning_field(payload) is payload
+
+
+class TestChatReasoningToResponses:
+    """Chat Completions reasoning text becomes a Responses ``reasoning`` item.
+
+    The item precedes the assistant message, as on the gateway's own Converse
+    path, and its ID derives from the response ID like every other output item.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         stdapi/models/chat/_mantle/_convert.py:_chat_to_responses_response
+    """
+
+    def test_reasoning_item_precedes_message(self) -> None:
+        """A reasoning item carrying the thinking summary is emitted first."""
+        raw = {
+            "id": "chatcmpl-abc123",
+            "created": 1000,
+            "model": "m",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": " 45",
+                        "reasoning_content": " Let total be T.",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 70, "completion_tokens": 342},
+        }
+        out = mantle_convert.convert_response("chat_completions", "responses", raw)
+        assert [item["type"] for item in out["output"]] == ["reasoning", "message"]
+        reasoning = out["output"][0]
+        assert reasoning["id"] == "resp_abc123-rs-0"
+        assert reasoning["status"] == "completed"
+        assert reasoning["content"] == [
+            {"type": "reasoning_text", "text": " Let total be T."}
+        ]
+
+    def test_no_reasoning_item_without_reasoning_content(self) -> None:
+        """A response without reasoning text produces no reasoning item."""
+        raw = {
+            "id": "chatcmpl-abc123",
+            "model": "m",
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "hi"}}
+            ],
+        }
+        out = mantle_convert.convert_response("chat_completions", "responses", raw)
+        assert [item["type"] for item in out["output"]] == ["message"]
+
+    def test_reasoning_not_surfaced_on_messages_conversion(self) -> None:
+        """The Anthropic shape carries no thinking block for the reasoning text.
+
+        An Anthropic ``thinking`` block requires a signature that cannot be
+        produced from a Chat Completions response, and an invalid one breaks
+        replay, so the text is dropped on this conversion.
+        """
+        raw = {
+            "id": "chatcmpl-abc123",
+            "model": "m",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "hi",
+                        "reasoning_content": "thinking",
+                    },
+                }
+            ],
+        }
+        out = mantle_convert.convert_response("chat_completions", "messages", raw)
+        assert out["content"] == [{"type": "text", "text": "hi"}]
+
+
+class TestChatReasoningToResponsesStream:
+    """Chat Completions reasoning deltas become Responses summary events.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+         stdapi/models/chat/_mantle/_convert.py:_responses_reasoning_delta
+         stdapi/models/chat/_mantle/_convert.py:_close_responses_reasoning
+    """
+
+    def _chunks(self) -> list[SseEvent]:
+        """Build CC chunks streaming two reasoning deltas then the answer."""
+        return [
+            (
+                None,
+                dumps(
+                    {
+                        "id": "chatcmpl-1",
+                        "created": 100,
+                        "model": "m",
+                        "choices": [
+                            {"index": 0, "delta": {"reasoning_content": "Let "}}
+                        ],
+                    }
+                ),
+            ),
+            (
+                None,
+                dumps(
+                    {"choices": [{"index": 0, "delta": {"reasoning_content": "T=x."}}]}
+                ),
+            ),
+            (None, dumps({"choices": [{"index": 0, "delta": {"content": "45"}}]})),
+            (
+                None,
+                dumps(
+                    {
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 70, "completion_tokens": 342},
+                    }
+                ),
+            ),
+        ]
+
+    async def test_reasoning_events_precede_message_events(self) -> None:
+        """The reasoning item opens, streams and closes before the message item."""
+        events = await _collect(
+            mantle_convert.convert_stream(
+                "chat_completions", "responses", _agen(self._chunks()), None
+            )
+        )
+        names = _names(events)
+        assert "response.content_part.added" in names
+        assert names.index("response.reasoning_text.done") < names.index(
+            "response.output_text.delta"
+        )
+        deltas = [
+            loads(data)["delta"]
+            for name, data in events
+            if name == "response.reasoning_text.delta"
+        ]
+        assert deltas == ["Let ", "T=x."]
+
+    async def test_completed_response_carries_the_reasoning_item(self) -> None:
+        """The terminal event's output lists the completed reasoning item first."""
+        events = await _collect(
+            mantle_convert.convert_stream(
+                "chat_completions", "responses", _agen(self._chunks()), "resp_route1"
+            )
+        )
+        completed = next(
+            loads(data) for name, data in events if name == "response.completed"
+        )
+        output = completed["response"]["output"]
+        assert [item["type"] for item in output] == ["reasoning", "message"]
+        assert output[0]["id"] == "resp_route1-rs-0"
+        assert output[0]["content"] == [{"type": "reasoning_text", "text": "Let T=x."}]
+        assert output[0]["status"] == "completed"

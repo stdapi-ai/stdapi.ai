@@ -75,6 +75,9 @@ _LEARNED_APIS: dict[str, frozenset[MantleApi]] = {}
 #: Learned per-model OpenAI routing surface.
 _LEARNED_SURFACE: dict[str, Surface] = {}
 
+#: Serialized key marking a stream frame that carries reasoning text.
+_REASONING_MARKER = '"reasoning"'
+
 
 class ChatModel(ChatModelBase[Any, Any]):
     """Default Mantle chat model (unknown models assume the Responses API)."""
@@ -307,6 +310,8 @@ class ChatModel(ChatModelBase[Any, Any]):
 
         Usage is recorded from the raw upstream-shaped response before any
         wire conversion, so the api-keyed extractor reads the original keys.
+        Reasoning text is renamed while still in the Chat Completions shape,
+        so every converted shape sees it too.
 
         Args:
             inbound: API matching the inbound route.
@@ -323,6 +328,8 @@ class ChatModel(ChatModelBase[Any, Any]):
         self._record_usage(
             api, raw.get("usage") or {}, serving_region, raw.get("service_tier")
         )
+        if api == "chat_completions":
+            convert.rename_reasoning_field(raw)
         if api != inbound:
             raw = convert.convert_response(api, inbound, raw)
         return api, serving_region, raw
@@ -418,7 +425,8 @@ class ChatModel(ChatModelBase[Any, Any]):
 
         When *api* differs from *inbound* the events are converted to the
         inbound wire format first. Public/native ID rewrites are applied to
-        the raw event payloads (stored-response region tagging).
+        the raw event payloads (stored-response region tagging). Reasoning
+        text is renamed on the Chat Completions frames before conversion.
 
         Args:
             api: Upstream Mantle API serving the stream.
@@ -438,6 +446,8 @@ class ChatModel(ChatModelBase[Any, Any]):
         """
         rewrites = id_rewrites if id_rewrites is not None else {}
         observed = self._observe_stream(api, events, region, rewrites)
+        if api == "chat_completions":
+            observed = _rename_stream_reasoning(observed)
         if api != inbound:
             observed = convert.convert_stream(api, inbound, observed, response_id)
         async for event, data in observed:
@@ -795,6 +805,27 @@ def _include_usage(
         request.stream_options is not None
         and request.stream_options.include_usage is True
     )
+
+
+async def _rename_stream_reasoning(
+    events: AsyncGenerator[SseEvent],
+) -> AsyncGenerator[SseEvent]:
+    """Rename ``reasoning`` to ``reasoning_content`` on Chat Completions frames.
+
+    Only frames whose raw payload mentions the key are parsed and
+    re-serialized; every other frame is relayed byte-identical.
+
+    Args:
+        events: Chat Completions SSE events.
+
+    Yields:
+        The same events, with the reasoning delta key renamed where present.
+    """
+    async for event, data in events:
+        if _REASONING_MARKER not in data or (parsed := _try_loads(data)) is None:
+            yield event, data
+            continue
+        yield event, dumps(convert.rename_reasoning_field(parsed))
 
 
 def _may_carry_usage(data: str) -> bool:

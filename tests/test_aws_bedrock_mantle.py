@@ -3275,6 +3275,198 @@ class TestRelayStreamErrorScrubbing:
         assert "123456789012" not in _event_data(events[0])
 
 
+class TestReasoningFieldSurfacing:
+    """A reasoning model's thinking text reaches the client as ``reasoning_content``.
+
+    Upstream returns it under ``reasoning``; the gateway's Chat Completions
+    surface declares the DeepSeek-compatible ``reasoning_content`` field, so an
+    unrenamed key is pruned out of the validated response and the caller is
+    billed for text it never receives.
+
+    Ref: https://api-docs.deepseek.com/api/create-chat-completion
+         stdapi/models/chat/_mantle/_default.py:ChatModel._serve_validated
+         stdapi/models/chat/_mantle/_default.py:_rename_stream_reasoning
+    """
+
+    async def test_non_streaming_response_renamed_before_conversion(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The raw Chat Completions message exposes ``reasoning_content``."""
+        raw = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "test.model",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": " 45",
+                        "reasoning": " Let total be T.",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 70, "completion_tokens": 342},
+        }
+
+        async def fake_serve(
+            self: mantle_default.ChatModel,  # noqa: ARG001
+            inbound: str,  # noqa: ARG001
+            payload: dict[str, Any],  # noqa: ARG001
+            *,
+            stream: bool,  # noqa: ARG001
+            region: str | None = None,  # noqa: ARG001
+        ) -> tuple[str, str, dict[str, Any]]:
+            return "chat_completions", "us-east-1", raw
+
+        monkeypatch.setattr(mantle_default.ChatModel, "_serve", fake_serve)
+        _capture_usage_records(monkeypatch)
+        model = mantle_default.ChatModel("test.reasoning-model")
+        _, _, out = await model._serve_validated(  # noqa: SLF001
+            "chat_completions", {"messages": []}
+        )
+        message = out["choices"][0]["message"]
+        assert message["reasoning_content"] == " Let total be T."
+        assert "reasoning" not in message
+
+    async def test_non_streaming_response_reaches_the_responses_shape(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Renaming before conversion lets the Responses shape carry the text."""
+        raw = {
+            "id": "chatcmpl-1",
+            "model": "test.model",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": " 45",
+                        "reasoning": " Let total be T.",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 70, "completion_tokens": 342},
+        }
+
+        async def fake_serve(
+            self: mantle_default.ChatModel,  # noqa: ARG001
+            inbound: str,  # noqa: ARG001
+            payload: dict[str, Any],  # noqa: ARG001
+            *,
+            stream: bool,  # noqa: ARG001
+            region: str | None = None,  # noqa: ARG001
+        ) -> tuple[str, str, dict[str, Any]]:
+            return "chat_completions", "us-east-1", raw
+
+        monkeypatch.setattr(mantle_default.ChatModel, "_serve", fake_serve)
+        _capture_usage_records(monkeypatch)
+        model = mantle_default.ChatModel("test.reasoning-model")
+        _, _, out = await model._serve_validated(  # noqa: SLF001
+            "responses", {"input": "x"}
+        )
+        assert out["output"][0]["type"] == "reasoning"
+        assert out["output"][0]["content"][0]["text"] == " Let total be T."
+
+    async def test_streaming_delta_renamed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A chunk carrying ``delta.reasoning`` is relayed as ``reasoning_content``."""
+        _capture_usage_records(monkeypatch)
+        model = mantle_default.ChatModel("test.reasoning-stream-model")
+        chunk = dumps(
+            {
+                "id": "chatcmpl-1",
+                "choices": [{"index": 0, "delta": {"reasoning": "step"}}],
+            }
+        )
+        events = [
+            event
+            async for event in model._relay_stream(  # noqa: SLF001
+                "chat_completions",
+                "chat_completions",
+                _fake_stream([(None, chunk)]),
+                "us-east-1",
+                strip_usage_chunk=False,
+            )
+        ]
+        relayed = loads(_event_data(events[0]))
+        assert relayed["choices"][0]["delta"] == {"reasoning_content": "step"}
+        assert events[-1].data == "[DONE]"
+
+    async def test_frames_without_reasoning_pass_through_byte_identical(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Frames not mentioning the key are relayed without a parse round trip.
+
+        The relay deliberately avoids re-serialising every frame, so a payload
+        with unusual spacing must come back exactly as it was sent.
+        """
+        _capture_usage_records(monkeypatch)
+        model = mantle_default.ChatModel("test.reasoning-passthrough-model")
+        spaced = '{"id": "chatcmpl-1",  "choices": [{"index": 0, "delta": {"content":  "hi"}}]}'
+        malformed = 'not json but has "reasoning" in it'
+        events = [
+            event
+            async for event in model._relay_stream(  # noqa: SLF001
+                "chat_completions",
+                "chat_completions",
+                _fake_stream([(None, spaced), (None, malformed)]),
+                "us-east-1",
+                strip_usage_chunk=False,
+            )
+        ]
+        assert [_event_data(event) for event in events[:-1]] == [spaced, malformed]
+
+    async def test_streaming_reasoning_reaches_the_responses_shape(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Renaming before conversion feeds the Responses reasoning events."""
+        _capture_usage_records(monkeypatch)
+        model = mantle_default.ChatModel("test.reasoning-convert-model")
+        chunks: list[SseEvent] = [
+            (
+                None,
+                dumps(
+                    {
+                        "id": "chatcmpl-1",
+                        "model": "test.model",
+                        "choices": [{"index": 0, "delta": {"reasoning": "step"}}],
+                    }
+                ),
+            ),
+            (
+                None,
+                dumps(
+                    {
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 2},
+                    }
+                ),
+            ),
+        ]
+        events = [
+            event
+            async for event in model._relay_stream(  # noqa: SLF001
+                "chat_completions",
+                "responses",
+                _fake_stream(chunks),
+                "us-east-1",
+                strip_usage_chunk=False,
+                response_id="resp_route1",
+            )
+        ]
+        deltas = [
+            loads(_event_data(event))["delta"]
+            for event in events
+            if event.event == "response.reasoning_text.delta"
+        ]
+        assert deltas == ["step"]
+
+
 class TestEndpointUrl:
     """Mantle endpoint URL resolution: configured template vs. default.
 

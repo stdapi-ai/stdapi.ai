@@ -113,6 +113,7 @@ Mantle-only Claude models are passed through to the upstream Anthropic Messages 
 |-----------|--------------------|------------------------------|
 | Server tools (`web_search`, `code_execution`, `bash`, `text_editor`, `computer`, …) | Forwarded verbatim (`anthropic-beta` flags are **not** auto-injected on the Mantle path — pass them yourself) | Rejected with `400` |
 | `thinking` | Forwarded | Dropped on conversion (use `output_config.effort` for portable reasoning control) |
+| `thinking` response blocks | Returned as sent upstream | Not returned — a converted model's chain of thought is only available on the OpenAI-compatible APIs |
 | `output_config.effort` | Forwarded | Mapped to reasoning effort |
 | `output_config.format` | Fails upstream — not supported by the Mantle Messages API | `json_schema` mapped to OpenAI structured output |
 | `top_k` | Forwarded | Dropped |
