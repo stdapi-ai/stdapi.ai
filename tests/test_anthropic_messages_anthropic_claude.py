@@ -1253,7 +1253,8 @@ class TestComputerUseTool:
             pytest.skip("Computer use is not supported by this model")
 
     @pytest.fixture(scope="class")
-    def desktop_screenshot_b64(self) -> str:
+    @staticmethod
+    def desktop_screenshot_b64() -> str:
         """Base64-encoded JPEG of the sample Windows desktop screenshot.
 
         Returns:

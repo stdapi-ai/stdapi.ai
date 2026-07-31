@@ -319,7 +319,8 @@ class TestMCPIntegration:
     """
 
     @pytest.fixture(scope="class")
-    def mcp_session_id(self, local_test_client: TestClient, api_key: str) -> str:
+    @staticmethod
+    def mcp_session_id(local_test_client: TestClient, api_key: str) -> str:
         """Initialize an MCP session and return the session ID."""
         response = _mcp_post(
             local_test_client,

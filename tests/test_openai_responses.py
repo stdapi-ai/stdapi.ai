@@ -112,9 +112,8 @@ class TestResponses:
     """
 
     @pytest.fixture(scope="class")
-    def minimal_response(
-        self, openai_client: OpenAI, responses_model: str
-    ) -> SdkResponse:
+    @staticmethod
+    def minimal_response(openai_client: OpenAI, responses_model: str) -> SdkResponse:
         """One minimal completed response shared by the envelope-shape assertions.
 
         These tests only read fields of the Response envelope, so they would
@@ -1991,8 +1990,9 @@ class TestOpenAIInputTokens:
     """
 
     @pytest.fixture(scope="class")
+    @staticmethod
     def hello_input_token_count(
-        self, openai_client: OpenAI, responses_input_tokens_model: str
+        openai_client: OpenAI, responses_input_tokens_model: str
     ) -> int:
         """Baseline count of the one-word input the delta tests compare against.
 
