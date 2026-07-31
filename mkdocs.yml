@@ -109,6 +109,12 @@ plugins:
   - search:
       lang: en
       separator: '[\s\-,:!=\[\]()"/]+|(?!\b)(?=[A-Z][a-z])|\.(?!\d)|&[lg]t;'
+  # Self-hosts the Google Fonts stylesheet and font files at build time: removes
+  # two render-blocking third-party origins and keeps visitor data off Google.
+  # Mermaid is self-hosted too. The plugin rewrites its URL in the theme bundle
+  # to an absolute site_url path, so diagrams render on the canonical domain but
+  # not in a local preview served from another origin.
+  - privacy
   - redoc-tag
   - meta
 
@@ -118,6 +124,9 @@ hooks:
 
 extra_css:
   - styles/theme.css
+
+extra_javascript:
+  - js/home-carousel.js
 
 markdown_extensions:
   - admonition

@@ -31,40 +31,52 @@
   color: var(--md-accent-fg-color);
 }
 
+/* WCAG 1.4.1 — colour alone must not distinguish a link from its surrounding
+   text, so prose links carry a discreet underline that firms up on hover.
+   Buttons, permalinks and logo tiles are already distinguishable by shape. */
+.md-typeset a:not(.md-button):not(.headerlink):not(.logo-item) {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.15em;
+  text-decoration-color: color-mix(in srgb, currentcolor 45%, transparent);
+}
+.md-typeset a:not(.md-button):not(.headerlink):not(.logo-item):hover {
+  text-decoration-color: currentcolor;
+}
+
 /* Ensure primary buttons use the accent */
 .md-button--primary {
   background-color: var(--md-accent-fg-color);
   border-color: var(--md-accent-fg-color);
-}
-
-/* Hero banner */
-.hero--home {
-  position: relative;
-  padding: 4rem 1.25rem 3rem;
-  border-radius: 12px;
   color: var(--primary-dark);
-  background: linear-gradient(45deg, var(--accent-dark), var(--accent), var(--accent-light) 100%);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.18);
 }
 
-@media (min-width: 768px) {
-  .hero--home { padding: 6rem 2rem 4rem; }
+/* On the dark scheme the stock .md-button ink is the dark primary colour,
+   which renders navy-on-navy (1.35:1). Give both variants readable ink. */
+[data-md-color-scheme="slate"] .md-button {
+  color: var(--md-typeset-color);
+  border-color: currentcolor;
+}
+[data-md-color-scheme="slate"] .md-button:hover,
+[data-md-color-scheme="slate"] .md-button:focus-visible {
+  background-color: transparent;
+  color: var(--accent-light);
+  border-color: var(--accent-light);
+}
+[data-md-color-scheme="slate"] .md-button--primary,
+[data-md-color-scheme="slate"] .md-button--primary:hover,
+[data-md-color-scheme="slate"] .md-button--primary:focus-visible {
+  color: var(--primary-dark);
+  border-color: var(--accent);
+  background-color: var(--accent);
+}
+[data-md-color-scheme="slate"] .md-button--primary:hover,
+[data-md-color-scheme="slate"] .md-button--primary:focus-visible {
+  background-color: var(--accent-light);
+  border-color: var(--accent-light);
 }
 
-.hero--home h1 {
-  margin-top: 0;
-  margin-bottom: 0.5rem;
-  line-height: 1.1;
-  color: inherit;
-}
-
-.hero--home p {
-  margin: 0.25rem 0 1.25rem;
-  font-size: 1.05rem;
-  opacity: 0.95;
-}
-
-.hero--home .buttons, .buttons {
+.buttons {
   display: flex;
   flex-wrap: wrap;
   gap: 0.6rem;
@@ -97,56 +109,6 @@
   transform: translateY(-2px);
   box-shadow: 0 10px 24px rgba(0,0,0,0.20);
   border-color: color-mix(in srgb, var(--theme-contrasted) 60%, transparent);
-}
-
-/* Code section */
-.section--soft {
-  margin: 2rem 0 0;
-  padding: 2rem 1rem 1.5rem;
-  border-radius: 12px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.18);
-  background: linear-gradient(
-    45deg,
-    color-mix(in srgb, var(--primary) 20%, transparent),
-    color-mix(in srgb, var(--primary-light) 20%, transparent)
-  );
-}
-.code-callout {
-  position: relative;
-  margin-top: 0.75rem;
-  border: 1px solid color-mix(in srgb, var(--theme-contrasted) 20%, transparent);
-  border-radius: 12px;
-  overflow: hidden;
-}
-.code-callout .code-callout__label {
-  font-size: 0.78rem;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  background: color-mix(in srgb, var(--primary-light) 20%, transparent);
-  padding: 0.35rem 0.6rem;
-  border-bottom: 1px solid color-mix(in srgb, var(--theme-contrasted) 20%, transparent);
-}
-.code-callout pre { margin: 0; }
-
-/* Closing CTA banner */
-.cta-banner {
-  margin: 2.25rem 0 0.5rem;
-  padding: 1.25rem;
-  border-radius: 12px;
-  background: linear-gradient(45deg, var(--accent-dark), var(--accent), var(--accent-light) 100%);
-  color: var(--primary-dark);
-  display: flex;
-  gap: 0.75rem;
-  align-items: center;
-  flex-wrap: wrap;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.18);
-}
-.cta-banner strong { font-size: 1.05rem; }
-.cta-banner .buttons { margin: 0 0 0 auto; }
-
-@media (max-width: 720px) {
-  .cta-banner { flex-direction: column; align-items: flex-start; }
-  .cta-banner .buttons { margin: 0; }
 }
 
 /* Logo marquees */
@@ -229,6 +191,21 @@
   color: var(--accent);
 }
 
+/* The bundled highlight theme renders name.builtin (4.48:1) and number
+   literals (4.45:1) just under AA on the code background. Nudge both
+   lighter, same hues. */
+[data-md-color-scheme="slate"] .md-typeset .highlight .nb {
+  color: #9c8ce6;
+}
+[data-md-color-scheme="slate"] .md-typeset .highlight .m,
+[data-md-color-scheme="slate"] .md-typeset .highlight .mi,
+[data-md-color-scheme="slate"] .md-typeset .highlight .mf,
+[data-md-color-scheme="slate"] .md-typeset .highlight .mh,
+[data-md-color-scheme="slate"] .md-typeset .highlight .mo,
+[data-md-color-scheme="slate"] .md-typeset .highlight .mb {
+  color: #ea7f73;
+}
+
 /* Feature compatibility table */
 .feature-table table {
   font-size: 0.9em;
@@ -275,9 +252,11 @@
   text-align: center;
 }
 
-/* Yellow section titles on home page only */
-.md-typeset:has(.hero--home) > h2 {
-  color: var(--accent-dark) !important;
+/* Top-level section titles on home page only */
+.md-typeset:has(.hero2) > h2 {
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 /* Custom icons for admonitions, e.g. `!!! tip trial "Title"` */
@@ -310,4 +289,622 @@
 .md-typeset .abstract.availability > summary::before {
   -webkit-mask-image: var(--md-admonition-icon--availability);
   mask-image: var(--md-admonition-icon--availability);
+}
+/* ============================================================
+   Homepage (docs/index.md)
+   Ink tokens stop at .55 alpha: that is the lowest that still
+   clears WCAG AA (4.5:1) against the two homepage backgrounds.
+   ============================================================ */
+
+:root {
+  --deep-bg: #12141c;
+  --card-bg: #171a24;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-interactive: rgba(255, 255, 255, 0.24);
+  --ink-70: rgba(232, 234, 246, 0.7);
+  --ink-60: rgba(232, 234, 246, 0.6);
+  --ink-muted: rgba(232, 234, 246, 0.55);
+  --mono: 'JetBrains Mono', monospace;
+  --ok: #8ddb8c;
+  --del: #f47067;
+}
+
+/* Visually hidden, still read aloud — used to name the comparison marks.
+   Deliberately not position:absolute: an absolutely positioned box escapes
+   Material's table scroll-wrapper and stretches the page on narrow screens. */
+.sr-only {
+  display: inline-block;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* One consistent focus ring for every control added by the homepage. */
+.carousel__tab:focus-visible,
+.carousel__dot:focus-visible,
+.compare:focus-visible,
+.usecase a:focus-visible,
+.logo-item:focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 2px;
+}
+
+/* --- ACT 1: hero --- */
+.hero2 {
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  gap: 2.8rem;
+  align-items: center;
+  padding: 3rem 2rem 2.6rem;
+  margin: 0 0 1rem;
+  border-radius: 12px;
+  background: radial-gradient(ellipse 90% 70% at 20% 0%, var(--primary) 0%, var(--card-bg) 65%);
+  border: 1px solid var(--line);
+}
+/* Grid items default to min-width:auto, which would let the code card widen the page. */
+.hero2 > *, .panel-split > * { min-width: 0; }
+.md-typeset .hero2 h1 {
+  margin: 0 0 0.8rem;
+  font-size: clamp(1.7rem, 1.15rem + 2.6vw, 2.4rem);
+  line-height: 1.1;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #fff;
+}
+.hero2__copy > p { font-size: 0.88rem; color: var(--ink-70); max-width: 33em; }
+.hero2__proof {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1.1rem;
+  margin-top: 1.2rem;
+  font-size: 0.68rem;
+  color: var(--ink-60);
+}
+.hero2__proof strong { color: #fff; }
+
+/* Hero code diff card */
+.code-card {
+  background: var(--deep-bg);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  font-family: var(--mono);
+}
+.code-card__title {
+  padding: 0.45rem 0.8rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.6rem;
+  color: var(--ink-muted);
+}
+.md-typeset .code-card pre {
+  margin: 0;
+  padding: 0.9rem 1rem;
+  background: transparent;
+  overflow-x: auto;
+}
+.md-typeset .code-card code {
+  font-size: 0.68rem;
+  line-height: 1.75;
+  background: transparent;
+  color: rgba(232, 234, 246, 0.85);
+  white-space: pre;
+}
+/* The hero snippet is a diff, so a copy button would hand over invalid code. */
+.code-card .md-code__nav { display: none; }
+.code-card .del { display: block; background: rgba(244, 67, 54, 0.08); color: var(--del); }
+.code-card .add { display: block; background: rgba(76, 175, 80, 0.09); color: var(--ok); }
+.code-card .str { color: var(--accent-light); }
+.code-card .cmt { color: var(--ink-muted); }
+
+/* --- Slim marquee variant --- */
+.logo-marquee--slim { margin-top: 2.4rem; }
+.logo-marquee--slim .logo-item {
+  flex-direction: row;
+  gap: 0.5rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 8px;
+  background: var(--deep-bg);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.logo-marquee--slim .logo-item img { height: 26px; width: auto; }
+.logo-marquee--slim .logo-item span { font-size: 0.62rem; color: rgba(232, 234, 246, 0.8); }
+/* WCAG 2.2.2 — the reader must be able to stop the scroll. */
+.logo-marquee:hover .logo-track,
+.logo-marquee:focus-within .logo-track { animation-play-state: paused; }
+/* The hover/focus tile turns accent-orange; white ink would drop to 2.1:1. */
+.logo-item:hover span,
+.logo-item:focus-visible span { color: var(--primary-dark); }
+
+/* --- ACT 2: differentiator carousel --- */
+.carousel {
+  margin: 2rem 0 0;
+  padding: 2.4rem 2rem;
+  border-radius: 12px;
+  background: var(--deep-bg);
+  border: 1px solid var(--line);
+}
+
+/* Controls are useless without JS: home-carousel.js injects and reveals them. */
+.carousel__nav { display: none; }
+.carousel--js .carousel__nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.4rem;
+}
+.carousel__tabs { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.carousel__tab {
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  font-weight: 600;
+  min-height: 32px;
+  padding: 0.4rem 0.8rem;
+  border-radius: 99px;
+  background: transparent;
+  color: var(--accent-light);
+  border: 1px solid var(--line-interactive);
+  transition: background-color 200ms ease, color 200ms ease, border-color 200ms ease;
+}
+.carousel__tab:hover { border-color: var(--accent-light); }
+.carousel__tab[aria-selected="true"] {
+  background: var(--accent-light);
+  color: var(--deep-bg);
+  border-color: var(--accent-light);
+}
+.carousel__dots { display: flex; gap: 0.1rem; align-items: center; }
+/* 7px dot, 24x24 hit area (WCAG 2.5.8). */
+.carousel__dot {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.carousel__dot::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--line-interactive);
+  transition: background-color 200ms ease;
+}
+.carousel__dot[aria-selected="true"]::before { background: var(--accent); }
+
+/* Stacked without JS; one panel at a time with JS. */
+.carousel__panel + .carousel__panel {
+  margin-top: 2.4rem;
+  padding-top: 2.4rem;
+  border-top: 1px solid var(--line);
+}
+/* Every panel shares one grid cell, so the carousel is always as tall as its
+   tallest panel. Switching panels then never shifts the content below it.
+   visibility:hidden (not display:none) keeps that height reserved while still
+   removing the panel from the tab order and the accessibility tree. */
+.carousel--js .carousel__panels { display: grid; align-items: start; }
+.carousel--js .carousel__panel { grid-area: 1 / 1; }
+.carousel--js .carousel__panel[hidden] { display: block; visibility: hidden; }
+.carousel--js .carousel__panel + .carousel__panel {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.carousel__kicker {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--accent-light);
+  margin-bottom: 0.3rem;
+}
+.md-typeset .carousel__panel h2,
+.md-typeset .band h2 {
+  margin: 0.2rem 0 0.5rem;
+  font-size: clamp(1.2rem, 0.95rem + 1.2vw, 1.6rem);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: #fff;
+  max-width: 24em;
+}
+.md-typeset .carousel__panel > p,
+.md-typeset .band > p {
+  font-size: 0.8rem;
+  color: var(--ink-70);
+  max-width: 44em;
+  margin-bottom: 1.6rem;
+}
+/* Trailing one-liner under a band: smaller and unconstrained, so the sentence
+   and its link stay on a single line instead of wrapping at the 44em measure. */
+.md-typeset .band > p.band__note {
+  max-width: none;
+  font-size: 0.72rem;
+  color: var(--ink-60);
+  margin-bottom: 0;
+}
+
+/* Panel layout: visual left, stats right */
+.panel-split {
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  gap: 1.6rem;
+  align-items: center;
+}
+.panel-visual {
+  background: var(--card-bg);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1.4rem;
+}
+.panel-visual--mono { font-family: var(--mono); font-size: 0.64rem; line-height: 2; }
+.receipt, .terminal { overflow-x: auto; }
+.panel-visual__caption {
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  color: var(--ink-muted);
+  margin-top: 1rem;
+}
+.panel-visual__caption--ruled { border-top: 1px solid var(--line); padding-top: 0.7rem; }
+
+.md-typeset .panel-stats ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+.md-typeset .panel-stats li {
+  display: flex;
+  gap: 0.7rem;
+  align-items: baseline;
+  margin: 0;
+  font-size: 0.74rem;
+  color: rgba(232, 234, 246, 0.75);
+}
+.md-typeset .panel-stats li > code:first-child {
+  font-family: var(--mono);
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--accent);
+  background: transparent;
+  padding: 0;
+  min-width: 2.6em;
+  flex-shrink: 0;
+}
+.md-typeset .panel-stats > p { margin: 0.9rem 0 0; font-size: 0.72rem; }
+.md-typeset .panel-stats__note { color: var(--ink-60); }
+
+/* Panel 1 visual: region routing diagram */
+.quota__diagram { display: flex; align-items: center; justify-content: center; gap: 1rem; flex-wrap: wrap; }
+.quota__gw {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  background: var(--primary);
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  border-radius: 10px;
+  padding: 0.7rem 1.1rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.quota__gw img { height: 32px; width: auto; }
+/* Material dims <small> to .75 opacity, which would drag these under 4.5:1. */
+.quota__gw small { font-weight: 400; font-size: 0.6rem; color: var(--ink-70); opacity: 1; }
+/* Drawn in CSS, not with box-drawing glyphs: U+2500 and U+2192 sit on
+   different baselines, so the line and the arrowhead never joined up. */
+.quota__arrows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  color: var(--ink-muted);
+}
+.quota__arrows span {
+  position: relative;
+  display: block;
+  width: 1.1rem;
+  height: 1px;
+  background: currentColor;
+}
+.quota__arrows span::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  top: 50%;
+  transform: translateY(-50%);
+  border-left: 5px solid currentColor;
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+}
+.quota__regions { display: flex; flex-direction: column; gap: 0.5rem; flex: 1; min-width: 14rem; }
+.quota__region {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  background: var(--deep-bg);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 0.5rem 0.8rem;
+  font-size: 0.66rem;
+}
+.quota__region strong { color: #fff; }
+.md-typeset .quota__region code {
+  background: transparent;
+  padding: 0;
+  font-family: var(--mono);
+  color: var(--ok);
+  font-size: 0.58rem;
+}
+
+/* Panel 2 visual: endpoints grouped by modality, one row per modality */
+.md-typeset .api-groups ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.3rem;
+}
+/* Slightly tighter than the standalone chips: grouping adds rows, and this
+   keeps the panel from becoming the one that sets the carousel's height. */
+.api-groups .chip { padding: 0.25rem 0.5rem; font-size: 0.6rem; }
+/* The icon sits outside the flow so a row that wraps keeps every chip
+   aligned to the same left edge instead of tucking under the icon. */
+.md-typeset .api-groups li {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0;
+  padding-left: 1.4rem;
+}
+/* The route names carry the meaning; the icon is a visual cue only. */
+.md-typeset .api-groups li > .twemoji {
+  position: absolute;
+  left: 0;
+  top: 0.3rem;
+  width: 0.85rem;
+  height: 0.85rem;
+  color: var(--accent-light);
+}
+
+/* Panels 2 & 4 visual: endpoint / capability chips */
+.chips { display: flex; gap: 0.4rem; flex-wrap: wrap; line-height: 1.5; }
+/* A second band inside a visual card (sample tool names below a console block,
+   AWS service marks below the capability chips) is ruled off from it. */
+.chips + .model-logos,
+.receipt + .chips {
+  margin-top: 0.9rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--line);
+}
+.chip {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  color: var(--ok);
+  background: var(--deep-bg);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 0.3rem 0.6rem;
+}
+
+/* Panel 3 visual: model provider logos */
+.model-logos {
+  display: flex;
+  gap: 1.1rem;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+}
+.model-logos img { height: 30px; width: auto; }
+.model-logos__more { font-size: 0.68rem; color: var(--ink-60); }
+
+/* Panel 5 visual: per-request cost receipt */
+.receipt__row { display: flex; justify-content: space-between; gap: 1rem; }
+.receipt__row > span:first-child { color: var(--ink-muted); }
+.receipt__row > span:last-child { color: rgba(232, 234, 246, 0.85); text-align: right; }
+.receipt__row--head {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 0.4rem;
+  margin-bottom: 0.4rem;
+}
+.receipt__row--head > span:first-child { color: #fff; }
+.receipt__row--total { border-top: 1px solid var(--line); padding-top: 0.4rem; margin-top: 0.4rem; }
+.receipt .ok { color: var(--ok); }
+.receipt .amount { color: var(--accent-light); font-weight: 700; }
+
+/* Panel 6 visual: terraform terminal */
+.terminal .ok { color: var(--ok); }
+.terminal .cmd { color: #fff; }
+.terminal .str { color: var(--accent-light); }
+.terminal__out { color: var(--ink-muted); margin-top: 0.4rem; }
+
+/* --- ACT 3: compliance band --- */
+.band { margin: 2.4rem 0 0; }
+
+/* The design puts these four cards on one row; Material's auto-fit default
+   drops the fourth onto a line of its own at this width. */
+@media (min-width: 1220px) {
+  .md-typeset .band .grid.cards { grid-template-columns: repeat(4, 1fr); }
+}
+
+/* AWS Qualified Software badge — 120px digital minimum, one per page, clearspace kept */
+.qualified-card {
+  margin-top: 2rem;
+  padding: 1.6rem 2rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--deep-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2rem;
+  flex-wrap: wrap;
+}
+.qualified-card img { width: 120px; min-width: 120px; height: auto; }
+.qualified-card > div { font-size: 0.72rem; color: var(--ink-70); max-width: 32em; }
+.qualified-card strong { color: #fff; }
+
+/* --- How it compares --- */
+.compare { overflow-x: auto; }
+.md-typeset .compare table:not([class]) {
+  width: 100%;
+  min-width: 34rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 0.7rem;
+  box-shadow: none;
+}
+.md-typeset .compare table:not([class]) th {
+  background: var(--deep-bg);
+  text-align: center;
+  font-weight: 700;
+  color: var(--ink-70);
+}
+.md-typeset .compare table:not([class]) th:first-child { text-align: left; }
+.md-typeset .compare table:not([class]) td { text-align: center; background: var(--card-bg); }
+.md-typeset .compare table:not([class]) td:first-child { text-align: left; color: rgba(232, 234, 246, 0.8); }
+/* stdapi.ai column highlighted */
+.md-typeset .compare table:not([class]) th:nth-child(2) {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--deep-bg));
+}
+.md-typeset .compare table:not([class]) td:nth-child(2) {
+  background: color-mix(in srgb, var(--accent) 7%, var(--card-bg));
+}
+.md-typeset .compare table:not([class]) tr:hover td { background-color: transparent; }
+/* Row hover must not strip the highlighted stdapi.ai column of its tint. */
+.md-typeset .compare table:not([class]) tr:hover td:nth-child(2) {
+  background-color: color-mix(in srgb, var(--accent) 7%, var(--card-bg));
+}
+.m-y { color: var(--ok); font-weight: 700; }
+.m-p { color: var(--accent-light); }
+.m-n { color: var(--ink-muted); }
+.compare__legend { margin-top: 0.8rem; font-size: 0.65rem; color: var(--ink-60); }
+
+/* --- What teams run on it --- */
+.usecases { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.7rem; }
+.usecase {
+  background: var(--deep-bg);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  padding: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+.usecase:hover, .usecase:focus-within {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.usecase__tag { font-family: var(--mono); font-size: 0.6rem; font-weight: 600; color: var(--accent-light); }
+.usecase__title { font-weight: 700; font-size: 0.8rem; color: #fff; }
+.usecase__body { font-size: 0.68rem; color: var(--ink-70); flex: 1; }
+.usecase__tools { font-size: 0.65rem; color: var(--ink-60); }
+.md-typeset .usecase p { margin: 0; font-size: 0.68rem; }
+.md-typeset .usecases__more { margin-top: 0.9rem; font-size: 0.72rem; }
+
+/* --- Pricing --- */
+.pricing { display: grid; grid-template-columns: 1fr 1.2fr 1fr; gap: 0.8rem; align-items: stretch; }
+.pricing__col {
+  background: var(--deep-bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1.4rem;
+}
+.pricing__col--featured {
+  background: linear-gradient(160deg, var(--primary), var(--card-bg));
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  position: relative;
+}
+.pricing__col--offer { border: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent); }
+.pricing__col--offer .md-button { color: var(--accent); border-color: var(--accent); }
+.pricing__col--offer .md-button:hover,
+.pricing__col--offer .md-button:focus-visible {
+  background-color: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent-light);
+  border-color: var(--accent-light);
+}
+.pricing__flag {
+  position: absolute;
+  top: -12px;
+  right: 24px;
+  background: var(--accent);
+  color: var(--primary-dark);
+  font-size: 0.55rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 3px 12px;
+  border-radius: 99px;
+}
+.pricing__tier {
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-60);
+  font-weight: 700;
+  margin-bottom: 0.4rem;
+}
+.pricing__tier--accent, .pricing__col--featured .pricing__tier { color: var(--accent-light); }
+.pricing__price { font-size: 1.5rem; font-weight: 800; color: #fff; line-height: 1.2; }
+.pricing__price small { font-size: 0.72rem; font-weight: 400; color: var(--ink-70); opacity: 1; }
+.md-typeset .pricing__col p { font-size: 0.7rem; color: var(--ink-70); }
+
+/* --- Footer line --- */
+.footer-line {
+  margin-top: 2.4rem;
+  padding-top: 1.2rem;
+  border-top: 1px solid var(--line);
+  text-align: center;
+  font-size: 0.7rem;
+  color: var(--ink-60);
+}
+.md-typeset .footer-line p { margin: 0; font-size: 0.7rem; }
+
+/* --- Responsive --- */
+@media (max-width: 1220px) {
+  .usecases { grid-template-columns: repeat(2, 1fr); }
+}
+/* The hero stacks earlier than the rest: below this the code column is
+   narrower than the longest line of the snippet, which would force a
+   horizontal scrollbar inside the card. */
+@media (max-width: 1200px) {
+  .hero2 { grid-template-columns: 1fr; gap: 2rem; padding: 2.2rem 1.2rem; }
+}
+@media (max-width: 960px) {
+  .carousel { padding: 1.6rem 1.1rem; }
+  .panel-split { grid-template-columns: 1fr; }
+  .pricing { grid-template-columns: 1fr; gap: 1.4rem; }
+  .qualified-card { padding: 1.4rem; gap: 1.2rem; }
+}
+@media (max-width: 600px) {
+  .usecases { grid-template-columns: 1fr; }
+  .carousel { padding: 1.2rem 0.9rem; }
+  .panel-visual { padding: 1rem; }
+  .quota__diagram { gap: 0.6rem; }
+  /* Stacked at this width, so the horizontal arrows would point nowhere. */
+  .quota__arrows { display: none; }
+  .quota__regions { min-width: 0; }
+  /* Region name and rate need their own line before 320px runs out. */
+  .quota__region { flex-direction: column; align-items: flex-start; gap: 0.15rem; }
+  .hero2__proof { gap: 0.4rem 0.9rem; font-size: 0.65rem; }
+}
+
+/* --- Reduced motion: stop everything that moves on its own --- */
+@media (prefers-reduced-motion: reduce) {
+  .logo-track { animation: none; }
+  .usecase, .carousel__tab, .carousel__dot::before { transition: none; }
+  .usecase:hover, .usecase:focus-within { transform: none; }
 }

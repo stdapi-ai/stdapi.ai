@@ -8,13 +8,29 @@ keywords: stdapi.ai getting started, try stdapi.ai, OpenAI gateway AWS, Anthropi
 
 Pick the path that fits where you are right now. Both use the same OpenAI, Anthropic, and Cohere-compatible API — you can graduate from one to the other without changing your application code.
 
+!!! tip trial "Start here: 14-day free trial on AWS"
+    Deploy the production-ready stack today and pay nothing for 14 days. After the trial, it's $0.10/container-hour — cancel anytime.
+
 <div class="grid cards" markdown>
+
+-   :material-aws:{ .lg .middle } __14-day free trial — Deploy on AWS with Terraform__
+
+    ---
+
+    **Start here — recommended for production.**
+
+    - 3 Terraform commands → ECS Fargate with HTTPS, WAF, auto-scaling
+    - Hardened container image from **AWS Marketplace** — free for 14 days, then $0.10/container-hour
+    - IP-restricted by default — safe to test right away
+    - Multi-region variants available (EU / US) for data residency
+
+    [:octicons-arrow-right-24: Deploy on AWS](operations_getting_started.md){ .md-button .md-button--primary }
 
 -   :material-docker:{ .lg .middle } __30 seconds — Try locally with Docker__
 
     ---
 
-    **Best for:** First look, local development, evaluation, open-source projects.
+    **Lighter option, for:** local development, evaluation, open-source projects.
 
     - One `docker run` command — no AWS infrastructure to provision
     - Uses your local AWS credentials (mounted from `~/.aws`) to reach Bedrock
@@ -22,20 +38,7 @@ Pick the path that fits where you are right now. Both use the same OpenAI, Anthr
     - Free **community image** (AGPL-3.0)
     - Full API compatibility — same endpoints as production
 
-    [:octicons-arrow-right-24: Run Locally with Docker](operations_getting_started_local.md){ .md-button .md-button--primary }
-
--   :material-aws:{ .lg .middle } __5 minutes — Deploy on AWS with Terraform__
-
-    ---
-
-    **Best for:** Production workloads, team access, internal tools, SaaS.
-
-    - 3 Terraform commands → ECS Fargate with HTTPS, WAF, auto-scaling
-    - Hardened container image from **AWS Marketplace** (14-day free trial)
-    - IP-restricted by default — safe to test right away
-    - Multi-region variants available (EU / US) for data residency
-
-    [:octicons-arrow-right-24: Deploy on AWS](operations_getting_started.md){ .md-button .md-button--primary }
+    [:octicons-arrow-right-24: Run Locally with Docker](operations_getting_started_local.md){ .md-button }
 
 </div>
 

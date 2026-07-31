@@ -11,19 +11,22 @@ hide:
 
 Feel free to get in touch to discuss your needs.
 
+<span id="private-offer"></span>
+
 !!! tip offer "Request a 10% discount via a private offer"
 
-    Get **$0.09/container-hour** instead of $0.10 — a 10% reduction on the standard rate, with the same pay-per-use model and no upfront payment or minimum usage. Want to try first? Use the [14-day free trial](operations_getting_started.md) of the public listing, then accept the private offer once we send it.
+    Get **$0.09/container-hour** instead of $0.10 — a 10% reduction on the standard rate, with the same pay-per-use model and no upfront payment or minimum usage. Want to try first? Use the [14-day free trial](operations_getting_started.md) of the public listing, then accept your private offer once we send it.
 
-    Please include:
-
-    - Company name
-    - **AWS account ID that will accept the offer** (required by AWS to create the offer)
-    - Use case (optional)
-    - Expected deployment date (optional)
-    - Contact email (optional)
+    [Request your private offer](mailto:private@offers.stdapi.ai?subject=Private%20offer%20request%20-%20stdapi.ai&body=Company%3A%20%0AAWS%20account%20ID%3A%20%0AUse%20case%3A%20%0ADesired%20start%20date%3A%20){ .md-button .md-button--primary }
 
     [private@offers.stdapi.ai](mailto:private@offers.stdapi.ai)
+
+    **How it works:**
+
+    1. **Email us** — use the pre-filled link above, including your company name, AWS account ID (required by AWS to create the offer), use case, and desired start date.
+    2. **Offer created** — typically ready in minutes.
+    3. **Accept it** in AWS Marketplace.
+    4. **Pay $0.09/container-hour** — billed automatically, same pay-per-use model as the public listing.
 
 ---
 

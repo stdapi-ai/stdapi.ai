@@ -98,6 +98,11 @@ curl http://localhost:8000/v1/chat/completions \
 
     Use `GET /search_models` (shown above) to discover what's available and filter by capability, or `GET /v1/models` for strict OpenAI SDK compatibility — see the [Search Models API](api_search_models.md) reference.
 
+!!! tip "Optional: expose the API as MCP tools"
+    The [MCP server](features.md#mcp-model-context-protocol) is off by default. Add `-e ENABLE_MCP_STREAMABLE_HTTP=true` to the `docker run` command and every endpoint becomes a named MCP tool at `http://localhost:8000/mcp`, callable directly by Claude Code or any MCP client.
+
+    Every exposed tool adds its schema to each MCP client's context window, so expose only the tools you actually use — for example `-e MCP_INCLUDE_TOOLS=openai_chat_completion,openai_embedding,search_models`. See the [MCP configuration reference](operations_configuration.md#summary-mcp).
+
 ---
 
 ## :material-information: Technical Notes

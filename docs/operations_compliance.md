@@ -157,17 +157,17 @@ All third-party models available through Bedrock are subject to the same Model D
 
 This applies to providers from every geography, for example:
 
-- <img src="../styles/logo_alibaba.svg" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **Alibaba Cloud** (China 🇨🇳) — Qwen models
-- <img src="../styles/logo_amazon.svg" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **Amazon** (United States 🇺🇸) — Nova and Titan models
-- <img src="../styles/logo_anthropic.svg" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **Anthropic** (United States 🇺🇸) — Claude models
-- <img src="../styles/logo_cohere.svg" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **Cohere** (Canada 🇨🇦) — Command and Embed models
-- <img src="../styles/logo_deepSeek.svg" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **DeepSeek** (China 🇨🇳) — DeepSeek models
-- <img src="../styles/logo_meta.svg" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **Meta** (United States 🇺🇸) — Llama models
-- <img src="../styles/logo_minimax.svg" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **MiniMax** (China 🇨🇳) — MiniMax models
-- <img src="../styles/logo_mistralai.svg" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **Mistral AI** (France 🇫🇷) — Mistral models
-- <img src="../styles/logo_moonshot.svg" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **Moonshot AI** (China 🇨🇳) — Kimi models
-- <img src="../styles/logo_stabilityai.svg" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **Stability AI** (United Kingdom 🇬🇧) — Stable Diffusion models
-- <img src="../styles/logo_writer.svg" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **Writer** (United States 🇺🇸) — Palmyra models
+- <img src="../styles/logo_alibaba.svg" alt="" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **Alibaba Cloud** (China 🇨🇳) — Qwen models
+- <img src="../styles/logo_amazon.svg" alt="" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **Amazon** (United States 🇺🇸) — Nova and Titan models
+- <img src="../styles/logo_anthropic.svg" alt="" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **Anthropic** (United States 🇺🇸) — Claude models
+- <img src="../styles/logo_cohere.svg" alt="" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **Cohere** (Canada 🇨🇦) — Command and Embed models
+- <img src="../styles/logo_deepSeek.svg" alt="" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **DeepSeek** (China 🇨🇳) — DeepSeek models
+- <img src="../styles/logo_meta.svg" alt="" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **Meta** (United States 🇺🇸) — Llama models
+- <img src="../styles/logo_minimax.svg" alt="" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **MiniMax** (China 🇨🇳) — MiniMax models
+- <img src="../styles/logo_mistralai.svg" alt="" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **Mistral AI** (France 🇫🇷) — Mistral models
+- <img src="../styles/logo_moonshot.svg" alt="" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **Moonshot AI** (China 🇨🇳) — Kimi models
+- <img src="../styles/logo_stabilityai.svg" alt="" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **Stability AI** (United Kingdom 🇬🇧) — Stable Diffusion models
+- <img src="../styles/logo_writer.svg" alt="" style="height:1.2em;width:1.5em;object-fit:contain;vertical-align:middle;" /> **Writer** (United States 🇺🇸) — Palmyra models
 
 ---
 

@@ -1,0 +1,16 @@
+{#-
+  Overrides the theme partial to drop data-md-component="source".
+
+  That attribute is what makes Material call api.github.com on every page load
+  to show star and fork counts. Removing it keeps the repository link and icon
+  while avoiding two third-party requests per page.
+-#}
+<a href="{{ config.repo_url }}" title="{{ lang.t('source') }}" class="md-source">
+  <div class="md-source__icon md-icon">
+    {% set icon = config.theme.icon.repo or "fontawesome/brands/git-alt" %}
+    {% include ".icons/" ~ icon ~ ".svg" %}
+  </div>
+  <div class="md-source__repository">
+    {{ config.repo_name }}
+  </div>
+</a>

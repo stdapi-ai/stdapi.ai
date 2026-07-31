@@ -272,6 +272,18 @@ The [Terraform module](operations_getting_started.md) provisions:
 | **KMS**, IAM, networking          | Keys and roles; NAT/VPC endpoints only when the module creates the network |
 | **WAF** (optional)                | Per-rule and per-request charges when `alb_waf_enabled = true`            |
 
+#### Cost Tiers at a Glance
+
+Both infrastructure and license cost scale with **how many containers run and for how long** — there's no single "deployment cost," just a wide range between a minimal setup and a full production one. Three representative configurations:
+
+| Tier | Configuration | You pay for | Main cost driver |
+|:-----|:--------------|:-------------|:-------------------|
+| **Minimal** | 1 ARM64 task, [Fargate Spot](operations_deploy_advanced.md#cost-optimized-deployment) (~70% cheaper than on-demand), [scheduled service hours](#keeping-it-low), no ALB — reached via [Service Discovery](operations_deploy_advanced.md#integration-with-existing-infrastructure) | Spot compute only for the scheduled hours; license for those same hours; no ALB/WAF charges at all | Hours the schedule keeps the service running — see [License](#license) for a worked example (~$17/month at ~165 h/month) |
+| **Standard** | 1 on-demand task, single AZ (`subnet_ids` limited to one subnet or `autoscaling_min_capacity = 1`), ALB enabled, running 24/7 | On-demand compute for one container around the clock, plus the ALB's hourly rate and LCU usage | The ALB becomes a fixed cost on top of continuous compute; no Spot discount |
+| **Full production** | One task per Availability Zone (module default), ALB + WAF, running 24/7 | Compute × number of AZs, ALB + WAF, and the per-container-hour license × total task-hours across all AZs | AZ count is the main multiplier — it scales infrastructure and license cost together |
+
+None of these include AI service usage (Bedrock, Polly, Transcribe, …), which is billed separately by AWS at cost — see the buckets table at the top of this page.
+
 #### Keeping It Low
 
 - **Stop the service outside business hours.** `autoscaling_schedule_stop` and `autoscaling_schedule_start` take cron expressions, so the cluster can run weekdays only and cost nothing at night — the single largest saving for an internal workload.
@@ -287,7 +299,7 @@ The [Terraform module](operations_getting_started.md) provisions:
 - **Trim observability volume.** Raising `LOG_LEVEL` and disabling request/response payload logging cut CloudWatch ingestion — see [Controlling Log Verbosity](operations_logging_monitoring.md#controlling-log-verbosity). Note that **EMF metric lines are not affected by `LOG_LEVEL`**: they are written to stdout on every request whenever `CLOUDWATCH_METRICS` is on, so disabling that setting is the only way to remove them.
 
 !!! note "Estimating before you deploy"
-    stdapi.ai publishes no infrastructure estimate: the total depends on your region, replica count, schedule and whether the module creates networking. Price the component list above with the [AWS Pricing Calculator](https://calculator.aws/) for your own configuration.
+    stdapi.ai publishes no infrastructure dollar estimate — the tiers above describe direction and drivers, not quotes: the total depends on your region, replica count, schedule and whether the module creates networking. Price the component list above with the [AWS Pricing Calculator](https://calculator.aws/) for your own configuration.
 
 ---
 

@@ -11,11 +11,6 @@ Get a production-grade OpenAI-compatible AI gateway running on AWS in 5 minutes.
 !!! tip trial "14-Day Free Trial"
     The AWS Marketplace subscription includes a **14-day free trial**. Test the full production stack in your environment risk-free.
 
-!!! tip offer "Save 10% with an AWS Marketplace private offer"
-    Contact us to receive a private rate of **$0.09/container-hour** instead of $0.10. Same pay-per-use model, no upfront payment or minimum usage. Want to try first? Use the 14-day free trial of the public listing, then accept the private offer.
-
-    [:material-email-outline: Request a Private Offer](contact.md)
-
 !!! info "Need help?"
     For questions, issue reports, or assistance, see the [Contact](contact.md) page.
 
@@ -28,9 +23,14 @@ Get a production-grade OpenAI-compatible AI gateway running on AWS in 5 minutes.
 
 ### Prerequisites
 
-1. **Subscribe to stdapi.ai** on [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) (14-day free trial included).
+1. **Subscribe on AWS Marketplace** — this is the action that starts your 14-day free trial:
+
+    [Subscribe on AWS Marketplace — starts your 14-day free trial](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo){ .md-button .md-button--primary }
+
 2. Install [Terraform](https://www.terraform.io/downloads) or [OpenTofu](https://opentofu.org/docs/intro/install/) >= 1.5.
 3. Configure [AWS credentials](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html) (`aws configure` or `aws sso login`).
+
+AWS infrastructure cost depends entirely on your configuration — from a single scheduled Spot container with no load balancer to a full multi-AZ stack — so there's no one figure to quote; see [Deployment Cost](#deployment-cost) below. stdapi.ai's own license runs $0.10/container-hour ($0.09 via private offer); Bedrock usage is billed separately by AWS at cost.
 
 !!! warning "Requires AWS administrator permissions"
     The Terraform module provisions IAM roles and policies, KMS keys, ECS/Fargate, ALB, and networking. A restricted developer profile will fail during `terraform apply`.
@@ -93,6 +93,16 @@ terraform output docs_url
 
 !!! tip "Ready-to-use Terraform example on GitHub"
     :material-map-marker: **Single region** — [getting_started_production](https://github.com/stdapi-ai/samples/tree/main/getting_started_production)
+
+!!! tip "Optional: expose the API as MCP tools"
+    The [MCP server](features.md#mcp-model-context-protocol) is off by default. Set `enable_mcp_streamable_http = true` on the Terraform module and every endpoint becomes a named MCP tool at `<api_endpoint>/mcp`, callable directly by Claude Code, LangGraph, or any MCP client.
+
+    Every exposed tool adds its schema to each MCP client's context window, so expose only the tools your agents actually use — for example `mcp_include_tools = "openai_chat_completion,openai_embedding,search_models"`. See the [MCP configuration reference](operations_configuration.md#summary-mcp).
+
+!!! tip offer "Save 10% with an AWS Marketplace private offer"
+    Contact us to receive a private rate of **$0.09/container-hour** instead of $0.10. Same pay-per-use model, no upfront payment or minimum usage. Want to try first? Use the 14-day free trial of the public listing, then accept the private offer.
+
+    [:material-email-outline: Request a Private Offer](contact.md#private-offer)
 
 ---
 
@@ -169,7 +179,11 @@ The `503` and TLS-warning hiccups on first deployment are already covered above 
 
 ## :material-currency-usd: Deployment Cost
 
-Costs scale with the number of Availability Zones (AZs) — see [Cost-Optimized Deployment](operations_deploy_advanced.md#cost-optimized-deployment) for configuration to limit them, and [Cost Management](operations_cost_management.md) for the full cost breakdown.
+AWS infrastructure cost is driven by configuration, not a fixed default: task count (one per Availability Zone unless overridden), Fargate Spot vs. on-demand, scheduled service hours, and whether an ALB is provisioned at all. A minimal deployment — one scheduled Fargate Spot task, no ALB, reached via Service Discovery — and a full multi-AZ production stack — ALB + WAF, one task per AZ, running 24/7 — sit at opposite ends of a wide range.
+
+stdapi.ai's own license is billed separately at **$0.10/container-hour** ($0.09 via [private offer](contact.md#private-offer)); Bedrock and other AI service usage is billed by AWS at cost, with no stdapi.ai markup.
+
+See [Cost-Optimized Deployment](operations_deploy_advanced.md#cost-optimized-deployment) for the Spot/scheduling configuration, and [Cost Management → Gateway Cost](operations_cost_management.md#gateway-cost) for the full tier-by-tier breakdown.
 
 ---
 

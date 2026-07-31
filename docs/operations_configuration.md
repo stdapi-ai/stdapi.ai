@@ -1711,9 +1711,9 @@ When deploying stdapi.ai, configure settings in this recommended order:
 
 ## :material-shield-key: IAM Permissions { #iam-permissions }
 
-[](){ #bedrock-iam }
-[](){ #bedrock-mantle-iam }
-[](){ #speech-to-text-optional }
+<span id="bedrock-iam"></span>
+<span id="bedrock-mantle-iam"></span>
+<span id="speech-to-text-optional"></span>
 
 The full IAM reference — required Amazon Bedrock permissions, per-feature policy statements, complete policy examples, and AWS tag policy requirements — has moved to the dedicated [IAM Permissions](operations_iam_permissions.md) page.
 
@@ -3438,8 +3438,8 @@ export DEFAULT_TTS_LANGUAGE=fr-FR
 
 ## :material-archive: Deprecated Settings
 
-[](){ #tokens-estimation }
-[](){ #tokens-encoding }
+<span id="tokens-estimation"></span>
+<span id="tokens-encoding"></span>
 
 !!! warning "Deprecated and Ignored"
     `TOKENS_ESTIMATION` (default: `false`) and `TOKENS_ESTIMATION_DEFAULT_ENCODING` (default: `None`) are deprecated and ignored: tiktoken-based token estimation has been removed from the project. Token counts are now sourced directly from AWS billing data when available. Remove these variables from existing configurations.
