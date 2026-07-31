@@ -268,6 +268,31 @@ async def test_alpha_mask_to_bw_passes_through_undecodable_content() -> None:
     assert await alpha_mask_to_bw(source) == source
 
 
+async def test_alpha_mask_to_bw_converts_palette_masks_with_trns() -> None:
+    """A palette ("P") mask with a ``tRNS`` transparency chunk is still converted.
+
+    PNG optimizers (pngquant) and "PNG-8" exports routinely turn an RGBA mask into
+    a palette image carrying transparency via ``tRNS`` instead of an alpha channel
+    proper; that shape must still be recognised, not passed through untouched.
+
+    Ref: https://www.w3.org/TR/png/#11tRNS
+         stdapi/utils.py:_alpha_mask_to_bw
+    """
+    rgba = Image.new("RGBA", (2, 2), (0, 0, 0, 255))
+    rgba.putpixel((0, 0), (0, 0, 0, 0))  # fully transparent -> edit region
+    palette = rgba.convert("P")  # Pillow derives a tRNS chunk from the alpha channel
+    buffer = BytesIO()
+    palette.save(buffer, format="PNG")
+    source = b64encode(buffer.getvalue()).decode()
+
+    result = await alpha_mask_to_bw(source)
+
+    with BytesIO(pybase64_b64decode(result)) as out, Image.open(out) as converted:
+        assert converted.mode == "RGB"
+        assert converted.getpixel((0, 0)) == (0, 0, 0)
+        assert converted.getpixel((1, 1)) == (255, 255, 255)
+
+
 async def _mask_pixel(
     alpha: int, *, invert: bool = False, threshold: int | None = None
 ) -> tuple[int, ...]:

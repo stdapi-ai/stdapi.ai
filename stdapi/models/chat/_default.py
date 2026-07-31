@@ -31,6 +31,7 @@ from stdapi.types.anthropic_messages import (
     ToolChoiceToolParam,
     ToolParam,
 )
+from stdapi.types.openai import ResponseFormatJSONObject
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -179,6 +180,10 @@ class ChatModel(ChatModelBase[Any, Any]):
             request.messages,
             allow_explicit_caching=self.PROMPT_CACHING_SUPPORTED,
             cache_ttl=cache_ttl,
+        )
+        _openai_common.enforce_json_object(
+            system_blocks,
+            requested=isinstance(request.response_format, ResponseFormatJSONObject),
         )
 
         (
@@ -489,6 +494,11 @@ class ChatModel(ChatModelBase[Any, Any]):
             cache_ttl=self._cache_ttl(
                 request.prompt_cache_retention, request.prompt_cache_options
             ),
+        )
+        _openai_common.enforce_json_object(
+            system_blocks,
+            requested=request.text is not None
+            and isinstance(request.text.format, ResponseFormatJSONObject),
         )
 
         (

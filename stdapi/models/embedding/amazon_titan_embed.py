@@ -99,8 +99,10 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
                 # Titan invokes once per input; aggregate each call's by-type
                 # vectors into the combined per-type lists.
                 by_type = result.response.get("embeddingsByType") or {}
-                for embedding_type, vector in by_type.items():
-                    embeddings_by_type.setdefault(embedding_type, []).append(vector)
+                for embedding_type in ("float", "binary"):
+                    if embedding_type in by_type:
+                        vector: list[float | int] = list(by_type[embedding_type])
+                        embeddings_by_type.setdefault(embedding_type, []).append(vector)
 
         return EmbeddingResponse(
             embeddings=embeddings,

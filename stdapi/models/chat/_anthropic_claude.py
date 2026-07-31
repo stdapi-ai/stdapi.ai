@@ -52,21 +52,24 @@ _REASONING_CONFIG: dict[str, str] = {"type": "adaptive"}
 _DATE_SUFFIX = re_compile(r"^(.+)-(\d{8})$")
 
 
-def _has_tool_result(bedrock_messages: list[MessageTypeDef]) -> bool:
-    """Return ``True`` if *bedrock_messages* contains any ``toolResult`` block.
+def _history_tool_use_names(messages: list[MessageTypeDef] | None) -> set[str]:
+    """Collect distinct tool names referenced by ``toolUse`` blocks in message history.
 
     Args:
-        bedrock_messages: Bedrock Converse message list.
+        messages: Converted Bedrock message history, or ``None``.
 
     Returns:
-        ``True`` when any message content block is a ``toolResult``.
+        Set of tool names found in ``toolUse`` content blocks; empty when
+        *messages* is ``None`` or contains none.
     """
-    return any(
-        "toolResult" in block
-        for msg in bedrock_messages
-        for block in (msg.get("content") or [])
-        if isinstance(block, dict)
-    )
+    if not messages:
+        return set()
+    return {
+        block["toolUse"]["name"]
+        for message in messages
+        for block in message.get("content", ())
+        if "toolUse" in block
+    }
 
 
 def _forward_tool_choice_to_additional_request_fields(
@@ -173,68 +176,111 @@ class AnthropicClaudeChatModel(_BaseChatModel):
         server_tools: list[JsonMapping],
         bedrock_messages: list[MessageTypeDef] | None = None,
     ) -> None:
-        """Configure Claude server tools: native-format routing on Turn 1, stubs on Turn 2+, plus beta flags.
+        """Configure Claude server tools: native-format routing plus beta flags, on every turn.
 
-        **Turn 1 — native Anthropic format** (no ``toolResult`` in history):
         All server tools are moved to ``additionalModelRequestFields["tools"]``
-        in Anthropic native format so Claude receives the full tool configuration.
-        Their ``toolSpec`` stubs are removed from *tool_config*.
+        in Anthropic native format so Claude receives the full tool definition on
+        every turn, not only the first — Bedrock never sees the real schema
+        otherwise, and the model invents its own argument names once history
+        carries a ``toolResult``. Their ``toolSpec`` stubs are removed from
+        *tool_config*.
 
-        **Multi-turn stub mode** (``toolResult`` present in history):
-        Server tools remain as ``toolSpec`` stubs in *tool_config* (required by
-        Bedrock when ``toolResult`` blocks appear in message history).
+        A natively-promoted tool must not also keep a ``toolSpec`` stub with
+        the same name in *tool_config*: Anthropic rejects duplicate tool
+        names, and the base class would otherwise resynthesize exactly such a
+        stub for every tool name it finds in history once *tool_config* is
+        left empty. So when removing the promoted stubs empties *tool_config*,
+        a replacement is synthesized here — but only for *other* tool names
+        still found in *bedrock_messages* history, never for the ones just
+        promoted natively. A ``toolChoice`` forcing one of the just-promoted
+        names is forwarded to *additional_request_fields* instead, since no
+        surviving ``toolSpec`` can back it; a ``toolChoice`` that is still
+        satisfiable by the surviving *tool_config* (``auto``/``any``, or a
+        name among the *other* tool names) is left in place.
 
-        ``anthropic_beta`` flags are injected in both cases.
+        ``anthropic_beta`` flags are injected as well.
 
         Args:
-            tool_config: Bedrock tool configuration (mutable).  Stubs are removed
-                in Turn 1; dict is cleared when it becomes empty.
+            tool_config: Bedrock tool configuration (mutable).  Stubs are
+                removed; dict is cleared when it becomes empty, unless
+                non-native tool names remain in history.
             additional_request_fields: Mutable ``additionalModelRequestFields`` dict.
             server_tools: Per-tool dicts — on the Anthropic route these are full
                 ``model_dump(exclude_none=True)`` dicts; on the OpenAI route they
                 contain ``{"name": tool_name, "type": versioned_type}`` plus
                 any extra params.
-            bedrock_messages: Translated Bedrock messages, used to detect
-                ``toolResult`` blocks.  ``None`` treated as empty (Turn 1).
+            bedrock_messages: Converted Bedrock message history, used to avoid
+                re-adding a stub for a tool name already promoted natively.
         """
         if not server_tools:
             return
 
-        if not _has_tool_result(bedrock_messages or []):
-            # Turn 1: move all server tools to additionalModelRequestFields native format.
-            native_tool_names = {tool["name"] for tool in server_tools}
-            existing_tools: list[JsonMapping] = additional_request_fields.get(  # type: ignore[assignment]
-                "tools", []
-            )
-            additional_request_fields["tools"] = existing_tools + [  # type: ignore[assignment]
-                {
-                    k: v
-                    for k, v in tool.items()
-                    if k not in _SERVER_TOOL_SERIALIZE_EXCLUDE
-                }
-                for tool in server_tools
-            ]
+        # Move all server tools to additionalModelRequestFields native format.
+        native_tool_names = {tool["name"] for tool in server_tools}
+        existing_tools: list[JsonMapping] = additional_request_fields.get(  # type: ignore[assignment]
+            "tools", []
+        )
+        additional_request_fields["tools"] = existing_tools + [  # type: ignore[assignment]
+            {k: v for k, v in tool.items() if k not in _SERVER_TOOL_SERIALIZE_EXCLUDE}
+            for tool in server_tools
+        ]
 
-            # Remove corresponding stubs from toolConfig.
-            if tool_config:
-                tool_config["tools"] = [
-                    entry
-                    for entry in tool_config["tools"]
-                    if not (
-                        isinstance(entry, dict)
-                        and isinstance(spec := entry.get("toolSpec"), dict)
-                        and spec.get("name") in native_tool_names
-                    )
-                ]
-                if not tool_config["tools"]:
-                    if tool_choice := tool_config.get("toolChoice"):
+        # Remove corresponding stubs from toolConfig.
+        if tool_config:
+            tool_config["tools"] = [
+                entry
+                for entry in tool_config["tools"]
+                if not (
+                    isinstance(entry, dict)
+                    and isinstance(spec := entry.get("toolSpec"), dict)
+                    and spec.get("name") in native_tool_names
+                )
+            ]
+            if not tool_config["tools"]:
+                # Only synthesize stubs for tool names history still needs that
+                # were not just promoted above — otherwise the caller's own
+                # history-based fallback would resynthesize a stub for the
+                # promoted names too, sending each one twice.
+                other_names = (
+                    _history_tool_use_names(bedrock_messages) - native_tool_names
+                )
+                tool_choice = tool_config.get("toolChoice")
+                # A toolChoice naming a just-promoted tool has no matching
+                # toolSpec left anywhere in toolConfig; it must be forwarded
+                # instead of silently dropped or left dangling on a name that
+                # no longer resolves.
+                forces_native_tool = bool(
+                    isinstance(tool_choice, dict)
+                    and (forced := tool_choice.get("tool"))
+                    and forced.get("name") in native_tool_names
+                )
+                if other_names:
+                    tool_config["tools"] = [
+                        {
+                            "toolSpec": {
+                                "name": name,
+                                "inputSchema": {"json": {"type": "object"}},
+                            }
+                        }
+                        for name in sorted(other_names)
+                    ]
+                    if forces_native_tool:
+                        _forward_tool_choice_to_additional_request_fields(
+                            tool_choice,  # type: ignore[arg-type]
+                            additional_request_fields,
+                        )
+                        del tool_config["toolChoice"]
+                    # else: "auto"/"any", or a name among *other_names* --
+                    # still satisfiable by the surviving toolConfig, unchanged.
+                else:
+                    if tool_choice:
                         _forward_tool_choice_to_additional_request_fields(
                             tool_choice,  # type: ignore[arg-type]
                             additional_request_fields,
                         )
                     tool_config.clear()  # type: ignore[attr-defined]
 
-        # Inject anthropic_beta flags for all server tools (both modes).
+        # Inject anthropic_beta flags for all server tools.
         if required_flags := {
             flag
             for tool in server_tools

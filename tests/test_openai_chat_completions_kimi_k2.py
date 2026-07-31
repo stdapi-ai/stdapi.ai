@@ -12,6 +12,9 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from stdapi.models import _find_model_class
+from stdapi.models.chat.kimi_k25 import ChatModel as KimiChatModel
+
 if TYPE_CHECKING:
     from openai import OpenAI
 
@@ -22,6 +25,24 @@ KIMI_ALL = (KIMI_K2_5, KIMI_K2_THINKING)
 
 #: finish_reason values the OpenAI Chat Completions reference defines.
 _FINISH_REASONS = frozenset({"stop", "length", "content_filter", "tool_calls"})
+
+
+@pytest.mark.local
+class TestKimiK2Matcher:
+    """``ChatModel.MATCHER`` dispatches both Bedrock provider prefixes to the Kimi class.
+
+    Bedrock exposes Kimi K2 models under two different provider prefixes
+    (``moonshotai.kimi-k2.5`` and ``moonshot.kimi-k2-thinking``); both must
+    resolve to the same Kimi-specific reasoning implementation (issue #98).
+
+    Ref: stdapi/models/chat/kimi_k25.py:ChatModel.MATCHER
+         stdapi/models/__init__.py:_find_model_class
+    """
+
+    @pytest.mark.parametrize("model_id", KIMI_ALL)
+    def test_dispatches_to_kimi_chat_model(self, model_id: str) -> None:
+        """Both Kimi K2 provider prefixes resolve to the Kimi ``ChatModel`` class."""
+        assert _find_model_class(model_id) is KimiChatModel
 
 
 @pytest.mark.gateway("Kimi is not supported on the official API")

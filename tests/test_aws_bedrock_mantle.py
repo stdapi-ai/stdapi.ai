@@ -69,6 +69,7 @@ from stdapi.pricing import Service
 from stdapi.routes.openai_responses import _decode_mantle_id, _require_local_response_id
 from stdapi.types.anthropic_messages import Message, MessageCreateParams, MessageParam
 from stdapi.types.openai import ModerationResult, ResponseModeration
+from stdapi.types.openai_chat_completions import ChatCompletionUserMessageParam
 from stdapi.types.openai_chat_completions import (
     CompletionCreateParams as ChatCompletionCreateParams,
 )
@@ -2322,6 +2323,70 @@ class TestServesViaMantleHeaderDispatch:
         assert not isinstance(model, mantle_default.ChatModel)
 
 
+class TestParallelToolCallsFalseAccepted:
+    """``parallel_tool_calls: false`` is accepted for every model.
+
+    Upstream never rejects the flag, and the Responses API on this gateway has
+    always accepted it, so rejecting it on Chat Completions alone broke requests
+    that are valid upstream and split the two sibling surfaces. Mantle honors it
+    by mapping the flag onto Anthropic's ``disable_parallel_tool_use``
+    (covered in ``tests/test_aws_bedrock_mantle_convert.py``); models that cannot
+    constrain tool use ignore it, and the client still sees which tool calls were
+    actually made.
+
+    Ref: https://developers.openai.com/api/docs/guides/function-calling#parallel-function-calling
+         stdapi/types/openai_chat_completions.py:CompletionCreateParams
+         stdapi/models/chat/_mantle/_convert.py:_anthropic_tool_choice_from_chat
+    """
+
+    def test_mantle_served_model_is_accepted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A model the Mantle catalog reports as Mantle-served accepts the flag."""
+        model_id = "test.mantle-parallel-tool-calls-model"
+        monkeypatch.setitem(
+            stdapi_models._ALL_MODELS,  # noqa: SLF001
+            model_id,
+            _model_details(model_id, MANTLE_SERVICE),
+        )
+        request = ChatCompletionCreateParams(
+            model=model_id,
+            messages=[ChatCompletionUserMessageParam(role="user", content="Hello")],
+            parallel_tool_calls=False,
+        )
+        assert request.parallel_tool_calls is False
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            pytest.param("amazon.nova-micro-v1:0", id="classic-bedrock-runtime"),
+            pytest.param("test.unregistered-model", id="absent-from-the-catalog"),
+        ],
+    )
+    def test_non_mantle_model_is_accepted(self, model: str) -> None:
+        """A model that cannot honor the flag accepts it rather than failing.
+
+        The response still reports the tool calls the model made, so a client
+        that depends on sequential tool use can detect that it did not get it --
+        which is what makes ignoring the flag safe rather than silent.
+        """
+        request = ChatCompletionCreateParams(
+            model=model,
+            messages=[ChatCompletionUserMessageParam(role="user", content="Hello")],
+            parallel_tool_calls=False,
+        )
+        assert request.parallel_tool_calls is False
+
+    def test_true_is_unchanged(self) -> None:
+        """The default value keeps round-tripping untouched."""
+        request = ChatCompletionCreateParams(
+            model="amazon.nova-micro-v1:0",
+            messages=[ChatCompletionUserMessageParam(role="user", content="Hello")],
+            parallel_tool_calls=True,
+        )
+        assert request.parallel_tool_calls is True
+
+
 class TestPreviousResponseIdFallback:
     """Serving demoted off the Responses API rejects a chained conversation.
 
@@ -3026,7 +3091,9 @@ class TestStreamedResponseIdPlumbing:
         assert isinstance(result, EventSourceResponse)
         token = REQUEST_ID.set("req-stream-id")
         try:
-            events = [event async for event in result.body_iterator]
+            events = cast(
+                "list[ServerSentEvent]", [event async for event in result.body_iterator]
+            )
         finally:
             REQUEST_ID.reset(token)
         assert [event.event for event in events][:2] == [

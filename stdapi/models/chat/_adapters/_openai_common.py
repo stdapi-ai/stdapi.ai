@@ -169,6 +169,32 @@ def cap_cache_points(
         blocks[:] = kept
 
 
+#: Appended to the system prompt when ``json_object`` output is requested, since
+#: Bedrock's ``outputConfig`` applies no schema for it (see ``build_output_config``).
+JSON_OBJECT_SYSTEM_INSTRUCTION: SystemContentBlockTypeDef = {
+    "text": "Respond with a single syntactically valid JSON object and no other text."
+}
+
+
+def enforce_json_object(
+    system_blocks: list[SystemContentBlockTypeDef], *, requested: bool
+) -> None:
+    """Append a JSON-only instruction to *system_blocks* when requested.
+
+    Bedrock applies no decoding constraint for ``json_object`` output (unlike
+    ``json_schema``), so this system-prompt nudge is the only enforcement
+    available. It is appended as a new block, never merged into or replacing an
+    existing one, so an explicit user/system prompt is preserved untouched.
+
+    Args:
+        system_blocks: Mutable system content blocks list to append to.
+        requested: Whether the request asked for unconstrained JSON-object
+            output (``response_format``/``text.format`` of type ``json_object``).
+    """
+    if requested:
+        system_blocks.append(JSON_OBJECT_SYSTEM_INSTRUCTION)
+
+
 def drop_tool_turn_cache_points(bedrock_messages: list[MessageTypeDef]) -> None:
     """Remove cache points from messages carrying tool use or tool result blocks.
 

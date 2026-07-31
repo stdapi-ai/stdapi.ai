@@ -1,15 +1,27 @@
 # Agentic test lane
 
-Real coding-agent CLIs — Claude Code and Codex — driven end to end against a live
-stdapi.ai server. They are the only tests that exercise a full agentic loop: a
-third-party client's own system prompt, tool definitions, multi-turn tool-call
+Real coding-agent CLIs — Claude Code, Codex and pi — driven end to end against a
+live stdapi.ai server. They are the only tests that exercise a full agentic loop:
+a third-party client's own system prompt, tool definitions, multi-turn tool-call
 replays and SSE streaming, all translated by the gateway for a model that is
 usually not the vendor's own.
+
+| CLI | Gateway route | Why it is here |
+|---|---|---|
+| Claude Code | `/anthropic` | Anthropic Messages, with a large tool set and session attribution |
+| Codex | `/v1/responses` | Responses, with a ~7600-token `instructions` field |
+| pi | all three | The same run over Chat Completions, Responses **and** Anthropic Messages |
+
+pi is parametrized over its three providers, so one failure isolates to one
+adapter: the binary, prompt, model and assertions are identical across the three,
+and only the wire format differs. It is also the only tool driving
+`/v1/chat/completions`, which no other agentic test reaches.
 
 ```bash
 uv run pytest tests/agentic --agentic -s          # whole lane, with metric lines
 uv run pytest tests/agentic --agentic --agentic-rebuild   # refresh the CLIs first
 uv run pytest tests/agentic/test_codex.py --agentic -k nova-2-lite
+uv run pytest tests/agentic/test_pi.py --agentic -k chat-completions   # one route
 ```
 
 `-s` surfaces one benchmark line per run:
@@ -53,7 +65,9 @@ Only the gateway package is mounted. The agent cannot read `tests/.env`, `.git`,
    a command line, a `parse` that normalises its output into an `AgenticResult`,
    and a `prepare_workdir` that seeds any config it needs.
 2. Add a `test_<tool>.py` in this directory that sets a module-level `TOOL` and
-   parametrizes on `model_config`.
+   parametrizes on `model_config`. A module driving one CLI over several routes
+   parametrizes an `agentic_tool` fixture instead of setting `TOOL`; the
+   identity check picks up either (see `test_pi.py`).
 
 Nothing else is needed. The image picks the package up automatically, because its
 tag is a digest of the package list and the `Containerfile` — changing either
@@ -65,8 +79,9 @@ autouse model-identity check are all shared.
 - the CLI exits 0 and emits parsable output;
 - the answer is non-trivial and contains vocabulary that only appears in files the
   agent had to open, so an answer recited from the model's own knowledge fails;
-- a **step floor** — turns for Claude Code, completed shell calls for Codex — proving
-  the tool-use round trip carried file contents back through the gateway;
+- a **step floor** — turns for Claude Code, completed shell calls for Codex, completed
+  tool calls for pi — proving the tool-use round trip carried file contents back
+  through the gateway;
 - **model identity** (autouse): every request the gateway logged for this test targeted
   the parametrized Bedrock model. Without it, a CLI silently falling back to its own
   default model would still pass and the test would prove nothing.

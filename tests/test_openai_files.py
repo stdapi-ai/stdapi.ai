@@ -26,13 +26,17 @@ from openai import NotFoundError as OpenAINotFoundError
 from openai.types import FileObject
 
 from stdapi.api_errors import ApiError
+from stdapi.aws_s3 import S3Object
 from stdapi.config import SETTINGS
 from stdapi.files import FileRecord, _core, _multipart
 from stdapi.routes import openai_files as openai_files_routes
 
 if TYPE_CHECKING:
     import httpx
+    from anthropic import Anthropic
     from starlette.testclient import TestClient
+
+    from stdapi.input_file import InputFile
 
 #: Minimal valid PDF bytes for testing document endpoints.
 _MINIMAL_PDF: bytes = (
@@ -141,6 +145,38 @@ class TestOpenAIFiles:
             )
         finally:
             openai_client.files.delete(result.id)
+
+    @pytest.mark.gateway(
+        "cross-API file sharing (Anthropic upload, OpenAI listing) is a gateway feature"
+    )
+    def test_purposeless_upload_lists_as_user_data(
+        self, openai_client: OpenAI, anthropic_client: Anthropic
+    ) -> None:
+        """A file uploaded with no purpose concept lists consistently as ``user_data``.
+
+        The Anthropic Files API has no ``purpose`` field, and its files share
+        storage with the OpenAI Files API (docs/api_anthropic_files.md). The
+        gateway stores the ``user_data`` default at write time rather than only
+        at response time, so such a file both displays as ``user_data`` *and*
+        matches the ``purpose=user_data`` list filter -- it does not silently
+        drop out of the filtered listing the way a response-only default would.
+
+        Ref: docs/api_anthropic_files.md#configuration
+             stdapi/files/_core.py:upload_file
+        """
+        created = anthropic_client.beta.files.upload(
+            file=("data.txt", io.BytesIO(_TEXT_FILE), "text/plain")
+        )
+        try:
+            retrieved = openai_client.files.retrieve(created.id)
+            assert retrieved.purpose == "user_data"
+            listed = openai_client.files.list(purpose="user_data", limit=100)
+            assert created.id in {f.id for f in listed.data}, (
+                "a purposeless file must match the purpose=user_data list filter "
+                "the same way its displayed purpose does"
+            )
+        finally:
+            openai_client.files.delete(created.id)
 
     @pytest.mark.gateway("expires_after behavior may differ on official API")
     def test_upload_with_expires_after(self, openai_client: OpenAI) -> None:
@@ -676,6 +712,126 @@ class TestCreateMultipartSessionUnit:
         assert "stdapi-ai.expires" not in stub_s3.create_kwargs["Tagging"]
 
 
+class _FakeS3SourceInputFile:
+    """Fake ``InputFile`` mimicking ``_S3Source``, whose ``to_s3`` ignores the requested metadata.
+
+    Exactly like a real S3-to-S3 server-side copy.
+
+    Ref: stdapi/input_file.py:_S3Source.to_s3
+    """
+
+    def __init__(self, filename: str) -> None:
+        self._filename = filename
+
+    async def get_filename(self) -> str | None:
+        return self._filename
+
+    async def to_s3(
+        self,
+        _region: object,
+        *,
+        bucket: str | None = None,
+        key: str | None = None,
+        temporary: bool = False,
+        content_disposition: str | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> S3Object:
+        return S3Object(bucket=bucket or "", key=key or "")
+
+
+class _StubS3SourceCorrectionClient:
+    """Stub S3 client modelling an object already copied with the *source's* own metadata.
+
+    ``upload_file`` must detect the mismatch against what it requested and issue
+    a corrective ``copy_object`` with ``MetadataDirective=REPLACE``.
+    """
+
+    def __init__(self) -> None:
+        self.content_disposition = 'attachment; filename="source-object-name"'
+        self.metadata: dict[str, str] = {"purpose": "fine-tune", "expires-at": ""}
+        self.copy_object_kwargs: dict[str, Any] | None = None
+        self.head_object_calls = 0
+
+    async def head_object(self, **_kwargs: object) -> dict[str, Any]:
+        self.head_object_calls += 1
+        return {
+            "ContentDisposition": self.content_disposition,
+            "ContentType": "application/octet-stream",
+            "Metadata": self.metadata,
+            "ContentLength": 42,
+            "LastModified": datetime.now(UTC),
+        }
+
+    async def copy_object(self, **kwargs: object) -> dict[str, Any]:
+        self.copy_object_kwargs = kwargs
+        self.content_disposition = cast("str", kwargs["ContentDisposition"])
+        self.metadata = cast("dict[str, str]", kwargs["Metadata"])
+        return {}
+
+
+@pytest.mark.local
+class TestUploadFileS3SourceMetadataUnit:
+    """``upload_file`` forces purpose/filename onto S3-to-S3 copy sources (unit, stubbed S3).
+
+    Issue #99(a): a server-side copy (used for ``s3://``/``file-id:`` upload
+    sources) keeps the *source* object's own metadata and content-disposition,
+    silently dropping the requested ``purpose``/filename. Without a fix, the
+    resulting file both displays and is filtered as ``user_data`` regardless of
+    what was requested, and lists under the source's raw key as its filename.
+
+    Ref: https://platform.openai.com/docs/api-reference/files/create
+         stdapi/input_file.py:_S3Source.to_s3
+         stdapi/files/_core.py:upload_file
+    """
+
+    @pytest.fixture
+    def stub_s3(self, monkeypatch: pytest.MonkeyPatch) -> _StubS3SourceCorrectionClient:
+        """Patch the S3 client, bucket resolution, and region map with stubs."""
+        stub = _StubS3SourceCorrectionClient()
+        monkeypatch.setattr(_core, "get_client", lambda *_: stub)
+        monkeypatch.setattr(_core, "_require_bucket", lambda: "bucket")
+        monkeypatch.setattr(_core, "BUCKET_TO_REGION", {"bucket": "us-east-1"})
+        return stub
+
+    async def test_purpose_and_filename_are_forced_onto_s3_copy_source(
+        self, stub_s3: _StubS3SourceCorrectionClient
+    ) -> None:
+        """A requested purpose/filename reach the record despite the copy dropping them.
+
+        Ref: stdapi/files/_core.py:upload_file
+        """
+        fake_file = cast("InputFile", _FakeS3SourceInputFile("wanted.jsonl"))
+
+        record = await _core.upload_file(fake_file, purpose="batch")
+
+        assert record.purpose == "batch"
+        assert record.filename == "wanted.jsonl"
+        assert stub_s3.copy_object_kwargs is not None
+        assert stub_s3.copy_object_kwargs["MetadataDirective"] == "REPLACE"
+
+    async def test_matching_metadata_skips_the_corrective_copy(
+        self, stub_s3: _StubS3SourceCorrectionClient
+    ) -> None:
+        """When the copy already carries the requested metadata, no extra copy is issued.
+
+        A single ``HeadObject`` call is a discriminating check: a broken guard
+        that unconditionally treats the copy as mismatched would trigger
+        ``_force_s3_metadata`` (and hence its own extra ``HeadObject`` re-fetch)
+        even though nothing here actually needs correcting.
+
+        Ref: stdapi/files/_core.py:upload_file
+        """
+        stub_s3.content_disposition = 'attachment; filename="wanted.jsonl"'
+        stub_s3.metadata = {"purpose": "batch", "expires-at": ""}
+        fake_file = cast("InputFile", _FakeS3SourceInputFile("wanted.jsonl"))
+
+        record = await _core.upload_file(fake_file, purpose="batch")
+
+        assert record.purpose == "batch"
+        assert stub_s3.copy_object_kwargs is None
+        assert stub_s3.head_object_calls == 1
+
+
 class _StubCompleteS3Client:
     """Stub S3 client for ``complete_multipart_session`` part-order tests.
 
@@ -699,7 +855,13 @@ class _StubCompleteS3Client:
         return {}
 
     async def head_object(self, **_kwargs: object) -> dict[str, Any]:
-        return {"Metadata": self.marker_metadata}
+        # ContentLength/LastModified are only read by the final HeadObject that
+        # builds the FileRecord after a successful completion.
+        return {
+            "Metadata": self.marker_metadata,
+            "ContentLength": sum(size for _etag, size in self.parts.values()),
+            "LastModified": datetime.now(UTC),
+        }
 
     async def list_parts(self, **_kwargs: object) -> dict[str, Any]:
         return {
@@ -839,6 +1001,119 @@ class TestAddPartNumberingUnit:
 
         assert _multipart._extract_part_number(part_id, session.upload_id) == 2  # noqa: SLF001
         assert stub_s3.parts[1] == ("etag-1", 4)
+
+    async def test_part_number_ceiling_rejected(
+        self, stub_s3: _StubAddPartS3Client
+    ) -> None:
+        """A session already holding S3's 10 000-part maximum rejects one more, with 400.
+
+        The rejection is raised before any S3 call, so S3's own ``InvalidArgument``
+        for an out-of-range ``PartNumber`` never has to be mapped.
+
+        Ref: https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
+             stdapi/files/_multipart.py:add_part
+        """
+        session = await _multipart.create_multipart_session(
+            "f.bin", "text/plain", "assistants", 1
+        )
+        max_part_number = _multipart._MAX_PART_NUMBER  # noqa: SLF001
+        stub_s3.parts[max_part_number] = ("etag-max", 1)
+
+        with pytest.raises(ApiError) as exc_info:
+            await _multipart.add_part(session.upload_id, b"1234")
+
+        assert exc_info.value.status == 400
+        assert str(max_part_number) in str(exc_info.value)
+        assert len(stub_s3.parts) == 1, (
+            "no new part must reach S3 once the session is already at the ceiling"
+        )
+
+
+@pytest.mark.local
+class TestCompleteMultipartSessionMinPartSizeUnit:
+    """Non-last part minimum size validation in ``complete_multipart_session`` (unit, stubbed S3).
+
+    S3 enforces its 5 MiB minimum part size (every part except the last) at
+    ``CompleteMultipartUpload`` time, surfacing as ``EntityTooSmall``; the
+    gateway checks it first so an undersized part is rejected with a clean,
+    OpenAI-shaped 400 instead of a raw S3 error.
+
+    Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
+         stdapi/files/_multipart.py:complete_multipart_session
+    """
+
+    @pytest.fixture
+    def stub_s3(self, monkeypatch: pytest.MonkeyPatch) -> _StubCompleteS3Client:
+        """Patch the S3 client, bucket resolution, and bucket lookup with stubs."""
+        stub = _StubCompleteS3Client()
+        monkeypatch.setattr(_multipart, "get_client", lambda *_: stub)
+        monkeypatch.setattr(_multipart, "_require_bucket", lambda: "bucket")
+        monkeypatch.setattr(
+            _multipart, "resolve_file_bucket", lambda _payload: "bucket"
+        )
+        monkeypatch.setattr(_multipart, "track_temporary_s3_objects", lambda *_: None)
+        return stub
+
+    async def test_undersized_non_last_part_rejected(
+        self, stub_s3: _StubCompleteS3Client
+    ) -> None:
+        """A non-last part below 5 MiB is rejected with 400, naming the part and no backend.
+
+        Ref: stdapi/files/_multipart.py:complete_multipart_session
+        """
+        min_size = _multipart._MIN_PART_SIZE  # noqa: SLF001
+        session = await _multipart.create_multipart_session(
+            "f.bin", "text/plain", "assistants", min_size + 9
+        )
+        part_1 = _multipart._make_part_id(session.upload_id, 1)  # noqa: SLF001
+        part_2 = _multipart._make_part_id(session.upload_id, 2)  # noqa: SLF001
+        stub_s3.parts = {1: ("etag-1", min_size - 1), 2: ("etag-2", 10)}
+
+        with pytest.raises(ApiError) as exc_info:
+            await _multipart.complete_multipart_session(
+                session.upload_id, [part_1, part_2]
+            )
+
+        assert exc_info.value.status == 400
+        message = str(exc_info.value)
+        assert str(min_size) in message
+        assert part_1 in message, "the rejection must name the undersized part"
+        assert "s3" not in message.lower(), "must not leak the backing storage service"
+        assert "bucket" not in message.lower(), "must not leak the S3 bucket concept"
+        assert stub_s3.complete_called is False
+
+    async def test_undersized_last_part_is_accepted(
+        self, stub_s3: _StubCompleteS3Client
+    ) -> None:
+        """The last part may be smaller than 5 MiB; only non-last parts are checked.
+
+        The same undersized size is exercised in both positions on the same
+        session: rejected as part 1 (non-last), accepted as part 2 (last). A
+        check that covered every part, or no size check at all, would fail
+        one of the two assertions, so this discriminates the "last part is
+        exempt" behavior rather than just showing completion can succeed.
+
+        Ref: stdapi/files/_multipart.py:complete_multipart_session
+        """
+        min_size = _multipart._MIN_PART_SIZE  # noqa: SLF001
+        small = min_size - 1
+        session = await _multipart.create_multipart_session(
+            "f.bin", "text/plain", "assistants", min_size + small
+        )
+        part_1 = _multipart._make_part_id(session.upload_id, 1)  # noqa: SLF001
+        part_2 = _multipart._make_part_id(session.upload_id, 2)  # noqa: SLF001
+
+        stub_s3.parts = {1: ("etag-1", small), 2: ("etag-2", min_size)}
+        with pytest.raises(ApiError):
+            await _multipart.complete_multipart_session(
+                session.upload_id, [part_1, part_2]
+            )
+        assert stub_s3.complete_called is False
+
+        stub_s3.parts = {1: ("etag-1", min_size), 2: ("etag-2", small)}
+        await _multipart.complete_multipart_session(session.upload_id, [part_1, part_2])
+
+        assert stub_s3.complete_called is True
 
 
 @pytest.mark.local

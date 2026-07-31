@@ -52,6 +52,12 @@ if TYPE_CHECKING:
 #: TTL in seconds for a pending multipart session (1 day, matching the S3 lifecycle cleanup window).
 _MULTIPART_EXPIRY_SECONDS: int = 86400
 
+#: Maximum number of parts a multipart upload session can hold (S3 limit).
+_MAX_PART_NUMBER: int = 10000
+
+#: Minimum size in bytes for a part that is not the last one (S3 limit, 5 MiB).
+_MIN_PART_SIZE: int = 5 * 1024 * 1024
+
 #: S3 tagging query string marking an object for Lifecycle expiry cleanup.
 _EXPIRING_S3_TAGGING: str = f"{S3_TAGGING}&stdapi-ai.expires=true"
 
@@ -387,7 +393,8 @@ async def add_part(upload_id: str, data: bytes) -> tuple[str, int]:
         ``(part_id, created_at)`` — part_id encodes the 1-based part number.
 
     Raises:
-        ApiError: 404 if the session does not exist; 400 if not pending.
+        ApiError: 404 if the session does not exist; 400 if not pending or the
+            session already holds the maximum number of parts.
     """
     file_id = _file_id_from_upload_id(upload_id)
     bucket = resolve_file_bucket(file_id)
@@ -400,6 +407,9 @@ async def add_part(upload_id: str, data: bytes) -> tuple[str, int]:
     # its number would overwrite it.
     parts = await _list_all_parts(s3, bucket, s3_key, s3_upload_id)
     part_number = max(parts, default=0) + 1
+    if part_number > _MAX_PART_NUMBER:
+        msg = f"This upload already has the maximum of {_MAX_PART_NUMBER} parts."
+        raise ApiError(msg)
 
     try:
         await s3.upload_part(
@@ -435,7 +445,8 @@ async def complete_multipart_session(
 
     Raises:
         ApiError: 404 not found; 400 not pending, out-of-order part_ids, bad
-            part fingerprint, unknown part, or size mismatch.
+            part fingerprint, unknown part, undersized non-last part, or size
+            mismatch.
     """
     file_id = _file_id_from_upload_id(upload_id)
     bucket = resolve_file_bucket(file_id)
@@ -448,8 +459,10 @@ async def complete_multipart_session(
     )
     parts_info = await _list_all_parts(s3, bucket, s3_key, s3_upload_id)
 
-    s3_parts: list[dict[str, int | str]] = []
-    assembled_size = 0
+    # Ordering is validated over the whole list first: only once it is known to be
+    # strictly ascending does "last element" reliably mean "highest part number",
+    # which the size check below relies on.
+    part_numbers: list[int] = []
     previous_pn = 0
     for pid in part_ids:
         pn = _extract_part_number(pid, upload_id)
@@ -460,10 +473,22 @@ async def complete_multipart_session(
             )
             raise ApiError(msg)
         previous_pn = pn
+        part_numbers.append(pn)
+
+    s3_parts: list[dict[str, int | str]] = []
+    assembled_size = 0
+    last_index = len(part_ids) - 1
+    for i, (pid, pn) in enumerate(zip(part_ids, part_numbers, strict=True)):
         if (part := parts_info.get(pn)) is None:
             msg = f"Part '{pid}' (number {pn}) was not uploaded."
             raise ApiError(msg)
         etag, size = part
+        if i != last_index and size < _MIN_PART_SIZE:
+            msg = (
+                f"Part '{pid}' (number {pn}) is too small: every part except "
+                f"the last must be at least {_MIN_PART_SIZE} bytes."
+            )
+            raise ApiError(msg)
         s3_parts.append({"PartNumber": pn, "ETag": etag})
         assembled_size += size
 

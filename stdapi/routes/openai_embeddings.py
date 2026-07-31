@@ -10,10 +10,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
+from stdapi.api_errors import ApiError
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.aws_bedrock import get_extra_model_parameters
 from stdapi.config import SETTINGS
+from stdapi.input_file import InputFileUrl
 from stdapi.models import validate_model
 from stdapi.models.capabilities import register_route_capability
 from stdapi.models.embedding import get_embedding_model
@@ -104,8 +106,19 @@ async def create_embeddings(
     """
     log_request_params(request, user_id=request.user)
     model_id = (await validate_model(request.model, "EMBEDDING")).id
+    raw_inputs = request.input if isinstance(request.input, list) else [request.input]
+    inputs: list[InputFileUrl | str] = []
+    for item in raw_inputs:
+        if not isinstance(item, (str, InputFileUrl)):
+            # `EmbeddingCreateParams._unsupported` only inspects the first list
+            # item, so a mixed list (e.g. ["text", 123]) reaches here with a
+            # token-array element still in it; reject it explicitly instead of
+            # forwarding an int to the backend.
+            msg = "Token array inputs are not supported on this backend. Provide strings instead."
+            raise ApiError(msg)
+        inputs.append(item)
     response = await get_embedding_model(model_id).embed_text(
-        request.input if isinstance(request.input, list) else [request.input],
+        inputs,
         dimensions=request.dimensions,
         extra_params=get_extra_model_parameters(model_id, request),
     )

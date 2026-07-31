@@ -62,7 +62,10 @@ def _fake_response() -> dict[str, Any]:
             "completion_tokens": 2,
             "prompt_tokens": 10,
             "total_tokens": 12,
-            "prompt_tokens_details": {"audio_tokens": 10, "cached_tokens": 0},
+            # cached_tokens is deliberately far from prompt_tokens - audio_tokens
+            # (10 - 7 = 3) so a regression back to reading cached_tokens as
+            # text_tokens is caught (issue #95).
+            "prompt_tokens_details": {"audio_tokens": 7, "cached_tokens": 5},
         },
     }
 
@@ -110,10 +113,12 @@ class TestSttAcceptsLogprobs:
         Bedrock reports ``logprobs: null`` on every choice, so requesting them cannot
         populate the field. The same response also pins the usage mapping: Bedrock's
         ``prompt_tokens``/``completion_tokens`` become OpenAI's
-        ``input_tokens``/``output_tokens`` and ``prompt_tokens_details`` becomes
-        ``input_token_details``.
+        ``input_tokens``/``output_tokens``, and ``input_token_details.text_tokens``
+        is derived as ``prompt_tokens - audio_tokens`` rather than read from
+        ``prompt_tokens_details.cached_tokens`` (issue #95).
 
         Ref: stdapi/types/openai_audio.py:UsageTokens
+             https://github.com/stdapi-ai/stdapi.ai/issues/95
         """
 
         async def _fake_invoke(self: AudioModel, _request: object) -> InvokeResult[Any]:  # noqa: ARG001
@@ -134,7 +139,69 @@ class TestSttAcceptsLogprobs:
         assert usage.output_tokens == 2
         assert usage.total_tokens == 12
         assert usage.input_token_details is not None
-        assert usage.input_token_details.audio_tokens == 10
+        assert usage.input_token_details.audio_tokens == 7
+        assert usage.input_token_details.text_tokens == 3
+
+    async def test_input_token_details_omitted_when_audio_tokens_zero(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``input_token_details`` is omitted when Bedrock reports ``audio_tokens=0``.
+
+        A captured real Voxtral response reported ``prompt_tokens=384`` with
+        ``prompt_tokens_details.audio_tokens=0`` for an audio-dominated request, which
+        would make ``text_tokens = prompt_tokens - audio_tokens`` attribute the whole
+        prompt to text. Omitting the breakdown avoids reporting that wrong split
+        (issue #95).
+
+        Ref: stdapi/models/audio/mistral_voxtral.py:AudioModel.stt
+             https://github.com/stdapi-ai/stdapi.ai/issues/95
+        """
+        response = _fake_response()
+        response["usage"]["prompt_tokens_details"] = {
+            "audio_tokens": 0,
+            "cached_tokens": 5,
+        }
+
+        async def _fake_invoke(self: AudioModel, _request: object) -> InvokeResult[Any]:  # noqa: ARG001
+            return InvokeResult(response=response)
+
+        monkeypatch.setattr(mistral_voxtral.AudioModel, "invoke", _fake_invoke)
+
+        model = AudioModel(_MODEL_ID)
+        result = await model.stt(_FakeAudioContent(), "json", logprobs=False)  # type: ignore[arg-type]
+
+        usage = result.usage  # type: ignore[union-attr]
+        assert isinstance(usage, UsageTokens)
+        assert usage.input_tokens == 10
+        assert usage.input_token_details is None
+
+    async def test_input_token_details_omitted_when_audio_tokens_key_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A response with ``prompt_tokens_details`` but no ``audio_tokens`` key does not crash.
+
+        ``_PromptTokensDetails`` is ``total=False``, so a real Bedrock response can
+        omit ``audio_tokens`` entirely rather than reporting it as ``0``. Indexing
+        the key directly would raise ``KeyError`` and turn a successful
+        transcription into a 500.
+
+        Ref: stdapi/models/audio/mistral_voxtral.py:AudioModel.stt
+        """
+        response = _fake_response()
+        response["usage"]["prompt_tokens_details"] = {"cached_tokens": 5}
+
+        async def _fake_invoke(self: AudioModel, _request: object) -> InvokeResult[Any]:  # noqa: ARG001
+            return InvokeResult(response=response)
+
+        monkeypatch.setattr(mistral_voxtral.AudioModel, "invoke", _fake_invoke)
+
+        model = AudioModel(_MODEL_ID)
+        result = await model.stt(_FakeAudioContent(), "json", logprobs=False)  # type: ignore[arg-type]
+
+        usage = result.usage  # type: ignore[union-attr]
+        assert isinstance(usage, UsageTokens)
+        assert usage.input_tokens == 10
+        assert usage.input_token_details is None
 
 
 class TestSttStreamAcceptsLogprobs:
@@ -152,9 +219,12 @@ class TestSttStreamAcceptsLogprobs:
 
         The single stubbed chunk yields one ``transcript.text.delta`` followed by the
         terminal ``transcript.text.done``, whose usage is built from
-        ``amazon-bedrock-invocationMetrics`` (all input tokens counted as audio).
+        ``amazon-bedrock-invocationMetrics``. That footer carries no audio/text
+        split, so ``input_token_details`` stays unset rather than attributing every
+        input token to audio as before (issue #95).
 
         Ref: stdapi/types/openai_audio.py:TranscriptionTextDoneEvent
+             https://github.com/stdapi-ai/stdapi.ai/issues/95
         """
         monkeypatch.setattr(
             mistral_voxtral.AudioModel, "invoke_stream", _fake_stream_chunks
@@ -185,5 +255,4 @@ class TestSttStreamAcceptsLogprobs:
         assert usage.input_tokens == 10
         assert usage.output_tokens == 2
         assert usage.total_tokens == 12
-        assert usage.input_token_details is not None
-        assert usage.input_token_details.audio_tokens == 10
+        assert usage.input_token_details is None

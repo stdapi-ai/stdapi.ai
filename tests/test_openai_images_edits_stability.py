@@ -14,12 +14,18 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/stable-image-services.
 
 import base64
 import re
+from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from openai import BadRequestError
+from PIL import Image
 
+from stdapi.models.image import ImageGenerationResponse
+from stdapi.models.image._stability import StabilityImageGenerationJobBase
+from stdapi.models.image.stability_stable_image_erase_object import _EraseJob
+from stdapi.models.image.stability_stable_image_inpaint import _InpaintJob
 from tests._helpers import decoded_png
 
 from .test_openai_images_generations import validate_image_usage
@@ -72,6 +78,111 @@ _SIZE_PATTERN = re.compile(r"^\d+x\d+$")
 pytestmark = pytest.mark.gateway(
     "Stability AI is not available on the official OpenAI API"
 )
+
+
+def _rgba_mask_b64() -> str:
+    """Build a base64 2x1 RGBA PNG mask: one transparent pixel, one opaque pixel."""
+    image = Image.new("RGBA", (2, 1), (0, 0, 0, 255))
+    image.putpixel((0, 0), (0, 0, 0, 0))  # transparent -> OpenAI-style edit region
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode()
+
+
+async def _build_request(
+    monkeypatch: pytest.MonkeyPatch, job: _InpaintJob | _EraseJob, mask: str
+) -> dict[str, Any]:
+    """Run ``_edit_image`` and return the request it built, without invoking Bedrock."""
+    captured: dict[str, Any] = {}
+
+    async def _fake_get_image_from_response(
+        _self: object, request: dict[str, Any], index: int
+    ) -> ImageGenerationResponse:
+        captured.update(request)
+        return ImageGenerationResponse(image="", index=index)
+
+    monkeypatch.setattr(
+        StabilityImageGenerationJobBase,
+        "_get_image_from_response",
+        _fake_get_image_from_response,
+    )
+    for coroutine in await job._edit_image(["c291cmNl"], mask):  # noqa: SLF001
+        await coroutine
+    return captured
+
+
+class TestStabilityMaskPolarityOffline:
+    """Alpha-mask conversion for the inpaint/erase models, exercised without Bedrock.
+
+    Stability reads mask polarity the opposite of Nova/Titan: white marks the region
+    to edit/erase and black the region to preserve (confirmed by ``test_inpaint``'s
+    docstring below and by Stability's own API reference), so an OpenAI-style alpha
+    mask must be converted with ``invert=True`` -- the same call Nova/Titan's
+    outpainting conversion uses, but for the opposite reason.
+
+    Ref: stdapi/utils.py:alpha_mask_to_bw
+         stdapi/models/image/stability_stable_image_inpaint.py:_InpaintJob
+         stdapi/models/image/stability_stable_image_erase_object.py:_EraseJob
+         https://platform.stability.ai/docs/api-reference#tag/Edit/paths/~1v2beta~1stable-image~1edit~1inpaint/post
+         https://github.com/stdapi-ai/stdapi.ai/issues/75
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    def _mask_pixels(mask_b64: str) -> tuple[tuple[int, ...], tuple[int, ...]]:
+        """Decode a base64 PNG mask and return its two RGB pixels."""
+        with BytesIO(base64.b64decode(mask_b64)) as buffer, Image.open(buffer) as image:
+            assert image.mode == "RGB", "the alpha channel must be dropped"
+            pixel_0 = image.getpixel((0, 0))
+            pixel_1 = image.getpixel((1, 0))
+        assert isinstance(pixel_0, tuple)
+        assert isinstance(pixel_1, tuple)
+        return pixel_0, pixel_1
+
+    async def test_inpaint_converts_alpha_mask_to_white_edit_polarity(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``_InpaintJob`` converts an alpha mask to white=edit, black=preserve."""
+        job = _InpaintJob(
+            model=None,  # type: ignore[arg-type]
+            prompt="prompt",
+            count=1,
+            width=2,
+            height=1,
+            quality=None,
+            style=None,
+            output_format=None,
+            output_compression=100,
+            extra_params={},
+        )
+        request = await _build_request(monkeypatch, job, _rgba_mask_b64())
+
+        edit_pixel, preserve_pixel = self._mask_pixels(request["mask"])
+        assert edit_pixel == (255, 255, 255), "transparent pixel must map to white"
+        assert preserve_pixel == (0, 0, 0), "opaque pixel must map to black"
+
+    async def test_erase_converts_alpha_mask_to_white_edit_polarity(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``_EraseJob`` converts an alpha mask to white=erase, black=preserve."""
+        job = _EraseJob(
+            model=None,  # type: ignore[arg-type]
+            prompt="prompt",
+            count=1,
+            width=2,
+            height=1,
+            quality=None,
+            style=None,
+            output_format=None,
+            output_compression=100,
+            extra_params={},
+        )
+        request = await _build_request(monkeypatch, job, _rgba_mask_b64())
+
+        edit_pixel, preserve_pixel = self._mask_pixels(request["mask"])
+        assert edit_pixel == (255, 255, 255), "transparent pixel must map to white"
+        assert preserve_pixel == (0, 0, 0), "opaque pixel must map to black"
 
 
 class TestStabilityEditing:

@@ -253,7 +253,7 @@ curl -X POST "$BASE/v1/uploads" \
 
 ### Add Parts
 
-Each part except the last must be at least 5 MiB (S3 minimum part size). The last part may be any size.
+Each part except the last must be at least 5 MiB (S3 minimum part size); the last part may be any size. An upload accepts at most 10,000 parts (S3's own ceiling).
 
 **Binary upload (multipart/form-data):**
 
@@ -351,6 +351,7 @@ curl -X POST "$BASE/v1/uploads/upload_0190c51c7de7455d9b8c2efe27dfbf67/cancel" \
 | Part data (binary)       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Standard `multipart/form-data` binary upload via the `data` field |
 | Part data (JSON body)    | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents |
 | Part ordering            |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | `part_ids` must be listed in ascending upload order; S3 cannot reassemble out of order |
+| Part count / size limits |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Max 10,000 parts; every part except the last must be at least 5 MiB |
 | `md5` checksum           | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted but not validated                                   |
 | Session TTL              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 1 day from creation                                          |
 
@@ -501,6 +502,7 @@ curl -X DELETE "$BASE/v1/files/${FILE_ID}" \
 |------|--------------------------------------------------------------------|
 | 400  | Invalid `expires_after` range, bad filename, size mismatch, or unknown part ID |
 | 400  | `part_ids` not listed in ascending upload order on `/v1/uploads/{upload_id}/complete` |
+| 400  | A non-last part under 5 MiB, or an upload past its 10,000-part limit |
 | 400  | `file-id:` URI passed to an ingest endpoint (`POST /v1/files`, `POST /v1/uploads/{upload_id}/parts`) |
 | 404  | File or upload not found, already deleted, expired, or not pending |
 | 503  | `AWS_S3_BUCKET` is not configured                                  |

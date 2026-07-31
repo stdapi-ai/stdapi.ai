@@ -101,7 +101,7 @@ curl -X POST "https://your-host/v1/videos" \
 | `model`                     |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Required — this gateway has no implicit default video model            |
 | `seconds` / `size`          |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Supported values depend on the model (see table below)                 |
 | `input_reference`           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | First-frame image; also accepts URLs/S3/Files API IDs in JSON requests |
-| Extra model-specific params | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra fields are forwarded to the model (e.g. `seed`, `loop`)          |
+| Extra model-specific params | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra fields are forwarded to the model (e.g. `seed`, `loop`); a string value that parses as a JSON number, boolean, or null is forwarded as that type |
 | **Lifecycle**               |                                          |                                                                        |
 | Retrieve / poll job         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `progress` is `0` while running and `100` when completed               |
 | Download content (`video`)  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Streamed MP4                                                           |

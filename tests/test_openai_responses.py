@@ -16,6 +16,9 @@ from openai import BadRequestError, NotFoundError, OpenAI
 
 from stdapi import usage
 from stdapi.config import SETTINGS
+from stdapi.models.chat._adapters._openai_common import JSON_OBJECT_SYSTEM_INSTRUCTION
+from stdapi.models.chat._default import ChatModel
+from stdapi.types.openai_responses import ResponseCreateParams
 from stdapi.usage import record_bedrock_usage
 
 if TYPE_CHECKING:
@@ -34,6 +37,24 @@ _CACHEABLE_CONTEXT = (
     "single API, with the capabilities needed to build generative AI "
     "applications with security, privacy and responsible AI. "
 ) * 150
+
+
+def _strip_code_fence(text: str) -> str:
+    """Strip a wrapping Markdown code fence (e.g. ` ```json `) from model output.
+
+    Args:
+        text: Raw model output, possibly fenced.
+
+    Returns:
+        ``text`` with a leading/trailing triple-backtick fence removed, or
+        ``text`` stripped of surrounding whitespace when it is not fenced.
+    """
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    lines = stripped.splitlines()
+    lines = lines[1:-1] if len(lines) > 1 and lines[-1].strip() == "```" else lines[1:]
+    return "\n".join(lines).strip()
 
 
 def _emf_lines(captured_out: str) -> list[dict[str, Any]]:
@@ -500,17 +521,15 @@ class TestResponses:
         responses_json_output_model: str,
         use_official_api: bool,
     ) -> None:
-        """``text.format={"type": "json_object"}`` returns a bare JSON object.
+        """``text.format={"type": "json_object"}`` returns the prompted JSON object.
 
         The word "json" must appear in the input or OpenAI rejects the request
         with a 400.  OpenAI's JSON mode constrains the syntax only, so the object
-        carries whatever the prompt asked for.  The gateway maps the format to
-        Bedrock Converse ``outputConfig``, which refuses a permissive object
-        schema (``{}``, ``{"type": "object"}`` and ``additionalProperties: true``
-        all raise ``ValidationException``), so it sends
-        ``{"type": "object", "additionalProperties": false}`` — a schema whose
-        only valid instance is ``{}``.  The prompted keys can therefore never
-        come back through the gateway, whatever the input says.
+        carries whatever the prompt asked for.  Upstream never wraps ``json_object``
+        output in a Markdown code fence, so the official lane requires the raw
+        prefix; the gateway's Bedrock-backed models are not constrained the same
+        way, so that lane tolerates a fence -- a common, harmless way models wrap
+        JSON -- rather than requiring an exact-prefix match.
 
         Ref: https://developers.openai.com/api/docs/guides/structured-outputs
              stdapi/models/chat/_adapters/_openai_responses.py:_build_output_config
@@ -528,18 +547,19 @@ class TestResponses:
         assert response.text is not None
         assert response.text.format is not None
         assert response.text.format.type == "json_object"
-        output_text = response.output_text
-        assert output_text.strip().startswith("{"), (
-            f"json_object output must not be wrapped in prose: {output_text!r}"
+        output_text = (
+            response.output_text
+            if use_official_api
+            else _strip_code_fence(response.output_text)
+        )
+        assert output_text.startswith("{"), (
+            f"json_object output must not be wrapped in prose: {response.output_text!r}"
         )
         parsed = json.loads(output_text)
         assert isinstance(parsed, dict), f"json_object must be an object: {parsed!r}"
-        if use_official_api:
-            # OpenAI only enforces JSON syntax, so the prompted content survives.
-            assert parsed, f"json_object must carry the prompted content: {parsed!r}"
-        else:
-            # The gateway's closed empty-object schema admits no other value.
-            assert parsed == {}, f"json_object schema admits only {{}}, got {parsed!r}"
+        assert "result" in parsed, (
+            f"json_object must carry the prompted content: {parsed!r}"
+        )
 
     def test_text_format_json_schema(
         self, openai_client: OpenAI, responses_json_output_model: str
@@ -2611,3 +2631,105 @@ class TestDeprecation:
         monkeypatch.setattr(SETTINGS, "__pydantic_fields_set__", set())
 
         assert SETTINGS.deprecated() == set()
+
+
+@pytest.mark.local
+class TestJsonObjectSystemInstruction:
+    """``text.format={"type": "json_object"}`` appends a JSON-only system block.
+
+    Bedrock's ``outputConfig`` has no schema for "any JSON object" (issue #96),
+    so ``create_response`` enforces the contract with a system-prompt
+    instruction instead, appended after any explicit ``instructions`` without
+    altering them.
+
+    Ref: stdapi/models/chat/_default.py:ChatModel.create_response
+         stdapi/models/chat/_adapters/_openai_common.py:enforce_json_object
+    """
+
+    @staticmethod
+    async def _captured_system_blocks(
+        monkeypatch: pytest.MonkeyPatch,
+        request: ResponseCreateParams,
+        request_log: dict[str, Any],
+    ) -> list[Any] | None:
+        """Run ``create_response`` against a stub Converse call and return ``system``.
+
+        Args:
+            monkeypatch: Fixture used to stub ``ChatModel.converse``.
+            request: Responses API request to translate.
+            request_log: Bound ``REQUEST_LOG`` context, read by ``format_response``.
+
+        Returns:
+            The ``system`` field of the captured Converse request body, or
+            ``None`` if the request carried no system blocks.
+        """
+        del request_log
+        captured: dict[str, Any] = {}
+
+        async def fake_converse(
+            _self: ChatModel, bedrock_request: dict[str, Any]
+        ) -> dict[str, Any]:
+            captured.update(bedrock_request)
+            return {
+                "output": {"message": {"role": "assistant", "content": []}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            }
+
+        monkeypatch.setattr(ChatModel, "converse", fake_converse)
+        await ChatModel("amazon.nova-2-lite-v1:0").create_response(
+            request, "resp-1", 0.0
+        )
+        return captured.get("system")
+
+    async def test_instruction_is_appended_after_the_instructions(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """Explicit ``instructions`` are preserved, with the instruction appended."""
+        request = ResponseCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "instructions": "You only speak in French.",
+                "input": "Reply in json.",
+                "text": {"format": {"type": "json_object"}},
+            }
+        )
+        system = await self._captured_system_blocks(monkeypatch, request, request_log)
+        assert system == [
+            {"text": "You only speak in French."},
+            JSON_OBJECT_SYSTEM_INSTRUCTION,
+        ]
+
+    async def test_no_instruction_for_plain_text(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """The default (text) ``text.format`` sends no extra system block."""
+        request = ResponseCreateParams.model_validate(
+            {"model": "test-model", "input": "hi"}
+        )
+        assert (
+            await self._captured_system_blocks(monkeypatch, request, request_log)
+            is None
+        )
+
+    async def test_no_instruction_for_json_schema(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """``json_schema`` output is already constrained, so no nudge is added."""
+        request = ResponseCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "input": "Reply in json.",
+                "text": {
+                    "format": {
+                        "type": "json_schema",
+                        "name": "answer",
+                        "schema": {"type": "object"},
+                    }
+                },
+            }
+        )
+        assert (
+            await self._captured_system_blocks(monkeypatch, request, request_log)
+            is None
+        )

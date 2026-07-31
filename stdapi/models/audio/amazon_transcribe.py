@@ -3,7 +3,7 @@
 from asyncio import gather, sleep
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Literal, NotRequired
+from typing import TYPE_CHECKING, Literal, NotRequired, cast
 from zlib import compress
 
 from botocore.exceptions import ClientError, ParamValidationError
@@ -67,6 +67,7 @@ if TYPE_CHECKING:
     from types_aiobotocore_transcribe.client import TranscribeServiceClient
     from types_aiobotocore_transcribe.type_defs import (
         StartTranscriptionJobRequestTypeDef,
+        ToxicityDetectionSettingsTypeDef,
     )
 
     from stdapi.input_file import InputFile
@@ -342,18 +343,16 @@ def _get_audio_duration(transcript_data: TranscribeJobData) -> float:
 _DEFAULT_MAX_SPEAKER_LABELS = 10
 
 #: Settings sub-fields flattened onto _TranscribeExtraParams (see its docstring)
-_SETTINGS_FIELDS = frozenset(
-    {
-        "ChannelIdentification",
-        "MaxAlternatives",
-        "MaxSpeakerLabels",
-        "ShowAlternatives",
-        "ShowSpeakerLabels",
-        "VocabularyFilterMethod",
-        "VocabularyFilterName",
-        "VocabularyName",
-    }
-)
+_SETTINGS_FIELDS: set[str] = {
+    "ChannelIdentification",
+    "MaxAlternatives",
+    "MaxSpeakerLabels",
+    "ShowAlternatives",
+    "ShowSpeakerLabels",
+    "VocabularyFilterMethod",
+    "VocabularyFilterName",
+    "VocabularyName",
+}
 
 
 def _apply_language_params(
@@ -415,9 +414,10 @@ def _apply_extra_settings(
         if extra.ModelSettings is not None:
             job_params["ModelSettings"] = extra.ModelSettings.model_dump()  # type: ignore[typeddict-item]
         if extra.ToxicityDetection is not None:
-            job_params["ToxicityDetection"] = [  # type: ignore[typeddict-item]
-                setting.model_dump() for setting in extra.ToxicityDetection
-            ]
+            job_params["ToxicityDetection"] = cast(
+                "list[ToxicityDetectionSettingsTypeDef]",
+                [setting.model_dump() for setting in extra.ToxicityDetection],
+            )
     if settings:
         job_params["Settings"] = settings  # type: ignore[typeddict-item]
 
@@ -782,11 +782,9 @@ def _pop_translate_extra_params(
     remaining = dict(extra_params)
     settings = remaining.pop("Settings", None)
     terminology_names = remaining.pop("TerminologyNames", None)
-    return (
-        remaining or None,
-        settings,  # type: ignore[return-value]
-        terminology_names,  # type: ignore[return-value]
-    )
+    # Both are handed to AWS Translate, which validates their shape and returns
+    # a clean 4xx; narrowing them here would only duplicate that check.
+    return (remaining or None, settings, terminology_names)  # type: ignore[return-value]
 
 
 class AudioModel(AudioModelBase[None, None]):
@@ -1082,7 +1080,7 @@ class AudioModel(AudioModelBase[None, None]):
         temperature: float | None = None,
         extra_params: JsonMapping | None = None,
         *,
-        logprobs: bool,  # noqa: ARG002
+        logprobs: bool,
     ) -> AsyncGenerator[TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent]:
         """Transcribe audio to text with streaming response.
 
@@ -1100,7 +1098,10 @@ class AudioModel(AudioModelBase[None, None]):
 
         Raises:
             ApiError: When transcription fails
+            UnsupportedParameterError: When ``logprobs`` is requested, as on the
+                non-streaming path -- Transcribe returns no log probabilities.
         """
+        self._validate_no_logprobs(logprobs)
         transcript_data = await self._transcribe(
             audio_content, response_format, language, prompt, temperature, extra_params
         )

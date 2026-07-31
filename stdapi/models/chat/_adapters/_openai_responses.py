@@ -655,7 +655,14 @@ def _build_output_config(
         text: Text configuration specifying the desired output format.
 
     Returns:
-        Bedrock JSON schema definition dict, or ``None`` for plain-text format.
+        Bedrock JSON schema definition dict, or ``None`` for plain-text and
+        ``json_object`` formats.  For ``json_object`` no schema is applied here:
+        Bedrock's structured output has no schema for "any JSON object" (an
+        empty schema is rejected, and ``{"type": "object",
+        "additionalProperties": false}`` admits only ``{}``). JSON syntax is
+        instead enforced by a system-prompt instruction appended in
+        ``ChatModel.create_response`` (``_openai_common.enforce_json_object``),
+        which is a best-effort nudge rather than a decoding-level constraint.
     """
     if text is None or text.format is None:
         return None
@@ -663,13 +670,7 @@ def _build_output_config(
         case ResponseFormatText():
             return None
         case ResponseFormatJSONObject():
-            # Bedrock rejects an empty ``{}`` schema ("Empty schema that
-            # accepts any JSON value is not supported") and, under strict
-            # structured output, requires ``additionalProperties: false``
-            # on every object. The closest universal representation of
-            # "any JSON object" is therefore an object with no declared
-            # properties and additional properties disallowed.
-            return {"schema": '{"type": "object", "additionalProperties": false}'}
+            return None
         case ResponseFormatTextJSONSchemaConfig(
             name=name, schema_=schema, description=description
         ):

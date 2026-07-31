@@ -64,7 +64,7 @@ Generate model responses with Amazon Bedrock foundation models through an OpenAI
 | `tool_choice: "none"`                                                 |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Prevents tool calls                                                          |
 | Named `tool_choice` (force)                                           |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Force a specific function to be called                                       |
 | `tool_choice: allowed_tools`                                          |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Approximated: `required` + 1 function → forced tool; `required` + many → any tool; `auto` → auto; type-variants add no constraint |
-| `parallel_tool_calls`                                                 |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Echoed in response; not transmitted to Converse — forwarded upstream on Bedrock Mantle native models |
+| `parallel_tool_calls`                                                 |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Accepted for every model and honored by models able to constrain tool use; echoed in the response, which reports the tool calls actually made |
 | Built-in tools (`code_interpreter`, `web_search`, `image_generation`) |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | See [OpenAI Integrated Tools](#openai-integrated-tools)                      |
 | `file_search` tool                                                    |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | No Converse equivalent — accepted and dropped; forwarded upstream on Bedrock Mantle native models |
 | `computer` / `computer_use_preview` tools                             |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | No Converse equivalent — accepted and dropped (see [Computer Use Not Supported](#computer-use-not-supported)); forwarded upstream on Bedrock Mantle native models |
@@ -102,7 +102,7 @@ Generate model responses with Amazon Bedrock foundation models through an OpenAI
 | `moderation`                                                          |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Applies an Amazon Bedrock guardrail; results in the response `moderation` field (on the terminal event when streaming) — rejected (`400`) on Mantle-served models |
 | **Output Format**                                                     |                                         |                                                                              |
 | `text.format: "text"`                                                 |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Plain text output                                                            |
-| `text.format: "json_object"`                                          |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | JSON object output via Bedrock outputConfig                                  |
+| `text.format: "json_object"`                                          |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Accepted for all models; syntactically valid JSON is not guaranteed for every model |
 | `text.format: "json_schema"`                                          |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Structured JSON output with schema validation                                |
 | **Multi-Turn**                                                        |                                         |                                                                              |
 | `previous_response_id`                                                |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Continues a response stored with `store=true`                                |
@@ -298,6 +298,12 @@ If an error occurs mid-stream, a spec `error` event (with `code`, `message`, `pa
 Request machine-readable output using `text.format`.
 
 **JSON object:**
+
+`json_object` is not schema-validated: the gateway asks the model to reply with a
+JSON object on your behalf, but nothing constrains its decoding, so this is a
+best-effort guarantee rather than a hard one. Including the word "JSON" in the
+input, as below, still helps the model comply. Use `json_schema` when the
+response must conform to a specific shape.
 
 ```bash
 curl -X POST "$BASE/v1/responses" \

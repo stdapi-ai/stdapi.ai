@@ -5,7 +5,7 @@ specification shape, calling AWS Bedrock rerank models (e.g., Amazon Rerank,
 Cohere Rerank) through the Bedrock Rerank API.
 """
 
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends
 
@@ -19,6 +19,9 @@ from stdapi.models.rerank import get_rerank_model
 from stdapi.monitoring import REQUEST_ID, log_request_params, log_response_params
 from stdapi.types.cohere import ApiMeta, BilledUnits
 from stdapi.types.cohere_rerank import RerankRequest, RerankResponse, RerankResult
+
+if TYPE_CHECKING:
+    from stdapi.types import JsonMapping
 
 register_route_capability(
     "cohere_rerank",
@@ -96,8 +99,11 @@ async def rerank(
     extra_params = get_extra_model_parameters(model_id, request)
     if request.max_tokens_per_doc is not None:
         extra_params["max_tokens_per_doc"] = request.max_tokens_per_doc
+    # A fresh list: `rerank` accepts a mix of str/mapping documents, but
+    # `request.documents` is invariantly typed as `list[str]`.
+    documents: list[str | JsonMapping] = list(request.documents)
     response = await get_rerank_model(model_id).rerank(
-        request.query, request.documents, top_n=request.top_n, extra_params=extra_params
+        request.query, documents, top_n=request.top_n, extra_params=extra_params
     )
     return log_response_params(
         RerankResponse(

@@ -11,6 +11,7 @@ from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.config import SETTINGS
 from stdapi.files import (
+    DEFAULT_PURPOSE,
     FileRecord,
     delete_file,
     get_file,
@@ -79,6 +80,11 @@ _FileId = Annotated[
 def _to_file_object(record: FileRecord) -> FileObject:
     """Convert a ``_FileRecord`` to an OpenAI ``FileObject`` response.
 
+    The ``purpose or DEFAULT_PURPOSE`` fallback only matters for records
+    written before ``upload_file`` started storing the default explicitly for
+    every input source (including ``s3://``/``file-id:`` references); every
+    current record already carries a stored purpose.
+
     Args:
         record: Internal ``_FileRecord`` instance.
 
@@ -90,7 +96,7 @@ def _to_file_object(record: FileRecord) -> FileObject:
         bytes=record.size,
         created_at=int(record.created_at.timestamp()),
         filename=record.filename,
-        purpose=record.purpose or "user_data",
+        purpose=record.purpose or DEFAULT_PURPOSE,
         status="processed",
         expires_at=record.expires_at,
     )

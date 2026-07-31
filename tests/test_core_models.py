@@ -19,8 +19,10 @@ from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from pydantic import SecretStr
+from starlette.testclient import TestClient
 
-from stdapi import pricing
+from stdapi import auth, pricing
 from stdapi.config import SETTINGS
 from stdapi.models import MANTLE_SERVICE, ModelDetails
 from stdapi.pricing import Dimension, Price, PriceKey, Service
@@ -30,8 +32,6 @@ from tests.conftest import set_test_price
 
 if TYPE_CHECKING:
     from collections.abc import Generator
-
-    from starlette.testclient import TestClient
 
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
@@ -90,11 +90,43 @@ _FAKE_INPUT_MODS: dict[str, set[str]] = {
 
 
 @pytest.fixture(scope="module")
-def client(test_client: TestClient | None) -> TestClient:
-    """Return the session test client, skipping if not running locally."""
-    if test_client is None:
-        pytest.skip("Requires local test server")
-    return test_client
+def client() -> TestClient:
+    """In-process ASGI client with no app lifespan.
+
+    Every route under test below patches out the Bedrock model registry and
+    the price index (``fake_models``, ``priced_catalog``), so the app's live
+    AWS startup work is never needed here. Unlike ``app_client``, no
+    ``Authorization`` header is baked in: every test sets its own, including
+    the 401 tests in ``TestSearchModelsAuthentication``.
+    """
+    from stdapi.main import app  # noqa: PLC0415
+
+    return TestClient(app)
+
+
+@pytest.fixture
+async def authenticated_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """Lifespan-free client backed by a freshly initialized real auth handler.
+
+    ``client`` runs with no app lifespan, so the module-global
+    ``stdapi.auth._auth_handler`` is never initialized and ``authenticate``
+    accepts every request regardless of credentials. Initializing a fresh
+    handler here (offline: ``SETTINGS.api_key`` only, no SSM/Secrets Manager
+    call) restores real 401 enforcement for the auth tests without paying for
+    the app's live AWS startup work.
+
+    Ref: stdapi/auth.py:AuthenticationHandler
+         tests/test_openai_moderations.py:test_missing_or_wrong_bearer_returns_401_envelope
+    """
+    from stdapi.main import app  # noqa: PLC0415
+
+    monkeypatch.setattr(SETTINGS, "api_key", SecretStr("core-models-test-key"))
+    monkeypatch.setattr(SETTINGS, "api_key_ssm_parameter", None)
+    monkeypatch.setattr(SETTINGS, "api_key_secretsmanager_secret", None)
+    handler = auth.AuthenticationHandler()
+    assert await handler.initialize() is True
+    monkeypatch.setattr(auth, "_auth_handler", handler)
+    return TestClient(app)
 
 
 @pytest.fixture
@@ -160,15 +192,19 @@ class TestSearchModelsAuthentication:
          stdapi/utils.py:hide_security_details
     """
 
-    def test_missing_api_key_returns_401(self, client: TestClient) -> None:
+    def test_missing_api_key_returns_401(
+        self, authenticated_client: TestClient
+    ) -> None:
         """GET /search_models without credentials is rejected with HTTP 401."""
-        response = client.get("/search_models")
+        response = authenticated_client.get("/search_models")
         assert response.status_code == 401
         assert response.json() == {"error": "Unauthorized"}
 
-    def test_invalid_api_key_returns_401(self, client: TestClient) -> None:
+    def test_invalid_api_key_returns_401(
+        self, authenticated_client: TestClient
+    ) -> None:
         """GET /search_models with a wrong API key is rejected with the same opaque 401."""
-        response = client.get(
+        response = authenticated_client.get(
             "/search_models", headers={"Authorization": "Bearer wrong-key"}
         )
         assert response.status_code == 401
@@ -176,9 +212,10 @@ class TestSearchModelsAuthentication:
 
 
 class TestSearchModels:
-    """GET /search_models without filters returns the whole catalogue.
+    """GET /search_models without filters returns the catalogue minus legacy models.
 
     Ref: stdapi/routes/core_models.py:search_models
+         https://github.com/stdapi-ai/stdapi.ai/issues/94
     """
 
     def test_returns_200(self, client: TestClient, fake_models: dict[str, str]) -> None:
@@ -187,20 +224,21 @@ class TestSearchModels:
         assert response.status_code == 200
         assert isinstance(response.json(), list)
 
-    def test_returns_all_models_sorted(
+    def test_returns_non_legacy_models_sorted(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """Unfiltered response contains every catalogue model, sorted by ID.
+        """Unfiltered response excludes legacy models, sorted by ID.
 
-        Legacy models are advertised by default: ``legacy`` is only a filter, so
-        the legacy speech model is part of the unfiltered listing.
+        A caller discovering models through the unfiltered listing must be able
+        to invoke every model it returns, so the legacy speech model — no longer
+        guaranteed invokable — is left out unless ``legacy=true`` is requested.
 
         Ref: https://github.com/stdapi-ai/stdapi.ai/issues/94
         """
         ids = _get_ids(client, {}, fake_models)
-        assert ids == sorted(_FAKE_MODELS.keys())
+        assert ids == sorted({_TEXT_MODEL.id, _IMAGE_MODEL.id})
         assert _SPEECH_MODEL.legacy is True
-        assert _SPEECH_MODEL.id in ids
+        assert _SPEECH_MODEL.id not in ids
 
     def test_response_item_required_fields(
         self, client: TestClient, fake_models: dict[str, str]
@@ -208,9 +246,14 @@ class TestSearchModels:
         """Every catalogue entry round-trips through ``ModelDetails`` unchanged.
 
         The route returns registry objects directly, so each item must equal its
-        catalogue entry serialised with ``exclude_none``.
+        catalogue entry serialised with ``exclude_none``. Both legacy and
+        non-legacy entries are fetched (two calls) to cover the whole catalogue.
         """
-        items = {str(item["id"]): item for item in _get(client, {}, fake_models)}
+        items = {
+            str(item["id"]): item
+            for params in ({}, {"legacy": "true"})
+            for item in _get(client, params, fake_models)
+        }
         assert set(items) == set(_FAKE_MODELS)
         for item in items.values():
             assert "id" in item
@@ -234,10 +277,13 @@ class TestSearchModels:
         while the fields that do have values stay present.
         """
         items = {m["id"]: m for m in _get(client, {}, fake_models)}
+        legacy_items = {
+            m["id"]: m for m in _get(client, {"legacy": "true"}, fake_models)
+        }
         assert "legacy" not in items[_IMAGE_MODEL.id]
         assert "inference_profiles" not in items[_IMAGE_MODEL.id]
         assert items[_TEXT_MODEL.id]["legacy"] is False
-        assert items[_SPEECH_MODEL.id]["legacy"] is True
+        assert legacy_items[_SPEECH_MODEL.id]["legacy"] is True
 
 
 class TestFilterByInputModality:
@@ -257,7 +303,11 @@ class TestFilterByInputModality:
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
         """input_modalities=SPEECH returns only models accepting SPEECH input."""
-        ids = set(_get_ids(client, {"input_modalities": "SPEECH"}, fake_models))
+        ids = set(
+            _get_ids(
+                client, {"input_modalities": "SPEECH", "legacy": "true"}, fake_models
+            )
+        )
         assert ids == {"vendor.speech-v1"}
 
     def test_input_modality_case_insensitive(
@@ -297,8 +347,18 @@ class TestFilterByOutputModality:
     def test_text_output_returns_text_models(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """output_modalities=TEXT returns only models producing TEXT output."""
-        ids = set(_get_ids(client, {"output_modalities": "TEXT"}, fake_models))
+        """output_modalities=TEXT returns only models producing TEXT output.
+
+        Queried with and without ``legacy=true`` (two calls) since the legacy
+        speech model is otherwise excluded from the default listing.
+        """
+        ids = {
+            mid
+            for legacy in ("false", "true")
+            for mid in _get_ids(
+                client, {"output_modalities": "TEXT", "legacy": legacy}, fake_models
+            )
+        }
         assert ids == {"vendor.text-chat-v1", "vendor.speech-v1"}
 
     def test_image_output_returns_image_model(
@@ -343,8 +403,18 @@ class TestFilterByRoute:
     def test_filter_by_transcription_route(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """route=/v1/audio/transcriptions returns only transcription-capable models."""
-        ids = set(_get_ids(client, {"route": "/v1/audio/transcriptions"}, fake_models))
+        """route=/v1/audio/transcriptions returns only transcription-capable models.
+
+        Queried with ``legacy=true`` since the only transcription model is
+        legacy and otherwise excluded by default.
+        """
+        ids = set(
+            _get_ids(
+                client,
+                {"route": "/v1/audio/transcriptions", "legacy": "true"},
+                fake_models,
+            )
+        )
         assert ids == {"vendor.speech-v1"}
 
     def test_filter_by_mcp_tool_name(
@@ -397,8 +467,18 @@ class TestFilterByRegion:
     def test_filter_by_us_east_1(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """region=us-east-1 returns models available in that region."""
-        ids = set(_get_ids(client, {"region": "us-east-1"}, fake_models))
+        """region=us-east-1 returns models available in that region.
+
+        Queried with and without ``legacy=true`` (two calls) since the legacy
+        speech model is otherwise excluded from the default listing.
+        """
+        ids = {
+            mid
+            for legacy in ("false", "true")
+            for mid in _get_ids(
+                client, {"region": "us-east-1", "legacy": legacy}, fake_models
+            )
+        }
         assert ids == {"vendor.text-chat-v1", "vendor.speech-v1"}
 
     def test_filter_by_us_west_2(
@@ -414,9 +494,13 @@ class TestFilterByRegion:
         """A secondary region in a model's ``regions`` list is matched too.
 
         The speech model lists ``eu-west-1`` after ``us-east-1``, so matching is
-        membership-based rather than keyed on a primary region.
+        membership-based rather than keyed on a primary region. Queried with
+        ``legacy=true`` since the model is legacy and otherwise excluded by
+        default.
         """
-        ids = set(_get_ids(client, {"region": "eu-west-1"}, fake_models))
+        ids = set(
+            _get_ids(client, {"region": "eu-west-1", "legacy": "true"}, fake_models)
+        )
         assert ids == {"vendor.speech-v1"}
 
     def test_unknown_region_returns_400(
@@ -451,8 +535,18 @@ class TestFilterByStreaming:
     def test_streaming_false_returns_non_streaming_models(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """streaming=false returns exactly the models flagged response_streaming=False."""
-        ids = set(_get_ids(client, {"streaming": "false"}, fake_models))
+        """streaming=false returns exactly the models flagged response_streaming=False.
+
+        Queried with and without ``legacy=true`` (two calls) since the legacy
+        speech model is otherwise excluded from the default listing.
+        """
+        ids = {
+            mid
+            for legacy in ("false", "true")
+            for mid in _get_ids(
+                client, {"streaming": "false", "legacy": legacy}, fake_models
+            )
+        }
         assert ids == {"vendor.image-gen-v1", "vendor.speech-v1"}
 
     def test_streaming_excludes_models_with_unset_streaming_support(
@@ -672,12 +766,14 @@ class TestModelPricingEndpoint:
          stdapi/routes/core_models.py:model_pricing
     """
 
-    def test_missing_api_key_returns_401(self, client: TestClient) -> None:
+    def test_missing_api_key_returns_401(
+        self, authenticated_client: TestClient
+    ) -> None:
         """Authentication is checked before cost tracking, so an anonymous call is a 401.
 
         Ref: stdapi/auth.py:AuthenticationHandler.verify_credentials
         """
-        response = client.get("/model_pricing", params={"model": "x"})
+        response = authenticated_client.get("/model_pricing", params={"model": "x"})
         assert response.status_code == 401
         assert response.json() == {"error": "Unauthorized"}
 

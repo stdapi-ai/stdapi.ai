@@ -14,6 +14,7 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from stdapi.api_errors import UnsupportedParameterError
+from stdapi.types import BaseModelRequestWithFormExtra
 from stdapi.types.openai_chat_completions import (
     ChatCompletionList,
     ChatCompletionStoreMessageList,
@@ -21,6 +22,7 @@ from stdapi.types.openai_chat_completions import (
 )
 from stdapi.types.openai_responses import (
     AdditionalTools,
+    CallerProgram,
     CompactParams,
     FunctionCallInput,
     FunctionTool,
@@ -266,11 +268,11 @@ class TestToolCallerParity:
             call_id="c1",
             name="f",
             type="function_call",
-            caller={"type": "program", "caller_id": "p1"},
+            caller=CallerProgram(type="program", caller_id="p1"),
         )
         assert item.caller is not None
         assert item.caller.type == "program"
-        assert item.caller.caller_id == "p1"  # type: ignore[union-attr]
+        assert item.caller.caller_id == "p1"
 
     def test_response_function_tool_call_accepts_program_caller(self) -> None:
         """A function_call output item retains a program caller instead of dropping it."""
@@ -279,11 +281,11 @@ class TestToolCallerParity:
             call_id="c1",
             name="f",
             type="function_call",
-            caller={"type": "program", "caller_id": "p1"},
+            caller=CallerProgram(type="program", caller_id="p1"),
         )
         assert item.caller is not None
         assert item.caller.type == "program"
-        assert item.caller.caller_id == "p1"  # type: ignore[union-attr]
+        assert item.caller.caller_id == "p1"
 
     def test_response_custom_tool_call_accepts_program_caller(self) -> None:
         """A custom_tool_call output item retains a program caller instead of dropping it."""
@@ -292,11 +294,11 @@ class TestToolCallerParity:
             input="x",
             name="f",
             type="custom_tool_call",
-            caller={"type": "program", "caller_id": "p1"},
+            caller=CallerProgram(type="program", caller_id="p1"),
         )
         assert item.caller is not None
         assert item.caller.type == "program"
-        assert item.caller.caller_id == "p1"  # type: ignore[union-attr]
+        assert item.caller.caller_id == "p1"
 
 
 class TestPromptCacheRetentionParity:
@@ -461,3 +463,46 @@ class TestVideoParity:
         )
         assert video.remixed_from_video_id is None
         assert "remixed_from_video_id" not in video.model_dump(exclude_none=True)
+
+
+class _FormParams(BaseModelRequestWithFormExtra):
+    """Minimal multipart-form request type for extra-parameter coercion tests."""
+
+    model: str
+    prompt: str = ""
+
+
+class TestFormExtraParameterParity:
+    """Extra model parameters get the same typing over multipart as over JSON.
+
+    A JSON body already delivers non-string extra values (numbers, booleans) as
+    their native Python type; a multipart/form-data body only has strings.
+    ``BaseModelRequestWithFormExtra._deserialize_forms`` JSON-decodes extra
+    (undeclared) field values so both surfaces agree, without touching declared
+    string fields, which must reach the model verbatim even if they look like
+    JSON (a `prompt` of literal text "null" must stay the string "null").
+
+    Ref: https://platform.openai.com/docs/api-reference/images/createVariation
+         (multipart/form-data; `extra_body` values are form-encoded strings)
+         stdapi/types/__init__.py:BaseModelRequestWithFormExtra._deserialize_forms
+    """
+
+    def test_extra_numeric_string_is_json_decoded(self) -> None:
+        """A numeric extra parameter arriving as a form string becomes a float."""
+        params = _FormParams.model_validate({"model": "m", "strength": "0.7"})
+        assert params.model_extra == {"strength": 0.7}
+
+    def test_extra_boolean_string_is_json_decoded(self) -> None:
+        """A boolean extra parameter arriving as a form string becomes a bool."""
+        params = _FormParams.model_validate({"model": "m", "flag": "true"})
+        assert params.model_extra == {"flag": True}
+
+    def test_declared_string_field_is_not_coerced(self) -> None:
+        """A declared string field keeps a JSON-look-alike value verbatim."""
+        params = _FormParams.model_validate({"model": "m", "prompt": "null"})
+        assert params.prompt == "null"
+
+    def test_non_json_extra_string_stays_a_string(self) -> None:
+        """An extra value that is not valid JSON is kept as-is, not dropped."""
+        params = _FormParams.model_validate({"model": "m", "note": "hello there"})
+        assert params.model_extra == {"note": "hello there"}

@@ -45,11 +45,11 @@ class TestMistralVoxtralTranscriptions:
         """``response_format=json`` returns the transcript plus token usage.
 
         Voxtral is billed per token, so the gateway emits the ``tokens`` usage variant
-        built from the Bedrock ``usage`` block. This path reports ``audio_tokens: 0``
-        and fills ``text_tokens`` from Bedrock's ``cached_tokens`` — inconsistent with
-        the streaming path, which attributes every input token to audio (issue #95).
-        Only the breakdown's consistency with ``input_tokens`` is asserted here so the
-        test does not enshrine either mapping as intended.
+        built from the Bedrock ``usage`` block. ``text_tokens`` is derived as
+        ``prompt_tokens - audio_tokens`` rather than read from Bedrock's
+        ``cached_tokens`` (issue #95). Bedrock reports ``audio_tokens=0`` for this
+        short sample even though the prompt is entirely audio, so the breakdown is
+        omitted entirely rather than attributing the whole prompt to text.
 
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/models/audio/mistral_voxtral.py:AudioModel.stt
@@ -76,14 +76,9 @@ class TestMistralVoxtralTranscriptions:
         assert usage.output_tokens > 0
         assert usage.total_tokens == usage.input_tokens + usage.output_tokens
 
-        # Validate input token details
-        details = usage.input_token_details
-        assert details is not None, "Audio prompt token breakdown is missing"
-        assert details.audio_tokens is not None
-        assert details.text_tokens is not None
-        assert details.audio_tokens + details.text_tokens <= usage.input_tokens, (
-            f"Token breakdown exceeds the billed input tokens: {usage!r}"
-        )
+        # Bedrock reports audio_tokens=0 for this short sample, so the breakdown
+        # is omitted rather than fabricated (issue #95).
+        assert usage.input_token_details is None
 
     @pytest.mark.parametrize("model_id", VOXTRAL_ALL)
     def test_transcription_text_format(
@@ -235,10 +230,13 @@ class TestMistralVoxtralTranscriptions:
         Voxtral streams real Bedrock chunks, so several deltas may arrive; the closing
         ``transcript.text.done`` event repeats the concatenated deltas verbatim and is
         the only event carrying usage, taken from
-        ``amazon-bedrock-invocationMetrics``.
+        ``amazon-bedrock-invocationMetrics``. That footer has no audio/text split, so
+        ``input_token_details`` is omitted rather than attributing every input token
+        to audio as it previously did (issue #95).
 
         Ref: https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create
              stdapi/models/audio/mistral_voxtral.py:AudioModel.stt_stream
+             https://github.com/stdapi-ai/stdapi.ai/issues/95
         """
         response = openai_client.audio.transcriptions.create(
             file=("test.mp3", sample_audio_mp3_file), model=model_id, stream=True
@@ -268,11 +266,8 @@ class TestMistralVoxtralTranscriptions:
                 assert usage.input_tokens > 0
                 assert usage.output_tokens > 0
                 assert usage.total_tokens == usage.input_tokens + usage.output_tokens
-                assert usage.input_token_details is not None
-                # The streaming path attributes every input token to audio, while the
-                # non-streaming path reports audio_tokens=0 (issue #95).
-                assert usage.input_token_details.audio_tokens == usage.input_tokens
-                assert usage.input_token_details.text_tokens == 0
+                # Bedrock's streaming footer carries no audio/text split.
+                assert usage.input_token_details is None
 
         assert len(chunks) > 0
         assert has_delta_events

@@ -192,6 +192,17 @@ class AudioModel(AudioModelBase[_Request, _Response]):
             return Response(content=content, media_type="text/plain; charset=utf-8")
 
         usage = response["usage"]
+        input_token_details = None
+        if "prompt_tokens_details" in usage:
+            audio_tokens = usage["prompt_tokens_details"].get("audio_tokens", 0)
+            # Bedrock sometimes reports audio_tokens=0 even for an audio-dominated
+            # prompt (issue #95); treat that as "not populated" rather than derive
+            # a text_tokens breakdown that would attribute the whole prompt to text.
+            if audio_tokens:
+                input_token_details = UsageInputTokenDetails(
+                    audio_tokens=audio_tokens,
+                    text_tokens=usage["prompt_tokens"] - audio_tokens,
+                )
         return Transcription(
             text=content,
             logprobs=choice.get("logprobs") if logprobs else None,
@@ -199,12 +210,7 @@ class AudioModel(AudioModelBase[_Request, _Response]):
                 input_tokens=usage["prompt_tokens"],
                 output_tokens=usage["completion_tokens"],
                 total_tokens=usage["total_tokens"],
-                input_token_details=UsageInputTokenDetails(
-                    audio_tokens=usage["prompt_tokens_details"]["audio_tokens"],
-                    text_tokens=usage["prompt_tokens_details"]["cached_tokens"],
-                )
-                if "prompt_tokens_details" in usage
-                else None,
+                input_token_details=input_token_details,
             ),
         )
 
@@ -261,6 +267,10 @@ class AudioModel(AudioModelBase[_Request, _Response]):
             ):
                 metrics = chunk["amazon-bedrock-invocationMetrics"]  # type: ignore[typeddict-item]
 
+        # amazon-bedrock-invocationMetrics carries only the raw input/output token
+        # counts, with no audio/text split, so input_token_details is left unset
+        # rather than guessing a breakdown (unlike the non-streaming response body,
+        # which reports prompt_tokens_details).
         yield TranscriptionTextDoneEvent(
             text="".join(full_text_parts),
             type="transcript.text.done",
@@ -270,9 +280,6 @@ class AudioModel(AudioModelBase[_Request, _Response]):
                 output_tokens=metrics["outputTokenCount"],
                 total_tokens=metrics["inputTokenCount"] + metrics["outputTokenCount"],
                 type="tokens",
-                input_token_details=UsageInputTokenDetails(
-                    audio_tokens=metrics["inputTokenCount"], text_tokens=0
-                ),
             )
             if metrics
             else None,

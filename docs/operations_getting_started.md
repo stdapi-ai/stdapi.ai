@@ -152,7 +152,7 @@ stdapi.ai is compatible with both OpenAI and Anthropic SDKs. If you've used eith
 !!! tip "Discover the full model catalog"
     Once your first call succeeds, switch the `model` field to any other Bedrock model — `anthropic.claude-fable-5`, `anthropic.claude-sonnet-5`, `qwen.qwen3-coder-next`, and more.
 
-    - **Browse all models (recommended):** `GET /search_models` — returns every discovered model with full details (provider, modalities, supported routes, regions, streaming/legacy status). Or open the interactive Swagger docs.
+    - **Browse active models (recommended):** `GET /search_models` — returns every discovered non-legacy model with full details (provider, modalities, supported routes, regions, streaming/legacy status). Add `legacy=true` to look up a deprecated model instead. Or open the interactive Swagger docs.
     - **Find a model by capability:** the same endpoint filters by modality, route, region, streaming, or legacy status — e.g. `GET /search_models?input_modalities=IMAGE&route=/v1/chat/completions` returns only vision-capable chat models. This is also the recommended way for AI agents to discover the right model ID before calling another endpoint. See the [Search Models API](api_search_models.md) reference.
     - **OpenAI SDK compatibility:** `GET /v1/models` is also available with the standard OpenAI listing format (lighter payload, no capability metadata) for tools that require the exact OpenAI schema.
 

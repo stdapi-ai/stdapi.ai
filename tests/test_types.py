@@ -2,8 +2,11 @@
 
 ``multipart/form-data`` has no nested types, so the Images routes accept
 PHP/HTML-style bracket keys (``params[key][]``) and the model's ``before``
-validator rebuilds the nested Bedrock payload from them. Only values that arrived
-under a bracket key are JSON-decoded; a plain key is copied through verbatim.
+validator rebuilds the nested Bedrock payload from them. A string value is
+JSON-decoded whenever its key is not a field declared on the model — whether
+that key is plain or bracketed — so a multipart or JSON extra parameter reaches
+``model_extra`` with the same type either way; a value under a declared field
+name is always left untouched.
 
 Ref: stdapi/types/__init__.py:BaseModelRequestWithFormExtra
      https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
@@ -103,7 +106,10 @@ class TestBaseModelRequestWithFormExtra:
             pytest.param(
                 {"param": "not-json-value"},
                 {"param": "not-json-value"},
-                id="bracket-free-value-not-json-decoded",
+                id="plain-key-non-json-value-kept-as-is",
+            ),
+            pytest.param(
+                {"count": "42"}, {"count": 42}, id="plain-key-json-value-decoded"
             ),
             pytest.param({}, {}, id="empty-payload"),
         ],
@@ -114,7 +120,10 @@ class TestBaseModelRequestWithFormExtra:
         """A bracket path is expanded into the nested dicts and lists it describes.
 
         A numeric or empty final segment yields a list; every other segment yields a
-        dict. Keys carrying no bracket are copied through verbatim, value included.
+        dict. Keys carrying no bracket go through the same JSON-decode attempt as a
+        bracket leaf, so a plain-key value that parses as JSON (e.g. ``"42"``) comes
+        out decoded, and one that does not (e.g. ``"not-json-value"``) is kept as the
+        original string.
         """
         assert _form_extra(payload) == expected
 
@@ -122,8 +131,7 @@ class TestBaseModelRequestWithFormExtra:
         """Two keys sharing a prefix merge into one dict instead of overwriting it.
 
         The Nova Canvas virtual-try-on payload sends ``maskType`` and
-        ``imageBasedMask[maskImage]`` under the same parent, which the original
-        implementation flattened into a single overwritten branch.
+        ``imageBasedMask[maskImage]`` under the same parent.
         """
         extra = _form_extra(
             {
@@ -199,7 +207,6 @@ class TestBaseModelRequestWithFormExtra:
         Ref: stdapi/types/__init__.py:_navigate_bracket_part
         """
         extra = _form_extra({"outer[][inner]": "value"})
-        # Expected: outer should be an array containing one dict with key 'inner'
         assert extra == {"outer": [{"inner": "value"}]}
 
     def test_real_world_virtual_tryon_params(self) -> None:

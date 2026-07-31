@@ -118,8 +118,10 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
         is_data: tuple[bool, ...] = tuple(isinstance(v, InputFile) for v in inputs)
         if all(is_data):
-            images: list[InputFile] = inputs  # type: ignore[assignment]
-            request["images"] = await gather(*(image.to_data_uri() for image in images))
+            image_inputs: list[InputFile] = inputs  # type: ignore[assignment]
+            request["images"] = await gather(
+                *(image.to_data_uri() for image in image_inputs)
+            )
             if self._model_id.endswith("v3"):
                 request["input_type"] = "image"
         elif any(is_data):
@@ -150,9 +152,14 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             raise ApiError(msg)
         input_tokens = result.input_tokens or 0
         images = result.response.get("images")
+        # A fresh dict: `resp` is keyed by the narrower `_EmbeddingType` literal,
+        # but `embeddings_by_type` is invariantly typed as `dict[str, ...]`.
+        embeddings_by_type: dict[str, list[list[float | int]]] | None = (
+            dict(resp.items()) if isinstance(resp, dict) else None
+        )
         return EmbeddingResponse(
             embeddings=resp["float"] if isinstance(resp, dict) else resp,
-            embeddings_by_type=resp if isinstance(resp, dict) else None,
+            embeddings_by_type=embeddings_by_type,
             prompt_tokens=input_tokens,
             total_tokens=input_tokens + (result.output_tokens or 0),
             images=(

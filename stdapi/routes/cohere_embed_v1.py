@@ -109,12 +109,12 @@ async def embed_v1(
         if request.truncate is not None:
             extra_params["truncate"] = request.truncate
         if native_embedding_types is not None:
-            extra_params["embedding_types"] = native_embedding_types
+            extra_params["embedding_types"] = list(native_embedding_types)
     elif (
         model_id.startswith(TITAN_EMBED_V2_PREFIX)
         and native_embedding_types is not None
     ):
-        extra_params["embeddingTypes"] = native_embedding_types
+        extra_params["embeddingTypes"] = list(native_embedding_types)
     response = await get_embedding_model(model_id).embed_text(
         [*(request.texts or ()), *(request.images or ())],
         dimensions=None,

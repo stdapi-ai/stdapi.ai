@@ -12,6 +12,7 @@ from stdapi.models.image._stability import (
     StabilityImageGenerationJobBase,
     StabilityImageModelBase,
 )
+from stdapi.utils import alpha_mask_to_bw
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Iterable
@@ -33,7 +34,9 @@ class _InpaintJob(StabilityImageGenerationJobBase):
             "image": self._get_one_image_from_list(images),
         }
         if mask:
-            request["mask"] = mask
+            # Stability reads white as the edit region, the opposite of Nova/Titan's
+            # black-marks-edit convention, so an OpenAI-style alpha mask inverts.
+            request["mask"] = await alpha_mask_to_bw(mask, invert=True)
         self._finalize_request(request)
         return tuple(
             self._get_image_from_response(request, index)

@@ -27,6 +27,7 @@ from asyncio import gather
 from base64 import b32decode, b32hexdecode, b32hexencode
 from binascii import Error as _BinasciiError
 from binascii import crc32 as _crc32
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from itertools import chain
@@ -41,6 +42,7 @@ from stdapi.api_errors import FileNotExistError as _FileNotFoundError
 from stdapi.aws import get_client
 from stdapi.aws_s3 import (
     BUCKET_TO_REGION,
+    S3_TAGGING,
     require_s3_bucket_for_region,
     track_temporary_s3_objects,
 )
@@ -52,24 +54,35 @@ from stdapi.utils import now_utc_timestamp, parse_content_disposition_filename
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
-    from typing import NotRequired, TypedDict
+    from typing import TypedDict
 
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_s3.client import S3Client
-    from types_aiobotocore_s3.type_defs import HeadObjectOutputTypeDef
+    from types_aiobotocore_s3.type_defs import (
+        CopySourceTypeDef,
+        HeadObjectOutputTypeDef,
+    )
 
     from stdapi.input_file import InputFile
 
     #: S3 object metadata fields for stored files.
-    _FileMetadata = TypedDict(
-        "_FileMetadata", {"expires-at": str, "purpose": NotRequired[str]}
-    )
+    _FileMetadata = TypedDict("_FileMetadata", {"expires-at": str, "purpose": str})
 
 #: Characters forbidden in filenames per the Anthropic Files API specification.
 _FILENAME_FORBIDDEN_RE = re_compile(r'[<>:"|?*\\/]|[\x00-\x1f]')
 
 #: Maximum filename length per the Anthropic spec.
 _FILENAME_MAX_LEN: int = 500
+
+#: OpenAI purpose stored for files uploaded without a purpose (OpenAI's "any purpose" value).
+DEFAULT_PURPOSE = "user_data"
+
+#: S3's hard size limit for a single-request ``CopyObject`` call; larger objects
+#: need the multipart ``UploadPartCopy`` API instead.
+_COPY_OBJECT_MAX_BYTES = 5 * 1024**3
+
+#: Part size used when correcting metadata on an object above :data:`_COPY_OBJECT_MAX_BYTES`.
+_METADATA_FIX_PART_SIZE = 512 * 1024**2
 
 #: CRC32 fingerprint → bucket name, for O(1) file-ID bucket resolution.
 _BUCKET_CRC32: dict[int, str] = {_crc32(b.encode()): b for b in BUCKET_TO_REGION}
@@ -271,6 +284,87 @@ def _record_from_head(payload: str, head: HeadObjectOutputTypeDef) -> FileRecord
     )
 
 
+async def _force_s3_metadata(
+    s3: S3Client,
+    bucket: str,
+    key: str,
+    size: int,
+    content_type: str,
+    content_disposition: str,
+    metadata: _FileMetadata,
+) -> None:
+    """Force *content_disposition*/*metadata* onto an existing S3 object via self-copy.
+
+    A server-side S3-to-S3 copy (used by :meth:`InputFile.to_s3` for
+    ``s3://``/``file-id:`` sources) always inherits the source object's own
+    ``Content-Disposition`` and metadata and ignores whatever the caller
+    requested, so :func:`upload_file` calls this to reconcile the two when
+    they differ.
+
+    Args:
+        s3: Authenticated S3 client.
+        bucket: Bucket holding the object.
+        key: Key of the object to fix in place.
+        size: Current object size, to pick single-shot vs. multipart copy.
+        content_type: Content type to preserve on the object.
+        content_disposition: Desired ``Content-Disposition`` header value.
+        metadata: Desired user metadata.
+
+    Raises:
+        BotoCoreError: If the AWS SDK fails.
+        ClientError: If S3 returns an error.
+    """
+    copy_source: CopySourceTypeDef = {"Bucket": bucket, "Key": key}
+    if size <= _COPY_OBJECT_MAX_BYTES:
+        await s3.copy_object(
+            Bucket=bucket,
+            Key=key,
+            CopySource=copy_source,
+            ContentType=content_type,
+            ContentDisposition=content_disposition,
+            Metadata=metadata,  # type: ignore[arg-type]
+            MetadataDirective="REPLACE",
+        )
+        return
+    upload_id = (
+        await s3.create_multipart_upload(
+            Bucket=bucket,
+            Key=key,
+            ContentType=content_type,
+            ContentDisposition=content_disposition,
+            Metadata=metadata,  # type: ignore[arg-type]
+            Tagging=S3_TAGGING,
+        )
+    )["UploadId"]
+    try:
+        parts: list[dict[str, int | str]] = []
+        for part_number, start in enumerate(
+            range(0, size, _METADATA_FIX_PART_SIZE), start=1
+        ):
+            end = min(start + _METADATA_FIX_PART_SIZE, size) - 1
+            etag = (
+                await s3.upload_part_copy(
+                    Bucket=bucket,
+                    Key=key,
+                    UploadId=upload_id,
+                    PartNumber=part_number,
+                    CopySource=copy_source,
+                    CopySourceRange=f"bytes={start}-{end}",
+                )
+            )["CopyPartResult"]["ETag"]
+            parts.append({"PartNumber": part_number, "ETag": etag})
+        await s3.complete_multipart_upload(
+            Bucket=bucket,
+            Key=key,
+            UploadId=upload_id,
+            MultipartUpload={"Parts": parts},  # type: ignore[typeddict-item]
+        )
+    except Exception:
+        with suppress(ClientError):
+            await s3.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)
+        raise
+
+
 async def upload_file(
     file: InputFile,
     purpose: str | None = None,
@@ -287,6 +381,12 @@ async def upload_file(
     Args:
         file: Input file with content and optional filename / content type.
         purpose: OpenAI purpose string (stored as metadata; not validated).
+            ``None``/falsy (e.g. from the Anthropic Files API) is stored as
+            :data:`DEFAULT_PURPOSE`, so the stored value always matches what
+            is displayed and matched by the ``purpose`` list filter. This is
+            enforced for every source :class:`InputFile` supports, including
+            ``s3://``/``file-id:`` references whose server-side copy would
+            otherwise silently keep the *source* object's own metadata.
         expires_after: Seconds from now until expiry, or ``None``.
         region: AWS region for bucket selection; ``None`` uses the default bucket.
 
@@ -301,19 +401,35 @@ async def upload_file(
     )
 
     metadata: _FileMetadata = {
-        "expires-at": str(expires_at) if expires_at is not None else ""
+        "expires-at": str(expires_at) if expires_at is not None else "",
+        "purpose": purpose or DEFAULT_PURPOSE,
     }
-    if purpose:
-        metadata["purpose"] = purpose
+    content_disposition = f'attachment; filename="{_validate_filename(await file.get_filename() or "upload")}"'
     await file.to_s3(
         BUCKET_TO_REGION[bucket],
         bucket=bucket,
         key=s3_key,
         temporary=False,
-        content_disposition=f'attachment; filename="{_validate_filename(await file.get_filename() or "upload")}"',
+        content_disposition=content_disposition,
         metadata=metadata,  # type: ignore[arg-type]
     )
     s3: S3Client = get_client("s3", BUCKET_TO_REGION.get(bucket))
+    head = await s3.head_object(Bucket=bucket, Key=s3_key)
+    if head.get("ContentDisposition", "") != content_disposition or head.get(
+        "Metadata", {}
+    ) != dict(metadata):
+        # Only S3-to-S3 copy sources reach this: they ignore the requested
+        # content-disposition/metadata, so force them in place.
+        await _force_s3_metadata(
+            s3,
+            bucket,
+            s3_key,
+            head["ContentLength"],
+            head.get("ContentType", "application/octet-stream"),
+            content_disposition,
+            metadata,
+        )
+        head = await s3.head_object(Bucket=bucket, Key=s3_key)
     if expires_at is not None:
         await s3.put_object_tagging(
             Bucket=bucket,
@@ -325,7 +441,7 @@ async def upload_file(
                 ]
             },
         )
-    return _record_from_head(payload, await s3.head_object(Bucket=bucket, Key=s3_key))
+    return _record_from_head(payload, head)
 
 
 async def _get_file_impl(payload: str) -> tuple[FileRecord, str, S3Client]:

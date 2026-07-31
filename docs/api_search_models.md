@@ -16,7 +16,7 @@ Discover available models by capability — filter by modality, route, region, s
 
 ## How It Works
 
-All query parameters are optional. Parameters combine with **AND** logic — only models matching every supplied filter are returned. Results are sorted by model ID. With no filters, all available models are returned.
+All query parameters are optional. Parameters combine with **AND** logic — only models matching every supplied filter are returned. Results are sorted by model ID. With no filters, every active (non-legacy) model is returned. `legacy=true` does not add deprecated models to that list — it replaces it, returning deprecated models only.
 
 **Agent workflow:** call `search_models` first to obtain the correct model ID, then pass it to the target endpoint. To compare costs before picking, pass the shortlisted IDs to the [Model Pricing API](api_model_pricing.md).
 
@@ -29,10 +29,13 @@ All query parameters are optional. Parameters combine with **AND** logic — onl
 | `route`             | `string`  | Filter to models supporting a route path (e.g. `/v1/chat/completions`) **or** an MCP tool name (e.g. `openai_chat_completion`) — both formats are accepted transparently |
 | `region`            | `string`  | Filter to models available in a specific AWS region (e.g. `us-east-1`)                                                                                                   |
 | `streaming`         | `boolean` | `true` = streaming-capable models only, `false` = non-streaming only                                                                                                     |
-| `legacy`            | `boolean` | `true` = deprecated models only, `false` = active models only                                                                                                            |
+| `legacy`            | `boolean` | `true` = deprecated models only, `false` = active models only. Deprecated models are excluded when omitted.                                                             |
 
 !!! note "Modality values are case-insensitive"
     `TEXT`, `text`, and `Text` are all accepted.
+
+!!! note "Legacy models are excluded by default"
+    Deprecated models are left out of the results unless you pass `legacy=true`. Pass it if you specifically need to look up a deprecated model, for example to check its replacement — it returns deprecated models only, not the active ones plus the deprecated ones. Combine both calls (with and without `legacy=true`) if you need the full catalogue.
 
 ## Response Fields
 
@@ -84,12 +87,11 @@ curl -G "$BASE/search_models" \
   -H "Authorization: Bearer $API_KEY"
 ```
 
-**Active non-deprecated chat models:**
+**Active chat models (legacy models are excluded by default):**
 
 ```bash
 curl -G "$BASE/search_models" \
   --data-urlencode "route=openai_chat_completion" \
-  --data-urlencode "legacy=false" \
   -H "Authorization: Bearer $API_KEY"
 ```
 
@@ -99,7 +101,15 @@ curl -G "$BASE/search_models" \
 curl -G "$BASE/search_models" \
   --data-urlencode "region=us-east-1" \
   --data-urlencode "streaming=true" \
-  --data-urlencode "legacy=false" \
+  -H "Authorization: Bearer $API_KEY"
+```
+
+**Look up a deprecated model (e.g. to check its replacement) — `legacy=true` returns deprecated models only, not active ones too:**
+
+```bash
+curl -G "$BASE/search_models" \
+  --data-urlencode "route=openai_chat_completion" \
+  --data-urlencode "legacy=true" \
   -H "Authorization: Bearer $API_KEY"
 ```
 
@@ -123,8 +133,7 @@ The `route` parameter accepts either format — agents can pass the MCP tool nam
 {
   "tool": "search_models",
   "arguments": {
-    "route": "openai_chat_completion",
-    "legacy": false
+    "route": "openai_chat_completion"
   }
 }
 ```

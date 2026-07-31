@@ -33,7 +33,10 @@ from stdapi.models.audio.amazon_transcribe import (
     _get_audio_duration,
     _start_transcription_with_failover,
     _text_compression_ratio,
+    _TranscribeContentRedaction,
     _TranscribeExtraParams,
+    _TranscribeModelSettings,
+    _TranscribeToxicityDetectionSetting,
     initialize_transcribe_models,
     transcribe_job_candidates,
 )
@@ -487,6 +490,43 @@ class TestSttDurationComputedOnce:
         assert response.segments == []
         assert isinstance(response.usage, UsageDuration)
         assert response.usage.seconds == 15
+
+
+class TestSttStreamRejectsLogprobs:
+    """stt_stream: ``logprobs`` is rejected, matching the non-streaming ``stt`` path.
+
+    Ref: stdapi/models/audio/amazon_transcribe.py:AudioModel.stt_stream
+         stdapi/models/audio/__init__.py:AudioModelBase._validate_no_logprobs
+    """
+
+    async def test_logprobs_is_rejected_before_any_transcription_job_starts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``include=["logprobs"]`` fails with 400 without calling Transcribe.
+
+        Amazon Transcribe returns no log probabilities on either path, and the
+        non-streaming ``stt`` already rejects the parameter (see
+        ``TestTranscribeUnsupportedParameters`` in test_openai_audio_transcriptions.py);
+        streaming must reject it too instead of silently ignoring it.
+        """
+
+        async def _unexpected_transcribe(
+            _self: AudioModel, *_args: object, **_kwargs: object
+        ) -> dict[str, Any]:
+            pytest.fail("_transcribe must not run once logprobs is rejected")
+
+        monkeypatch.setattr(AudioModel, "_transcribe", _unexpected_transcribe)
+
+        with pytest.raises(UnsupportedParameterError) as excinfo:
+            async for _ in AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt_stream(
+                _FakeAudioContent(),  # type: ignore[arg-type]
+                "text",
+                logprobs=True,
+            ):
+                pass
+
+        assert excinfo.value.status == 400
+        assert "logprobs" in str(excinfo.value)
 
 
 class TestServedRegionStickiness:
@@ -978,12 +1018,12 @@ class TestTranscribeExtraParamsValueConstraints:
     def test_unknown_pii_entity_type_is_accepted(self) -> None:
         """A PiiEntityTypes value outside the documented set is forwarded as-is."""
         extra = _TranscribeExtraParams(
-            ContentRedaction={
-                "RedactionType": "PII",
-                "PiiEntityTypes": ["NOT_A_REAL_ENTITY"],
-            }
+            ContentRedaction=_TranscribeContentRedaction(
+                RedactionType="PII", PiiEntityTypes=["NOT_A_REAL_ENTITY"]
+            )
         )
-        assert extra.ContentRedaction.PiiEntityTypes == ["NOT_A_REAL_ENTITY"]  # type: ignore[union-attr]
+        assert extra.ContentRedaction is not None
+        assert extra.ContentRedaction.PiiEntityTypes == ["NOT_A_REAL_ENTITY"]
 
     def test_redacted_and_unredacted_output_is_rejected(self) -> None:
         """The dual-output redaction mode is rejected (no tracked-cleanup path yet).
@@ -993,7 +1033,7 @@ class TestTranscribeExtraParamsValueConstraints:
         """
         with pytest.raises(ValidationError) as excinfo:
             _TranscribeExtraParams(
-                ContentRedaction={
+                ContentRedaction={  # type: ignore[arg-type]
                     "RedactionType": "PII",
                     "RedactionOutput": "redacted_and_unredacted",
                 }
@@ -1032,16 +1072,17 @@ class TestTranscribeExtraParamsValueConstraints:
     def test_documented_values_round_trip(self) -> None:
         """A fully populated, valid extra-params payload validates and dumps back."""
         extra = _TranscribeExtraParams(
-            ContentRedaction={
-                "RedactionType": "PII",
-                "PiiEntityTypes": ["NAME", "SSN"],
-            },
+            ContentRedaction=_TranscribeContentRedaction(
+                RedactionType="PII", PiiEntityTypes=["NAME", "SSN"]
+            ),
             VocabularyFilterName="myfilter",
             VocabularyFilterMethod="mask",
             ShowAlternatives=True,
             MaxAlternatives=3,
-            ToxicityDetection=[{"ToxicityCategories": ["ALL"]}],
-            ModelSettings={"LanguageModelName": "my-clm"},
+            ToxicityDetection=[
+                _TranscribeToxicityDetectionSetting(ToxicityCategories=["ALL"])
+            ],
+            ModelSettings=_TranscribeModelSettings(LanguageModelName="my-clm"),
             LanguageOptions=["en-US", "es-US"],
             IdentifyMultipleLanguages=True,
         )
@@ -1075,10 +1116,12 @@ class TestBuildTranscriptionJobParamsExtra:
     def test_content_redaction_is_forwarded(self) -> None:
         """ContentRedaction is passed through to the job params unchanged."""
         extra = _TranscribeExtraParams(
-            ContentRedaction={"RedactionType": "PII", "PiiEntityTypes": ["NAME"]}
+            ContentRedaction=_TranscribeContentRedaction(
+                RedactionType="PII", PiiEntityTypes=["NAME"]
+            )
         )
         params = _build_transcription_job_params("job1", "bucket", "en", "json", extra)
-        assert params["ContentRedaction"] == {  # type: ignore[typeddict-item]
+        assert params["ContentRedaction"] == {
             "RedactionType": "PII",
             "RedactionOutput": "redacted",
             "PiiEntityTypes": ["NAME"],
@@ -1093,7 +1136,7 @@ class TestBuildTranscriptionJobParamsExtra:
             MaxAlternatives=4,
         )
         params = _build_transcription_job_params("job1", "bucket", "en", "json", extra)
-        assert params["Settings"] == {  # type: ignore[typeddict-item]
+        assert params["Settings"] == {
             "VocabularyFilterName": "myfilter",
             "VocabularyFilterMethod": "mask",
             "ShowAlternatives": True,
@@ -1106,20 +1149,19 @@ class TestBuildTranscriptionJobParamsExtra:
         params = _build_transcription_job_params(
             "job1", "bucket", "en", "diarized_json", extra
         )
-        assert params["Settings"] == {  # type: ignore[typeddict-item]
-            "ShowSpeakerLabels": True,
-            "MaxSpeakerLabels": 25,
-        }
+        assert params["Settings"] == {"ShowSpeakerLabels": True, "MaxSpeakerLabels": 25}
 
     def test_toxicity_detection_and_model_settings_are_forwarded(self) -> None:
         """ToxicityDetection and ModelSettings.LanguageModelName reach the job params."""
         extra = _TranscribeExtraParams(
-            ToxicityDetection=[{"ToxicityCategories": ["ALL"]}],
-            ModelSettings={"LanguageModelName": "my-clm"},
+            ToxicityDetection=[
+                _TranscribeToxicityDetectionSetting(ToxicityCategories=["ALL"])
+            ],
+            ModelSettings=_TranscribeModelSettings(LanguageModelName="my-clm"),
         )
         params = _build_transcription_job_params("job1", "bucket", "en", "json", extra)
-        assert params["ToxicityDetection"] == [{"ToxicityCategories": ["ALL"]}]  # type: ignore[typeddict-item]
-        assert params["ModelSettings"] == {"LanguageModelName": "my-clm"}  # type: ignore[typeddict-item]
+        assert params["ToxicityDetection"] == [{"ToxicityCategories": ["ALL"]}]
+        assert params["ModelSettings"] == {"LanguageModelName": "my-clm"}
 
     def test_identify_multiple_languages_supersedes_language_code(self) -> None:
         """IdentifyMultipleLanguages wins over an explicit language, per AWS's mutual exclusion."""
@@ -1127,8 +1169,8 @@ class TestBuildTranscriptionJobParamsExtra:
             IdentifyMultipleLanguages=True, LanguageOptions=["en-US", "fr-FR"]
         )
         params = _build_transcription_job_params("job1", "bucket", "en", "json", extra)
-        assert params["IdentifyMultipleLanguages"] is True  # type: ignore[typeddict-item]
-        assert params["LanguageOptions"] == ["en-US", "fr-FR"]  # type: ignore[typeddict-item]
+        assert params["IdentifyMultipleLanguages"] is True
+        assert params["LanguageOptions"] == ["en-US", "fr-FR"]
         assert "LanguageCode" not in params
         assert "IdentifyLanguage" not in params
 
@@ -1136,8 +1178,8 @@ class TestBuildTranscriptionJobParamsExtra:
         """LanguageOptions without an explicit language narrows auto-identification."""
         extra = _TranscribeExtraParams(LanguageOptions=["en-US", "fr-FR"])
         params = _build_transcription_job_params("job1", "bucket", None, "json", extra)
-        assert params["IdentifyLanguage"] is True  # type: ignore[typeddict-item]
-        assert params["LanguageOptions"] == ["en-US", "fr-FR"]  # type: ignore[typeddict-item]
+        assert params["IdentifyLanguage"] is True
+        assert params["LanguageOptions"] == ["en-US", "fr-FR"]
 
     def test_channel_identification_conflicts_with_diarized_json(self) -> None:
         """ChannelIdentification with diarized_json is rejected with a clean 400.
@@ -1163,7 +1205,7 @@ class TestBuildTranscriptionJobParamsExtra:
         """ChannelIdentification without diarized_json is accepted normally."""
         extra = _TranscribeExtraParams(ChannelIdentification=True)
         params = _build_transcription_job_params("job1", "bucket", "en", "json", extra)
-        assert params["Settings"] == {"ChannelIdentification": True}  # type: ignore[typeddict-item]
+        assert params["Settings"] == {"ChannelIdentification": True}
 
     def test_no_extra_params_matches_prior_behavior(self) -> None:
         """Without extra_params, the job params are unchanged from before #82."""

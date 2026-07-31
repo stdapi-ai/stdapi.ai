@@ -285,11 +285,8 @@ class TestMantleChatCompletions:
         sets the flag on it. A two-city question would otherwise produce two
         parallel calls, so a single call is the observable consequence.
 
-        KNOWN FAILURE (issue #90): Mantle currently rejects the converted
-        request although it implements ``disable_parallel_tool_use``.
-
-        Ref: https://github.com/stdapi-ai/stdapi.ai/issues/90
-             https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+             stdapi/types/openai_chat_completions.py:CompletionCreateParams._unsupported
              stdapi/models/chat/_mantle/_convert.py:_anthropic_tool_choice_from_chat
         """
         response = openai_client.chat.completions.create(
@@ -688,7 +685,9 @@ class TestMantleResponses:
             "response.in_progress",
         ]
         ids = {
-            event.response.id for event in events if getattr(event, "response", None)
+            response.id
+            for event in events
+            if (response := getattr(event, "response", None)) is not None
         }
         assert len(ids) == 1
         assert ids.pop().startswith("resp-")

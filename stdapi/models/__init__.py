@@ -18,7 +18,7 @@ from botocore.exceptions import (
     ReadTimeoutError,
 )
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
-from pydantic import AwareDatetime, BaseModel, JsonValue
+from pydantic import AwareDatetime, BaseModel, Field, JsonValue
 from pydantic_core import from_json, to_json
 
 import stdapi.region_routing as _region_routing
@@ -171,6 +171,24 @@ def _request_routing(resolved_model_id: str, latency: str | None) -> Routing:
     if resolved_model_id.startswith(_GLOBAL_INFERENCE_PROFILE_PREFIX):
         return "global"
     return ""
+
+
+def _request_uses_system_tool(request: ConverseRequestBaseTypeDef) -> bool:
+    """Whether *request*'s tool configuration promotes a Bedrock system tool.
+
+    Some system tools (e.g. ``nova_grounding``) are rejected on the ``global.``
+    inference profile even when the model otherwise supports cross-region routing.
+
+    Args:
+        request: Converse request payload.
+
+    Returns:
+        True if any ``toolConfig.tools`` entry is a ``systemTool``.
+    """
+    tool_config = request.get("toolConfig")
+    if not tool_config:
+        return False
+    return any("systemTool" in tool for tool in tool_config.get("tools", ()))
 
 
 def _count_grounding_tool_uses(response: ConverseResponseTypeDef) -> int:
@@ -365,11 +383,20 @@ class ModelDetails(BaseModel):
     aliases: list[str] | None = None
     regions: list[RegionName]
     inference_profiles: dict[RegionName, str] | None = None
+    #: Per-region non-``global.`` inference profile cache, gateway-internal routing
+    #: state, never part of the public /search_models response or OpenAPI schema.
+    inference_profiles_regional: dict[RegionName, str] | None = Field(
+        default=None, exclude=True
+    )
     supported_routes: list[str] = []
     supported_mcp_tools: list[str] = []
 
     def get_id(
-        self, region: RegionName | None = None, *, inference_profile: bool = False
+        self,
+        region: RegionName | None = None,
+        *,
+        inference_profile: bool = False,
+        prefer_regional: bool = False,
     ) -> str:
         """Return the model ID or inference profile ID valid for a specific region.
 
@@ -382,6 +409,9 @@ class ModelDetails(BaseModel):
         Args:
             region: Target AWS region. If ``None``, returns any available profile.
             inference_profile: If True, prefer the inference profile for that region.
+            prefer_regional: If True, return the geo-scoped profile cached for
+                *region* instead of ``global.`` when one is available (e.g. a
+                system tool the model rejects on the global profile).
 
         Returns:
             The appropriate model identifier for the given region.
@@ -393,6 +423,14 @@ class ModelDetails(BaseModel):
         """
         if not inference_profile:
             return self.id
+        if (
+            prefer_regional
+            and region is not None
+            and (
+                regional_profile := (self.inference_profiles_regional or {}).get(region)
+            )
+        ):
+            return regional_profile
         profiles = self.inference_profiles or {}
         if not profiles:
             # On-demand model: the bare foundation-model ID is the correct identifier.
@@ -424,6 +462,18 @@ class ModelDetails(BaseModel):
         if self.inference_profiles is None:
             self.inference_profiles = {}
         self.inference_profiles[region] = name
+
+    def set_inference_profile_regional(self, region: RegionName, name: str) -> None:
+        """Sets the geo-scoped (non-``global.``) inference profile for a specified region.
+
+        Args:
+            region: The region for which the inference profile needs to be set.
+            name: The name of the geo-scoped inference profile to associate with
+                the region.
+        """
+        if self.inference_profiles_regional is None:
+            self.inference_profiles_regional = {}
+        self.inference_profiles_regional[region] = name
 
 
 RequestT = TypeVar("RequestT")
@@ -839,7 +889,11 @@ class ModelBase[RequestT, ResponseT]:
             request["modelId"] = prompt.arn
         else:
             request["modelId"] = await resolve_routed_model_id(
-                self._model_id, region, inference_profile=True, latency=latency
+                self._model_id,
+                region,
+                inference_profile=True,
+                latency=latency,
+                prefer_regional=_request_uses_system_tool(request),
             )
         request["requestMetadata"] = build_metadata(request.get("requestMetadata"))
 
@@ -1305,8 +1359,10 @@ async def _get_provisioned_models(bedrock_client: BedrockClient) -> set[str]:
     return models_ids
 
 
-async def _get_inference_profiles(bedrock_client: BedrockClient) -> dict[str, str]:
-    """Return a mapping of model ID → inference profile ID for this region.
+async def _get_inference_profiles(
+    bedrock_client: BedrockClient,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Return mappings of model ID → inference profile ID for this region.
 
     Fetches active system-defined cross-region inference profiles when
     ``aws_bedrock_cross_region_inference`` is enabled.
@@ -1315,9 +1371,11 @@ async def _get_inference_profiles(bedrock_client: BedrockClient) -> dict[str, st
         bedrock_client: Bedrock control-plane client for the region.
 
     Returns:
-        Dict mapping model ID to its preferred inference profile ID.
+        Tuple of (model ID → preferred inference profile ID,
+        model ID → geo-scoped inference profile ID).
     """
     result: dict[str, str] = {}
+    regional_result: dict[str, str] = {}
     if SETTINGS.aws_bedrock_cross_region_inference:
         params: ListInferenceProfilesRequestTypeDef = {
             "maxResults": 1000,
@@ -1334,8 +1392,8 @@ async def _get_inference_profiles(bedrock_client: BedrockClient) -> dict[str, st
             if not (next_token := response.get("nextToken")):
                 break
             params["nextToken"] = next_token
-        _filter_inference_profiles(result, profiles_all)
-    return result
+        _filter_inference_profiles(result, regional_result, profiles_all)
+    return result, regional_result
 
 
 def _region_restriction_for(model_id: str) -> tuple[RegionName, ...] | None:
@@ -1360,12 +1418,17 @@ def _region_restriction_for(model_id: str) -> tuple[RegionName, ...] | None:
 
 
 def _filter_inference_profiles(
-    profiles: dict[str, str], profiles_all: dict[str, list[str]]
+    profiles: dict[str, str],
+    regional_profiles: dict[str, str],
+    profiles_all: dict[str, list[str]],
 ) -> None:
     """Populate *profiles* with the best inference profile per model.
 
     Prefers the ``global.`` prefix profile when ``aws_bedrock_cross_region_inference_global``
-    is enabled; otherwise picks the first non-global candidate.
+    is enabled; otherwise picks the first non-global candidate. *regional_profiles*
+    always records the first non-global candidate when one exists, so callers that
+    must avoid the ``global.`` profile (e.g. a system tool unsupported on it) have
+    a geo-scoped alternative to fall back on.
 
     Models that have an ``aws_bedrock_model_region_restrict`` entry are always
     assigned a non-global profile: a global profile would route requests
@@ -1373,11 +1436,23 @@ def _filter_inference_profiles(
 
     Args:
         profiles: Output dict (model ID → profile ID) updated in-place.
+        regional_profiles: Output dict (model ID → non-global profile ID) updated
+            in-place.
         profiles_all: All discovered profile IDs per model ID.
     """
     use_global = SETTINGS.aws_bedrock_cross_region_inference_global
     for model_id, profile_ids in profiles_all.items():
         model_restricted = _region_restriction_for(model_id) is not None
+        regional_candidate = next(
+            (
+                pid
+                for pid in profile_ids
+                if not pid.startswith(_GLOBAL_INFERENCE_PROFILE_PREFIX)
+            ),
+            None,
+        )
+        if regional_candidate is not None:
+            regional_profiles[model_id] = regional_candidate
         if (
             use_global
             and not model_restricted
@@ -1391,16 +1466,7 @@ def _filter_inference_profiles(
                     None,
                 )
             )
-        ) or (
-            profile := next(
-                (
-                    pid
-                    for pid in profile_ids
-                    if not pid.startswith(_GLOBAL_INFERENCE_PROFILE_PREFIX)
-                ),
-                None,
-            )
-        ):
+        ) or (profile := regional_candidate):
             profiles[model_id] = profile
 
 
@@ -1420,7 +1486,7 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
     """
     bedrock_client: BedrockClient = get_client("bedrock", region)
 
-    foundation_models, provisioned_models, profiles = await gather(
+    foundation_models, provisioned_models, (profiles, regional_profiles) = await gather(
         bedrock_client.list_foundation_models(),
         _get_provisioned_models(bedrock_client),
         _get_inference_profiles(bedrock_client),
@@ -1471,6 +1537,9 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
                 response_streaming=model.get("responseStreamingSupported"),
                 inference_profiles={region: inference_profile}
                 if (inference_profile := profiles.get(model["modelId"]))
+                else None,
+                inference_profiles_regional={region: regional_profile}
+                if (regional_profile := regional_profiles.get(model["modelId"]))
                 else None,
                 legacy=(
                     model["modelLifecycle"]["status"] == "LEGACY"
@@ -2024,6 +2093,10 @@ def _merge_candidate(existing: ModelDetails, candidate: ModelDetails) -> None:
         existing.regions.append(region)
         if profile := (candidate.inference_profiles or {}).get(region):
             existing.set_inference_profile(region, profile)
+        if regional_profile := (candidate.inference_profiles_regional or {}).get(
+            region
+        ):
+            existing.set_inference_profile_regional(region, regional_profile)
 
 
 async def _check_model_availability(model: ModelDetails) -> list[str]:
@@ -2422,6 +2495,7 @@ async def resolve_routed_model_id(
     *,
     inference_profile: bool,
     latency: str | None = None,
+    prefer_regional: bool = False,
 ) -> str:
     """Resolve the model/profile ID to send to Bedrock for *region* and record its routing.
 
@@ -2430,13 +2504,15 @@ async def resolve_routed_model_id(
         region: Target AWS region.
         inference_profile: Use the cross-region inference profile ID when available.
         latency: The request's ``performanceConfig`` latency value, if any.
+        prefer_regional: Prefer a cached geo-scoped inference profile over
+            ``global.`` for *region* (e.g. a system tool unsupported on it).
 
     Returns:
         The resolved model or inference-profile ID to send to Bedrock.
     """
     set_effective_region(model_id, region)
     resolved_model_id = (await get_model_details(model_id)).get_id(
-        region, inference_profile=inference_profile
+        region, inference_profile=inference_profile, prefer_regional=prefer_regional
     )
     get_model_state(model_id).routing = _request_routing(resolved_model_id, latency)
     return resolved_model_id

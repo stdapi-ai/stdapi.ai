@@ -21,7 +21,10 @@ from stdapi.types.anthropic_messages import (
     MessageCountTokensParams,
     MessageParam,
     ThinkingConfigEnabledParam,
+    ToolBashParam,
     ToolParam,
+    ToolResultBlockParam,
+    ToolUseBlockParam,
     WebSearchToolParam,
 )
 
@@ -154,6 +157,187 @@ async def test_count_tokens_promotes_server_tools_to_system_tools(
         "lookup",
         None,
     ], "the client-side tool must be kept, and only the server tool promoted"
+
+
+async def test_count_tokens_claude_server_tool_with_custom_tool_history_no_duplicate(
+    fake_client: _FakeCountTokensClient,
+) -> None:
+    """A Claude server tool and a custom tool from history never collide (issue #97).
+
+    ``count_tokens_via_bedrock`` builds its own Converse-shaped request through the
+    same ``_req_configure_tools`` hook ``create_message`` uses, so ``bash`` must be
+    natively promoted here too, while a custom tool the assistant already invoked
+    earlier in the conversation keeps a ``toolConfig`` stub instead of vanishing —
+    and the two must never end up naming the same tool.
+
+    A server-tool-*only* turn-2 conversation (no custom tool anywhere in
+    history) is covered separately by
+    ``test_count_tokens_server_tool_only_history_sends_no_toolconfig``, which
+    documents the still-open question this leaves (see its docstring).
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
+         stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
+         stdapi/models/chat/_adapters/_anthropic_message.py:count_tokens_via_bedrock
+    """
+    request = MessageCountTokensParams(
+        model=_CLAUDE_MODEL,
+        messages=[
+            MessageParam(role="user", content="What time is it, then list files?"),
+            MessageParam(
+                role="assistant",
+                content=[
+                    ToolUseBlockParam(
+                        type="tool_use", id="tooluse_1", name="get_time", input={}
+                    )
+                ],
+            ),
+            MessageParam(
+                role="user",
+                content=[
+                    ToolResultBlockParam(
+                        type="tool_result", tool_use_id="tooluse_1", content="12:00"
+                    )
+                ],
+            ),
+        ],
+        tools=[
+            ToolParam(name="get_time", input_schema={}),  # type: ignore[arg-type]
+            ToolBashParam(type="bash_20250124", name="bash"),
+        ],
+    )
+    await count_tokens_via_bedrock(
+        request, _CLAUDE_MODEL, "us-east-1", _chat_model(_CLAUDE_MODEL)
+    )
+    (call,) = fake_client.calls
+    converse = call["input"]["converse"]
+    native_names = {
+        tool["name"]
+        for tool in converse.get("additionalModelRequestFields", {}).get("tools", [])
+    }
+    config_names = {
+        entry["toolSpec"]["name"]
+        for entry in converse.get("toolConfig", {}).get("tools", [])
+    }
+    assert native_names == {"bash"}
+    assert config_names == {"get_time"}
+    assert not (native_names & config_names)
+
+
+async def test_count_tokens_server_tool_only_history_sends_no_toolconfig(
+    fake_client: _FakeCountTokensClient,
+) -> None:
+    """A server-tool-*only* turn 2 sends no ``toolConfig`` -- not a duplicate one.
+
+    History references only ``bash``, the tool ``_req_configure_tools`` just
+    natively promoted to ``additionalModelRequestFields``. The counted
+    request's own synthesis fallback must exclude that name, since Bedrock
+    already receives ``bash``'s definition through
+    ``additionalModelRequestFields`` -- re-adding it as a ``toolConfig`` stub
+    would collide with the native entry (issue #97's duplicate-name failure
+    mode). This leaves unverified, unchanged from before this fallback
+    existed, whether Bedrock's CountTokens API accepts a ``toolUse``/
+    ``toolResult`` pair with no ``toolConfig`` at all when the referenced tool
+    is defined only natively; a live run is needed to confirm either way (see
+    module docstring for how to target this file against a live gateway).
+
+    Ref: stdapi/models/chat/_adapters/_anthropic_message.py:_synthesize_tool_config_from_history
+         stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
+    """
+    request = MessageCountTokensParams(
+        model=_CLAUDE_MODEL,
+        messages=[
+            MessageParam(role="user", content="List files in /tmp"),
+            MessageParam(
+                role="assistant",
+                content=[
+                    ToolUseBlockParam(
+                        type="tool_use",
+                        id="tooluse_1",
+                        name="bash",
+                        input={"command": "ls"},
+                    )
+                ],
+            ),
+            MessageParam(
+                role="user",
+                content=[
+                    ToolResultBlockParam(
+                        type="tool_result", tool_use_id="tooluse_1", content="file.txt"
+                    )
+                ],
+            ),
+        ],
+        tools=[ToolBashParam(type="bash_20250124", name="bash")],
+    )
+    await count_tokens_via_bedrock(
+        request, _CLAUDE_MODEL, "us-east-1", _chat_model(_CLAUDE_MODEL)
+    )
+    (call,) = fake_client.calls
+    converse = call["input"]["converse"]
+    native_names = {
+        tool["name"]
+        for tool in converse.get("additionalModelRequestFields", {}).get("tools", [])
+    }
+    assert native_names == {"bash"}
+    assert "toolConfig" not in converse, (
+        "no toolConfig stub may duplicate the natively-promoted bash tool"
+    )
+
+
+async def test_count_tokens_omitted_tools_synthesizes_config_from_history(
+    fake_client: _FakeCountTokensClient,
+) -> None:
+    """A later turn omitting ``tools`` still gets a ``toolConfig`` when history needs one.
+
+    OpenAI-style clients (and some Anthropic ones) routinely drop ``tools`` on
+    a round-trip turn once the model has already made its choice; if history
+    still carries a ``toolUse``/``toolResult`` pair for a plain custom tool,
+    the counted request must synthesize a permissive stub for it, mirroring
+    the fallback ``create_message`` applies via ``_prepare_converse_request``
+    -- otherwise the count would silently omit tokens Bedrock actually charges
+    for the missing ``toolConfig``, or Bedrock could reject the request outright.
+
+    Ref: stdapi/models/chat/_default.py:_synthesize_tool_config_from_history
+         stdapi/models/chat/_adapters/_anthropic_message.py:count_tokens_via_bedrock
+    """
+    request = MessageCountTokensParams(
+        model=_CLAUDE_MODEL,
+        messages=[
+            MessageParam(role="user", content="What time is it?"),
+            MessageParam(
+                role="assistant",
+                content=[
+                    ToolUseBlockParam(
+                        type="tool_use", id="tooluse_1", name="get_time", input={}
+                    )
+                ],
+            ),
+            MessageParam(
+                role="user",
+                content=[
+                    ToolResultBlockParam(
+                        type="tool_result", tool_use_id="tooluse_1", content="12:00"
+                    )
+                ],
+            ),
+        ],
+        # No `tools` on this turn -- a common round-trip pattern.
+    )
+    await count_tokens_via_bedrock(
+        request, _CLAUDE_MODEL, "us-east-1", _chat_model(_CLAUDE_MODEL)
+    )
+    (call,) = fake_client.calls
+    converse = call["input"]["converse"]
+    assert converse["toolConfig"] == {
+        "tools": [
+            {
+                "toolSpec": {
+                    "name": "get_time",
+                    "inputSchema": {"json": {"type": "object"}},
+                }
+            }
+        ]
+    }
 
 
 async def test_count_tokens_without_extras_sends_no_additional_fields(

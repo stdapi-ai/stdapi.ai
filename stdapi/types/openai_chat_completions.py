@@ -1155,7 +1155,9 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
     parallel_tool_calls: bool | None = Field(
         default=True,
-        description="Enable parallel function calling. UNSUPPORTED on this implementation.",
+        description="Enable parallel function calling. Accepted for every model; "
+        "`false` is honored only by models able to constrain tool use, and the "
+        "response reports the tool calls actually made.",
     )
     prediction: ChatCompletionPredictionContentParam | None = Field(
         default=None,
@@ -1342,9 +1344,6 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         self._validate_audio_modalities()
         if self.functions is not None and self.tools is not None:
             msg = "Only one of `functions` or `tools` can be specified. `functions` is deprecated."
-            raise ValueError(msg)
-        if self.parallel_tool_calls is False:
-            msg = "parallel_tool_calls=False is not supported on this backend."
             raise ValueError(msg)
         self._validate_tool_choice()
         self._validate_thinking_options()

@@ -344,6 +344,181 @@ def _codex_parse(stdout: str) -> AgenticResult:
 
 
 # ---------------------------------------------------------------------------
+# pi — one CLI over all three chat routes
+# ---------------------------------------------------------------------------
+#
+# pi reaches each route through its own provider abstraction, so the same binary,
+# prompts and assertions cover Chat Completions, Responses and Anthropic Messages.
+# That makes it the only tool in the lane whose results are comparable *across*
+# routes: a failure on exactly one of the three isolates the fault to that
+# adapter rather than to the model or the prompt.
+
+#: pi's built-in read-only tools, mirroring the other CLIs' read-only posture.
+_PI_TOOLS = "read,bash,grep,find,ls"
+
+#: Context window pi is told the model under test has.
+#:
+#: Deliberately permissive: the gateway, not the client, enforces the real
+#: per-model limit, and a client-side cap would silently truncate a prompt
+#: instead of surfacing the gateway's own error.
+_PI_CONTEXT_WINDOW = 200_000
+
+#: Output token ceiling pi is told the model under test has, same rationale.
+_PI_MAX_TOKENS = 16_384
+
+#: Provider extension registering the gateway as a pi provider.
+#:
+#: pi ships no CLI flag for a custom base URL, so a provider is registered from an
+#: extension instead. Everything that varies per run arrives through the
+#: environment, which keeps this file identical for every route and model.
+_PI_EXTENSION = """\
+// Registers the stdapi.ai server under test as a pi provider.
+// Written by tests/agentic/_tools.py; the values arrive through the environment.
+export default function (pi) {
+  pi.registerProvider("stdapi", {
+    name: "stdapi.ai",
+    baseUrl: process.env.STDAPI_BASE_URL,
+    apiKey: "STDAPI_API_KEY",
+    authHeader: true,
+    api: process.env.STDAPI_API,
+    models: [
+      {
+        id: process.env.STDAPI_MODEL,
+        name: process.env.STDAPI_MODEL,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: CONTEXT_WINDOW,
+        maxTokens: MAX_TOKENS,
+      },
+    ],
+  });
+}
+""".replace("CONTEXT_WINDOW", str(_PI_CONTEXT_WINDOW)).replace(
+    "MAX_TOKENS", str(_PI_MAX_TOKENS)
+)
+
+
+def _pi_prepare(invocation: Invocation) -> None:
+    """Write pi's writable HOME and the provider extension for this run."""
+    workdir = invocation.workdir
+    (workdir / "home").mkdir(exist_ok=True)
+    extensions = workdir / "pi-ext"
+    extensions.mkdir(exist_ok=True)
+    (extensions / "stdapi.js").write_text(_PI_EXTENSION)
+
+
+def _pi_build(api: str, route: str) -> Callable[[Invocation], Command]:
+    """Return a ``build`` bound to one pi wire API and the gateway route it speaks.
+
+    Args:
+        api: pi provider API kind (``openai-completions``, ``openai-responses``
+            or ``anthropic-messages``).
+        route: Gateway path prefix serving that API.
+
+    Returns:
+        A ``build`` callable for an :class:`AgenticTool`.
+    """
+
+    def build(invocation: Invocation) -> Command:
+        env = {
+            "HOME": f"{WORK_MOUNT}/home",
+            "STDAPI_BASE_URL": f"http://127.0.0.1:{invocation.port}{route}",
+            "STDAPI_API_KEY": invocation.api_key,
+            "STDAPI_API": api,
+            "STDAPI_MODEL": invocation.model,
+            # The container cannot resolve pi's update-check host, and startup
+            # would otherwise stall on that lookup before the first request.
+            "PI_OFFLINE": "1",
+            **invocation.extra_env,
+        }
+        argv = [
+            "pi",
+            "--print",
+            "--mode",
+            "json",
+            "--offline",
+            "--no-session",
+            # Discovery would pick up the gateway's own AGENTS.md from the source
+            # mount and change the prompt under test between runs.
+            "--no-extensions",
+            "--no-context-files",
+            "--no-skills",
+            "--extension",
+            f"{WORK_MOUNT}/pi-ext/stdapi.js",
+            "--provider",
+            "stdapi",
+            "--model",
+            f"stdapi/{invocation.model}",
+            "--tools",
+            _PI_TOOLS,
+        ]
+        if invocation.effort:
+            argv += ["--thinking", invocation.effort]
+        argv.append(invocation.prompt)
+        return Command(tuple(argv), env)
+
+    return build
+
+
+def _pi_parse(stdout: str) -> AgenticResult:
+    """Normalise ``pi --mode json`` JSONL output.
+
+    Raises:
+        ValueError: If no JSONL events were emitted.
+    """
+    events: list[dict[str, object]] = []
+    for raw in stdout.splitlines():
+        line = raw.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    if not events:
+        msg = f"pi produced no JSONL events\nOutput: {stdout[:500]}"
+        raise ValueError(msg)
+
+    texts: list[str] = []
+    usage: dict[str, object] = {}
+    error_detail = ""
+    for event in events:
+        if event.get("type") != "message_end":
+            continue
+        message = event.get("message")
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        # Usage is cumulative per assistant message; the last one totals the run.
+        if isinstance(message_usage := message.get("usage"), dict):
+            usage = message_usage
+        if detail := message.get("errorMessage"):
+            error_detail = str(detail)
+        texts += [
+            str(part.get("text", ""))
+            for part in message.get("content", [])
+            if isinstance(part, dict) and part.get("type") == "text"
+        ]
+
+    def _tokens(key: str) -> int:
+        value = usage.get(key, 0)
+        return value if isinstance(value, int) else 0
+
+    return AgenticResult(
+        text=texts[-1] if texts else "",
+        # Every completed tool call counts, matching Codex's shell-call floor:
+        # both count up as the agent does more work in the tree.
+        steps=sum(event.get("type") == "tool_execution_end" for event in events),
+        input_tokens=_tokens("input"),
+        output_tokens=_tokens("output"),
+        cache_read=_tokens("cacheRead"),
+        cache_created=_tokens("cacheWrite"),
+        is_error=bool(error_detail),
+        error_detail=error_detail[:500],
+    )
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -375,8 +550,57 @@ CODEX = AgenticTool(
     attributes_sessions=False,
 )
 
+#: npm specifier shared by every pi route entry.
+_PI_PACKAGE = "@earendil-works/pi-coding-agent@latest"
+
+
+def _pi_tool(suffix: str, api: str, route: str, metrics_prefix: str) -> AgenticTool:
+    """Build one pi entry bound to a single gateway route.
+
+    Args:
+        suffix: Route discriminator appended to the tool id.
+        api: pi provider API kind.
+        route: Gateway path prefix serving it.
+        metrics_prefix: Tag opening this entry's ``-s`` benchmark lines.
+
+    Returns:
+        The configured tool.
+    """
+    return AgenticTool(
+        id=f"pi-{suffix}",
+        npm_package=_PI_PACKAGE,
+        binary="pi",
+        route=route,
+        metrics_prefix=metrics_prefix,
+        build=_pi_build(api, route),
+        parse=_pi_parse,
+        prepare_workdir=_pi_prepare,
+        # pi sends no per-run identifier the gateway records, so its requests can
+        # only be attributed positionally.
+        attributes_sessions=False,
+    )
+
+
+PI_CHAT_COMPLETIONS = _pi_tool(
+    "chat", "openai-completions", "/v1", metrics_prefix="PI-CC-METRICS"
+)
+
+PI_RESPONSES = _pi_tool(
+    "responses", "openai-responses", "/v1", metrics_prefix="PI-RS-METRICS"
+)
+
+PI_MESSAGES = _pi_tool(
+    "messages", "anthropic-messages", "/anthropic", metrics_prefix="PI-MG-METRICS"
+)
+
 #: Every agentic CLI the suite knows how to drive.
-AGENTIC_TOOLS: tuple[AgenticTool, ...] = (CLAUDE_CODE, CODEX)
+AGENTIC_TOOLS: tuple[AgenticTool, ...] = (
+    CLAUDE_CODE,
+    CODEX,
+    PI_CHAT_COMPLETIONS,
+    PI_RESPONSES,
+    PI_MESSAGES,
+)
 
 
 def npm_packages(tools: Sequence[AgenticTool] = AGENTIC_TOOLS) -> tuple[str, ...]:

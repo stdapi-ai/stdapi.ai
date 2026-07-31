@@ -19,6 +19,19 @@ from stdapi.types.openai_responses import ResponseTextConfig
 pytestmark = pytest.mark.local
 
 
+def test_build_output_config_returns_none_for_json_object() -> None:
+    """``text.format={"type": "json_object"}`` builds no Bedrock outputConfig.
+
+    Bedrock's strict structured output has no schema for "any JSON object": an
+    empty schema is rejected and the only closed alternative,
+    ``{"type": "object", "additionalProperties": false}``, admits only ``{}``,
+    so the adapter must skip outputConfig entirely rather than constrain the
+    model to an empty response (issue #96).
+    """
+    text = ResponseTextConfig.model_validate({"format": {"type": "json_object"}})
+    assert _build_output_config(text) is None
+
+
 def test_build_output_config_forwards_json_schema_name_and_description() -> None:
     """The client-supplied schema, name and description reach Bedrock's jsonSchema."""
     text = ResponseTextConfig.model_validate(

@@ -362,9 +362,11 @@ def _alpha_mask_to_bw(content: bytes, threshold: int, *, invert: bool) -> bytes:
     Nova Canvas/Titan require a black-and-white ``maskImage`` (no alpha channel).
     For inpainting, pure black marks the region to edit and pure white the
     region to preserve; outpainting uses the opposite polarity. OpenAI-style
-    masks use a transparent (low-alpha) pixel to mark the region to edit.
-    Masks without an alpha channel are returned unchanged, since they already
-    use, or are assumed to use, the target task's black/white format.
+    masks use a transparent (low-alpha) pixel to mark the region to edit,
+    whether stored as RGBA/LA/PA or as a palette ("P") image with a ``tRNS``
+    transparency chunk (e.g. pngquant/"PNG-8" exports). Masks with no alpha
+    information at all are returned unchanged, since they already use, or
+    are assumed to use, the target task's black/white format.
 
     Args:
         content: Decoded mask image bytes.
@@ -382,7 +384,8 @@ def _alpha_mask_to_bw(content: bytes, threshold: int, *, invert: bool) -> bytes:
     except UnidentifiedImageError, Image.DecompressionBombError:
         return content
     with image:
-        if image.mode not in ("RGBA", "LA", "PA"):
+        has_palette_alpha = image.mode == "P" and "transparency" in image.info
+        if image.mode not in ("RGBA", "LA", "PA") and not has_palette_alpha:
             return content
         edit_color, preserve_color = (255, 0) if invert else (0, 255)
         alpha = image.convert("RGBA").split()[-1]

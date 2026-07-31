@@ -1,8 +1,4 @@
-"""Local types for the stdapi.ai project.
-
-This package hosts OpenAI-compatible type definitions used by the routes to
-avoid hard runtime dependencies on the official openai.types package.
-"""
+"""Local types, avoiding a runtime dependency on the official provider packages."""
 
 from contextlib import suppress
 from re import compile as regex_compile
@@ -51,10 +47,7 @@ class BaseModelRequestWithExtra(BaseModel):
 
 
 def _ensure_list_size(lst: JsonList, idx: int) -> None:
-    """Extend list to accommodate a specific index.
-
-    Pads the list with None values up to the required index if needed.
-    This allows setting values at arbitrary indices without IndexError.
+    """Pad the list with ``None`` so *idx* can be assigned without IndexError.
 
     Args:
         lst: The list to extend (modified in-place).
@@ -68,12 +61,8 @@ def _navigate_bracket_part(
 ) -> JsonMappingOrList:
     """Navigate one level deeper in form bracket notation structure.
 
-    Processes a single bracket notation segment and returns the next level
-    in the nested structure, creating intermediate dicts/lists as needed.
-
-    The type of structure created (dict vs list) is determined by examining
-    the next key: empty string or numeric indicates a list should be created,
-    otherwise a dict is created.
+    The missing intermediate container is created as a list when *next_key* is
+    empty or numeric, as a dict otherwise.
 
     Args:
         current: Current position in the nested structure.
@@ -103,10 +92,7 @@ def _navigate_bracket_part(
 def _set_bracket_leaf(current: JsonMappingOrList, leaf: str, value: JsonValue) -> None:
     """Set the final value at the leaf position of bracket notation.
 
-    Handles three types of leaf assignments:
-    - Empty string: Append to array (e.g., "items[]")
-    - Numeric string: Set array index (e.g., "items[0]")
-    - Named string: Set dict key (e.g., "items[name]")
+    Appends for ``items[]``, sets the index for ``items[0]``, the key otherwise.
 
     Args:
         current: The container (dict or list) to set the value in.
@@ -124,39 +110,25 @@ def _set_bracket_leaf(current: JsonMappingOrList, leaf: str, value: JsonValue) -
 
 
 class BaseModelRequestWithFormExtra(BaseModelRequestWithExtra):
-    """Pydantic Basemodel request storing extra from form.
-
-    Automatically deserializes from in extra fields to their Python equivalents.
-    """
+    """Pydantic Basemodel request storing form extra fields, JSON-deserialized."""
 
     @model_validator(mode="before")
     @classmethod
     def _deserialize_forms(cls, data: Any) -> Any:  # noqa: ANN401
         """Deserialize PHP/HTML-style form bracket notation into nested structures.
 
-        Parses multipart/form-data fields with bracket notation into proper
-        nested dictionaries and lists, matching the behavior of PHP's $_POST
-        array parsing. This enables complex nested data structures to be sent
-        via HTML forms or multipart requests.
-
-        String values are automatically deserialized from JSON when possible,
-        converting types like "123" to 123, "true" to True, etc.
+        String values of *extra* fields (those not declared on the model, e.g.
+        provider-specific parameters) are deserialized from JSON when possible,
+        mirroring how a JSON request body would already carry them. Declared
+        fields are left untouched here (a string that merely looks like JSON,
+        e.g. a prompt of "null", must reach the field as-is).
 
         Bracket Notation Patterns:
             - 'param[key]' -> {'param': {'key': value}}
-              Nested dictionary access
-
             - 'param[]' -> {'param': [value1, value2, ...]}
-              Array append (multiple fields with same name)
-
             - 'param[0]' -> {'param': [value]}
-              Explicit array index
-
             - 'param[key][]' -> {'param': {'key': [value1, value2, ...]}}
-              Nested dict containing array
-
             - 'param[a][b][c]' -> {'param': {'a': {'b': {'c': value}}}}
-              Deep nesting
 
         Args:
             data: Raw form data dictionary with bracket notation keys.
@@ -170,18 +142,18 @@ class BaseModelRequestWithFormExtra(BaseModelRequestWithExtra):
 
         result: JsonMapping = {}
         for key, value in data.items():
+            json_value: JsonValue = value
+            if key.split("[", 1)[0] not in cls.model_fields and isinstance(value, str):
+                with suppress(ValueError):
+                    json_value = from_json(value)
+
             if "[" not in key:
-                result[key] = value
+                result[key] = json_value
                 continue
 
             parts = [p or "" for p in _BRACKET_PARSE_PATTERN.findall(key)]
             if not parts:
                 continue
-
-            json_value: JsonValue = value
-            if isinstance(value, str):
-                with suppress(ValueError):
-                    json_value = from_json(value)
 
             *path, leaf = parts
             current: JsonMappingOrList = result

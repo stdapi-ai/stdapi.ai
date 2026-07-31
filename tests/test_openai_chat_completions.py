@@ -25,7 +25,11 @@ from stdapi.models.chat._adapters._openai_chat_completion import (
     format_response,
     format_stream,
 )
-from stdapi.models.chat._adapters._openai_common import extract_stream_usage
+from stdapi.models.chat._adapters._openai_common import (
+    JSON_OBJECT_SYSTEM_INSTRUCTION,
+    extract_stream_usage,
+)
+from stdapi.models.chat._default import ChatModel
 from stdapi.models.deprecation import DEPRECATED_MODELS
 from stdapi.types.openai_chat_completions import CompletionCreateParams
 from tests.conftest import logged_usage_entries
@@ -35,6 +39,26 @@ if TYPE_CHECKING:
 
     from openai.types.chat import ChatCompletion
     from starlette.testclient import TestClient as TestClientType
+
+    from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
+
+
+def _strip_code_fence(text: str) -> str:
+    """Strip a wrapping Markdown code fence (e.g. ` ```json `) from model output.
+
+    Args:
+        text: Raw model output, possibly fenced.
+
+    Returns:
+        ``text`` with a leading/trailing triple-backtick fence removed, or
+        ``text`` stripped of surrounding whitespace when it is not fenced.
+    """
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    lines = stripped.splitlines()
+    lines = lines[1:-1] if len(lines) > 1 and lines[-1].strip() == "```" else lines[1:]
+    return "\n".join(lines).strip()
 
 
 #: Tool declaration reused verbatim so a repeated request can hit the prompt cache.
@@ -1711,19 +1735,25 @@ class TestChatCompletions:
         Ref: https://developers.openai.com/api/docs/guides/function-calling#parallel-function-calling
              stdapi/types/openai_chat_completions.py:CompletionCreateParams._unsupported
         """
-        with pytest.raises(BadRequestError) as exc_info:
-            openai_client.chat.completions.create(
-                model=chat_model,
-                messages=[{"role": "user", "content": "Hello"}],
-                parallel_tool_calls=False,
-            )
-        error = exc_info.value
-        assert error.status_code == 400
-        body = error.body
-        assert isinstance(body, dict)
-        assert body["type"] == "invalid_request_error"
-        assert "parallel_tool_calls" in body["message"].lower()
-        assert body["code"] is None
+        response = openai_client.chat.completions.create(
+            model=chat_model,
+            messages=[{"role": "user", "content": "Hello"}],
+            # Upstream rejects the flag outright when no tools are declared
+            # ("'parallel_tool_calls' is only allowed when 'tools' are
+            # specified"), so a tool is required to exercise the value itself.
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_time",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+            parallel_tool_calls=False,
+            max_completion_tokens=16,
+        )
+        assert response.choices[0].message.role == "assistant"
 
     @pytest.mark.gateway("Project-specific restriction: stream with n>1 unsupported")
     def test_validation_stream_n_gt1_error(
@@ -1752,46 +1782,51 @@ class TestChatCompletions:
         assert "stream" in body["message"].lower()
         assert body["code"] is None
 
-    @pytest.mark.gateway(
-        "Bedrock outputConfig is not available on the official OpenAI API"
-    )
     def test_response_format_json_object(
-        self, openai_client: OpenAI, chat_reasoning_model: str
+        self, openai_client: OpenAI, chat_reasoning_model: str, use_official_api: bool
     ) -> None:
-        """A one-property ``json_schema`` response format yields exactly that JSON object.
+        """``response_format={"type": "json_object"}`` returns the prompted JSON object.
 
-        ``response_format`` becomes the Bedrock Converse ``outputConfig`` JSON
-        schema, which only Anthropic models accept — hence the reasoning-model
-        fixture. The schema pins the answer, so the value can be asserted.
+        The word "json" must appear in the input or OpenAI rejects the request
+        with a 400.  OpenAI's JSON mode constrains the syntax only, so the object
+        carries whatever the prompt asked for.  Upstream never wraps ``json_object``
+        output in a Markdown code fence, so the official lane requires the raw
+        prefix; the gateway's Bedrock-backed models are not constrained the same
+        way, so that lane tolerates a fence -- a common, harmless way models wrap
+        JSON -- rather than requiring an exact-prefix match.  The token budget is
+        larger on the official lane because ``gpt-5-nano`` bills reasoning tokens
+        against ``max_completion_tokens`` and would otherwise stop on ``length``
+        before emitting any content.
 
         Ref: https://developers.openai.com/api/docs/guides/structured-outputs
+             https://developers.openai.com/api/docs/guides/reasoning
              stdapi/models/chat/_adapters/_openai_chat_completion.py:build_output_config
         """
-        schema = {
-            "type": "object",
-            "properties": {"status": {"type": "string"}},
-            "required": ["status"],
-            "additionalProperties": False,
-        }
         response = openai_client.chat.completions.create(
             model=chat_reasoning_model,
             messages=[
                 {
                     "role": "user",
-                    "content": 'Reply with a JSON object containing a "status" key set to "ok".',
+                    "content": (
+                        "Reply in json with exactly this object and nothing "
+                        'else: {"status": "ok"}'
+                    ),
                 }
             ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {"name": "status_response", "schema": schema},
-            },
-            max_completion_tokens=64,
+            response_format={"type": "json_object"},
+            max_completion_tokens=_OFFICIAL_TOKEN_BUDGET if use_official_api else 64,
         )
         content = response.choices[0].message.content
         assert content
-        parsed = _json.loads(content)
-        assert parsed.get("status") == "ok"
-        assert response.choices[0].finish_reason in ("stop", "length")
+        unfenced = content if use_official_api else _strip_code_fence(content)
+        assert unfenced.startswith("{"), (
+            f"json_object output must not be wrapped in prose: {content!r}"
+        )
+        parsed = _json.loads(unfenced)
+        assert isinstance(parsed, dict), f"json_object must be an object: {parsed!r}"
+        assert "status" in parsed, (
+            f"json_object must carry the prompted content: {parsed!r}"
+        )
 
     @pytest.mark.gateway("Unsupported fields are project-specific here")
     def test_unsupported_seed_error(
@@ -3766,6 +3801,108 @@ class TestBedrockRequestFieldAliases:
         )
         assert request.stop == ["Y"]
         assert request.model_extra == {}
+
+
+class TestJsonObjectSystemInstruction:
+    """``response_format={"type": "json_object"}`` appends a JSON-only system block.
+
+    Bedrock's ``outputConfig`` has no schema for "any JSON object" (issue #96),
+    so ``create_completion`` enforces the contract with a system-prompt
+    instruction instead, appended after any explicit system prompt without
+    altering it.
+
+    Ref: stdapi/models/chat/_default.py:ChatModel.create_completion
+         stdapi/models/chat/_adapters/_openai_common.py:enforce_json_object
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    async def _captured_system_blocks(
+        monkeypatch: pytest.MonkeyPatch,
+        request: CompletionCreateParams,
+        request_log: dict[str, Any],
+    ) -> list[Any] | None:
+        """Run ``create_completion`` against a stub Converse call and return ``system``.
+
+        Args:
+            monkeypatch: Fixture used to stub ``ChatModel.converse``.
+            request: Chat completion request to translate.
+            request_log: Bound ``REQUEST_LOG`` context, read by ``format_response``.
+
+        Returns:
+            The ``system`` field of the captured Converse request body, or
+            ``None`` if the request carried no system blocks.
+        """
+        del request_log
+        captured: dict[str, Any] = {}
+
+        async def fake_converse(
+            _self: ChatModel, bedrock_request: ConverseRequestBaseTypeDef
+        ) -> dict[str, Any]:
+            captured.update(bedrock_request)
+            return {
+                "output": {"message": {"role": "assistant", "content": []}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            }
+
+        monkeypatch.setattr(ChatModel, "converse", fake_converse)
+        await ChatModel("amazon.nova-2-lite-v1:0").create_completion(
+            request, "chatcmpl-1", 0
+        )
+        return captured.get("system")
+
+    async def test_instruction_is_appended_after_the_user_system_prompt(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """An explicit system prompt is preserved, with the instruction appended."""
+        request = CompletionCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "messages": [
+                    {"role": "system", "content": "You only speak in French."},
+                    {"role": "user", "content": "Reply in json."},
+                ],
+                "response_format": {"type": "json_object"},
+            }
+        )
+        system = await self._captured_system_blocks(monkeypatch, request, request_log)
+        assert system == [
+            {"text": "You only speak in French."},
+            JSON_OBJECT_SYSTEM_INSTRUCTION,
+        ]
+
+    async def test_no_instruction_for_plain_text(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """The default (text) ``response_format`` sends no extra system block."""
+        request = CompletionCreateParams.model_validate(
+            {"model": "test-model", "messages": [{"role": "user", "content": "hi"}]}
+        )
+        assert (
+            await self._captured_system_blocks(monkeypatch, request, request_log)
+            is None
+        )
+
+    async def test_no_instruction_for_json_schema(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """``json_schema`` output is already constrained, so no nudge is added."""
+        request = CompletionCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "Reply in json."}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "answer", "schema": {"type": "object"}},
+                },
+            }
+        )
+        assert (
+            await self._captured_system_blocks(monkeypatch, request, request_log)
+            is None
+        )
 
 
 class TestIdentifierFieldLengthBounds:

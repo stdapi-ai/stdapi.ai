@@ -97,7 +97,13 @@ def _model_identity_check(request: pytest.FixtureRequest) -> Generator[None]:
             "container so no third-party binary executes on the host"
         )
     agentic_server: AgenticServer = request.getfixturevalue("agentic_server")
-    tool = getattr(request.module, "TOOL", None)
+    # A module driving one CLI declares ``TOOL``; one driving the same CLI over
+    # several gateway routes parametrizes an ``agentic_tool`` fixture instead.
+    tool = (
+        request.getfixturevalue("agentic_tool")
+        if "agentic_tool" in request.fixturenames
+        else getattr(request.module, "TOOL", None)
+    )
     config = (
         request.getfixturevalue("model_config")
         if "model_config" in request.fixturenames

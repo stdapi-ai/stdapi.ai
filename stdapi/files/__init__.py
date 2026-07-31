@@ -1,5 +1,6 @@
 """Files API — S3-backed file storage and multipart upload sessions."""
 
+from stdapi.files._core import DEFAULT_PURPOSE as DEFAULT_PURPOSE
 from stdapi.files._core import FileRecord as FileRecord
 from stdapi.files._core import delete_file as delete_file
 from stdapi.files._core import file_id_s3_key as file_id_s3_key

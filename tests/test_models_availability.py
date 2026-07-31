@@ -13,6 +13,7 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_GetFoundationMo
 """
 
 from datetime import UTC, datetime
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -22,13 +23,17 @@ import stdapi.models
 from stdapi import region_routing
 from stdapi.config import SETTINGS
 from stdapi.models import (
+    ModelBase,
     ModelDetails,
     _check_candidates,
     _check_model_availability,
     _collect_region_candidates,
+    _filter_inference_profiles,
     _merge_candidate,
+    _request_uses_system_tool,
     _trigger_price_catalog_refresh,
 )
+from stdapi.monitoring import REQUEST_ID
 from tests._helpers import make_client_error, make_event_log, make_model_details
 
 if TYPE_CHECKING:
@@ -37,6 +42,7 @@ if TYPE_CHECKING:
     from pydantic import JsonValue
     from types_aiobotocore_bedrock.literals import RegionName
 
+    from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
     from stdapi.monitoring import EventLog
 
 
@@ -198,6 +204,235 @@ class TestMergeCandidate:
         _merge_candidate(existing, _make_model())
         assert existing.regions == ["us-east-1"]
         assert existing.inference_profiles is None
+
+    def test_regional_profile_is_appended_alongside_the_preferred_one(self) -> None:
+        """A candidate's geo-scoped profile is merged into ``inference_profiles_regional``.
+
+        This is what lets a system-tool request avoid the ``global.`` profile for a
+        region reached through a later merge, not just the first one (issue #92).
+        """
+        existing = _make_model()
+        candidate = _make_model(region="eu-west-1")
+        candidate.set_inference_profile("eu-west-1", "global.vendor.some-model-v1")
+        candidate.set_inference_profile_regional("eu-west-1", "eu.vendor.some-model-v1")
+
+        _merge_candidate(existing, candidate)
+
+        assert existing.inference_profiles_regional == {
+            "eu-west-1": "eu.vendor.some-model-v1"
+        }
+        assert (
+            existing.get_id("eu-west-1", inference_profile=True, prefer_regional=True)
+            == "eu.vendor.some-model-v1"
+        )
+
+
+class TestFilterInferenceProfiles:
+    """_filter_inference_profiles: pick the preferred profile per model, keep a regional fallback.
+
+    Amazon Nova 2 Lite advertises both a ``global.`` and a ``us.`` system-defined
+    profile; with global cross-region inference on, ``global.`` wins the preferred
+    slot, but Bedrock rejects the ``nova_grounding`` system tool on it, so the
+    geo-scoped ``us.`` candidate must still be recorded for callers to fall back on.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html
+         stdapi/models/__init__.py:_filter_inference_profiles
+    """
+
+    def test_global_preferred_still_records_the_regional_candidate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Both the preferred (global) and the regional profile end up recorded."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_cross_region_inference_global", True)
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_model_region_restrict", {})
+        profiles: dict[str, str] = {}
+        regional_profiles: dict[str, str] = {}
+
+        _filter_inference_profiles(
+            profiles,
+            regional_profiles,
+            {
+                "amazon.nova-2-lite-v1:0": [
+                    "us.amazon.nova-2-lite-v1:0",
+                    "global.amazon.nova-2-lite-v1:0",
+                ]
+            },
+        )
+
+        assert profiles == {"amazon.nova-2-lite-v1:0": "global.amazon.nova-2-lite-v1:0"}
+        assert regional_profiles == {
+            "amazon.nova-2-lite-v1:0": "us.amazon.nova-2-lite-v1:0"
+        }
+
+    def test_global_only_model_has_no_regional_candidate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A model with only a ``global.`` profile leaves the regional map untouched."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_cross_region_inference_global", True)
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_model_region_restrict", {})
+        profiles: dict[str, str] = {}
+        regional_profiles: dict[str, str] = {}
+
+        _filter_inference_profiles(
+            profiles,
+            regional_profiles,
+            {"amazon.global-only-v1:0": ["global.amazon.global-only-v1:0"]},
+        )
+
+        assert profiles == {"amazon.global-only-v1:0": "global.amazon.global-only-v1:0"}
+        assert regional_profiles == {}
+
+
+class TestGetIdPreferRegional:
+    """ModelDetails.get_id(prefer_regional=True): route a request around the global profile.
+
+    Ref: stdapi/models/__init__.py:ModelDetails.get_id
+    """
+
+    def test_prefers_the_cached_regional_profile_for_the_region(self) -> None:
+        """A regional profile cached for the target region wins over the preferred (global) one."""
+        details = make_model_details(
+            "amazon.nova-2-lite-v1:0",
+            inference_profiles={"us-east-1": "global.amazon.nova-2-lite-v1:0"},
+            inference_profiles_regional={"us-east-1": "us.amazon.nova-2-lite-v1:0"},
+        )
+        assert (
+            details.get_id("us-east-1", inference_profile=True, prefer_regional=True)
+            == "us.amazon.nova-2-lite-v1:0"
+        )
+
+    def test_falls_back_to_the_default_profile_without_a_regional_candidate(
+        self,
+    ) -> None:
+        """No cached regional profile: behaves exactly like ``prefer_regional=False``."""
+        details = make_model_details(
+            "amazon.global-only-v1:0",
+            inference_profiles={"us-east-1": "global.amazon.global-only-v1:0"},
+        )
+        assert (
+            details.get_id("us-east-1", inference_profile=True, prefer_regional=True)
+            == "global.amazon.global-only-v1:0"
+        )
+
+    def test_ignored_when_inference_profile_is_not_requested(self) -> None:
+        """``prefer_regional`` has no effect on the bare on-demand model ID path."""
+        details = make_model_details(
+            "amazon.nova-2-lite-v1:0",
+            inference_profiles={"us-east-1": "global.amazon.nova-2-lite-v1:0"},
+            inference_profiles_regional={"us-east-1": "us.amazon.nova-2-lite-v1:0"},
+        )
+        assert (
+            details.get_id("us-east-1", prefer_regional=True)
+            == "amazon.nova-2-lite-v1:0"
+        )
+
+
+class TestRequestUsesSystemTool:
+    """_request_uses_system_tool: detect a promoted Bedrock system tool in a Converse request.
+
+    Ref: stdapi/models/__init__.py:_request_uses_system_tool
+         stdapi/models/chat/_default.py:ChatModelBase._req_promote_system_tools
+    """
+
+    def test_true_when_a_system_tool_entry_is_present(self) -> None:
+        """A ``systemTool`` entry in ``toolConfig.tools`` is detected."""
+        request: ConverseRequestBaseTypeDef = {
+            "modelId": "",
+            "toolConfig": {"tools": [{"systemTool": {"name": "nova_grounding"}}]},
+        }
+        assert _request_uses_system_tool(request) is True
+
+    def test_false_for_a_regular_tool(self) -> None:
+        """A plain ``toolSpec`` entry, with no system tool, is not detected."""
+        request: ConverseRequestBaseTypeDef = {
+            "modelId": "",
+            "toolConfig": {
+                "tools": [{"toolSpec": {"name": "get_weather", "inputSchema": {}}}]
+            },
+        }
+        assert _request_uses_system_tool(request) is False
+
+    def test_false_without_a_tool_config(self) -> None:
+        """A request with no tools at all reports no system tool."""
+        request: ConverseRequestBaseTypeDef = {"modelId": ""}
+        assert _request_uses_system_tool(request) is False
+
+
+@pytest.fixture
+def _request_id_context(request_log: EventLog) -> Generator[EventLog]:
+    """Bind ``REQUEST_ID`` alongside the request log for code called outside a real request.
+
+    ``_prepare_converse_request_for_region`` builds ``requestMetadata`` via
+    ``build_metadata``, which reads both context variables unconditionally.
+
+    Yields:
+        The bound request log.
+    """
+    token = REQUEST_ID.set("req-system-tool-routing")
+    yield request_log
+    REQUEST_ID.reset(token)
+
+
+async def _capturing_resolve(
+    model_id: str, _region: RegionName, captured: dict[str, object], **kwargs: object
+) -> str:
+    """Stand in for resolve_routed_model_id, recording its keyword arguments."""
+    captured.update(kwargs)
+    return model_id
+
+
+@pytest.mark.usefixtures("_request_id_context")
+class TestPrepareConverseRequestRoutesSystemTools:
+    """ModelBase._prepare_converse_request_for_region: route system-tool requests off ``global.``.
+
+    Ref: stdapi/models/__init__.py:ModelBase._prepare_converse_request_for_region (issue #92)
+    """
+
+    async def test_system_tool_request_prefers_the_regional_profile(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A request carrying a ``systemTool`` entry is resolved with ``prefer_regional=True``."""
+        captured: dict[str, object] = {}
+        monkeypatch.setattr(
+            stdapi.models,
+            "resolve_routed_model_id",
+            partial(_capturing_resolve, captured=captured),
+        )
+        request: ConverseRequestBaseTypeDef = {
+            "modelId": "",
+            "toolConfig": {"tools": [{"systemTool": {"name": "nova_grounding"}}]},
+        }
+
+        model: ModelBase[Any, Any] = ModelBase("amazon.nova-2-lite-v1:0")
+        await model._prepare_converse_request_for_region(  # noqa: SLF001
+            request, "us-east-1"
+        )
+
+        assert captured["prefer_regional"] is True
+
+    async def test_plain_request_does_not_prefer_the_regional_profile(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A request without a system tool keeps the default (possibly global) routing."""
+        captured: dict[str, object] = {}
+        monkeypatch.setattr(
+            stdapi.models,
+            "resolve_routed_model_id",
+            partial(_capturing_resolve, captured=captured),
+        )
+        request: ConverseRequestBaseTypeDef = {
+            "modelId": "",
+            "toolConfig": {
+                "tools": [{"toolSpec": {"name": "get_weather", "inputSchema": {}}}]
+            },
+        }
+
+        model: ModelBase[Any, Any] = ModelBase("amazon.nova-2-lite-v1:0")
+        await model._prepare_converse_request_for_region(  # noqa: SLF001
+            request, "us-east-1"
+        )
+
+        assert captured["prefer_regional"] is False
 
 
 class TestCheckCandidates:
@@ -760,8 +995,10 @@ class TestBedrockModelLifecycleFilter:
         async def _empty_provisioned(_client: object) -> set[str]:
             return set()
 
-        async def _empty_profiles(_client: object) -> dict[str, str]:
-            return {}
+        async def _empty_profiles(
+            _client: object,
+        ) -> tuple[dict[str, str], dict[str, str]]:
+            return {}, {}
 
         monkeypatch.setattr(
             stdapi.models, "_get_provisioned_models", _empty_provisioned

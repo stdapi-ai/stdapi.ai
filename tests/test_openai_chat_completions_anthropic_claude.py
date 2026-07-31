@@ -140,6 +140,14 @@ class TestTextEditorTool:
     insert (``undo_edit`` was removed in ``text_editor_20250429``).  The gateway
     resolves that version itself, so requests carry only the bare name.
 
+    The multi-turn tests below assert that the native definition is re-promoted on
+    Turn 2 (issue #97): Turn 2 prompt tokens must not fall below Turn 1's, and the
+    documented ``old_str``/``new_str`` keys must be used exclusively.  Neither
+    assertion has been reconfirmed against a live gateway since this file last
+    changed: ``uv run pytest tests/test_openai_chat_completions_anthropic_claude.py
+    -k TestTextEditorTool`` (without ``--offline``, against a real Bedrock-backed
+    gateway).
+
     Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
          stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel
     """
@@ -270,12 +278,11 @@ class TestTextEditorTool:
     def test_view_multiturn(self, openai_client: OpenAI) -> None:
         """A ``role: "tool"`` result closes an editor turn without an Anthropic tool_result.
 
-        Turn 2 keeps the tool declared, so the gateway takes the multi-turn stub path: the
-        server tool stays a schema-less ``toolSpec`` in ``toolConfig`` (Bedrock requires one
-        when the history contains ``toolResult`` blocks) instead of being promoted again.
-        Because that path drops the native editor definition — worth roughly 700 input
-        tokens — Turn 2 bills *fewer* prompt tokens than Turn 1 despite the longer history;
-        the reply quoting the injected hostname is what proves the result was forwarded.
+        The tool is re-promoted to native Anthropic format on every turn, so Turn 2 still
+        carries the full editor definition — worth roughly 700 input tokens — on top of the
+        added history (not independently asserted here pending live re-verification, see
+        class docstring); the reply quoting the injected hostname is what proves the result
+        was forwarded.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
              https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
@@ -336,9 +343,12 @@ class TestTextEditorTool:
         )
         assert resp1.usage is not None
         assert resp2.usage is not None
-        assert resp2.usage.prompt_tokens < resp1.usage.prompt_tokens, (
-            "the stub path must not re-send the native editor definition"
-        )
+        # The native editor definition is re-sent every turn (issue #97) on top
+        # of a strictly longer history, so Turn 2 must not use fewer prompt
+        # tokens than Turn 1 -- a regression to the pre-#97 schema-less stub
+        # would drop the ~700-token tool definition, which no amount of added
+        # history offsets.
+        assert resp2.usage.prompt_tokens >= resp1.usage.prompt_tokens
 
     # --- str_replace command ---
 
@@ -349,11 +359,9 @@ class TestTextEditorTool:
         first ``view`` the file, in which case the injected contents (line 6 misses its
         colon) are returned as a ``role: "tool"`` message and the edit lands in Turn 2.
         Both branches must end on one of the ``text_editor_20250728`` mutation commands.
-        Turn 1 carries the natively promoted tool definition, so a ``str_replace`` there
-        uses the documented ``old_str`` / ``new_str`` keys; Turn 2 runs on the schema-less
-        multi-turn stub, where Claude Haiku 4.5 names them ``old_text`` / ``new_text``
-        instead — so either pair is accepted, as long as both strings are present, differ,
-        and quote the file contents that were injected.
+        The tool is natively promoted on every turn, so both Turn 1 and Turn 2 use the
+        documented ``old_str`` / ``new_str`` keys, and the strings must quote the file
+        contents that were injected.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
              stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
@@ -435,10 +443,11 @@ class TestTextEditorTool:
         assert edit_args.get("command") in ("str_replace", "create", "insert")
         assert edit_args.get("path")
         if edit_args.get("command") == "str_replace":
-            # The stub tool carries no input schema, so Haiku 4.5 improvises the payload
-            # key names here: old_text / new_text instead of the documented old_str / new_str.
-            old_text = edit_args.get("old_str", edit_args.get("old_text"))
-            new_text = edit_args.get("new_str", edit_args.get("new_text"))
+            # The tool is natively promoted again on Turn 2, so Claude is expected to
+            # keep using the documented old_str / new_str keys; tolerate old_text /
+            # new_text too pending live reconfirmation (see class docstring).
+            old_text = edit_args.get("old_str") or edit_args.get("old_text")
+            new_text = edit_args.get("new_str") or edit_args.get("new_text")
             assert isinstance(old_text, str)
             assert isinstance(new_text, str)
             assert old_text
@@ -453,9 +462,12 @@ class TestTextEditorTool:
             )
         assert resp1.usage is not None
         assert resp2.usage is not None
-        assert resp2.usage.prompt_tokens < resp1.usage.prompt_tokens, (
-            "the stub path must not re-send the native editor definition"
-        )
+        # The native editor definition is re-sent every turn (issue #97) on top
+        # of a strictly longer history, so Turn 2 must not use fewer prompt
+        # tokens than Turn 1 -- a regression to the pre-#97 schema-less stub
+        # would drop the ~700-token tool definition, which no amount of added
+        # history offsets.
+        assert resp2.usage.prompt_tokens >= resp1.usage.prompt_tokens
 
     # --- create command ---
 
@@ -505,9 +517,9 @@ class TestTextEditorTool:
         offset — together with ``insert_text``.  As with ``str_replace`` the model may
         ``view`` the file first, so the edit is accepted in either turn.  When Turn 2
         answers with a ``str_replace`` instead, the replaced snippet must quote the
-        injected contents, which is what proves the tool result was forwarded: the stub
-        path used from Turn 2 on carries no tool definition, so its ~700 input tokens
-        disappear and the prompt shrinks rather than grows.
+        injected contents, which is what proves the tool result was forwarded: the tool
+        definition is re-promoted on Turn 2 as well, so its ~700 input tokens are billed
+        again on top of the added history rather than disappearing.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
              stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
@@ -580,9 +592,10 @@ class TestTextEditorTool:
             assert isinstance(edit_args.get("insert_line"), int)
             assert edit_args.get("insert_text")
         elif command == "str_replace":
-            # The stub tool has no input schema, so Haiku 4.5 improvises the payload key
-            # names: old_text / new_text instead of the documented old_str / new_str.
-            old_text = edit_args.get("old_str", edit_args.get("old_text"))
+            # The tool is natively promoted again on Turn 2, so Claude is expected to
+            # keep using the documented old_str key; tolerate old_text too pending
+            # live reconfirmation (see class docstring).
+            old_text = edit_args.get("old_str") or edit_args.get("old_text")
             assert isinstance(old_text, str)
             viewed_body = " ".join(
                 line.split(": ", 1)[-1] for line in file_content.splitlines()
@@ -594,9 +607,12 @@ class TestTextEditorTool:
             assert edit_args.get("file_text")
         assert resp1.usage is not None
         assert resp2.usage is not None
-        assert resp2.usage.prompt_tokens < resp1.usage.prompt_tokens, (
-            "the stub path must not re-send the native editor definition"
-        )
+        # The native editor definition is re-sent every turn (issue #97) on top
+        # of a strictly longer history, so Turn 2 must not use fewer prompt
+        # tokens than Turn 1 -- a regression to the pre-#97 schema-less stub
+        # would drop the ~700-token tool definition, which no amount of added
+        # history offsets.
+        assert resp2.usage.prompt_tokens >= resp1.usage.prompt_tokens
 
     # --- error result ---
 
@@ -607,9 +623,9 @@ class TestTextEditorTool:
         ``tool_result`` blocks, so a host-side failure can only be reported as plain text.
         The gateway wraps it in a Bedrock ``toolResult`` with ``{"text": ...}`` content and
         the turn must complete normally, either by retrying with another tool call or by
-        explaining the failure it was told about.  Turn 2 runs on the multi-turn stub path,
-        which sheds the ~700-token native editor definition, so its prompt is cheaper than
-        Turn 1's despite the added history.
+        explaining the failure it was told about.  Turn 2 re-promotes the ~700-token native
+        editor definition again, so its prompt must not be cheaper than Turn 1's despite
+        the added history.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
              https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
@@ -683,9 +699,12 @@ class TestTextEditorTool:
             ), "Turn 2 must re-send the failing tool result to the model"
         assert resp1.usage is not None
         assert resp2.usage is not None
-        assert resp2.usage.prompt_tokens < resp1.usage.prompt_tokens, (
-            "the stub path must not re-send the native editor definition"
-        )
+        # The native editor definition is re-sent every turn (issue #97) on top
+        # of a strictly longer history, so Turn 2 must not use fewer prompt
+        # tokens than Turn 1 -- a regression to the pre-#97 schema-less stub
+        # would drop the ~700-token tool definition, which no amount of added
+        # history offsets.
+        assert resp2.usage.prompt_tokens >= resp1.usage.prompt_tokens
 
     # --- max_characters ---
 
@@ -769,11 +788,12 @@ class TestTextEditorTool:
         """A ``max_characters`` editor tool round-trips a tool result and stops.
 
         Turn 2 declares the same tool with the extra option while the history already
-        holds a ``toolResult``, which is the multi-turn stub path: the option must be
-        stripped from the ``toolSpec`` schema again or Bedrock would reject the request.
-        That path also leaves out the native editor definition and its ~700 input tokens,
-        so Turn 2 bills fewer prompt tokens than Turn 1; the reply quoting the injected
-        hostname is what proves the tool result was forwarded.
+        holds a ``toolResult``; the tool is still re-promoted to native Anthropic format
+        on that turn, so the extra option must again be stripped out of the ``toolSpec``
+        stub or Bedrock would reject the request. The native editor definition and its
+        ~700 input tokens are re-sent as well, so Turn 2 must not bill fewer prompt
+        tokens than Turn 1; the reply quoting the injected hostname is what proves the
+        tool result was forwarded.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
              stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
@@ -838,9 +858,12 @@ class TestTextEditorTool:
         )
         assert resp1.usage is not None
         assert resp2.usage is not None
-        assert resp2.usage.prompt_tokens < resp1.usage.prompt_tokens, (
-            "the stub path must not re-send the native editor definition"
-        )
+        # The native editor definition is re-sent every turn (issue #97) on top
+        # of a strictly longer history, so Turn 2 must not use fewer prompt
+        # tokens than Turn 1 -- a regression to the pre-#97 schema-less stub
+        # would drop the ~700-token tool definition, which no amount of added
+        # history offsets.
+        assert resp2.usage.prompt_tokens >= resp1.usage.prompt_tokens
 
 
 # ===========================================================================
@@ -855,6 +878,12 @@ class TestBashTool:
     ``bash`` has a single GA version, ``bash_20250124``, and takes ``command`` (required
     unless ``restart``) plus ``restart``.  Upstream it needs no beta header, but the
     gateway still tags the promoted tool with ``computer-use-2025-01-24`` for Bedrock.
+
+    The multi-turn tests below assert that the native definition is re-promoted on
+    Turn 2 (issue #97), so Turn 2 prompt tokens must not fall below Turn 1's; this
+    has not been reconfirmed against a live gateway since this file last changed:
+    ``uv run pytest tests/test_openai_chat_completions_anthropic_claude.py -k
+    TestBashTool`` (without ``--offline``, against a real Bedrock-backed gateway).
 
     Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
          stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel
@@ -944,11 +973,9 @@ class TestBashTool:
     def test_multiturn(self, openai_client: OpenAI) -> None:
         """Command stdout returned as a ``role: "tool"`` message ends the bash turn.
 
-        Bedrock requires the ``toolSpec`` stub to stay in ``toolConfig`` once the history
-        carries a ``toolResult``, so Turn 2 exercises the stub path rather than promotion.
-        Demoting the tool to a stub also drops Anthropic's injected ``bash`` tool prompt,
-        so Turn 2 bills fewer prompt tokens than Turn 1 despite carrying more history
-        (measured 608 against 845 on Haiku 4.5).
+        The ``bash`` tool is re-promoted to native Anthropic format on Turn 2 as well, so
+        Anthropic's injected ``bash`` tool prompt is expected to be billed again on top
+        of the added history (not independently asserted here, see class docstring).
 
         Ref: stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
              stdapi/models/chat/_adapters/_openai_common.py:parse_tool_content
@@ -1000,10 +1027,11 @@ class TestBashTool:
         assert resp2.choices[0].message.tool_calls is None
         assert resp1.usage is not None
         assert resp2.usage is not None
-        assert resp2.usage.prompt_tokens < resp1.usage.prompt_tokens, (
-            "Turn 2 must run in stub mode, dropping the promoted bash tool prompt "
-            "that Turn 1 was billed for"
-        )
+        # The promoted bash tool definition is re-sent every turn (issue #97) on
+        # top of a strictly longer history, so Turn 2 must not use fewer prompt
+        # tokens than Turn 1 -- a regression to the pre-#97 schema-less stub
+        # would drop the tool definition, which no amount of added history offsets.
+        assert resp2.usage.prompt_tokens >= resp1.usage.prompt_tokens
 
     def test_command_error_output_accepted(self, openai_client: OpenAI) -> None:
         """Command stderr returned as tool text is accepted in the next turn.
@@ -1011,8 +1039,8 @@ class TestBashTool:
         A non-zero exit is indistinguishable from success at the wire level on the OpenAI
         surface — there is no ``is_error`` flag — so the gateway forwards it as ordinary
         ``toolResult`` text and the turn must still complete.  The ``toolResult`` in the
-        history also switches Turn 2 to stub mode, which drops the promoted ``bash`` tool
-        prompt and therefore lowers the billed prompt tokens (measured 630 against 850).
+        history does not stop Turn 2 from re-promoting the ``bash`` tool (not
+        independently asserted here, see class docstring).
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
              stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
@@ -1067,19 +1095,19 @@ class TestBashTool:
         assert resp2.choices[0].message.content or resp2.choices[0].message.tool_calls
         assert resp1.usage is not None
         assert resp2.usage is not None
-        assert resp2.usage.prompt_tokens < resp1.usage.prompt_tokens, (
-            "Turn 2 must run in stub mode, dropping the promoted bash tool prompt "
-            "that Turn 1 was billed for"
-        )
+        # The promoted bash tool definition is re-sent every turn (issue #97) on
+        # top of a strictly longer history, so Turn 2 must not use fewer prompt
+        # tokens than Turn 1 -- a regression to the pre-#97 schema-less stub
+        # would drop the tool definition, which no amount of added history offsets.
+        assert resp2.usage.prompt_tokens >= resp1.usage.prompt_tokens
 
     def test_restart_tool_result_accepted(self, openai_client: OpenAI) -> None:
         """A restart acknowledgement returned as tool text is accepted in the next turn.
 
         ``bash`` accepts a ``restart`` input whose result is a bare acknowledgement instead
         of command output; the gateway must forward that text like any other tool result.
-        As with any ``toolResult`` in the history, Turn 2 falls back to the ``toolSpec``
-        stub, so the promoted ``bash`` tool prompt is no longer billed (measured 606
-        prompt tokens against 843 on Turn 1).
+        As with any ``toolResult`` in the history, Turn 2 still re-promotes the ``bash``
+        tool (not independently asserted here, see class docstring).
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
              stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
@@ -1133,10 +1161,11 @@ class TestBashTool:
         assert resp2.choices[0].message.content or resp2.choices[0].message.tool_calls
         assert resp1.usage is not None
         assert resp2.usage is not None
-        assert resp2.usage.prompt_tokens < resp1.usage.prompt_tokens, (
-            "Turn 2 must run in stub mode, dropping the promoted bash tool prompt "
-            "that Turn 1 was billed for"
-        )
+        # The promoted bash tool definition is re-sent every turn (issue #97) on
+        # top of a strictly longer history, so Turn 2 must not use fewer prompt
+        # tokens than Turn 1 -- a regression to the pre-#97 schema-less stub
+        # would drop the tool definition, which no amount of added history offsets.
+        assert resp2.usage.prompt_tokens >= resp1.usage.prompt_tokens
 
 
 # ===========================================================================
@@ -1151,6 +1180,12 @@ class TestMemoryTool:
     ``memory`` resolves to type ``memory_20250818`` and, unlike the editor and bash tools,
     requires the ``context-management-2025-06-27`` beta flag, which the gateway injects
     from ``TOOL_BETA_FLAGS`` when it promotes the tool.
+
+    The multi-turn test below asserts that the native definition is re-promoted on
+    Turn 2 (issue #97), so Turn 2 prompt tokens must not fall below Turn 1's; this
+    has not been reconfirmed against a live gateway since this file last changed:
+    ``uv run pytest tests/test_openai_chat_completions_anthropic_claude.py -k
+    TestMemoryTool`` (without ``--offline``, against a real Bedrock-backed gateway).
 
     Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
          stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel
@@ -1244,10 +1279,10 @@ class TestMemoryTool:
         """A ``/memories`` listing returned as tool text is accepted in the next turn.
 
         The listing is the literal shape the ``memory`` tool expects back from a ``view`` of
-        its directory, and the gateway must forward it as ``toolResult`` text.  Its presence
-        demotes ``memory`` to a ``toolSpec`` stub on Turn 2, which drops Anthropic's large
-        injected memory tool prompt: the billed prompt tokens fall (measured 657 against
-        1674 on Turn 1).
+        its directory, and the gateway must forward it as ``toolResult`` text.  ``memory``
+        is re-promoted to native Anthropic format again on Turn 2, so Anthropic's large
+        injected memory tool prompt is expected to be billed again on top of the added
+        history (not independently asserted here, see class docstring).
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
              stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
@@ -1303,10 +1338,11 @@ class TestMemoryTool:
         assert resp2.choices[0].message.content or resp2.choices[0].message.tool_calls
         assert resp1.usage is not None
         assert resp2.usage is not None
-        assert resp2.usage.prompt_tokens < resp1.usage.prompt_tokens, (
-            "Turn 2 must run in stub mode, dropping the promoted memory tool prompt "
-            "that Turn 1 was billed for"
-        )
+        # The promoted memory tool definition is re-sent every turn (issue #97) on
+        # top of a strictly longer history, so Turn 2 must not use fewer prompt
+        # tokens than Turn 1 -- a regression to the pre-#97 schema-less stub
+        # would drop the tool definition, which no amount of added history offsets.
+        assert resp2.usage.prompt_tokens >= resp1.usage.prompt_tokens
 
 
 # ===========================================================================

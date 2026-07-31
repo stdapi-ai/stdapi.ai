@@ -29,6 +29,8 @@ from stdapi.models.chat._adapters._openai_chat_completion import (
 )
 from stdapi.models.chat._adapters._openai_common import (
     CACHE_TTL,
+    JSON_OBJECT_SYSTEM_INSTRUCTION,
+    enforce_json_object,
     map_service_tier,
     parse_prompt_cache_key,
     resolve_cache_ttl,
@@ -796,12 +798,48 @@ class TestBuildOutputConfig:
         }
 
     def test_json_object_and_text_formats(self) -> None:
-        """``json_object`` sends the empty schema and plain text sends none."""
-        assert build_output_config(ResponseFormatJSONObject(type="json_object")) == {
-            "schema": "{}"
-        }
+        """``json_object`` and plain text both send no outputConfig schema.
+
+        Bedrock's strict structured output has no schema for "any JSON object": an
+        empty schema is rejected, and the only closed alternative admits only
+        ``{}`` (issue #96). Skipping outputConfig for ``json_object`` avoids
+        constraining the model to an empty response.
+        """
+        assert build_output_config(ResponseFormatJSONObject(type="json_object")) is None
         assert build_output_config(ResponseFormatText(type="text")) is None
         assert build_output_config(None) is None
+
+
+class TestEnforceJsonObject:
+    """``enforce_json_object`` appends a JSON-only system instruction on request.
+
+    Since Bedrock's ``outputConfig`` has no schema for ``json_object`` (issue
+    #96), this system-prompt nudge is the substitute enforcement -- and must
+    never disturb an existing system prompt.
+
+    Ref: stdapi/models/chat/_adapters/_openai_common.py:enforce_json_object
+    """
+
+    def test_appends_instruction_when_requested(self) -> None:
+        """A new block is appended, leaving the existing prompt untouched."""
+        system_blocks: list[Any] = [{"text": "You are a helpful assistant."}]
+        enforce_json_object(system_blocks, requested=True)
+        assert system_blocks == [
+            {"text": "You are a helpful assistant."},
+            JSON_OBJECT_SYSTEM_INSTRUCTION,
+        ]
+
+    def test_no_op_when_not_requested(self) -> None:
+        """``requested=False`` leaves ``system_blocks`` unchanged (e.g. json_schema)."""
+        system_blocks: list[Any] = [{"text": "You are a helpful assistant."}]
+        enforce_json_object(system_blocks, requested=False)
+        assert system_blocks == [{"text": "You are a helpful assistant."}]
+
+    def test_appends_to_empty_system_blocks(self) -> None:
+        """No prior system prompt still gets the instruction appended."""
+        system_blocks: list[Any] = []
+        enforce_json_object(system_blocks, requested=True)
+        assert system_blocks == [JSON_OBJECT_SYSTEM_INSTRUCTION]
 
 
 class TestTopKForwarding:

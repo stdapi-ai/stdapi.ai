@@ -1,5 +1,6 @@
-"""Moonshot Kimi K2.5 chat model implementation."""
+"""Moonshot Kimi K2 chat model implementation."""
 
+from re import compile as re_compile
 from typing import TYPE_CHECKING
 
 from stdapi.models.chat._default import ChatModel as _BaseChatModel
@@ -10,13 +11,14 @@ if TYPE_CHECKING:
 
 
 class ChatModel(_BaseChatModel):
-    """Moonshot Kimi K2.5-specific chat model implementation.
+    """Moonshot Kimi K2-specific chat model implementation.
 
     Supports Kimi-specific thinking/reasoning configuration via
     ``additionalModelRequestFields.thinking``.
     """
 
-    MATCHER = "moonshotai.kimi-k2."
+    #: Matches both Bedrock provider prefixes for any Kimi K2.x model, open-ended on version.
+    MATCHER = re_compile(r"^moonshot(?:ai)?\.kimi-k2")
 
     def _req_configure_reasoning(
         self,
@@ -27,7 +29,7 @@ class ChatModel(_BaseChatModel):
         budget_tokens: int | None = None,  # noqa: ARG002
         max_tokens: int | None = None,  # noqa: ARG002
     ) -> None:
-        """Configure thinking parameters for Kimi K2.5 models.
+        """Configure thinking parameters for Kimi K2 models.
 
         Kimi uses the ``thinking`` field in additionalModelRequestFields.
         Supports only enabling or disabling thinking (budget_tokens is ignored).

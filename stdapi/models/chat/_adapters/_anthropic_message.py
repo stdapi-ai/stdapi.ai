@@ -180,6 +180,50 @@ _SERVICES_TIERS: dict[ServiceTiers | None, ServiceTierTypeType] = {
 _RE_DOC_NAME = re.compile(r"[^a-zA-Z0-9_-]")
 
 
+def _synthesize_tool_config_from_history(
+    messages: list[MessageTypeDef], *, exclude: frozenset[str] = frozenset()
+) -> ToolConfigurationTypeDef | None:
+    """Synthesize a permissive tool config from ``toolUse`` blocks in history.
+
+    Mirrors ``stdapi.models.chat._default._synthesize_tool_config_from_history``
+    for the CountTokens path: Bedrock's CountTokens API wraps the same
+    Converse-shaped payload, which rejects a request carrying
+    ``toolUse``/``toolResult`` content blocks without a ``toolConfig``. A
+    client (or ``_req_configure_tools``'s own server-tool promotion) can leave
+    a later turn with no ``toolConfig`` even though history still references a
+    tool, so a minimal one is built here: one ``toolSpec`` per distinct tool
+    name found in history, each with a permissive ``{"type": "object"}`` input
+    schema.
+
+    Args:
+        messages: Converted Bedrock message history.
+        exclude: Tool names already covered elsewhere (natively promoted to
+            ``additionalModelRequestFields``), skipped so the synthesized stub
+            never duplicates one of them.
+
+    Returns:
+        A synthesized tool configuration, or ``None`` if history contains no
+        eligible ``toolUse`` block.
+    """
+    names = sorted(
+        {
+            block["toolUse"]["name"]
+            for message in messages
+            for block in message.get("content", ())
+            if "toolUse" in block
+        }
+        - exclude
+    )
+    if not names:
+        return None
+    return {
+        "tools": [
+            {"toolSpec": {"name": name, "inputSchema": {"json": {"type": "object"}}}}
+            for name in names
+        ]
+    }
+
+
 def _map_stop_reason(stop_reason: StopReasonType | str | None) -> StopReason:
     """Map a Bedrock stop reason to an Anthropic stop reason.
 
@@ -1813,7 +1857,11 @@ async def count_tokens_via_bedrock(
     Builds a Converse-compatible input from the Anthropic request the same way
     ``create_message`` does — system-message placement, cache points, server-tool
     promotion and reasoning config included — so the count matches what the model
-    actually consumes, then calls the Bedrock ``count_tokens`` API.
+    actually consumes, then calls the Bedrock ``count_tokens`` API. When that
+    leaves no ``toolConfig`` but history still carries ``toolUse`` blocks (a
+    later turn that omitted ``tools``, or a server-tool-only turn whose stub was
+    fully promoted natively), a permissive one is synthesized, mirroring the
+    fallback ``create_message`` applies via ``_prepare_converse_request``.
 
     Args:
         request: The count tokens request containing messages, system prompt, and tools.
@@ -1871,6 +1919,19 @@ async def count_tokens_via_bedrock(
     )
     if tool_config:
         req["toolConfig"] = tool_config
+    else:
+        # Exclude names already promoted to additionalModelRequestFields (e.g.
+        # a Claude server tool): the synthesized stub must never re-add a
+        # toolSpec for a tool name the model already receives natively.
+        native_tool_names = frozenset(
+            str(tool["name"])
+            for tool in additional_request_fields.get("tools", ())  # type: ignore[union-attr]
+            if isinstance(tool, dict) and "name" in tool
+        )
+        if synthesized_tool_config := _synthesize_tool_config_from_history(
+            bedrock_messages, exclude=native_tool_names
+        ):
+            req["toolConfig"] = synthesized_tool_config
     if additional_request_fields:
         req["additionalModelRequestFields"] = additional_request_fields
 

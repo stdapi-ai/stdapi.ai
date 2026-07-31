@@ -19,7 +19,7 @@ Edit images using inpainting with Amazon Bedrock image models through an OpenAI-
   <br>Add, remove, or modify elements in existing images with AI assistance.
 
 - :material-layers-triple: __Flexible Masking__
-  <br>Use transparency or explicit masks to define edit regions.
+  <br>Define edit regions with an explicit mask image, using either alpha transparency or black/white pixels.
 
 - :material-aws: __Scalable Infrastructure__
   <br>Edit images at scale with Amazon Bedrock infrastructure.
@@ -299,7 +299,7 @@ curl -X POST "$BASE/v1/images/edits" \
     - **`mask`** (required): Maps to `style_image` - the reference style image
     - **`prompt`**: Guides the style application process
 
-#### Inpainting with Masks (Amazon Models)
+#### Inpainting with Masks (Amazon Models and Stability AI)
 
 An image submitted without a `mask` is **not** auto-masked from its own transparency:
 it is sent as a conditioning image for text-to-image generation instead of an
@@ -323,9 +323,9 @@ curl -X POST "$BASE/v1/images/edits" \
 
 **Mask format**: PNG with alpha channel where transparent pixels indicate regions to
 edit, opaque pixels are preserved (standard OpenAI edits-API mask). A mask with an
-alpha channel is automatically converted to the black/white RGB format Nova
-Canvas/Titan require; a mask that is already black/white RGB (no alpha channel) is
-passed through unchanged.
+alpha channel is automatically converted to the black/white RGB format each backend
+requires (Nova Canvas, Titan, and the Stability AI inpaint/erase-object models); a
+mask that is already black/white RGB (no alpha channel) is passed through unchanged.
 
 ### Provider-Specific Parameters
 

@@ -114,14 +114,14 @@ class ModelPricing(BaseModel):
         "`route` — this ensures the model supports *both* the route and the required modality. "
         "A model that only handles text would otherwise appear in a route-only search and then fail "
         "at request time.\n"
-        "4. **Exclude legacy models:** Add `legacy=false` to skip deprecated models unless you "
-        "specifically need one.\n\n"
+        "4. **Legacy models are excluded by default.** Add `legacy=true` if you specifically need "
+        "a deprecated model (e.g. to check what it should be migrated to).\n\n"
         "**Examples:**\n"
-        "- Text generation: `route=openai_chat_completion&legacy=false`\n"
-        "- Vision (image input): `route=openai_chat_completion&input_modalities=IMAGE&legacy=false`\n"
-        "- Audio understanding: `route=openai_chat_completion&input_modalities=SPEECH&legacy=false`\n"
-        "- Embeddings: `route=openai_embedding&legacy=false`\n"
-        "- Image generation: `route=openai_image_generation&legacy=false`\n\n"
+        "- Text generation: `route=openai_chat_completion`\n"
+        "- Vision (image input): `route=openai_chat_completion&input_modalities=IMAGE`\n"
+        "- Audio understanding: `route=openai_chat_completion&input_modalities=SPEECH`\n"
+        "- Embeddings: `route=openai_embedding`\n"
+        "- Image generation: `route=openai_image_generation`\n\n"
         '**Note:** Audio *output* from `openai_chat_completion` (via `modalities=["text","audio"]`) '
         "is a model-specific capability not separately tracked — use a `route` search "
         "and verify audio output support in the model documentation."
@@ -171,7 +171,9 @@ async def search_models(
     legacy: Annotated[
         bool | None,
         Query(
-            description="Filter by legacy status (true = deprecated models only, false = non-deprecated models only)."
+            description="Filter by legacy status (true = deprecated models only, false = "
+            "non-deprecated models only). Legacy models are excluded when omitted; pass "
+            "legacy=true to include them."
         ),
     ] = None,
     _: Annotated[None, Depends(authenticate)] = None,
@@ -185,7 +187,8 @@ async def search_models(
             tool name (e.g. openai_chat_completion). Both formats are accepted transparently.
         region: Filter to models available in a specific AWS region.
         streaming: Filter by streaming support.
-        legacy: Filter by legacy/deprecated status.
+        legacy: Filter by legacy/deprecated status. Legacy models are excluded when
+            omitted; pass True to include them.
 
     Returns:
         Filtered and sorted list of model details.
@@ -222,8 +225,12 @@ async def search_models(
         models_ids &= {
             mid for mid, m in models.items() if m.response_streaming is streaming
         }
-    if legacy is not None:
-        models_ids &= {mid for mid, m in models.items() if (m.legacy is True) is legacy}
+    # Legacy models are not guaranteed to stay invokable, so they are excluded by
+    # default and only surfaced when explicitly requested with legacy=true.
+    effective_legacy = legacy if legacy is not None else False
+    models_ids &= {
+        mid for mid, m in models.items() if (m.legacy is True) is effective_legacy
+    }
     return log_response_params([models[model_id] for model_id in sorted(models_ids)])
 
 

@@ -57,7 +57,7 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 | Function calling (`tools`)               |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Full OpenAI-compatible schema                                   |
 | Legacy `function_call`                   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Backward compatibility maintained                               |
 | Parallel tool calls                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Multiple tools in one turn                                      |
-| Disable parallel tool calls              | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | `parallel_tool_calls: false` returns `400`; not supported        |
+| Disable parallel tool calls              |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | `parallel_tool_calls: false` is accepted for every model and honored by models able to constrain tool use; the response reports the tool calls actually made |
 | Server tools                             | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Provider system tools and Claude server tools                   |
 | **Generation Control**                   |                                          |                                                                 |
 | `max_tokens` / `max_completion_tokens`   |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Output length limits                                            |
@@ -76,7 +76,8 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 | `n` (multiple choices)                   |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Generate multiple responses, not supported with streaming       |
 | `logprobs`                               | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Rejected with `400` when enabled (`false`/`null` accepted, as they request the default behavior); `top_logprobs` (above) remains usable |
 | `prediction`                             | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Static predicted output content                                 |
-| `response_format`                        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | JSON object or JSON schema output                               |
+| `response_format: "json_object"`         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Accepted for all models; syntactically valid JSON is not guaranteed for every model |
+| `response_format: "json_schema"`         |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Structured JSON output validated against the supplied schema     |
 | `verbosity`                              | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Model verbosity                                                 |
 | `web_search_options`                     | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Web search tool                                                 |
 | `prompt_cache_key`                       |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Cache prompts to reduce costs and latency                       |
@@ -88,7 +89,7 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 | Streaming (`stream: true`)               |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Server-Sent Events (SSE)                                        |
 | Streaming obfuscation                    | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Unsupported                                                     |
 | Audio                                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Model output or synthesis from text output (synthesis is Converse-only — not performed for Mantle-served requests) |
-| `response_format` (JSON mode)            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Model-specific JSON support                                     |
+| `response_format` (JSON mode)            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | `json_object` accepted for all models, without a syntax guarantee on every model; `json_schema` structured output is model-specific |
 | `reasoning_content` (From Deepseek API)  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Text reasoning messages                                         |
 | `annotations` (URL citations)            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | URL citations from system tools (non-streaming only)            |
 | **Usage tracking**                       |                                          |                                                                 |

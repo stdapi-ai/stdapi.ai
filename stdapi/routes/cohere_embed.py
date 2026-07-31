@@ -104,12 +104,12 @@ async def embed(
         if request.max_tokens is not None:
             extra_params["max_tokens"] = request.max_tokens
         if native_embedding_types is not None:
-            extra_params["embedding_types"] = native_embedding_types
+            extra_params["embedding_types"] = list(native_embedding_types)
     elif (
         model_id.startswith(TITAN_EMBED_V2_PREFIX)
         and native_embedding_types is not None
     ):
-        extra_params["embeddingTypes"] = native_embedding_types
+        extra_params["embeddingTypes"] = list(native_embedding_types)
     response = await get_embedding_model(model_id).embed_text(
         [*(request.texts or ()), *(request.images or ())],
         dimensions=request.output_dimension,

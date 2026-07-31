@@ -2,7 +2,7 @@
 
 from base64 import b64encode
 from struct import pack
-from typing import TYPE_CHECKING, Literal, Self
+from typing import TYPE_CHECKING, Literal, Self, cast
 
 from pydantic import Field, model_validator
 
@@ -12,6 +12,8 @@ from stdapi.types import BaseModelRequestWithExtra, BaseModelResponse
 from stdapi.types.cohere import ApiMeta
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from stdapi.models.embedding import EmbeddingResponse
 
 #: Cohere embed `input_type` values.
@@ -214,7 +216,7 @@ class EmbedResponse(BaseModelResponse):
 
 
 def resolve_embedding_types(
-    model_id: str, embedding_types: list[str] | None
+    model_id: str, embedding_types: Sequence[str] | None
 ) -> list[str] | None:
     """Resolve the native Bedrock embedding types to request for a model.
 
@@ -254,7 +256,7 @@ def resolve_embedding_types(
 
 
 def build_embeddings_by_type(
-    response: EmbeddingResponse, embedding_types: list[str] | None
+    response: EmbeddingResponse, embedding_types: Sequence[str] | None
 ) -> EmbeddingsByType:
     """Build the Cohere `embeddings_by_type` response from a model response.
 
@@ -271,15 +273,22 @@ def build_embeddings_by_type(
     by_type = response.embeddings_by_type or {}
     float_vectors = by_type.get("float", response.embeddings)
     requested = set(embedding_types) if embedding_types else {"float"}
-    fields: dict[str, list[list[float]] | list[list[int]] | list[str]] = {}
-    if "float" in requested:
-        fields["float_"] = float_vectors
-    for embedding_type in ("int8", "uint8", "binary", "ubinary"):
-        if embedding_type in requested and embedding_type in by_type:
-            fields[embedding_type] = by_type[embedding_type]
-    if "base64" in requested:
-        fields["base64"] = [_encode_base64(vector) for vector in float_vectors]
-    return EmbeddingsByType(**fields)
+    # Bedrock only ever returns integers for the quantized types below (only
+    # "float" uses floats), so this narrows the shared `float | int` element
+    # type declared on `EmbeddingResponse.embeddings_by_type`.
+    quantized = cast("dict[str, list[list[int]]]", by_type)
+    return EmbeddingsByType(
+        float_=float_vectors if "float" in requested else None,
+        int8=quantized.get("int8") if "int8" in requested else None,
+        uint8=quantized.get("uint8") if "uint8" in requested else None,
+        binary=quantized.get("binary") if "binary" in requested else None,
+        ubinary=quantized.get("ubinary") if "ubinary" in requested else None,
+        base64=(
+            [_encode_base64(vector) for vector in float_vectors]
+            if "base64" in requested
+            else None
+        ),
+    )
 
 
 def _encode_base64(vector: list[float]) -> str:
