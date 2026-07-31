@@ -6,6 +6,7 @@ Ref: https://developers.openai.com/api/docs/guides/text-to-speech#voice-options
 """
 
 import pytest
+from pydantic import ValidationError
 
 from stdapi.types.openai_audio import OPENAI_VOICES_FEMALE, TranscriptionCreateParams
 
@@ -72,3 +73,49 @@ class TestTranscriptionCreateParamsKnownSpeaker:
         params = TranscriptionCreateParams(model="amazon.transcribe")
         assert params.known_speaker_names is None
         assert params.known_speaker_references is None
+
+
+class TestTranscriptionCreateParamsStreamingSubtitles:
+    """Subtitle formats cannot be combined with ``stream=true``.
+
+    ``srt``/``vtt`` cues are cut from the finished transcript, while the streaming
+    path emits plain ``transcript.text.delta`` events. Accepting the pair would
+    answer 200 with plain text and still pay Amazon Transcribe for the subtitle
+    generation whose output is then discarded, so it is refused up front.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/dg/subtitles.html
+         stdapi/types/openai_audio.py:TranscriptionCreateParams
+    """
+
+    @pytest.mark.parametrize("response_format", ["srt", "vtt"])
+    def test_subtitle_format_with_streaming_is_rejected(
+        self, response_format: str
+    ) -> None:
+        """Each subtitle format is refused when streaming is requested."""
+        with pytest.raises(ValidationError, match="stream=true"):
+            TranscriptionCreateParams(
+                model="amazon.transcribe",
+                response_format=response_format,  # type: ignore[arg-type]
+                stream=True,
+            )
+
+    @pytest.mark.parametrize("response_format", ["srt", "vtt"])
+    def test_subtitle_format_without_streaming_is_accepted(
+        self, response_format: str
+    ) -> None:
+        """The same formats stay valid for a non-streaming request."""
+        params = TranscriptionCreateParams(
+            model="amazon.transcribe",
+            response_format=response_format,  # type: ignore[arg-type]
+        )
+        assert params.response_format == response_format
+
+    @pytest.mark.parametrize("response_format", ["json", "text"])
+    def test_streamable_formats_are_unaffected(self, response_format: str) -> None:
+        """Formats the streaming path can emit keep working with ``stream=true``."""
+        params = TranscriptionCreateParams(
+            model="amazon.transcribe",
+            response_format=response_format,  # type: ignore[arg-type]
+            stream=True,
+        )
+        assert params.stream is True

@@ -453,6 +453,7 @@ class TranscriptionCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=
 
         Rules implemented:
         - timestamp_granularities may only be used with response_format == 'verbose_json'.
+        - subtitle formats ('srt'/'vtt') cannot be streamed.
         - chunking_strategy other than 'auto' is unsupported.
         - known_speaker_names/known_speaker_references are accepted and ignored:
           diarization degrades to generic speaker labels instead of failing the request.
@@ -461,6 +462,13 @@ class TranscriptionCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=
         """
         if self.timestamp_granularities and self.response_format != "verbose_json":
             msg = "timestamp_granularities requires response_format='verbose_json'."
+            raise ValueError(msg)
+        if self.stream and self.response_format in SUBTITLE_FORMATS:
+            msg = (
+                f"response_format='{self.response_format}' is not available with "
+                "stream=true: subtitle cues are produced from the finished "
+                "transcript, and streaming emits plain text deltas."
+            )
             raise ValueError(msg)
         if isinstance(self.chunking_strategy, dict) or self.chunking_strategy != "auto":
             # Any explicit server_vad config or non-auto is unsupported
