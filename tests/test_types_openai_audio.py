@@ -76,22 +76,27 @@ class TestTranscriptionCreateParamsKnownSpeaker:
 
 
 class TestTranscriptionCreateParamsStreamingSubtitles:
-    """Subtitle formats cannot be combined with ``stream=true``.
+    """Formats a stream cannot express are refused with ``stream=true``.
 
-    ``srt``/``vtt`` cues are cut from the finished transcript, while the streaming
-    path emits plain ``transcript.text.delta`` events. Accepting the pair would
-    answer 200 with plain text and still pay Amazon Transcribe for the subtitle
-    generation whose output is then discarded, so it is refused up front.
+    The streaming path emits plain ``transcript.text.delta`` events and nothing
+    else, so each of these asks for something the stream cannot carry: ``srt`` and
+    ``vtt`` want cues, ``diarized_json`` wants speaker attribution. Accepting the
+    pair would answer 200 with plain text -- and still bill Amazon Transcribe for
+    the subtitle or diarization work whose output is then discarded -- so it is
+    refused up front. Speaker labels are the whole point of asking for
+    ``diarized_json``: silently returning an unlabelled transcript is a different
+    deliverable, not a degraded one.
 
     Ref: https://docs.aws.amazon.com/transcribe/latest/dg/subtitles.html
+         https://docs.aws.amazon.com/transcribe/latest/dg/diarization.html
          stdapi/types/openai_audio.py:TranscriptionCreateParams
     """
 
-    @pytest.mark.parametrize("response_format", ["srt", "vtt"])
-    def test_subtitle_format_with_streaming_is_rejected(
+    @pytest.mark.parametrize("response_format", ["srt", "vtt", "diarized_json"])
+    def test_unstreamable_format_with_streaming_is_rejected(
         self, response_format: str
     ) -> None:
-        """Each subtitle format is refused when streaming is requested."""
+        """Each format the stream cannot express is refused when streaming."""
         with pytest.raises(ValidationError, match="stream=true"):
             TranscriptionCreateParams(
                 model="amazon.transcribe",
@@ -99,8 +104,8 @@ class TestTranscriptionCreateParamsStreamingSubtitles:
                 stream=True,
             )
 
-    @pytest.mark.parametrize("response_format", ["srt", "vtt"])
-    def test_subtitle_format_without_streaming_is_accepted(
+    @pytest.mark.parametrize("response_format", ["srt", "vtt", "diarized_json"])
+    def test_unstreamable_format_without_streaming_is_accepted(
         self, response_format: str
     ) -> None:
         """The same formats stay valid for a non-streaming request."""

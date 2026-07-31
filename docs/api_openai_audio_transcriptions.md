@@ -45,14 +45,14 @@ Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable 
 | `json`                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Structured transcription                                         |
 | `text`                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Plain text output                                                |
 | `verbose_json`             |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | With timestamps and details (Amazon Transcribe; not Bedrock models) |
-| `diarized_json`            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | With speaker identification (Amazon Transcribe; not Bedrock models) |
+| `diarized_json`            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | With speaker identification (Amazon Transcribe; not Bedrock models); rejected with `stream=true` |
 | `srt`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Subtitle format with timing (Amazon Transcribe; not Bedrock models); rejected with `stream=true` |
 | `vtt`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | WebVTT subtitle format (Amazon Transcribe; not Bedrock models); rejected with `stream=true` |
 | **Language**               |                                          |                                                                  |
 | Language specification     |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | ISO-639-1 language codes                                         |
 | Auto language detection    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Automatic identification                                         |
 | **Streaming**              |                                          |                                                                  |
-| `stream` (SSE streaming)   |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Set `stream: true` to receive incremental results as server-sent events |
+| `stream` (SSE streaming)   |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Set `stream: true` to receive incremental results as server-sent events. Carries text only, so `srt`, `vtt` and `diarized_json` are rejected rather than answered without their cues or speaker labels |
 | **Advanced**               |                                          |                                                                  |
 | `timestamp_granularities`  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Word or segment level; requires `response_format=verbose_json` (Amazon Transcribe only) |
 | Speaker diarization        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Automatic speaker separation; requires `response_format=diarized_json` (Amazon Transcribe only) |

@@ -20,6 +20,10 @@ TranslateAudioResponseFormat = Literal["json", "text", "srt", "verbose_json", "v
 AudioSubtitleFormat = Literal["srt", "vtt"]
 SUBTITLE_FORMATS: set[AudioSubtitleFormat] = {"srt", "vtt"}
 
+#: Formats a streamed transcription cannot express: it carries text deltas only,
+#: so cues, speaker labels and segment timings would all be dropped in silence.
+UNSTREAMABLE_FORMATS: set[str] = {*SUBTITLE_FORMATS, "diarized_json"}
+
 #: OpenAI voices and matching gender (True for Female, False elsewhere)
 OPENAI_VOICES_FEMALE: dict[str, bool] = {
     "alloy": True,
@@ -453,7 +457,7 @@ class TranscriptionCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=
 
         Rules implemented:
         - timestamp_granularities may only be used with response_format == 'verbose_json'.
-        - subtitle formats ('srt'/'vtt') cannot be streamed.
+        - subtitle formats ('srt'/'vtt') and 'diarized_json' cannot be streamed.
         - chunking_strategy other than 'auto' is unsupported.
         - known_speaker_names/known_speaker_references are accepted and ignored:
           diarization degrades to generic speaker labels instead of failing the request.
@@ -463,11 +467,20 @@ class TranscriptionCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=
         if self.timestamp_granularities and self.response_format != "verbose_json":
             msg = "timestamp_granularities requires response_format='verbose_json'."
             raise ValueError(msg)
-        if self.stream and self.response_format in SUBTITLE_FORMATS:
+        if self.stream and self.response_format in UNSTREAMABLE_FORMATS:
+            # A streamed transcription carries text deltas and nothing else, so
+            # each of these asks for a deliverable the stream cannot hold: cues
+            # for the subtitle formats, speaker attribution for diarized_json.
+            wanted = (
+                "speaker-labelled segments"
+                if self.response_format == "diarized_json"
+                else "subtitles"
+            )
             msg = (
                 f"response_format='{self.response_format}' is not available with "
-                "stream=true. Request the subtitles without streaming, or stream "
-                "with response_format='text' or 'json'."
+                f"stream=true: a streamed transcription carries text only, so the "
+                f"{wanted} would be missing. Request it without streaming, or "
+                "stream with response_format='text' or 'json'."
             )
             raise ValueError(msg)
         if isinstance(self.chunking_strategy, dict) or self.chunking_strategy != "auto":
