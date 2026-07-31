@@ -30,7 +30,7 @@ class _FastUpscaleJob(StabilityImageGenerationJobBase):
         Do not check if there is no prompt.
         This is not used here, but is required for the OpenAI API.
         """
-        self._validate_no_quality()
+        self._drop_unsupported_quality()
         self._validate_no_mask(mask)
         request: FastUpscaleRequest = {"image": self._get_one_image_from_list(images)}
         self._finalize_request(request)

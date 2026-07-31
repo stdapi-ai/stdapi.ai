@@ -46,7 +46,7 @@ class TextToImageJob(StabilityImageGenerationJobBase):
         Returns:
             Iterable of awaitable image generation responses.
         """
-        self._validate_no_quality()
+        self._drop_unsupported_quality()
         self._validate_no_mask(mask)
 
         request = self._build_text_to_image_base_request()

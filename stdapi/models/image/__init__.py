@@ -21,7 +21,7 @@ from stdapi.api_errors import ApiError
 from stdapi.aws_s3 import put_object_and_get_url
 from stdapi.models import ModelBase, get_model, load_model_plugins
 from stdapi.models.capabilities import Capability
-from stdapi.monitoring import REQUEST_ID
+from stdapi.monitoring import REQUEST_ID, log_error_details
 from stdapi.usage import IMAGE_SPEC, record_bedrock_usage
 from stdapi.utils import b64decode, convert_base64_image, get_base64_image_size
 
@@ -218,25 +218,31 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
             raise ApiError(msg)
         return mask
 
-    def _validate_no_quality(self) -> None:
-        """Validate that quality parameter is not provided.
+    def _drop_unsupported_quality(self) -> None:
+        """Drop a quality this model has no control for, keeping the request alive.
 
-        Raises:
-            ApiError: If quality parameter is provided.
+        Quality steers the backend; it does not decide whether an image can be
+        produced. Refusing the request over it would break every client that
+        sends OpenAI's default, so it is dropped with a warning and the response
+        reports the quality actually produced.
         """
         if self._quality is not None:
-            msg = '"quality" parameter is not supported by this model.'
-            raise ApiError(msg)
+            log_error_details(
+                '"quality" is not supported by this model; ignored.', level="warning"
+            )
+            self._quality = None
 
-    def _validate_no_style(self) -> None:
-        """Validate that style parameter is not provided.
+    def _drop_unsupported_style(self) -> None:
+        """Drop a style this model has no control for, keeping the request alive.
 
-        Raises:
-            ApiError: If style parameter is provided.
+        Same rationale as quality: a style the backend cannot honour changes the
+        look of the result, never whether there is one.
         """
         if self._style is not None:
-            msg = '"style" parameter is not supported by this model.'
-            raise ApiError(msg)
+            log_error_details(
+                '"style" is not supported by this model; ignored.', level="warning"
+            )
+            self._style = None
 
     @staticmethod
     def _get_one_image_from_list(images: list[str]) -> str:

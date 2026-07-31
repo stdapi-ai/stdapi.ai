@@ -27,7 +27,7 @@ class _SearchReplaceJob(StabilityImageGenerationJobBase):
         self, images: list[str], mask: str | None
     ) -> Iterable[Awaitable[ImageGenerationResponse]]:
         """Replace objects in image using search."""
-        self._validate_no_quality()
+        self._drop_unsupported_quality()
         self._validate_no_mask(mask)
 
         try:

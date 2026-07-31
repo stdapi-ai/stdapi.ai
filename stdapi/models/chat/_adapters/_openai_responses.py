@@ -186,7 +186,7 @@ _TOOL_TYPE_TO_BEDROCK_NAME: MappingProxyType[type[Tool], str] = MappingProxyType
     }
 )
 
-#: Input schema for the synthetic ``image_generation`` function tool presented to the LLM (gateway executes the actual generation).
+#: Input schema for the synthetic ``image_generation`` function tool presented to the LLM (gateway executes the actual generation); quality stays out of it because most image models reject it and the caller sets it on the tool.
 _IMAGE_GENERATION_SCHEMA: JsonMapping = {
     "type": "object",
     "required": ["prompt"],
@@ -203,7 +203,6 @@ _IMAGE_GENERATION_SCHEMA: JsonMapping = {
             "type": "string",
             "description": "Image dimensions as WIDTHxHEIGHT, e.g. 1024x1024. Minimum 320x320.",
         },
-        "quality": {"type": "string", "enum": ["low", "medium", "high"]},
         "output_format": {"type": "string", "enum": ["png", "jpeg", "webp"]},
     },
 }
@@ -442,6 +441,9 @@ async def _generate_image_b64(
     """Run a single image-generation job and return its base64 payload.
 
     Model resolution priority: ``args["model"]`` → ``tool.model`` → *fallback_model*.
+    Quality comes from the tool definition alone: it is the caller's explicit ask,
+    whereas a value guessed by the model would fail every image model that has no
+    quality control.
 
     Args:
         args: String-valued arguments parsed from the tool call JSON.
@@ -473,7 +475,7 @@ async def _generate_image_b64(
         count=1,
         width=width,
         height=height,
-        quality=args.get("quality") or tool.quality,
+        quality=tool.quality,
         style=None,
         output_format=args.get("output_format") or tool.output_format or "png",  # type: ignore[arg-type]
         output_compression=tool.output_compression or 100,

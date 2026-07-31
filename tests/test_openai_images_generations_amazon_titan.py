@@ -113,31 +113,28 @@ class TestAmazonTitanImageGenerator:
             assert item.b64_json is not None
             assert item.url is None
 
+    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
-    def test_style_unsupported(self, openai_client: OpenAI, model_id: str) -> None:
-        """``style`` is rejected with a 400 naming the parameter.
+    def test_style_unsupported_is_ignored(
+        self, openai_client: OpenAI, model_id: str
+    ) -> None:
+        """``style`` is accepted and dropped, not refused.
 
-        Titan has no style knob, so the job rejects any style before invoking
-        Bedrock. The gateway envelope carries no ``param``/``code`` for this
-        class of error, only the message.
+        Titan has no style knob, but a style only steers the look of an image; it
+        never decides whether one can be produced, so the request goes through
+        without it rather than failing.
 
-        Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._validate_no_style
-             stdapi/api_providers/openai.py:_format_error
+        Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._drop_unsupported_style
         """
-        with pytest.raises(BadRequestError) as excinfo:
-            openai_client.images.generate(
-                model=model_id,
-                prompt="Portrait photo of a cat",
-                style="natural",
-                response_format="b64_json",
-            )
+        response = openai_client.images.generate(
+            model=model_id,
+            prompt="Portrait photo of a cat",
+            style="natural",
+            response_format="b64_json",
+        )
 
-        error = excinfo.value
-        assert error.status_code == 400
-        body = error.body
-        assert isinstance(body, dict), f"Unexpected error body: {body!r}"
-        assert body["type"] == "invalid_request_error"
-        assert body["message"] == '"style" parameter is not supported by this model.'
+        assert response.data is not None
+        assert response.data[0].b64_json
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)

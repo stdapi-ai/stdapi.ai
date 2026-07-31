@@ -26,7 +26,7 @@ class _RemoveBackgroundJob(StabilityImageGenerationJobBase):
         self, images: list[str], mask: str | None
     ) -> Iterable[Awaitable[ImageGenerationResponse]]:
         """Remove background from image."""
-        self._validate_no_quality()
+        self._drop_unsupported_quality()
         self._validate_no_mask(mask)
 
         request: RemoveBackgroundRequest = {

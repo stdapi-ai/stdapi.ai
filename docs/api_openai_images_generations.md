@@ -46,8 +46,8 @@ Generate images with Amazon Bedrock image models like Stability AI and Amazon No
 | `n` (number of images)         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Multiple images per request; accepted range is 1-10 (default: 1), but the effective maximum is model-dependent (e.g. Amazon Titan and Nova Canvas cap at 5) |
 | `size` (WIDTHxHEIGHT)          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Output dimensions (default: 1024x1024, format validated; `auto` resolves to the default) |
 | `response_format`              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `url` or `b64_json` (default: `url`)                                |
-| `quality`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Quality setting (default: `auto`, supports OpenAI & model-specific) |
-| `style`                        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Model-specific style parameters                                     |
+| `quality`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Quality setting (default: `auto`, supports OpenAI & model-specific); accepted and ignored by models with no quality control |
+| `style`                        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Model-specific style parameters; accepted and ignored by models with no style control |
 | `output_format`                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `png`, `jpeg`, or `webp` (model-specific)                           |
 | `output_compression`           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Compression level 1-100% (default: 100)                             |
 | `stream`                       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Generate images in streaming mode with partial results              |

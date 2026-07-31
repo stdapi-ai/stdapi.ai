@@ -27,7 +27,7 @@ class _EraseJob(StabilityImageGenerationJobBase):
         self, images: list[str], mask: str | None
     ) -> Iterable[Awaitable[ImageGenerationResponse]]:
         """Erase objects from image."""
-        self._validate_no_quality()
+        self._drop_unsupported_quality()
 
         request: EraseRequest = {
             "image": self._get_one_image_from_list(images),

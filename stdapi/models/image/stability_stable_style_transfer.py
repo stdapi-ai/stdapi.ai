@@ -27,7 +27,7 @@ class _StyleTransferJob(StabilityImageGenerationJobBase):
         self, images: list[str], mask: str | None
     ) -> Iterable[Awaitable[ImageGenerationResponse]]:
         """Transfer style from one image to another."""
-        self._validate_no_quality()
+        self._drop_unsupported_quality()
         if mask is None:
             try:
                 mask = str(self._extra_params["style_image"])

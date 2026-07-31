@@ -27,7 +27,7 @@ class _InpaintJob(StabilityImageGenerationJobBase):
         self, images: list[str], mask: str | None
     ) -> Iterable[Awaitable[ImageGenerationResponse]]:
         """Inpaint image regions."""
-        self._validate_no_quality()
+        self._drop_unsupported_quality()
 
         request: InpaintRequest = {
             "prompt": self._prompt,

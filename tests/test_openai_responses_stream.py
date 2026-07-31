@@ -1639,6 +1639,41 @@ class TestImageGenerationExecution:
             "the generated base64 payload is returned on the item"
         )
 
+    async def test_model_guessed_quality_is_not_forwarded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Quality comes from the tool definition, never from the model's arguments.
+
+        Every Stability backend rejects a quality outright, so a value the model
+        volunteered would fail the whole tool call; the caller's own tool-level
+        quality is an explicit ask and still reaches the job.
+
+        Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._validate_no_quality
+        """
+        stub_model = _StubImageModel()
+        monkeypatch.setattr(responses_adapter, "validate_model", _stub_validate_model)
+        monkeypatch.setattr(responses_adapter, "get_image_model", lambda _: stub_model)
+        advertised = responses_adapter._IMAGE_GENERATION_SCHEMA["properties"]  # noqa: SLF001
+        assert isinstance(advertised, dict)
+        assert "quality" not in advertised, (
+            "the model must not be offered a knob most image models reject"
+        )
+
+        item = _image_tool_call({"prompt": "a cat", "quality": "high"})
+        await execute_image_generation_calls(
+            [item], ImageGeneration(type="image_generation"), "resp-1", "fallback-model"
+        )
+        assert stub_model.calls[0]["quality"] is None
+
+        item = _image_tool_call({"prompt": "a cat", "quality": "high"})
+        await execute_image_generation_calls(
+            [item],
+            ImageGeneration(type="image_generation", quality="low"),
+            "resp-1",
+            "fallback-model",
+        )
+        assert stub_model.calls[1]["quality"] == "low"
+
     async def test_generation_error_produces_failed_item(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

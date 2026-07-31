@@ -267,7 +267,7 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
         Returns:
             Iterable of awaitable image generation responses.
         """
-        self._validate_no_style()
+        self._drop_unsupported_style()
 
         image_generation_config = _ImageGenerationConfig(
             width=self._width,

@@ -35,7 +35,7 @@ class _SimpleEditJob(StabilityImageGenerationJobBase):
         self, images: list[str], mask: str | None
     ) -> Iterable[Awaitable[ImageGenerationResponse]]:
         """Generate/edit images with prompt and image."""
-        self._validate_no_quality()
+        self._drop_unsupported_quality()
         self._validate_no_mask(mask)
 
         request: (

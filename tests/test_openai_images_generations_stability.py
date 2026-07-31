@@ -6,11 +6,15 @@ Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
      stdapi/models/image/_stability.py:StabilityImageGenerationJobBase
 """
 
+from typing import TYPE_CHECKING
+
 import pytest
-from openai import BadRequestError, OpenAI
 from pybase64 import b64decode
 
 from tests.conftest import smallest_image_size
+
+if TYPE_CHECKING:
+    from openai import OpenAI
 
 STABILITY_CORE = "stability.stable-image-core-v1:1"
 STABILITY_SD35 = "stability.sd3-5-large-v1:0"
@@ -110,54 +114,49 @@ class TestStabilityImages:
         assert image_bytes.startswith(b"RIFF")
         assert b"WEBP" in image_bytes[:12]
 
+    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", STABILITY_SAMPLE)
-    def test_quality_unsupported_raises(
+    def test_quality_unsupported_is_ignored(
         self, openai_client: OpenAI, model_id: str
     ) -> None:
-        """``quality`` is rejected with a 400 naming the parameter.
+        """``quality`` is accepted and dropped, not refused.
 
-        Stability text-to-image has no quality knob, so the job rejects any
-        resolved quality before invoking Bedrock. The gateway envelope carries no
-        ``param``/``code`` for this class of error, only the message.
+        Stability text-to-image has no quality knob. Quality steers a backend, it
+        never decides whether an image can be produced, so refusing the request
+        would break every client that sends OpenAI's default for nothing. The
+        response reports the quality actually produced rather than the one asked
+        for.
 
-        Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._validate_no_quality
-             stdapi/api_providers/openai.py:_format_error
+        Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._drop_unsupported_quality
         """
-        with pytest.raises(BadRequestError) as excinfo:
-            openai_client.images.generate(
-                model=model_id,
-                prompt="A landscape painting.",
-                response_format="b64_json",
-                quality="high",
-            )
+        response = openai_client.images.generate(
+            model=model_id,
+            prompt="A landscape painting.",
+            response_format="b64_json",
+            quality="high",
+        )
 
-        error = excinfo.value
-        assert error.status_code == 400
-        body = error.body
-        assert isinstance(body, dict), f"Unexpected error body: {body!r}"
-        assert body["type"] == "invalid_request_error"
-        assert body["message"] == '"quality" parameter is not supported by this model.'
+        assert response.data is not None
+        assert response.data[0].b64_json
+        assert response.quality != "high", (
+            "an unsupported quality must not be echoed back as if it applied"
+        )
 
+    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", STABILITY_SAMPLE)
-    def test_style_unsupported_raises(
+    def test_style_unsupported_is_ignored(
         self, openai_client: OpenAI, model_id: str
     ) -> None:
-        """``style`` is rejected with a 400 naming the parameter.
+        """``style`` is accepted and dropped, on the same grounds as quality.
 
-        Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._validate_no_style
-             stdapi/api_providers/openai.py:_format_error
+        Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._drop_unsupported_style
         """
-        with pytest.raises(BadRequestError) as excinfo:
-            openai_client.images.generate(
-                model=model_id,
-                prompt="A portrait.",
-                response_format="b64_json",
-                style="natural",
-            )
+        response = openai_client.images.generate(
+            model=model_id,
+            prompt="A portrait.",
+            response_format="b64_json",
+            style="natural",
+        )
 
-        error = excinfo.value
-        assert error.status_code == 400
-        body = error.body
-        assert isinstance(body, dict), f"Unexpected error body: {body!r}"
-        assert body["type"] == "invalid_request_error"
-        assert body["message"] == '"style" parameter is not supported by this model.'
+        assert response.data is not None
+        assert response.data[0].b64_json

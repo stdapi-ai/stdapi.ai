@@ -299,8 +299,8 @@ class StabilityImageGenerationJobBase(
 
     def _build_text_to_image_base_request(self) -> TextToImageRequest:
         """Build base request for text-to-image models."""
-        self._validate_no_quality()
-        self._validate_no_style()
+        self._drop_unsupported_quality()
+        self._drop_unsupported_style()
         request: TextToImageRequest = {"prompt": self._prompt}
         self._finalize_request(request)
         return request
