@@ -284,6 +284,15 @@ def _codex_build(invocation: Invocation) -> Command:
         'model_providers.stdapi.env_key="OPENAI_API_KEY"',
         "-c",
         'model_providers.stdapi.wire_api="responses"',
+        # Codex declares a web_search tool on every request unless told not to,
+        # and the answer depends on the model and the region rather than on
+        # anything these tests exercise: Nova maps it to nova_grounding, which
+        # no EU inference profile serves, and a Mantle-native model answers 400
+        # for a hosted tool it does not implement. Both are correct 400s, and
+        # both would fail every run here for a reason unrelated to the shell
+        # round trip under test.
+        "-c",
+        'web_search="disabled"',
         "-m",
         invocation.model,
         "--json",

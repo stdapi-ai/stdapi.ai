@@ -101,7 +101,59 @@ Most AI coding assistants follow a similar configuration pattern. The exact menu
     [profiles.stdapi]
     model_provider = "stdapi"
     model = "anthropic.claude-fable-5"
+    # Codex asks for web search on every request unless this is set.
+    web_search = "disabled"
     ```
+
+    Codex declares the built-in `web_search` tool by default, and it is served only where the model can actually search:
+
+    - **Amazon Nova 2 and Nova Premier, US regions** — mapped to Amazon Nova's grounding tool, which AWS bills per request on top of tokens (see [Cost Management](operations_cost_management.md)). Leave `web_search` enabled to use it.
+    - **EU inference profiles** — the grounding tool is not offered there, so the request is rejected.
+    - **Any other model** — no hosted search exists behind it, and the request is rejected rather than silently answered without one.
+
+    Set `web_search = "disabled"` unless your model and region are in the first group. Codex's own shell, file and patch tools are unaffected either way.
+
+    A model that is not in Codex's own catalog logs `Model metadata for '<id>' not found. Defaulting to fallback metadata`. That is expected for every Bedrock model ID and does not affect the run.
+
+!!! example "pi"
+    [pi](https://github.com/earendil-works/pi) has no command-line option for a custom base URL: providers are registered from an extension. Save this as `~/.pi/extensions/stdapi.js`:
+
+    ```js
+    export default function (pi) {
+      pi.registerProvider("stdapi", {
+        name: "stdapi.ai",
+        baseUrl: "https://YOUR_STDAPI_URL/v1",
+        authHeader: true,
+        api: "openai-completions",
+        models: [
+          {
+            id: "anthropic.claude-fable-5",
+            name: "Claude Fable 5",
+            input: ["text"],
+            contextWindow: 200000,
+            maxTokens: 16384,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      });
+    }
+    ```
+
+    Then run it against the provider, passing your stdapi.ai key:
+
+    ```bash
+    pi --api-key "$STDAPI_API_KEY" --provider stdapi --model stdapi/anthropic.claude-fable-5
+    ```
+
+    `api` selects the wire format, and `baseUrl` has to match the route serving it:
+
+    | `api` | `baseUrl` | API |
+    |---|---|---|
+    | `openai-completions` | `https://YOUR_STDAPI_URL/v1` | [Chat Completions](api_openai_chat_completions.md) |
+    | `openai-responses` | `https://YOUR_STDAPI_URL/v1` | [Responses](api_openai_responses.md) |
+    | `anthropic-messages` | `https://YOUR_STDAPI_URL/anthropic` | [Anthropic Messages](api_anthropic_messages.md) |
+
+    List one entry in `models` per model you want to select. `contextWindow` and `maxTokens` are pi's own client-side accounting: setting them generously lets the gateway report the model's real limit instead of pi truncating the prompt first.
 
 !!! tip "Model Selection for Coding"
     **Recommended models for different tasks:**
@@ -323,6 +375,8 @@ Claude Code skips validation for this model ID, so any Bedrock model ID accepted
 ### Other Anthropic-Compatible Tools
 
 Any tool using the Anthropic SDK or messages API can be configured the same way—set the `ANTHROPIC_BASE_URL` to `https://YOUR_STDAPI_URL/anthropic` and `ANTHROPIC_API_KEY` (or equivalent) to your stdapi.ai API key.
+
+[pi](https://github.com/earendil-works/pi) also speaks this API: register its provider with `api: "anthropic-messages"` and the `/anthropic` base URL, as shown in [the pi configuration above](#configuration).
 
 ---
 
