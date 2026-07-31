@@ -1542,7 +1542,10 @@ class TestChatCompletions:
 
     @pytest.mark.retry(
         "The assertion depends on a DNS lookup for a random host failing the way "
-        "the gateway expects; a resolver hiccup reports a different status"
+        "the gateway expects. Under a parallel run the resolver has also taken "
+        "long enough for the client to give up first, reporting a connection "
+        "error instead of the 400 under test",
+        reruns=3,
     )
     def test_multimodal_with_http_image_url_error(
         self, openai_client: OpenAI, chat_vision_model: str
