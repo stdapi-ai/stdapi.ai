@@ -11,8 +11,13 @@ from typing import Any
 import pytest
 
 from stdapi.api_errors import UnsupportedParameterError
+from stdapi.config import SETTINGS
 from stdapi.models.chat._adapters._openai_common import resolve_cache_ttl
-from stdapi.types.openai_chat_completions import CompletionCreateParams
+from stdapi.types.openai_chat_completions import (
+    ChatCompletionMessage,
+    ChoiceDelta,
+    CompletionCreateParams,
+)
 
 pytestmark = pytest.mark.local
 
@@ -150,3 +155,83 @@ class TestUnsupportedParameters:
         assert excinfo.value.code == "unsupported_parameter"
         assert excinfo.value.param == "verbosity"
         assert "'verbosity' is not supported" in str(excinfo.value)
+
+
+@pytest.mark.local
+class TestReasoningFieldSetting:
+    """The emitted reasoning field name is an operator setting, with an off switch.
+
+    OpenAI's own Chat Completions returns no thinking text, so the vendors that
+    do have split on the name: DeepSeek and the clients that followed it read
+    ``reasoning_content``, while OpenRouter and vLLM emit ``reasoning``. A
+    per-request selector would be a gateway-specific API field, which the design
+    rules forbid, so the choice is made once by whoever runs the gateway --
+    including ``none``, which keeps responses strictly OpenAI-shaped.
+
+    Ref: https://api-docs.deepseek.com/guides/reasoning_model
+         https://openrouter.ai/docs/use-cases/reasoning-tokens
+         stdapi/types/openai_chat_completions.py:_rename_emitted_reasoning
+    """
+
+    @pytest.mark.parametrize(
+        ("setting", "expected"),
+        [
+            ("reasoning_content", "reasoning_content"),
+            ("reasoning", "reasoning"),
+            ("none", None),
+        ],
+    )
+    def test_the_message_carries_the_configured_field(
+        self, monkeypatch: pytest.MonkeyPatch, setting: str, expected: str | None
+    ) -> None:
+        """A completed message emits the thinking text under the chosen name."""
+        monkeypatch.setattr(SETTINGS, "chat_completions_reasoning_field", setting)
+
+        dumped = ChatCompletionMessage(
+            role="assistant", content="45", reasoning_content="Let total be T."
+        ).model_dump(exclude_none=True)
+
+        assert dumped["content"] == "45"
+        if expected is None:
+            assert "reasoning" not in dumped
+            assert "reasoning_content" not in dumped
+        else:
+            assert dumped[expected] == "Let total be T."
+            assert len({"reasoning", "reasoning_content"} & dumped.keys()) == 1
+
+    @pytest.mark.parametrize(
+        ("setting", "expected"),
+        [
+            ("reasoning_content", "reasoning_content"),
+            ("reasoning", "reasoning"),
+            ("none", None),
+        ],
+    )
+    def test_the_streamed_delta_follows_the_same_setting(
+        self, monkeypatch: pytest.MonkeyPatch, setting: str, expected: str | None
+    ) -> None:
+        """A stream must not name the field differently from the final message."""
+        monkeypatch.setattr(SETTINGS, "chat_completions_reasoning_field", setting)
+
+        dumped = ChoiceDelta(
+            content="45", reasoning_content="Let total be T."
+        ).model_dump(exclude_none=True)
+
+        if expected is None:
+            assert "reasoning" not in dumped
+            assert "reasoning_content" not in dumped
+        else:
+            assert dumped[expected] == "Let total be T."
+
+    @pytest.mark.parametrize("setting", ["reasoning_content", "reasoning", "none"])
+    def test_a_message_without_reasoning_is_untouched(
+        self, monkeypatch: pytest.MonkeyPatch, setting: str
+    ) -> None:
+        """No setting adds a reasoning key to a message that carries none."""
+        monkeypatch.setattr(SETTINGS, "chat_completions_reasoning_field", setting)
+
+        dumped = ChatCompletionMessage(role="assistant", content="45").model_dump(
+            exclude_none=True
+        )
+
+        assert dumped == {"role": "assistant", "content": "45"}

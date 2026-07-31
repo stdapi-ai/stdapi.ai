@@ -902,6 +902,21 @@ class _Settings(BaseSettings):
         description="If True, raise error on extra fields in input request.",
     )
 
+    chat_completions_reasoning_field: Literal[
+        "reasoning_content", "reasoning", "none"
+    ] = Field(
+        default="reasoning_content",
+        description=(
+            "Field carrying a reasoning model's thinking text on "
+            "'/v1/chat/completions'. The OpenAI API itself returns no thinking "
+            "text at all, so vendors differ: 'reasoning_content' (default) is the "
+            "DeepSeek spelling most clients read, 'reasoning' is the one OpenRouter "
+            "and vLLM use, and 'none' emits neither and keeps the responses "
+            "strictly OpenAI-shaped. Clients can also suppress it per request with "
+            "'include_reasoning' or 'reasoning.exclude'."
+        ),
+    )
+
     max_input_file_size: int = Field(
         default=0,
         ge=0,

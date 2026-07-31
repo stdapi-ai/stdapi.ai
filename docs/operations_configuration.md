@@ -296,6 +296,7 @@ Choose **one** method (mutually exclusive):
 |---------------------------------------------------------------------|-------------------------|--------------------------------------------------------------------------------------------|
 | [`TIMEZONE`](#timezone)                                             | `UTC`                   | IANA timezone identifier for request timestamps                                            |
 | [`STRICT_INPUT_VALIDATION`](#strict-input-validation)               | `false`                 | Reject API requests with unknown/extra fields                                              |
+| [`CHAT_COMPLETIONS_REASONING_FIELD`](#chat-completions-reasoning-field) | `reasoning_content` | Field carrying reasoning text on `/v1/chat/completions`: `reasoning_content`, `reasoning`, or `none` |
 | [`MODEL_ALIASES`](#model-aliases)                                   | `{}`                    | JSON object mapping custom model name aliases to Bedrock model IDs                         |
 | [`DEFAULT_TTS_MODEL`](#default-tts-model)                           | `amazon.polly-standard` | Default TTS model: `amazon.polly-standard`, `-neural`, `-long-form`, or `-generative`      |
 | [`DEFAULT_TTS_LANGUAGE`](#default-tts-language)                     | None                    | Default language for TTS (e.g., `en-US`); when set, skips Amazon Comprehend auto-detection    |
@@ -2957,6 +2958,35 @@ For comprehensive logging and monitoring information, see the [Logging and Monit
 ```bash
 # Returns HTTP 400 for requests with unexpected fields
 export STRICT_INPUT_VALIDATION=true
+```
+
+#### `CHAT_COMPLETIONS_REASONING_FIELD` { #chat-completions-reasoning-field }
+
+:octicons-package-24: **Purpose**
+:   Choose which field carries a reasoning model's thinking text on `/v1/chat/completions`
+
+:octicons-database-24: **Type**
+:   String
+
+:octicons-gear-24: **Default**
+:   `reasoning_content`
+
+:octicons-list-ordered-24: **Options**
+:   `reasoning_content`, `reasoning`, `none`
+
+:octicons-workflow-24: **Behavior**
+:   The OpenAI Chat Completions API returns no thinking text of its own — it reports only a `reasoning_tokens` count — so the providers that do return it have settled on two different names. `reasoning_content` is the DeepSeek spelling, which most clients that read reasoning at all look for first. `reasoning` is the name used by OpenRouter and vLLM. `none` emits neither, keeping responses strictly OpenAI-shaped.
+:   The setting applies to both the completed message and the streamed deltas, so a client never sees one name while streaming and another at the end. Callers can also suppress reasoning per request with `include_reasoning: false` or `reasoning: {"exclude": true}`, whatever this is set to.
+
+```bash
+# Default: the name most clients read
+export CHAT_COMPLETIONS_REASONING_FIELD=reasoning_content
+
+# For clients written against OpenRouter or vLLM
+export CHAT_COMPLETIONS_REASONING_FIELD=reasoning
+
+# Strict OpenAI shape: never return thinking text
+export CHAT_COMPLETIONS_REASONING_FIELD=none
 ```
 
 #### `LOG_LEVEL` { #logging-level }

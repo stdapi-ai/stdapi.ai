@@ -642,7 +642,7 @@ Use the `reasoning_effort` parameter with predefined effort levels. This format 
 
 **What You Get:**
 
-- **`reasoning_content` field** (DeepSeek API-compatible): models include their thinking process in the response
+- **`reasoning_content` field** (DeepSeek API-compatible): models include their thinking process in the response The field name is an operator setting ([`CHAT_COMPLETIONS_REASONING_FIELD`](operations_configuration.md#chat-completions-reasoning-field)): `reasoning_content` by default, `reasoning` for clients written against OpenRouter or vLLM, or `none` to keep responses strictly OpenAI-shaped.
 - **Streaming support**: `choices[].delta.reasoning_content` chunks in real time
 
 **Example:**

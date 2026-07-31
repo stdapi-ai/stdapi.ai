@@ -2,9 +2,16 @@
 
 from typing import Annotated, Any, ClassVar, Literal, Self
 
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import (
+    AliasChoices,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from stdapi.api_errors import UnsupportedParameterError
+from stdapi.config import SETTINGS
 from stdapi.input_file import FileIdInputFile, InputFile
 from stdapi.types import (
     BaseModelRequest,
@@ -867,6 +874,17 @@ class ChoiceDelta(BaseModelResponse):
         description="Reasoning content. Extra field from Deepseek Chat Completion API.",
     )
 
+    @model_serializer(mode="wrap")
+    def _emit_reasoning_under_the_configured_name(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        """Serialize, then rename or drop the reasoning text per the setting.
+
+        Returns:
+            The serialized mapping.
+        """
+        return _rename_emitted_reasoning(handler(self))
+
 
 # Ref: openai.types.chat.chat_completion_message.AnnotationURLCitation
 class AnnotationURLCitation(BaseModelResponse):
@@ -937,6 +955,41 @@ class ChatCompletionMessage(BaseModelResponse):
         default=None,
         description="Reasoning content. Extra field from Deepseek Chat Completion API.",
     )
+
+    @model_serializer(mode="wrap")
+    def _emit_reasoning_under_the_configured_name(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        """Serialize, then rename or drop the reasoning text per the setting.
+
+        Returns:
+            The serialized mapping.
+        """
+        return _rename_emitted_reasoning(handler(self))
+
+
+#: Emitted reasoning field, or nothing at all, as the operator configured it.
+def _rename_emitted_reasoning(data: dict[str, Any]) -> dict[str, Any]:
+    """Move the serialized reasoning text under the configured field name.
+
+    The OpenAI API returns no thinking text on this route, so vendors picked
+    different names for it and clients read whichever their first backend used.
+    The name is an operator setting rather than a request field: inventing a
+    per-request selector would be a gateway-specific API field, and no vendor
+    defines one.
+
+    Args:
+        data: Serialized message or delta, modified in place.
+
+    Returns:
+        The same mapping.
+    """
+    if (text := data.pop("reasoning_content", None)) is None:
+        return data
+    field = SETTINGS.chat_completions_reasoning_field
+    if field != "none":
+        data[field] = text
+    return data
 
 
 # Ref: openai.types.chat.chat_completion_token_logprob.TopLogprob
