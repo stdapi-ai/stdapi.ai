@@ -553,6 +553,11 @@ class TestImageGeneration:
         levels and then reports the level actually used, so the Bedrock
         ``premium`` tier surfaces as ``high``.
 
+        Only Amazon's image models map ``quality``, and they are all legacy;
+        every Stability model rejects it. Keeping the parameter reachable through
+        legacy model support is the deliberate answer to #93, so this test
+        pinning a legacy model is intended, not an oversight to report.
+
         Ref: stdapi/routes/openai_images_generations.py:_OPENAI_QUALITY_LEVELS
              stdapi/models/image/amazon_titan_image_generator.py:AMZ_QUALITY_MAP
         """
@@ -599,6 +604,11 @@ class TestImageGeneration:
         Gateway-only: ``dall-e-3`` was the sole OpenAI model with a ``style``
         parameter and it has been retired, so ``gpt-image-1`` answers 400
         ``unknown_parameter`` for ``style`` whatever the value.
+
+        Only Amazon's image models accept ``style``, and they are all legacy;
+        every Stability model rejects it. Keeping the parameter reachable through
+        legacy model support is the deliberate answer to #93, so this test
+        pinning a legacy model is intended, not an oversight to report.
 
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
              stdapi/types/openai_images.py:ImageGenerateParams

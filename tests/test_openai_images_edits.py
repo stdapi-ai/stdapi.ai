@@ -353,6 +353,11 @@ class TestImagesEditsBasic:
         its ``referenceImage``, so the parameter is mandatory for that task type
         even though it is optional for the endpoint.
 
+        Nova Canvas is the only backend offering VIRTUAL_TRY_ON and it is legacy.
+        Keeping the task reachable through legacy model support is the deliberate
+        answer to #93, so this test pinning a legacy model is intended, not an
+        oversight to report.
+
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
              stdapi/models/image/amazon_nova_canvas.py:_get_request_virtual_try_on
         """

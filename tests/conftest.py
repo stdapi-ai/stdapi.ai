@@ -323,7 +323,9 @@ MODEL_MAPPINGS = {
         # Bedrock CountTokens only supports Anthropic models; the call is unbilled.
         "input_tokens": "anthropic.claude-haiku-4-5-20251001-v1:0",
         "image_generation": "stability.stable-image-core-v1:1",
-        # Nova Canvas is the only model mapping OpenAI ``quality``/``style`` to Bedrock params.
+        # Nova Canvas is the only model mapping OpenAI ``quality``/``style`` to Bedrock
+        # params. Legacy on purpose: those parameters are reachable through legacy model
+        # support and nowhere else, which is the deliberate answer to #93.
         "image_generation_hd": "amazon.nova-canvas-v1:0",
         "image_generation_stream": "stability.stable-image-core-v1:1",
         # Luma is the only non-legacy video model (Nova Reel is LEGACY on AWS).
