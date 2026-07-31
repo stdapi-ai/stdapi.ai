@@ -80,6 +80,37 @@ pytestmark = pytest.mark.gateway(
 )
 
 
+#: Input ceiling of the fast upscale model, which multiplies its input by four.
+_FAST_UPSCALE_MAX_PIXELS = 1024 * 1024
+
+
+def _within_pixel_budget(png: bytes, max_pixels: int) -> bytes:
+    """Shrink a PNG to at most *max_pixels*, keeping its aspect ratio.
+
+    The shared sample image is sized for generation, not for upscaling: at the
+    model's default size it is already over the fast upscale input ceiling, and
+    Stability rejects it before the gateway's own behavior is observable.
+
+    Args:
+        png: Source PNG bytes.
+        max_pixels: Largest pixel count the model accepts.
+
+    Returns:
+        The original bytes when they already fit, a re-encoded PNG otherwise.
+    """
+    with BytesIO(png) as buffer, Image.open(buffer) as image:
+        if image.width * image.height <= max_pixels:
+            return png
+        scale = (max_pixels / (image.width * image.height)) ** 0.5
+        resized = image.resize(
+            (int(image.width * scale), int(image.height * scale)),
+            Image.Resampling.LANCZOS,
+        )
+        with BytesIO() as out:
+            resized.save(out, format="PNG")
+            return out.getvalue()
+
+
 def _rgba_mask_b64() -> str:
     """Build a base64 2x1 RGBA PNG mask: one transparent pixel, one opaque pixel."""
     image = Image.new("RGBA", (2, 1), (0, 0, 0, 255))
@@ -249,7 +280,7 @@ class TestStabilityUpscaleModels:
         Ref: stdapi/models/image/_stability.py:StabilityImageGenerationJobBase._finalize_request
         """
         response = openai_client.images.edit(
-            image=sample_image_file,
+            image=_within_pixel_budget(sample_image_file, _FAST_UPSCALE_MAX_PIXELS),
             prompt="ignored",  # doesn't use prompt, but Openai Python library requires it
             model=STABILITY_FAST_UPSCALE,
             response_format="b64_json",

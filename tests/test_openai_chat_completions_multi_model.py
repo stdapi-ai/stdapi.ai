@@ -224,7 +224,10 @@ class TestMultiModelChatCompletions:
         completion = openai_client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "user", "content": "Reply with exactly one word: HELLO"}
+                {
+                    "role": "user",
+                    "content": "Repeat this word back and output nothing else: HELLO",
+                }
             ],
         )
 

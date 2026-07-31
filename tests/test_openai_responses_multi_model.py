@@ -210,7 +210,7 @@ class TestMultiModelResponses:
         with _skip_unavailable_model(model):
             response = openai_client.responses.create(
                 model=model,
-                input="Reply with exactly one word: HELLO",
+                input="Repeat this word back and output nothing else: HELLO",
                 max_output_tokens=512,
             )
 

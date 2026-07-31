@@ -258,7 +258,10 @@ class TestMultiModelBasics:
             model=model,
             max_tokens=2048,
             messages=[
-                {"role": "user", "content": "Reply with exactly one word: HELLO"}
+                {
+                    "role": "user",
+                    "content": "Repeat this word back and output nothing else: HELLO",
+                }
             ],
         )
 
@@ -303,7 +306,10 @@ class TestMultiModelBasics:
             model=model,
             max_tokens=256,
             messages=[
-                {"role": "user", "content": "Reply with exactly one word: HELLO"}
+                {
+                    "role": "user",
+                    "content": "Repeat this word back and output nothing else: HELLO",
+                }
             ],
         ) as stream:
             event_types.extend(event.type for event in stream)
