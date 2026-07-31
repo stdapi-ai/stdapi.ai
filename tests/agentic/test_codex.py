@@ -42,7 +42,9 @@ TOOL = CODEX
 pytestmark = pytest.mark.agentic
 
 #: Codex runs longer than Claude Code on the same task; it plans more shell calls.
-_TIMEOUT = 600
+#: Deliberately generous: a ceiling costs nothing when it is not reached, whereas a
+#: run killed part-way is indistinguishable from a gateway fault.
+_TIMEOUT = 1800
 
 _MODEL_CONFIGS = [
     pytest.param(
@@ -50,7 +52,13 @@ _MODEL_CONFIGS = [
         id="claude-haiku-4-5",
     ),
     pytest.param(
-        ModelConfig(model="amazon.nova-2-lite-v1:0", timeout=_TIMEOUT), id="nova-2-lite"
+        # Reaches the answer through many more shell round trips than the larger
+        # models: the parameter-mapping prompt points it at the largest file in
+        # the tree, and it reads it in small chunks. That takes about seven
+        # minutes alone and over twenty when it shares the machine, so it gets
+        # its own ceiling rather than a downgraded timeout signature.
+        ModelConfig(model="amazon.nova-2-lite-v1:0", timeout=3600),
+        id="nova-2-lite",
     ),
     pytest.param(
         ModelConfig(model="moonshotai.kimi-k2.5", timeout=_TIMEOUT, flaky=True),
@@ -62,7 +70,7 @@ _MODEL_CONFIGS = [
     ),
     pytest.param(
         # Notably slower than its siblings; give each run extra headroom.
-        ModelConfig(model="qwen.qwen3-coder-next", timeout=1200, flaky=True),
+        ModelConfig(model="qwen.qwen3-coder-next", timeout=3600, flaky=True),
         id="qwen3-coder-next",
         marks=pytest.mark.slow,
     ),

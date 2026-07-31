@@ -61,7 +61,9 @@ class ModelConfig:
         model: Bedrock model ID routed by the gateway.
         extra_env: CLI environment overrides (capabilities, caching, thinking).
         supports_effort: Whether the CLI's effort levels apply to this model.
-        timeout: Seconds allowed per run.
+        timeout: Seconds allowed per run. A ceiling, not an expectation: it costs
+            nothing when the run finishes sooner, and a run killed part-way is
+            indistinguishable from a gateway fault.
         flaky: Whether content-quality failures downgrade to xfail. Set only for
             models known to answer inconsistently; every other failure signature
             still fails the test, so real regressions stay visible.
@@ -72,7 +74,7 @@ class ModelConfig:
     model: str
     extra_env: Mapping[str, str] = field(default_factory=dict)
     supports_effort: bool = False
-    timeout: int = 300
+    timeout: int = 900
     flaky: bool = False
     extra_args: tuple[str, ...] = ()
 

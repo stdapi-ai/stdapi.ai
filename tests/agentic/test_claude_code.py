@@ -83,7 +83,7 @@ _MODEL_CONFIGS = [
         ModelConfig(
             model="qwen.qwen3-coder-next",
             extra_env=_NO_THINKING,
-            timeout=600,
+            timeout=2400,
             flaky=True,
         ),
         id="qwen3-coder-next",
@@ -91,7 +91,9 @@ _MODEL_CONFIGS = [
     ),
     pytest.param(
         # M2.5 reasons internally, so the CLI's own thinking budget is suppressed.
-        ModelConfig(model="minimax.minimax-m2.5", extra_env=_NO_THINKING),
+        # That internal reasoning also makes it the slowest model here, by enough
+        # of a margin to need a ceiling of its own under a parallel run.
+        ModelConfig(model="minimax.minimax-m2.5", extra_env=_NO_THINKING, timeout=2400),
         id="minimax-m2.5",
     ),
     pytest.param(

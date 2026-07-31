@@ -378,7 +378,7 @@ _PI_TOOLS = "read,bash,grep,find,ls"
 _PI_CONTEXT_WINDOW = 200_000
 
 #: Output token ceiling pi is told the model under test has, same rationale.
-_PI_MAX_TOKENS = 16_384
+_PI_MAX_TOKENS = 65_536
 
 #: Provider extension registering the gateway as a pi provider.
 #:

@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.agentic
 
 #: pi plans more tool calls than Claude Code for the same task.
-_TIMEOUT = 600
+_TIMEOUT = 1800
 
 #: The three gateway routes pi speaks, one entry per wire format.
 _TOOLS = [
