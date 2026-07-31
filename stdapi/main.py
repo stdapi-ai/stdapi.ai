@@ -403,19 +403,26 @@ async def handle_validation_exception(
     Returns:
         JSONResponse with status 400 and the appropriate error schema.
     """
-    match exc.errors():
-        case [{"loc": loc, "msg": msg}, *_]:
-            loc_str = ".".join(str(x) for x in loc)
-            message = (
-                f"Validation error at {loc_str}: {msg}"
-                if loc_str
-                else f"Validation error: {msg}"
-            )
-        case [{"msg": msg}, *_]:
+    errors = exc.errors()
+
+    # Report the deepest location rather than the first error. A field typed as
+    # a union -- `input: str | list[...]` on the Responses API, say -- reports one
+    # error per branch, and the first is the shallowest: it says the whole field
+    # should be a string, when the real fault is one item inside the list the
+    # client did send. The longest path is the specific one.
+    match max(errors, key=lambda error: len(error.get("loc", ())), default=None):
+        case {"loc": loc, "msg": msg} if loc:
+            message = f"Validation error at {'.'.join(str(x) for x in loc)}: {msg}"
+        case {"msg": msg}:
             message = f"Validation error: {msg}"
         case _:
             message = "Validation error"
-    log_error_details(message, level="warning")
+    # The whole error list stays server-side: it is the only place the other
+    # union branches, and any further faults, remain visible for debugging.
+    log_error_details(
+        [message, *(str(error) for error in errors)] if len(errors) > 1 else message,
+        level="warning",
+    )
     return JSONResponse(*format_http_error(request, 400, message))
 
 

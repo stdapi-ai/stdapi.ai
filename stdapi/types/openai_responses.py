@@ -2367,18 +2367,38 @@ class ResponseReasoningItem(BaseModelResponse):
 # fields, but clients replay previous API responses verbatim, so unknown upstream
 # fields must never fail input validation (regardless of strict_input_validation).
 class ResponseOutputMessageInput(ResponseOutputMessage):
-    """An echoed output message accepted as an input item (ignores unknown fields)."""
+    """An echoed output message accepted as an input item (ignores unknown fields).
+
+    The content parts are widened to the input shapes as well: a client replaying
+    an assistant turn may relabel its text parts as ``input_text`` rather than
+    ``output_text`` -- Codex does -- and the item is only being read back, so the
+    label carries nothing to act on. Refusing it would fail the turn over an echo
+    of the gateway's own output.
+    """
 
     model_config = ConfigDict(extra="ignore")
+
+    content: list[ResponseOutputMessageContent | ResponseInputContent] = Field(  # type: ignore[assignment]
+        description="Message content."
+    )
 
 
 class ReasoningItemContentInput(ReasoningItemContent):
-    """Echoed reasoning text tolerating the legacy ``text`` part type (Codex)."""
+    """Echoed reasoning text, tolerating any part type the client replays.
+
+    A reasoning item arrives here only because the client is handing back an item
+    it was given, so the part type carries no instruction to act on: only the text
+    is read. Clients differ on what they put there -- ``reasoning_text``,
+    ``summary_text``, and Codex's legacy ``text`` are all seen in the wild, and
+    Codex replays a reasoning item as the *first* input item of the following
+    turn. Rejecting an unrecognised value fails the whole turn over an echo, so
+    the type is accepted as-is and ignored.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
-    type: Literal["reasoning_text", "text"] = Field(  # type: ignore[assignment]
-        description="Reasoning text type."
+    type: str = Field(  # type: ignore[assignment]
+        description="Reasoning text type, such as `reasoning_text`."
     )
 
 
