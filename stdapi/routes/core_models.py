@@ -1,6 +1,6 @@
 """Custom Models API."""
 
-from typing import TYPE_CHECKING, Annotated, Final, cast
+from typing import TYPE_CHECKING, Annotated, Final
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -396,7 +396,7 @@ def _row_routing(key: PriceKey, details: ModelDetails | None) -> str:
     if key.routing:
         return key.routing
     profiles = (details.inference_profiles if details else None) or {}
-    region = cast("RegionName", key.region)
+    region: RegionName = key.region  # type: ignore[assignment]
     if (profile := profiles.get(region)) and not profile.startswith("global."):
         return profile.split(".", 1)[0]
     return key.region

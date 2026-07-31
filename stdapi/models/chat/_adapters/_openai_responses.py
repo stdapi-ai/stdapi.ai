@@ -11,7 +11,7 @@ from enum import Enum
 from time import time
 from traceback import format_exception
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal
 
 from botocore.exceptions import ClientError, HTTPClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
@@ -162,7 +162,6 @@ if TYPE_CHECKING:
         ResponseTextConfig,
         ToolChoice,
     )
-    from stdapi.types.openai_responses import ServiceTiers as ResponsesServiceTiers
 
 #: Empty tool schema for Bedrock tool configuration.
 _EMPTY_TOOL: dict[str, str] = {"type": "object"}
@@ -964,12 +963,7 @@ async def _map_function_call_output(
             else:
                 # Image/document/video blocks share their shape with toolResult
                 # content blocks.
-                tool_content.append(
-                    cast(
-                        "ToolResultContentBlockUnionTypeDef",
-                        await _convert_input_content(part),
-                    )
-                )
+                tool_content.append(await _convert_input_content(part))  # type: ignore[arg-type]
     _common.append_or_merge(
         bedrock_messages,
         "user",
@@ -1833,10 +1827,7 @@ def _build_response_object(
         # Responses' own ServiceTiers excludes the Bedrock-only "reserved" value,
         # which map_service_tier's wider (Chat Completions) signature allows for;
         # a Responses request can never actually carry it (rejected upstream).
-        service_tier=cast(
-            "ResponsesServiceTiers | None",
-            _openai_common.map_service_tier(request.service_tier)[1],
-        ),
+        service_tier=_openai_common.map_service_tier(request.service_tier)[1],  # type: ignore[arg-type]
         text=request.text,
         top_logprobs=request.top_logprobs,
         usage=usage,

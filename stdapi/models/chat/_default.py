@@ -159,10 +159,6 @@ class ChatModel(ChatModelBase[Any, Any]):
     #: When False (default), they are extracted and merged into the system prompt field.
     SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED: ClassVar[bool] = False
 
-    #: Replayed reasoning content must carry the signature the model issued with it.
-    #: When True, a replayed reasoning block that has no signature is dropped.
-    REASONING_SIGNATURE_REQUIRED: ClassVar[bool] = False
-
     #: Maximum cache control blocks (Bedrock limit).
     MAX_CACHE_BLOCKS: ClassVar[int] = 4
 

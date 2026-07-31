@@ -12,7 +12,7 @@ Design:
 """
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from stdapi.config import SETTINGS
 from stdapi.models import (
@@ -60,6 +60,10 @@ if TYPE_CHECKING:
 
 class ChatModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
     """Base class for provider-specific chat models."""
+
+    #: Replayed reasoning content must carry the signature the model issued with it.
+    #: When True, a replayed reasoning block that has no signature is dropped.
+    REASONING_SIGNATURE_REQUIRED: ClassVar[bool] = False
 
     def native_store_supported(self) -> bool:
         """Whether this model stores responses natively (Bedrock Mantle).

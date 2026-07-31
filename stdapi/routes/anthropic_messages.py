@@ -8,7 +8,7 @@ Functions:
     create_message: Main FastAPI endpoint for Anthropic message creation.
 """
 
-from typing import TYPE_CHECKING, Annotated, cast
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends
 
@@ -39,7 +39,6 @@ if TYPE_CHECKING:
     from sse_starlette import EventSourceResponse
     from types_aiobotocore_bedrock.literals import RegionName
 
-    from stdapi.models.chat._default import ChatModel
 
 register_route_capability(
     "anthropic_message",
@@ -83,7 +82,7 @@ async def _count_tokens_via_mantle(
     """
     # Reuse the Messages payload normalization (file inlining, system-role
     # folding, extension stripping); drop its generation-only default.
-    payload = await messages_payload(cast("MessageCreateParams", request), model_id)
+    payload = await messages_payload(request, model_id)  # type: ignore[arg-type]
     payload.pop("max_tokens", None)
     model = MANTLE_MODELS.get(model_id)
     regions = model.regions if model else SETTINGS.aws_bedrock_mantle_regions
@@ -324,7 +323,7 @@ async def count_tokens(
                 model_id,
                 model.regions[0],
                 # Not Mantle-served, so this is always a Converse chat model.
-                cast("ChatModel", get_chat_model(model_id)),
+                get_chat_model(model_id),  # type: ignore[arg-type]
             )
         )
     )

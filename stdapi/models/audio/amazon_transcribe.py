@@ -3,7 +3,7 @@
 from asyncio import gather, sleep
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Literal, NotRequired, cast
+from typing import TYPE_CHECKING, Literal, NotRequired
 from zlib import compress
 
 from botocore.exceptions import ClientError, ParamValidationError
@@ -67,7 +67,6 @@ if TYPE_CHECKING:
     from types_aiobotocore_transcribe.client import TranscribeServiceClient
     from types_aiobotocore_transcribe.type_defs import (
         StartTranscriptionJobRequestTypeDef,
-        ToxicityDetectionSettingsTypeDef,
     )
 
     from stdapi.input_file import InputFile
@@ -414,10 +413,10 @@ def _apply_extra_settings(
         if extra.ModelSettings is not None:
             job_params["ModelSettings"] = extra.ModelSettings.model_dump()  # type: ignore[typeddict-item]
         if extra.ToxicityDetection is not None:
-            job_params["ToxicityDetection"] = cast(
-                "list[ToxicityDetectionSettingsTypeDef]",
-                [setting.model_dump() for setting in extra.ToxicityDetection],
-            )
+            job_params["ToxicityDetection"] = [
+                setting.model_dump()  # type: ignore[misc]
+                for setting in extra.ToxicityDetection
+            ]
     if settings:
         job_params["Settings"] = settings  # type: ignore[typeddict-item]
 

@@ -2,7 +2,7 @@
 
 from base64 import b64encode
 from struct import pack
-from typing import TYPE_CHECKING, Literal, Self, cast
+from typing import TYPE_CHECKING, Literal, Self
 
 from pydantic import Field, model_validator
 
@@ -276,7 +276,7 @@ def build_embeddings_by_type(
     # Bedrock only ever returns integers for the quantized types below (only
     # "float" uses floats), so this narrows the shared `float | int` element
     # type declared on `EmbeddingResponse.embeddings_by_type`.
-    quantized = cast("dict[str, list[list[int]]]", by_type)
+    quantized: dict[str, list[list[int]]] = by_type  # type: ignore[assignment]
     return EmbeddingsByType(
         float_=float_vectors if "float" in requested else None,
         int8=quantized.get("int8") if "int8" in requested else None,
