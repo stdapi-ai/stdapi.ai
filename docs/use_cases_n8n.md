@@ -127,6 +127,18 @@ Enables: Text generation using the OpenAI Responses or Chat Completions APIs.
 
     n8n calls `POST /v1/chat/completions` (see [Chat Completions API](api_openai_chat_completions.md)), so the model must be a text/chat-capable model from the correct family.
 
+#### :material-text-box-outline: Legacy Completions
+
+Enables: raw prompt completion in LangChain-based chains, as an alternative to the chat-based nodes above.
+
+!!! example "Supported Node"
+    **`OpenAI Model`** (`@n8n/n8n-nodes-langchain.lmOpenAi`)
+
+    - Sub-node feeding a Basic LLM Chain or similar LangChain node — distinct from the **`OpenAI Chat Model`** sub-node above
+    - Model can be selected directly in the `Model` parameter
+
+    n8n calls `POST /v1/completions` (see [Completions API](api_openai_completions.md)), so the model must be a text-completion-capable model from the correct family.
+
 #### :material-shield-check: Text Moderation
 
 Enables: Content safety classification in workflows.
@@ -182,6 +194,18 @@ Enables: Image transformation and editing in workflows.
     - Model ID can be entered as expression in the `Model` parameter
 
     n8n calls `POST /v1/images/edits` (see [Images Edits API](api_openai_images_edits.md)), so the model must be an image-editing model from the correct family.
+
+#### :material-video: Video Generation
+
+Enables: Asynchronous text-to-video generation in workflows.
+
+!!! example "Supported Node"
+    **`OpenAI/Generate a Video`**
+
+    - Model ID can be entered as expression in the `Model` parameter
+    - Set **Wait Time** high enough for the job to finish—the node polls the job until it completes before returning, so the workflow blocks for the full generation time
+
+    n8n calls `POST /v1/videos` (see [Videos API](api_openai_videos.md)), including status polling and content download, so the model must be a video-generation model from the correct family.
 
 #### :material-volume-high: Audio Generation (TTS)
 
@@ -382,6 +406,10 @@ n8n calls the `/anthropic/v1/files` endpoints (see [Anthropic Files API](api_ant
 #### :material-lightbulb-outline: Prompt Resource
 
 The Anthropic node's **Prompt** resource (`Generate Prompt`, `Improve Prompt`, `Templatize Prompt`) calls Anthropic's experimental prompt tools endpoints, which are not part of the Amazon Bedrock API surface and are not available through stdapi.ai. Use a `Message a Model` node with prompt-engineering instructions instead.
+
+## :material-alert-outline: Known Limitations
+
+n8n's **Cohere Reranker** node (used by vector store nodes for hybrid search) cannot be pointed at stdapi.ai: its `cohereApi` credential takes only an API key and always calls Cohere's own endpoint, with no base URL field to redirect. Use an **HTTP Request** node against `POST /cohere/v2/rerank` (see [Cohere Rerank API](api_cohere_rerank.md)) instead, or a framework with a configurable reranker base URL—see [RAG Pipelines](use_cases_rag.md).
 
 ## :material-arrow-right: Next Steps
 

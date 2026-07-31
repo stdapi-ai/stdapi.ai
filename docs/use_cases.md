@@ -43,15 +43,15 @@ Pick the category that matches your goal — categories marked :material-book-op
 
 - :material-code-braces: **[AI Coding Assistants](#coding-assistants)** :material-book-open-variant:
   <br>Frontier coding models in your IDE and terminal
-- :material-brain: **[Autonomous Agents](#autonomous-agents)**
+- :material-brain: **[Autonomous Agents](#autonomous-agents)** :material-book-open-variant:
   <br>Self-directed agents on infrastructure you control
 - :material-chat: **[Chat Interfaces](#chat-interfaces)** :material-book-open-variant:
   <br>Private ChatGPT alternative for your organization
 - :material-graph-outline: **[Workflow Automation](#workflow-automation)** :material-book-open-variant:
   <br>AI steps in business processes, no code required
-- :material-microphone-message: **[Voice & Audio](#voice-audio)**
+- :material-microphone-message: **[Voice & Audio](#voice-audio)** :material-book-open-variant:
   <br>Voice agents, transcription, and subtitles
-- :material-magnify: **[RAG & Semantic Search](#rag-semantic-search)**
+- :material-magnify: **[RAG & Semantic Search](#rag-semantic-search)** :material-book-open-variant:
   <br>Ground AI answers in your own documents
 - :material-image-multiple: **[Content & Media Generation](#media-generation)**
   <br>Images and video for creative pipelines
@@ -97,6 +97,8 @@ Build self-directed AI agents that can plan, execute, and refine complex tasks a
 **Compatible frameworks:** OpenClaw, Hermes Agent, LangChain, LangGraph, LlamaIndex, CrewAI, OpenAI Agents SDK, Pydantic AI, Strands Agents
 
 All agent frameworks that support OpenAI or Anthropic SDKs work immediately — point the SDK's base URL to stdapi.ai. See the [API overview](api_overview.md) for connection details.
+
+**[Python Client Libraries Guide](use_cases_python_libraries.md)** — Configuring LangChain and pydantic-ai directly against stdapi.ai
 
 !!! tip "Give your agents AI capabilities via MCP"
     stdapi.ai is also a native [MCP server](api_overview.md#mcp-model-context-protocol): agents can call image generation, speech synthesis, transcription, file management, and model discovery as MCP tools — no custom integration code needed.
@@ -161,6 +163,10 @@ Build voice-first applications on the same OpenAI-compatible endpoint: text-to-s
 
 **Popular frameworks:** Pipecat, LiveKit Agents, TEN Framework — all accept a custom OpenAI-compatible base URL for LLM, speech-to-text, and text-to-speech services
 
+**Popular tools:** Home Assistant Assist (via the wyoming-openai proxy)
+
+**[Home Assistant Voice Guide](use_cases_home_assistant.md)** — Complete setup for local voice assistants backed by Amazon Transcribe and Amazon Polly
+
 !!! tip "Getting started"
     Point the framework's OpenAI plugin at your stdapi.ai `/v1` URL. See the [Audio Speech](api_openai_audio_speech.md), [Audio Transcriptions](api_openai_audio_transcriptions.md), and [Audio Translations](api_openai_audio_translations.md) APIs for supported models and formats.
 
@@ -181,8 +187,7 @@ Build retrieval-augmented generation and semantic search pipelines with Bedrock 
 
 **Popular tools:** LlamaIndex, Haystack, RAGFlow, LightRAG — works with any vector database (pgvector, Qdrant, and others store the vectors; stdapi.ai serves the embeddings)
 
-!!! tip "Getting started"
-    Configure the framework's OpenAI-compatible embedding provider with your stdapi.ai `/v1` URL, and the Cohere SDK with the `/cohere` prefix for reranking. No dedicated guide yet — [see the API overview](api_overview.md) for connection details.
+**[RAG Pipelines Guide](use_cases_rag.md)** — Configuring embeddings, Cohere-compatible reranking, and generation together
 
 ---
 

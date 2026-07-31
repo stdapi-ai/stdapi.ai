@@ -67,6 +67,12 @@ flowchart LR
 
 Open WebUI is configured entirely through environment variables. The sections below focus on the stdapi.ai integration. Use the same stdapi.ai key for all `*_OPENAI_API_KEY` entries. For more details on Open WebUI settings, refer to the official [Open WebUI Environment Variable Configuration](https://docs.openwebui.com/getting-started/env-configuration/) documentation.
 
+!!! warning "Each section needs its own connection settings"
+    Open WebUI does not fall back from `RAG_OPENAI_*`, `IMAGES_OPENAI_*`, or `AUDIO_*_OPENAI_*` to the core `OPENAI_API_*` pair — a missing pair disables that feature instead of inheriting the Core Connection. Set the base URL, key, and model explicitly for every section you enable.
+
+!!! warning "These settings are read once, on first boot"
+    Open WebUI reads its connection settings from the environment only the first time it starts against a given data directory, then stores them in its own database. Changing an environment variable afterwards has no effect until you either update the setting from the admin UI or start from a fresh `DATA_DIR`.
+
 ### :material-connection: Core Connection
 
 Enables: Chat completions and Open WebUI background tasks (titles, summarization).
@@ -113,6 +119,9 @@ Open WebUI's external reranker speaks the Cohere dialect, so it targets the Cohe
     Amazon Bedrock serves reranking from a subset of regions only. Keep at least one of them in [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions); stdapi.ai fails over to it automatically.
 
 Without an external reranker, Open WebUI falls back to a local Sentence-Transformers cross-encoder that it downloads from Hugging Face at startup—unavailable when `OFFLINE_MODE` is enabled.
+
+!!! tip "Chunk size determines whether reranking has anything to do"
+    Set `CHUNK_SIZE` small enough that each retrieval chunk covers one self-contained idea. A chunk size large enough to fold a whole document into a single chunk leaves the reranker nothing to reorder—there is only one candidate to rank.
 
 ### :material-image: Image Generation
 

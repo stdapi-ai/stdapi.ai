@@ -421,10 +421,10 @@ stdapi.ai is a drop-in replacement in hundreds of applications and tools. Change
   <br>n8n, Langflow, Dify, Flowise — connect AI to your business processes
 
 - :material-robot: **Agent Frameworks**
-  <br>OpenClaw, Hermes Agent, LangChain, LangGraph, CrewAI, OpenAI Agents SDK, Strands Agents — multi-agent systems on Bedrock
+  <br>OpenClaw, Hermes Agent, LangChain, LangGraph, CrewAI, OpenAI Agents SDK, Pydantic AI, Strands Agents — multi-agent systems on Bedrock
 
 - :material-microphone-message: **Voice & Audio**
-  <br>Pipecat, LiveKit Agents, TEN Framework — voice agents with speech, transcription, and translation
+  <br>Pipecat, LiveKit Agents, TEN Framework, Home Assistant — voice agents with speech, transcription, and translation
 
 - :material-magnify: **RAG & Semantic Search**
   <br>LlamaIndex, Haystack, RAGFlow, LightRAG — embeddings and Cohere-compatible reranking
@@ -550,7 +550,7 @@ export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
 
 <div class="grid cards" markdown>
 
-- :material-test-tube: __4,100+ automated tests__
+- :material-test-tube: __4,400+ automated tests__
   <br>Every endpoint, parameter and error path, run against real AWS services rather than mocks.
 
 - :material-shield-check: __~94% code coverage__
@@ -560,7 +560,7 @@ export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
   <br>The same tests run against the real OpenAI, Anthropic and Cohere APIs.
 
 - :material-robot-happy: __Driven by real client software__
-  <br>Actual AI agents and applications, in containers, end to end.
+  <br>Claude Code, Codex, pi, Qwen Code, n8n, Haystack, Open WebUI, Home Assistant's voice pipeline, and LangChain and pydantic-ai, driven end to end against a live gateway.
 
 </div>
 
@@ -572,7 +572,7 @@ That distinction is enforced when a test is written, before the feature exists: 
 
 ### Real applications, not just API calls
 
-Passing an HTTP test says nothing about whether a real coding agent, chatbot or automation platform actually works. So the suite runs them: **complete third-party client software, unmodified, inside containers, against a live gateway** — driving multi-turn tool-calling sessions across dozens of models and all three API dialects. A regression that only appears in a real agent loop is caught here, not by you.
+Passing an HTTP test says nothing about whether a real coding agent, chatbot or automation platform actually works. So the suite runs them: **complete third-party client software, unmodified, against a live gateway** — coding agents (Claude Code, Codex, pi, Qwen Code), the n8n workflow runner, a Haystack RAG pipeline, the Open WebUI chat interface, Home Assistant's voice bridge, and the LangChain and pydantic-ai Python libraries — driving multi-turn tool-calling sessions, document retrieval and reranking, and speech pipelines across dozens of models and all three API dialects. A regression that only appears in a real client is caught here, not by you.
 
 ### Every model is measured, not assumed
 

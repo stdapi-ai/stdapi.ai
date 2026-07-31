@@ -98,6 +98,9 @@ nav:
           - Open WebUI Integration: use_cases_openwebui.md
           - n8n Integration: use_cases_n8n.md
           - AI Coding Assistants: use_cases_coding_assistants.md
+          - Python Client Libraries: use_cases_python_libraries.md
+          - RAG Pipelines: use_cases_rag.md
+          - Home Assistant Voice: use_cases_home_assistant.md
       - Releases & Roadmap: roadmap.md
   - Contact: contact.md
 
