@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 
 from stdapi.models.chat import get_chat_model
+from stdapi.models.chat._anthropic_claude import _STUB_INPUT_SCHEMAS
 from stdapi.models.chat._default import ChatModel
 from stdapi.monitoring import REQUEST
 from stdapi.types.anthropic_messages import (
@@ -890,6 +891,30 @@ class TestMultiTurnStubSchema:
         second_schema = self._stub_schema(second)
         assert first_schema == second_schema
         assert first_schema is not second_schema
+
+    @pytest.mark.parametrize("model_id", [*_COMPUTER_TOOL_TYPES, *_FUTURE_MODELS])
+    def test_every_promotable_tool_version_has_a_documented_schema(
+        self, model_id: str
+    ) -> None:
+        """No Claude generation may promote a tool version with no documented schema.
+
+        A version missing from the table degrades to the permissive
+        ``{"type": "object"}`` stub, which is the exact condition that made the
+        model invent argument names. Nothing else would report it: the request
+        still succeeds and the answer still looks plausible. Adding a tool
+        version to a generation's table therefore fails here until its schema is
+        added too.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
+             stdapi/models/chat/_anthropic_claude.py:_STUB_INPUT_SCHEMAS
+        """
+        promotable = set(_claude_model(model_id).SERVER_TOOL_NAME_TO_TYPE.values())
+
+        assert promotable <= _STUB_INPUT_SCHEMAS.keys(), (
+            f"{model_id} promotes {sorted(promotable - _STUB_INPUT_SCHEMAS.keys())} "
+            "with no documented input schema, so its multi-turn stub falls back "
+            "to a schema-less one and the model invents its argument names"
+        )
 
 
 class TestSystemMessageAsMessages:
