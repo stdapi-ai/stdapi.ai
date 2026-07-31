@@ -478,6 +478,37 @@ class TestEchoedItemsTolerateUnknownFields:
     @pytest.mark.parametrize(
         "payload",
         [
+            # Shorthand form: content as a bare string.
+            {"type": "message", "role": "user", "id": "msg_1", "content": "hi"},
+            # Full form, with the status the API reports alongside the id.
+            {
+                "type": "message",
+                "role": "user",
+                "id": "msg_1",
+                "status": "completed",
+                "content": [{"type": "input_text", "text": "hi"}],
+            },
+        ],
+    )
+    async def test_message_item_keeps_its_echoed_id(
+        self, payload: dict[str, object]
+    ) -> None:
+        """A message item replayed with the ``id`` the API gave it still parses.
+
+        Every message the API hands back carries an ``id``; a client replaying a
+        listed item sends it straight back. Codex does so from its very first
+        request, and rejecting the field failed the whole turn.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/list_input_items
+             stdapi/types/openai_responses.py:EasyInputMessage
+        """
+        item = _parse(payload)
+        messages, _ = await map_input(cast("list[ResponseInputItem]", [item]), None)
+        assert messages == [{"role": "user", "content": [{"text": "hi"}]}]
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
             # Codex re-serializes reasoning content parts as `text`.
             {
                 "type": "reasoning",

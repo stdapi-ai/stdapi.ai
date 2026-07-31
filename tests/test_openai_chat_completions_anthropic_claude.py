@@ -140,16 +140,18 @@ class TestTextEditorTool:
     insert (``undo_edit`` was removed in ``text_editor_20250429``).  The gateway
     resolves that version itself, so requests carry only the bare name.
 
-    The multi-turn tests below assert that the native definition is re-promoted on
-    Turn 2 (issue #97): Turn 2 prompt tokens must not fall below Turn 1's, and the
-    documented ``old_str``/``new_str`` keys must be used exclusively.  Neither
-    assertion has been reconfirmed against a live gateway since this file last
-    changed: ``uv run pytest tests/test_openai_chat_completions_anthropic_claude.py
-    -k TestTextEditorTool`` (without ``--offline``, against a real Bedrock-backed
-    gateway).
+    On a Turn 2 whose history references only this tool, the native definition
+    cannot be re-sent (Bedrock requires a ``toolConfig``; Anthropic rejects the
+    same name in both channels), so the retained ``toolSpec`` stub carries the
+    documented input schema instead (issue #97). The multi-turn tests below
+    therefore assert that the documented ``old_str``/``new_str`` keys are used
+    on every turn — verified live 2026-07-31: the schema-less stub made Haiku
+    4.5 emit ``old_text``/``new_text`` instead, and the schema-bearing stub
+    restores the documented keys.
 
     Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
          stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel
+         stdapi/models/chat/_anthropic_claude.py:_apply_stub_input_schemas
     """
 
     # --- acceptance ---
@@ -278,11 +280,9 @@ class TestTextEditorTool:
     def test_view_multiturn(self, openai_client: OpenAI) -> None:
         """A ``role: "tool"`` result closes an editor turn without an Anthropic tool_result.
 
-        The tool is re-promoted to native Anthropic format on every turn, so Turn 2 still
-        carries the full editor definition — worth roughly 700 input tokens — on top of the
-        added history (not independently asserted here pending live re-verification, see
-        class docstring); the reply quoting the injected hostname is what proves the result
-        was forwarded.
+        On Turn 2 the retained ``toolSpec`` stub carries the documented editor schema
+        instead of the native definition (see class docstring); the reply quoting the
+        injected hostname is what proves the result was forwarded.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
              https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
@@ -336,20 +336,13 @@ class TestTextEditorTool:
         content = resp2.choices[0].message.content
         assert content
         assert resp2.choices[0].message.tool_calls is None
-        # Only the tool result can supply the hostname, so quoting it back proves the
-        # ``role: "tool"`` message reached the model.
         assert "testhost" in content.lower().replace("-", "").replace(" ", ""), (
             "Turn 2 must re-send the tool call and its result to the model"
         )
         assert resp1.usage is not None
         assert resp2.usage is not None
-        # Turn 2 sends the schema-less stub rather than the native definition:
-        # once history carries toolUse/toolResult, Bedrock requires a toolConfig
-        # and Anthropic refuses the same name in both channels, so the full
-        # definition cannot be re-sent while this is the only tool (measured
-        # live 2026-07-31 -- sending only the native form returns 400). What
-        # must hold is that the turn completes at all and the round trip
-        # survives; a duplicate-name regression fails the call outright.
+        # Deliberately weak: what this pins is that the round trip completes at
+        # all, since the token count depends on the stub the second turn sends.
         assert resp2.usage.prompt_tokens > 0
 
     # --- str_replace command ---
@@ -361,9 +354,9 @@ class TestTextEditorTool:
         first ``view`` the file, in which case the injected contents (line 6 misses its
         colon) are returned as a ``role: "tool"`` message and the edit lands in Turn 2.
         Both branches must end on one of the ``text_editor_20250728`` mutation commands.
-        The tool is natively promoted on every turn, so both Turn 1 and Turn 2 use the
-        documented ``old_str`` / ``new_str`` keys, and the strings must quote the file
-        contents that were injected.
+        The Turn 2 stub carries the documented schema, so both turns use the
+        ``old_str`` / ``new_str`` keys, and the strings must quote the injected file
+        contents.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
              stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
@@ -445,17 +438,12 @@ class TestTextEditorTool:
         assert edit_args.get("command") in ("str_replace", "create", "insert")
         assert edit_args.get("path")
         if edit_args.get("command") == "str_replace":
-            # The tool is natively promoted again on Turn 2, so Claude is expected to
-            # keep using the documented old_str / new_str keys; tolerate old_text /
-            # new_text too pending live reconfirmation (see class docstring).
-            old_text = edit_args.get("old_str") or edit_args.get("old_text")
-            new_text = edit_args.get("new_str") or edit_args.get("new_text")
+            old_text = edit_args.get("old_str")
+            new_text = edit_args.get("new_str")
             assert isinstance(old_text, str)
             assert isinstance(new_text, str)
             assert old_text
             assert old_text != new_text
-            # Only the injected tool result names the broken line, so quoting it proves
-            # the file contents were forwarded to the model.
             viewed_body = " ".join(
                 line.split(": ", 1)[-1] for line in file_content.splitlines()
             )
@@ -464,16 +452,88 @@ class TestTextEditorTool:
             )
         assert resp1.usage is not None
         assert resp2.usage is not None
-        # Turn 2 sends the schema-less stub rather than the native definition:
-        # once history carries toolUse/toolResult, Bedrock requires a toolConfig
-        # and Anthropic refuses the same name in both channels, so the full
-        # definition cannot be re-sent while this is the only tool (measured
-        # live 2026-07-31 -- sending only the native form returns 400). What
-        # must hold is that the turn completes at all and the round trip
-        # survives; a duplicate-name regression fails the call outright.
         assert resp2.usage.prompt_tokens > 0
 
     # --- create command ---
+
+    def test_turn_two_str_replace_uses_documented_keys(
+        self, openai_client: OpenAI
+    ) -> None:
+        """A forced Turn 2 edit carries the documented ``old_str``/``new_str`` keys.
+
+        Turn 1 forces a ``view``; Turn 2 returns the file contents and demands a
+        ``str_replace``.  History then references only the editor, the exact
+        shape in which the native definition cannot be re-sent and the retained
+        stub's schema is all the model sees.  Measured live 2026-07-31 on Haiku
+        4.5: a schema-less stub yields ``old_text``/``new_text`` on this turn,
+        while the documented-schema stub yields ``old_str``/``new_str``.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
+             stdapi/models/chat/_anthropic_claude.py:_apply_stub_input_schemas
+        """
+        tools: list[dict[str, object]] = [_TEXT_EDITOR_TOOL]
+        file_content = (
+            "1: def is_prime(n):\n"
+            "2:     if n <= 1:\n"
+            "3:         return False\n"
+            "4:     return True\n"
+            "5: \n"
+            "6: for num in range(2, 20)\n"  # missing colon on this line
+            "7:     if is_prime(num):\n"
+            "8:         print(num)\n"
+        )
+        resp1 = openai_client.chat.completions.create(  # type: ignore[call-overload]
+            model=_CLAUDE_CHEAP,
+            messages=[{"role": "user", "content": "View the file /tmp/primes.py"}],
+            tools=tools,
+            tool_choice="required",
+            max_completion_tokens=4096,
+        )
+        tool_calls = resp1.choices[0].message.tool_calls
+        assert tool_calls, "Expected tool_calls in Turn 1"
+        tc = tool_calls[0]
+
+        resp2 = openai_client.chat.completions.create(  # type: ignore[call-overload]
+            model=_CLAUDE_CHEAP,
+            messages=[
+                {"role": "user", "content": "Fix the syntax error in /tmp/primes.py"},
+                {
+                    "role": "assistant",
+                    "content": resp1.choices[0].message.content,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": tc.id, "content": file_content},
+                {
+                    "role": "user",
+                    "content": "Now apply the fix with a str_replace command.",
+                },
+            ],
+            tools=tools,
+            tool_choice="required",
+            max_completion_tokens=4096,
+        )
+        edit_calls = resp2.choices[0].message.tool_calls or []
+        str_replace_args = [
+            args
+            for edit_tc in edit_calls
+            if (args := _tool_call_args(edit_tc)).get("command") == "str_replace"
+        ]
+        assert str_replace_args, "Turn 2 must answer the demand with a str_replace"
+        args = str_replace_args[0]
+        assert isinstance(args.get("old_str"), str)
+        assert isinstance(args.get("new_str"), str)
+        assert not {"old_text", "new_text"} & args.keys(), (
+            "the model must not fall back to invented argument names on the stub turn"
+        )
 
     def test_create_command_shape(self, openai_client: OpenAI) -> None:
         """Writing a new file emits ``create`` with ``path`` and ``file_text``.
@@ -521,9 +581,9 @@ class TestTextEditorTool:
         offset — together with ``insert_text``.  As with ``str_replace`` the model may
         ``view`` the file first, so the edit is accepted in either turn.  When Turn 2
         answers with a ``str_replace`` instead, the replaced snippet must quote the
-        injected contents, which is what proves the tool result was forwarded: the tool
-        definition is re-promoted on Turn 2 as well, so its ~700 input tokens are billed
-        again on top of the added history rather than disappearing.
+        injected contents, which is what proves the tool result was forwarded; the
+        Turn 2 stub carries the documented schema, keeping the documented argument
+        names in play (see class docstring).
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
              stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
@@ -596,9 +656,8 @@ class TestTextEditorTool:
             assert isinstance(edit_args.get("insert_line"), int)
             assert edit_args.get("insert_text")
         elif command == "str_replace":
-            # The tool is natively promoted again on Turn 2, so Claude is expected to
-            # keep using the documented old_str key; tolerate old_text too pending
-            # live reconfirmation (see class docstring).
+            # The Turn 2 stub carries the documented schema, so ``old_str`` is
+            # expected; ``old_text`` is tolerated pending live reconfirmation.
             old_text = edit_args.get("old_str") or edit_args.get("old_text")
             assert isinstance(old_text, str)
             viewed_body = " ".join(
@@ -611,13 +670,6 @@ class TestTextEditorTool:
             assert edit_args.get("file_text")
         assert resp1.usage is not None
         assert resp2.usage is not None
-        # Turn 2 sends the schema-less stub rather than the native definition:
-        # once history carries toolUse/toolResult, Bedrock requires a toolConfig
-        # and Anthropic refuses the same name in both channels, so the full
-        # definition cannot be re-sent while this is the only tool (measured
-        # live 2026-07-31 -- sending only the native form returns 400). What
-        # must hold is that the turn completes at all and the round trip
-        # survives; a duplicate-name regression fails the call outright.
         assert resp2.usage.prompt_tokens > 0
 
     # --- error result ---
@@ -629,9 +681,7 @@ class TestTextEditorTool:
         ``tool_result`` blocks, so a host-side failure can only be reported as plain text.
         The gateway wraps it in a Bedrock ``toolResult`` with ``{"text": ...}`` content and
         the turn must complete normally, either by retrying with another tool call or by
-        explaining the failure it was told about.  Turn 2 re-promotes the ~700-token native
-        editor definition again, so its prompt must not be cheaper than Turn 1's despite
-        the added history.
+        explaining the failure it was told about.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
              https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
@@ -687,8 +737,6 @@ class TestTextEditorTool:
         assert resp2.choices[0].finish_reason in {"stop", "tool_calls"}
         assert reply.content or reply.tool_calls
         if reply.content and not reply.tool_calls:
-            # Nothing but the tool result reports the failure, so an explanation that
-            # mentions it proves the error text reached the model.
             lowered = reply.content.lower()
             assert any(
                 marker in lowered
@@ -705,13 +753,6 @@ class TestTextEditorTool:
             ), "Turn 2 must re-send the failing tool result to the model"
         assert resp1.usage is not None
         assert resp2.usage is not None
-        # Turn 2 sends the schema-less stub rather than the native definition:
-        # once history carries toolUse/toolResult, Bedrock requires a toolConfig
-        # and Anthropic refuses the same name in both channels, so the full
-        # definition cannot be re-sent while this is the only tool (measured
-        # live 2026-07-31 -- sending only the native form returns 400). What
-        # must hold is that the turn completes at all and the round trip
-        # survives; a duplicate-name regression fails the call outright.
         assert resp2.usage.prompt_tokens > 0
 
     # --- max_characters ---
@@ -796,12 +837,10 @@ class TestTextEditorTool:
         """A ``max_characters`` editor tool round-trips a tool result and stops.
 
         Turn 2 declares the same tool with the extra option while the history already
-        holds a ``toolResult``; the tool is still re-promoted to native Anthropic format
-        on that turn, so the extra option must again be stripped out of the ``toolSpec``
-        stub or Bedrock would reject the request. The native editor definition and its
-        ~700 input tokens are re-sent as well, so Turn 2 must not bill fewer prompt
-        tokens than Turn 1; the reply quoting the injected hostname is what proves the
-        tool result was forwarded.
+        holds a ``toolResult``; the retained ``toolSpec`` stub receives the documented
+        input schema on that turn, so the extra option must again be stripped out of
+        it or Bedrock would reject the request. The reply quoting the injected
+        hostname is what proves the tool result was forwarded.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
              stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
@@ -859,20 +898,11 @@ class TestTextEditorTool:
         assert resp2.choices[0].finish_reason == "stop"
         content = resp2.choices[0].message.content
         assert content
-        # Only the tool result can supply the hostname, so quoting it back proves the
-        # ``role: "tool"`` message reached the model.
         assert "testhost" in content.lower().replace("-", "").replace(" ", ""), (
             "Turn 2 must re-send the tool call and its result to the model"
         )
         assert resp1.usage is not None
         assert resp2.usage is not None
-        # Turn 2 sends the schema-less stub rather than the native definition:
-        # once history carries toolUse/toolResult, Bedrock requires a toolConfig
-        # and Anthropic refuses the same name in both channels, so the full
-        # definition cannot be re-sent while this is the only tool (measured
-        # live 2026-07-31 -- sending only the native form returns 400). What
-        # must hold is that the turn completes at all and the round trip
-        # survives; a duplicate-name regression fails the call outright.
         assert resp2.usage.prompt_tokens > 0
 
 
@@ -889,14 +919,14 @@ class TestBashTool:
     unless ``restart``) plus ``restart``.  Upstream it needs no beta header, but the
     gateway still tags the promoted tool with ``computer-use-2025-01-24`` for Bedrock.
 
-    The multi-turn tests below assert that the native definition is re-promoted on
-    Turn 2 (issue #97), so Turn 2 prompt tokens must not fall below Turn 1's; this
-    has not been reconfirmed against a live gateway since this file last changed:
-    ``uv run pytest tests/test_openai_chat_completions_anthropic_claude.py -k
-    TestBashTool`` (without ``--offline``, against a real Bedrock-backed gateway).
+    On a Turn 2 whose history references only this tool, the native definition
+    cannot be re-sent (Bedrock requires a ``toolConfig``; Anthropic rejects the
+    same name in both channels), so the retained ``toolSpec`` stub carries the
+    documented ``command``/``restart`` schema instead (issue #97).
 
     Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
          stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel
+         stdapi/models/chat/_anthropic_claude.py:_apply_stub_input_schemas
     """
 
     def test_accepted(self, openai_client: OpenAI) -> None:
@@ -983,9 +1013,9 @@ class TestBashTool:
     def test_multiturn(self, openai_client: OpenAI) -> None:
         """Command stdout returned as a ``role: "tool"`` message ends the bash turn.
 
-        The ``bash`` tool is re-promoted to native Anthropic format on Turn 2 as well, so
-        Anthropic's injected ``bash`` tool prompt is expected to be billed again on top
-        of the added history (not independently asserted here, see class docstring).
+        On Turn 2 the retained ``bash`` stub carries the documented
+        ``command``/``restart`` schema instead of the native definition (see class
+        docstring).
 
         Ref: stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
              stdapi/models/chat/_adapters/_openai_common.py:parse_tool_content
@@ -1037,13 +1067,6 @@ class TestBashTool:
         assert resp2.choices[0].message.tool_calls is None
         assert resp1.usage is not None
         assert resp2.usage is not None
-        # Turn 2 sends the schema-less stub rather than the native definition:
-        # once history carries toolUse/toolResult, Bedrock requires a toolConfig
-        # and Anthropic refuses the same name in both channels, so the full
-        # definition cannot be re-sent while this is the only tool (measured
-        # live 2026-07-31 -- sending only the native form returns 400). What
-        # must hold is that the turn completes at all and the round trip
-        # survives; a duplicate-name regression fails the call outright.
         assert resp2.usage.prompt_tokens > 0
 
     def test_command_error_output_accepted(self, openai_client: OpenAI) -> None:
@@ -1051,9 +1074,7 @@ class TestBashTool:
 
         A non-zero exit is indistinguishable from success at the wire level on the OpenAI
         surface — there is no ``is_error`` flag — so the gateway forwards it as ordinary
-        ``toolResult`` text and the turn must still complete.  The ``toolResult`` in the
-        history does not stop Turn 2 from re-promoting the ``bash`` tool (not
-        independently asserted here, see class docstring).
+        ``toolResult`` text and the turn must still complete.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
              stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
@@ -1108,13 +1129,6 @@ class TestBashTool:
         assert resp2.choices[0].message.content or resp2.choices[0].message.tool_calls
         assert resp1.usage is not None
         assert resp2.usage is not None
-        # Turn 2 sends the schema-less stub rather than the native definition:
-        # once history carries toolUse/toolResult, Bedrock requires a toolConfig
-        # and Anthropic refuses the same name in both channels, so the full
-        # definition cannot be re-sent while this is the only tool (measured
-        # live 2026-07-31 -- sending only the native form returns 400). What
-        # must hold is that the turn completes at all and the round trip
-        # survives; a duplicate-name regression fails the call outright.
         assert resp2.usage.prompt_tokens > 0
 
     def test_restart_tool_result_accepted(self, openai_client: OpenAI) -> None:
@@ -1122,8 +1136,6 @@ class TestBashTool:
 
         ``bash`` accepts a ``restart`` input whose result is a bare acknowledgement instead
         of command output; the gateway must forward that text like any other tool result.
-        As with any ``toolResult`` in the history, Turn 2 still re-promotes the ``bash``
-        tool (not independently asserted here, see class docstring).
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
              stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
@@ -1177,13 +1189,6 @@ class TestBashTool:
         assert resp2.choices[0].message.content or resp2.choices[0].message.tool_calls
         assert resp1.usage is not None
         assert resp2.usage is not None
-        # Turn 2 sends the schema-less stub rather than the native definition:
-        # once history carries toolUse/toolResult, Bedrock requires a toolConfig
-        # and Anthropic refuses the same name in both channels, so the full
-        # definition cannot be re-sent while this is the only tool (measured
-        # live 2026-07-31 -- sending only the native form returns 400). What
-        # must hold is that the turn completes at all and the round trip
-        # survives; a duplicate-name regression fails the call outright.
         assert resp2.usage.prompt_tokens > 0
 
 
@@ -1200,14 +1205,14 @@ class TestMemoryTool:
     requires the ``context-management-2025-06-27`` beta flag, which the gateway injects
     from ``TOOL_BETA_FLAGS`` when it promotes the tool.
 
-    The multi-turn test below asserts that the native definition is re-promoted on
-    Turn 2 (issue #97), so Turn 2 prompt tokens must not fall below Turn 1's; this
-    has not been reconfirmed against a live gateway since this file last changed:
-    ``uv run pytest tests/test_openai_chat_completions_anthropic_claude.py -k
-    TestMemoryTool`` (without ``--offline``, against a real Bedrock-backed gateway).
+    On a Turn 2 whose history references only this tool, the native definition
+    cannot be re-sent (Bedrock requires a ``toolConfig``; Anthropic rejects the
+    same name in both channels), so the retained ``toolSpec`` stub carries the
+    documented memory command schema instead (issue #97).
 
     Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
          stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel
+         stdapi/models/chat/_anthropic_claude.py:_apply_stub_input_schemas
     """
 
     def test_accepted(self, openai_client: OpenAI) -> None:
@@ -1298,10 +1303,9 @@ class TestMemoryTool:
         """A ``/memories`` listing returned as tool text is accepted in the next turn.
 
         The listing is the literal shape the ``memory`` tool expects back from a ``view`` of
-        its directory, and the gateway must forward it as ``toolResult`` text.  ``memory``
-        is re-promoted to native Anthropic format again on Turn 2, so Anthropic's large
-        injected memory tool prompt is expected to be billed again on top of the added
-        history (not independently asserted here, see class docstring).
+        its directory, and the gateway must forward it as ``toolResult`` text.  On Turn 2
+        the retained ``memory`` stub carries the documented command schema instead of the
+        native definition (see class docstring).
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
              stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
@@ -1357,13 +1361,6 @@ class TestMemoryTool:
         assert resp2.choices[0].message.content or resp2.choices[0].message.tool_calls
         assert resp1.usage is not None
         assert resp2.usage is not None
-        # Turn 2 sends the schema-less stub rather than the native definition:
-        # once history carries toolUse/toolResult, Bedrock requires a toolConfig
-        # and Anthropic refuses the same name in both channels, so the full
-        # definition cannot be re-sent while this is the only tool (measured
-        # live 2026-07-31 -- sending only the native form returns 400). What
-        # must hold is that the turn completes at all and the round trip
-        # survives; a duplicate-name regression fails the call outright.
         assert resp2.usage.prompt_tokens > 0
 
 
@@ -1801,7 +1798,6 @@ class TestBuildToolConfig:
             self._make_request([{"type": "function", "function": {"name": "bash"}}])
         )
         assert cfg is not None
-        # No parameters schema → adapter emits the canonical empty Bedrock schema.
         assert cfg["tools"][0]["toolSpec"]["inputSchema"]["json"] == {"type": "object"}
 
     def test_function_format_extra_params_in_parameters_forwarded(self) -> None:

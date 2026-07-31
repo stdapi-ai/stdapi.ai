@@ -16,11 +16,13 @@ Ref: https://docs.podman.io/en/latest/markdown/podman-run.1.html
 
 from __future__ import annotations
 
+import atexit
 import shutil
 import subprocess
 from functools import cache
 from hashlib import sha256
 from pathlib import Path
+from tempfile import mkdtemp
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -28,6 +30,12 @@ if TYPE_CHECKING:
 
 #: Mount point of the host root inside a toolbox container.
 _HOST_ROOT_PREFIX = "/run/host"
+
+#: Names left out of a staged source copy; bytecode is noise the CLI never reads.
+_STAGING_EXCLUDES = ("__pycache__", "*.pyc")
+
+#: Staging copy of each host source tree, keyed by the tree it was made from.
+_staged_sources: dict[Path, Path] = {}
 
 #: Memory ceiling per agentic CLI run; a runaway agent must not swap the host.
 _MEMORY_LIMIT = "4g"
@@ -89,6 +97,42 @@ def host_path(path: Path) -> str:
     if uses_remote_engine() and resolved.startswith(f"{_HOST_ROOT_PREFIX}/"):
         return resolved[len(_HOST_ROOT_PREFIX) :]
     return resolved
+
+
+@cache
+def _staging_root() -> Path:
+    """Directory holding the read-only source copies handed to containers.
+
+    The repository is never bind-mounted directly. Under SELinux a project tree
+    carries whatever label it was last given, and a tree stamped with one
+    container's private MCS categories is unreadable from every other container --
+    the CLI then reports an empty source tree and the run fails for a reason that
+    looks nothing like a labelling problem. Copying into a directory this process
+    owns makes the mount readable under any policy without ever relabelling the
+    repository, which is a host-wide side effect a test suite must not have.
+    """
+    root = Path(mkdtemp(prefix="stdapi-agentic-src-"))
+    atexit.register(shutil.rmtree, root, True)  # noqa: FBT003
+    return root
+
+
+def _staged(source: Path) -> Path:
+    """Return the staging copy of *source*, making it on first use.
+
+    Args:
+        source: Host directory to expose to a container read-only.
+
+    Returns:
+        Path of the copy, inside :func:`_staging_root`.
+    """
+    staged = _staged_sources.get(source)
+    if staged is None:
+        staged = _staging_root() / str(len(_staged_sources)) / source.name
+        shutil.copytree(
+            source, staged, ignore=shutil.ignore_patterns(*_STAGING_EXCLUDES)
+        )
+        _staged_sources[source] = staged
+    return staged
 
 
 def image_tag(packages: Sequence[str]) -> str:
@@ -230,8 +274,10 @@ def run_in_container(
 
     The container gets no capabilities, no new privileges, a read-only root
     filesystem and a memory/PID ceiling. *workdir* is the only writable bind
-    mount; *mounts* are all read-only. Nothing outside them is visible, which is
-    what keeps ``tests/.env`` and the host's credentials away from the CLI.
+    mount; *mounts* are all read-only, and are served from a staging copy rather
+    than the tree itself (see :func:`_staging_root`). Nothing outside them is
+    visible, which is what keeps ``tests/.env`` and the host's credentials away
+    from the CLI.
 
     ``--userns=keep-id`` maps the host user to the same UID inside, so files the
     CLI writes into *workdir* stay owned by the test runner.
@@ -287,7 +333,9 @@ def run_in_container(
     if stdin is not None:
         cmd.append("--interactive")
     for source, target in mounts.items():
-        cmd += ["-v", f"{host_path(source)}:{target}:ro"]
+        # ",z" relabels the staging copy as shared so any container may read it.
+        # Only the copy is touched; the repository keeps the label it had.
+        cmd += ["-v", f"{host_path(_staged(source))}:{target}:ro,z"]
     for key, value in env.items():
         cmd += ["-e", f"{key}={value}"]
     cmd.append(image)

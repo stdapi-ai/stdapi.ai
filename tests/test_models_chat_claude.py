@@ -755,6 +755,143 @@ class TestServerToolRePromotion:
         )
 
 
+class TestMultiTurnStubSchema:
+    """A retained multi-turn stub carries the documented server tool input schema.
+
+    When history references only server tool names and their stubs are all that
+    keeps ``toolConfig`` populated, the native definition cannot be promoted for
+    the turn: Bedrock requires a ``toolConfig`` once history carries
+    ``toolUse``/``toolResult`` blocks, and Anthropic rejects the same tool name
+    in both ``toolConfig`` and the native ``tools`` list ("Tool names must be
+    unique"). Issue #97: with a bare ``{"type": "object"}`` stub the model
+    invents argument names (measured live: ``old_text``/``new_text`` instead of
+    the documented ``old_str``/``new_str``), so the retained stub must carry the
+    documented input schema instead.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
+         https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
+         https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool
+         stdapi/models/chat/_anthropic_claude.py:_apply_stub_input_schemas
+    """
+
+    @staticmethod
+    def _turn_two_history(tool_name: str) -> list[JsonMapping]:
+        """Return a minimal turn-2 Bedrock history referencing only *tool_name*."""
+        return [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "tooluse_1",
+                            "name": tool_name,
+                            "input": {},
+                        }
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "toolResult": {
+                            "toolUseId": "tooluse_1",
+                            "content": [{"text": "ok"}],
+                        }
+                    }
+                ],
+            },
+        ]
+
+    def _configure(
+        self, tool_name: str, tool_type: str
+    ) -> tuple[JsonMapping, JsonMapping]:
+        """Run ``_req_configure_tools`` for a server-tool-only turn-2 conversation."""
+        model = _claude_model("anthropic.claude-haiku-4-5-20251001-v1:0")
+        tool_config: JsonMapping = {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "name": tool_name,
+                        "inputSchema": {"json": {"type": "object"}},
+                    }
+                }
+            ]
+        }
+        additional_request_fields: JsonMapping = {}
+        model._req_configure_tools(  # noqa: SLF001
+            tool_config=tool_config,  # type: ignore[arg-type]
+            additional_request_fields=additional_request_fields,
+            server_tools=[{"name": tool_name, "type": tool_type}],
+            bedrock_messages=self._turn_two_history(tool_name),  # type: ignore[arg-type]
+        )
+        return tool_config, additional_request_fields
+
+    @staticmethod
+    def _stub_schema(tool_config: JsonMapping) -> dict[str, Any]:
+        """Return the retained stub's ``inputSchema.json`` payload."""
+        tools = cast("list[dict[str, Any]]", tool_config["tools"])
+        return cast("dict[str, Any]", tools[0]["toolSpec"]["inputSchema"]["json"])
+
+    def test_text_editor_stub_gets_the_documented_schema(self) -> None:
+        """The retained editor stub pins the documented commands and argument names."""
+        tool_config, additional_request_fields = self._configure(
+            "str_replace_based_edit_tool", "text_editor_20250728"
+        )
+
+        assert "tools" not in additional_request_fields, (
+            "the native definition must not be sent while its stub keeps the "
+            "same name in toolConfig"
+        )
+        schema = self._stub_schema(tool_config)
+        assert schema["required"] == ["command", "path"]
+        properties = schema["properties"]
+        assert properties["command"]["enum"] == [
+            "view",
+            "create",
+            "str_replace",
+            "insert",
+        ], "undo_edit was removed in text_editor_20250429"
+        assert {"old_str", "new_str", "file_text", "insert_line", "insert_text"} <= (
+            properties.keys()
+        )
+
+    def test_bash_stub_gets_the_documented_schema(self) -> None:
+        """The retained bash stub pins the documented ``command``/``restart`` arguments."""
+        tool_config, _ = self._configure("bash", "bash_20250124")
+
+        assert set(self._stub_schema(tool_config)["properties"]) == {
+            "command",
+            "restart",
+        }
+
+    def test_memory_stub_gets_the_documented_schema(self) -> None:
+        """The retained memory stub pins the documented commands, including ``rename``."""
+        tool_config, _ = self._configure("memory", "memory_20250818")
+
+        properties = self._stub_schema(tool_config)["properties"]
+        assert "rename" in properties["command"]["enum"]
+        assert {"old_path", "new_path"} <= properties.keys()
+
+    def test_unknown_tool_version_keeps_the_permissive_stub(self) -> None:
+        """A tool version without a documented schema keeps the permissive stub."""
+        tool_config, _ = self._configure(
+            "str_replace_based_edit_tool", "text_editor_20991231"
+        )
+
+        assert self._stub_schema(tool_config) == {"type": "object"}
+
+    def test_stub_schema_is_a_copy_per_request(self) -> None:
+        """Each request gets its own schema copy, so mutations cannot leak across requests."""
+        first, _ = self._configure("bash", "bash_20250124")
+        second, _ = self._configure("bash", "bash_20250124")
+
+        first_schema = self._stub_schema(first)
+        second_schema = self._stub_schema(second)
+        assert first_schema == second_schema
+        assert first_schema is not second_schema
+
+
 class TestSystemMessageAsMessages:
     """Native mid-conversation system messages are enabled per model family.
 

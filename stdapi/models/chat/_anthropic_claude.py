@@ -1,5 +1,6 @@
 """Common base for all Anthropic Claude chat model implementations."""
 
+from copy import deepcopy
 from re import compile as re_compile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar
@@ -68,6 +69,100 @@ _JSON_SCHEMA_KEYWORDS = frozenset(
     }
 )
 
+#: Documented ``bash`` server tool input schema (``command``/``restart``)
+_BASH_STUB_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "properties": {"command": {"type": "string"}, "restart": {"type": "boolean"}},
+}
+
+#: Documented Claude 4+ text editor input schema (``undo_edit`` removed in ``text_editor_20250429``)
+_TEXT_EDITOR_STUB_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "command": {
+            "type": "string",
+            "enum": ["view", "create", "str_replace", "insert"],
+        },
+        "path": {"type": "string"},
+        "file_text": {"type": "string"},
+        "insert_line": {"type": "integer"},
+        "insert_text": {"type": "string"},
+        "old_str": {"type": "string"},
+        "new_str": {"type": "string"},
+        "view_range": {"type": "array", "items": {"type": "integer"}},
+    },
+    "required": ["command", "path"],
+}
+
+#: Documented legacy text editor input schema, keeping the ``undo_edit`` command
+_TEXT_EDITOR_UNDO_STUB_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "command": {
+            "type": "string",
+            "enum": ["view", "create", "str_replace", "insert", "undo_edit"],
+        },
+        "path": {"type": "string"},
+        "file_text": {"type": "string"},
+        "insert_line": {"type": "integer"},
+        "insert_text": {"type": "string"},
+        "old_str": {"type": "string"},
+        "new_str": {"type": "string"},
+        "view_range": {"type": "array", "items": {"type": "integer"}},
+    },
+    "required": ["command", "path"],
+}
+
+#: Documented ``memory`` server tool input schema (``rename`` takes ``old_path``/``new_path``)
+_MEMORY_STUB_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "command": {
+            "type": "string",
+            "enum": ["view", "create", "str_replace", "insert", "delete", "rename"],
+        },
+        "path": {"type": "string"},
+        "file_text": {"type": "string"},
+        "insert_line": {"type": "integer"},
+        "insert_text": {"type": "string"},
+        "old_str": {"type": "string"},
+        "new_str": {"type": "string"},
+        "old_path": {"type": "string"},
+        "new_path": {"type": "string"},
+        "view_range": {"type": "array", "items": {"type": "integer"}},
+    },
+    "required": ["command"],
+}
+
+#: Documented computer use input parameters (superset across versions; ``action`` left un-enumerated)
+_COMPUTER_STUB_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "action": {"type": "string"},
+        "coordinate": {"type": "array", "items": {"type": "integer"}},
+        "start_coordinate": {"type": "array", "items": {"type": "integer"}},
+        "text": {"type": "string"},
+        "duration": {"type": "number"},
+        "scroll_direction": {"type": "string", "enum": ["up", "down", "left", "right"]},
+        "scroll_amount": {"type": "integer"},
+        "region": {"type": "array", "items": {"type": "integer"}},
+    },
+    "required": ["action"],
+}
+
+#: Documented input schema per versioned server tool type, written into retained multi-turn stubs
+_STUB_INPUT_SCHEMAS: dict[str, dict[str, object]] = {
+    "bash_20250124": _BASH_STUB_SCHEMA,
+    "text_editor_20241022": _TEXT_EDITOR_UNDO_STUB_SCHEMA,
+    "text_editor_20250124": _TEXT_EDITOR_UNDO_STUB_SCHEMA,
+    "text_editor_20250429": _TEXT_EDITOR_STUB_SCHEMA,
+    "text_editor_20250728": _TEXT_EDITOR_STUB_SCHEMA,
+    "memory_20250818": _MEMORY_STUB_SCHEMA,
+    "computer_20241022": _COMPUTER_STUB_SCHEMA,
+    "computer_20250124": _COMPUTER_STUB_SCHEMA,
+    "computer_20251124": _COMPUTER_STUB_SCHEMA,
+}
+
 #: Default reasoning config for Claude models
 _REASONING_CONFIG: dict[str, str] = {"type": "adaptive"}
 
@@ -93,6 +188,37 @@ def _history_tool_use_names(messages: list[MessageTypeDef] | None) -> set[str]:
         for block in message.get("content", ())
         if "toolUse" in block
     }
+
+
+def _apply_stub_input_schemas(
+    tool_config: ToolConfigurationTypeDef, server_tools: list[JsonMapping]
+) -> None:
+    """Write each retained server tool's documented input schema into its ``toolSpec`` stub.
+
+    Used when the native definition cannot be promoted for the turn: the stub is
+    all that keeps ``toolConfig`` populated, and with a bare ``{"type": "object"}``
+    schema the model invents its own argument names (e.g. ``old_text``/``new_text``
+    instead of the documented ``old_str``/``new_str``).
+
+    Args:
+        tool_config: Bedrock tool configuration whose stubs are kept this turn.
+        server_tools: Per-tool dicts carrying ``name`` and versioned ``type``.
+    """
+    type_by_name = {
+        str(tool.get("name", "")): str(tool.get("type", "")) for tool in server_tools
+    }
+    for entry in tool_config["tools"]:
+        if not (
+            isinstance(entry, dict)
+            and isinstance(spec := entry.get("toolSpec"), dict)
+            and (
+                schema := _STUB_INPUT_SCHEMAS.get(
+                    type_by_name.get(str(spec.get("name", "")), "")
+                )
+            )
+        ):
+            continue
+        spec["inputSchema"] = {"json": deepcopy(schema)}
 
 
 def _forward_tool_choice_to_additional_request_fields(
@@ -213,7 +339,11 @@ class AnthropicClaudeChatModel(_BaseChatModel):
         every turn, not only the first — Bedrock never sees the real schema
         otherwise, and the model invents its own argument names once history
         carries a ``toolResult``. Their ``toolSpec`` stubs are removed from
-        *tool_config*.
+        *tool_config*. When promotion is impossible because the stubs are all
+        that keeps *tool_config* populated (history references only server tool
+        names), the stubs stay and receive the documented input schema instead,
+        which preserves the documented argument names without duplicating any
+        tool name across the two channels.
 
         A natively-promoted tool must not also keep a ``toolSpec`` stub with
         the same name in *tool_config*: Anthropic rejects duplicate tool
@@ -254,7 +384,9 @@ class AnthropicClaudeChatModel(_BaseChatModel):
         # Promoting is therefore only possible while something else is left to
         # populate the toolConfig -- another declared tool, or another tool name
         # in history.  When nothing is, the stub has to stay and the native
-        # definition cannot be sent for this turn; only the beta flags are.
+        # definition cannot be sent for this turn; the stub gets the documented
+        # input schema instead, so the model keeps emitting the documented
+        # argument names, and the beta flags are still sent.
         history_names = _history_tool_use_names(bedrock_messages)
         surviving_stubs = [
             entry
@@ -270,6 +402,8 @@ class AnthropicClaudeChatModel(_BaseChatModel):
             and not surviving_stubs
             and not history_names - native_tool_names
         ):
+            if tool_config:
+                _apply_stub_input_schemas(tool_config, server_tools)
             self._req_configure_anthropic_beta(additional_request_fields, server_tools)
             return
 

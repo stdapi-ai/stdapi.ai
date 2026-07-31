@@ -254,8 +254,11 @@ def _codex_build(invocation: Invocation) -> Command:
     refuse overrides of the reserved built-in ``openai`` provider. ``env_key``
     makes Codex send the gateway's API key as a bearer token.
 
-    The model-generated shell commands run with Codex's own ``read-only``
-    sandbox, nested inside the container that is the actual security boundary.
+    Codex's own Linux sandbox is turned off: it is built on Landlock, which the
+    container runtime's seccomp profile denies, and Codex then refuses to run any
+    shell command at all. The container is the real boundary anyway -- no
+    capabilities, no new privileges, a read-only root and read-only source mounts,
+    with ``/work`` and ``/tmp`` the only writable paths.
     """
     base_url = f"http://127.0.0.1:{invocation.port}/v1"
     env = {
@@ -288,7 +291,7 @@ def _codex_build(invocation: Invocation) -> Command:
         "--ignore-user-config",
         "--skip-git-repo-check",
         "-s",
-        "read-only",
+        "danger-full-access",
         "-C",
         SRC_MOUNT,
         invocation.prompt,

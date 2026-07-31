@@ -1134,7 +1134,12 @@ Caller = Annotated[CallerDirect | CallerProgram, Field(discriminator="type")] | 
 
 # Ref: openai.types.responses.easy_input_message.EasyInputMessage
 class EasyInputMessage(BaseModelRequest):
-    """A message input to the model with a role indicating instruction following hierarchy."""
+    """A message input to the model with a role indicating instruction following hierarchy.
+
+    ``id`` is absent from the SDK's request type but present on every message item
+    the API hands back, so a client replaying a listed item -- Codex does, from the
+    first turn on -- sends it. It is read-only here; only the role and content act.
+    """
 
     content: str | ResponseInputMessageContentList = Field(
         description="Text, image, or audio input for the model."
@@ -1142,6 +1147,7 @@ class EasyInputMessage(BaseModelRequest):
     role: Literal["user", "assistant", "system", "developer"] = Field(
         description="Message role: `user`, `assistant`, `system`, or `developer`."
     )
+    id: str | None = Field(default=None, description="Message item ID.")
     phase: Literal["commentary", "final_answer"] | None = Field(
         default=None,
         description="Labels assistant message as commentary or final answer.",
@@ -1153,12 +1159,16 @@ class EasyInputMessage(BaseModelRequest):
 
 # Ref: openai.types.responses.response_input_item.Message
 class InputMessage(BaseModelRequest):
-    """A message input with a restricted set of roles (no `assistant`)."""
+    """A message input with a restricted set of roles (no `assistant`).
+
+    Accepts the echoed ``id`` for the same reason as :class:`EasyInputMessage`.
+    """
 
     content: ResponseInputMessageContentList = Field(description="Input content items.")
     role: Literal["user", "system", "developer"] = Field(
         description="Message role: `user`, `system`, or `developer`."
     )
+    id: str | None = Field(default=None, description="Message item ID.")
     status: ResponseItemStatus | None = Field(
         default=None,
         description="Item status: `in_progress`, `completed`, or `incomplete`.",
