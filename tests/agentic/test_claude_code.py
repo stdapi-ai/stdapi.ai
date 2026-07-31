@@ -114,6 +114,12 @@ _MODEL_CONFIGS = [
         ModelConfig(model="xai.grok-4.3", extra_env=_NO_THINKING, flaky=True),
         id="grok-4.3",
     ),
+    pytest.param(
+        # Mantle serves this one over Responses only, so reaching it from an
+        # Anthropic Messages client is the widest conversion the gateway performs.
+        ModelConfig(model="openai.gpt-5.6-luna", extra_env=_NO_THINKING, flaky=True),
+        id="gpt-5.6-luna",
+    ),
 ]
 
 # ---------------------------------------------------------------------------

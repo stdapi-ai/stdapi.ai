@@ -15,6 +15,10 @@ What this exercises that the other tools do not:
   string-valued ``reasoning_config`` for DeepSeek alone, and the resulting
   reasoning text comes back in the non-standard ``reasoning_content`` field that
   ``stdapi/types/openai_chat_completions.py`` declares on three separate models.
+- The ``CHAT_COMPLETIONS_REASONING_FIELD`` operator setting. It is read once
+  into the settings singleton at process start, so proving it actually relocates
+  (or drops) a live response's reasoning text needs its own gateway per value; a
+  plain ``openai`` client reads back each of the three.
 
 Requires ``--agentic``, podman, and Bedrock credentials.
 
@@ -22,15 +26,21 @@ Ref: https://pi.dev/docs/latest
      https://api-docs.deepseek.com/guides/reasoning_model
      stdapi/models/chat/deepseek_v3.py:ChatModel
      stdapi/models/chat/_adapters/_openai_chat_completion.py:translate_request
+     stdapi/config.py:_Settings.chat_completions_reasoning_field
+     stdapi/types/openai_chat_completions.py:_rename_emitted_reasoning
 """
 
 from __future__ import annotations
 
+import os
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import pytest
+from openai import OpenAI
 
 from ._runner import ModelConfig, assert_result, log_metrics, run_agent
+from ._server import start_server, stop_server
 from ._tools import (
     PI_CHAT_COMPLETIONS,
     PI_MESSAGES,
@@ -40,6 +50,7 @@ from ._tools import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
 
     from ._server import AgenticServer
@@ -60,8 +71,10 @@ _TOOLS = [
 #:
 #: Deliberately small: this module multiplies by three routes, so each entry
 #: costs three runs per test. One Anthropic model and one Amazon model cover the
-#: two native Converse dialects; DeepSeek covers the Mantle-served open-weight
-#: path and is the only model whose reasoning knob is string-valued.
+#: two native Converse dialects; DeepSeek covers the open-weight path and is the
+#: only model whose reasoning knob is string-valued. Bedrock Mantle is reached
+#: separately, by :class:`TestPiMantleCoverage`, which pairs each model with the
+#: one route that serves it rather than crossing all three.
 _MODEL_CONFIGS = [
     pytest.param(
         ModelConfig(model="anthropic.claude-haiku-4-5-20251001-v1:0", timeout=_TIMEOUT),
@@ -229,6 +242,103 @@ class TestPiAcrossRoutes:
         )
 
 
+#: One Bedrock Mantle model per route, each verified (tests/probes/results/) to
+#: accept only that route: qwen.qwen3-32b rejects Responses and Anthropic
+#: Messages, while openai.gpt-5.6-luna and google.gemma-4-31b both reject
+#: Chat Completions outright.
+_MANTLE_ROUTE_MODELS = [
+    pytest.param(
+        PI_CHAT_COMPLETIONS,
+        ModelConfig(model="qwen.qwen3-32b", timeout=_TIMEOUT),
+        id="qwen3-32b-chat-completions",
+    ),
+    pytest.param(
+        PI_RESPONSES,
+        ModelConfig(model="openai.gpt-5.6-luna", timeout=_TIMEOUT),
+        id="gpt-5.6-luna-responses",
+    ),
+    pytest.param(
+        PI_MESSAGES,
+        ModelConfig(model="google.gemma-4-31b", timeout=_TIMEOUT),
+        id="gemma-4-31b-messages",
+    ),
+]
+
+
+@pytest.mark.parametrize(("agentic_tool", "model_config"), _MANTLE_ROUTE_MODELS)
+class TestPiMantleCoverage:
+    """The same pi task, run once per route against the Mantle model that serves it.
+
+    Bedrock Mantle rejects each of these models on the other two routes, so unlike
+    :class:`TestPiAcrossRoutes` -- which crosses every model with every route --
+    this class pairs exactly one model with the single route it accepts.
+
+    Ref: stdapi/models/chat/_adapters/
+    """
+
+    def test_enumerate_adapters(
+        self,
+        request: pytest.FixtureRequest,
+        agentic_tool: AgenticTool,
+        model_config: ModelConfig,
+        agentic_server: AgenticServer,
+        agentic_image: str,
+        agentic_workdir: Path,
+    ) -> None:
+        """Pi enumerates the adapters after reading them, over Mantle.
+
+        Ref: stdapi/models/chat/_adapters/__init__.py
+        """
+        result = run_agent(
+            tool=agentic_tool,
+            server=agentic_server,
+            image=agentic_image,
+            config=model_config,
+            prompt=_PROMPT_ADAPTER_LAYOUT,
+            workdir=agentic_workdir,
+            test_name=f"{request.node.originalname}[{agentic_tool.id}]",
+        )
+        log_metrics(agentic_tool, result, model_config, "test_enumerate_adapters")
+        assert_result(
+            result,
+            config=model_config,
+            contains="adapter",
+            any_of=_ADAPTER_KEYWORDS,
+            min_steps=2,
+        )
+
+    def test_trace_tool_round_trip(
+        self,
+        request: pytest.FixtureRequest,
+        agentic_tool: AgenticTool,
+        model_config: ModelConfig,
+        agentic_server: AgenticServer,
+        agentic_image: str,
+        agentic_workdir: Path,
+    ) -> None:
+        """Pi explains the tool round trip, having performed one to find it, over Mantle.
+
+        Ref: stdapi/models/chat/_adapters/_common.py:append_or_merge
+        """
+        result = run_agent(
+            tool=agentic_tool,
+            server=agentic_server,
+            image=agentic_image,
+            config=model_config,
+            prompt=_PROMPT_TOOL_ROUND_TRIP,
+            workdir=agentic_workdir,
+            test_name=f"{request.node.originalname}[{agentic_tool.id}]",
+        )
+        log_metrics(agentic_tool, result, model_config, "test_trace_tool_round_trip")
+        assert_result(
+            result,
+            config=model_config,
+            contains="bedrock",
+            any_of=_TOOL_ROUND_TRIP_KEYWORDS,
+            min_steps=2,
+        )
+
+
 @pytest.mark.parametrize("model_config", _REASONING_MODEL_CONFIGS)
 @pytest.mark.parametrize("effort", ["low", "high"])
 class TestPiReasoning:
@@ -285,3 +395,114 @@ class TestPiReasoning:
             any_of=_ADAPTER_KEYWORDS,
             min_steps=2,
         )
+
+
+#: Model whose reasoning text the field setting relocates or drops; the only
+#: model in this module whose reasoning comes back as ``reasoning_content``.
+_REASONING_FIELD_MODEL = "deepseek.v3.2"
+
+#: Values the operator setting accepts, each proven against a live response.
+_REASONING_FIELD_VALUES = ["reasoning_content", "reasoning", "none"]
+
+#: Environment variable the gateway reads the reasoning-field setting from.
+_REASONING_FIELD_VAR = "CHAT_COMPLETIONS_REASONING_FIELD"
+
+
+@dataclass(frozen=True)
+class _ReasoningFieldServer:
+    """A gateway started with one value of ``CHAT_COMPLETIONS_REASONING_FIELD``.
+
+    Attributes:
+        server: The running gateway.
+        field: The value its environment was started with.
+    """
+
+    server: AgenticServer
+    field: str
+
+
+@pytest.fixture(
+    params=[pytest.param(value, id=value) for value in _REASONING_FIELD_VALUES],
+    scope="module",
+)
+def reasoning_field_server(
+    request: pytest.FixtureRequest,
+) -> Iterator[_ReasoningFieldServer]:
+    """A dedicated gateway, restarted once per reasoning-field setting.
+
+    The setting is read once into the settings singleton when the process
+    starts, so it cannot be varied per request on the shared, session-scoped
+    ``agentic_server`` -- each value needs its own gateway.
+
+    Yields:
+        The server, paired with the value its environment was started with.
+    """
+    field = request.param
+    # The child inherits os.environ, so the setting is put there just long
+    # enough to launch, then whatever the operator had is put back.
+    previous = os.environ.get(_REASONING_FIELD_VAR)
+    os.environ[_REASONING_FIELD_VAR] = field
+    try:
+        server = start_server()
+    finally:
+        if previous is None:
+            del os.environ[_REASONING_FIELD_VAR]
+        else:
+            os.environ[_REASONING_FIELD_VAR] = previous
+    try:
+        yield _ReasoningFieldServer(server=server, field=field)
+    finally:
+        stop_server(server)
+
+
+class TestChatCompletionsReasoningField:
+    """The ``CHAT_COMPLETIONS_REASONING_FIELD`` operator setting, live end to end.
+
+    The Qwen Code suite was meant to carry this coverage but was never written.
+    pi's ``/v1/chat/completions`` route is the closest existing driver of that
+    route, and DeepSeek is the model whose reasoning text this setting relocates.
+    A plain ``openai`` client reads the response back directly -- pi itself
+    declares this model non-reasoning and never looks at the field.
+
+    Ref: stdapi/config.py:_Settings.chat_completions_reasoning_field
+         stdapi/types/openai_chat_completions.py:_rename_emitted_reasoning
+    """
+
+    def test_reasoning_text_lands_in_the_configured_field(
+        self, reasoning_field_server: _ReasoningFieldServer
+    ) -> None:
+        """A real client reads DeepSeek's reasoning text from the configured field.
+
+        ``reasoning_content`` and ``reasoning`` are mutually exclusive: the
+        response must carry the text under the field this gateway was started
+        with, under no other field, and under neither once the setting is
+        ``"none"``.
+
+        Ref: https://developers.openai.com/api/docs/guides/reasoning
+             stdapi/models/chat/deepseek_v3.py:ChatModel._req_configure_reasoning
+        """
+        server, field = reasoning_field_server.server, reasoning_field_server.field
+        client = OpenAI(
+            base_url=server.url("/v1"), api_key=server.api_key, max_retries=0
+        )
+        response = client.chat.completions.create(
+            model=_REASONING_FIELD_MODEL,
+            messages=[
+                {"role": "user", "content": "What is 6 times 7? Reply with the number."}
+            ],
+            reasoning_effort="low",
+        )
+        message = response.choices[0].message
+        assert message.content, f"no answer content came back: {response!r}"
+        extra = message.model_extra or {}
+        reasoning_fields = {"reasoning_content", "reasoning"} & extra.keys()
+        if field == "none":
+            assert not reasoning_fields, (
+                f"reasoning text leaked under {reasoning_fields}: {extra!r}"
+            )
+        else:
+            assert reasoning_fields == {field}, (
+                f"reasoning text under {reasoning_fields}, expected only "
+                f"{field!r}: {extra!r}"
+            )
+            assert extra[field], f"empty reasoning text under {field!r}"

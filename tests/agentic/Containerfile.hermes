@@ -1,0 +1,35 @@
+# Image running the Hermes agent under test in isolation from the host.
+#
+# The "hermes" image group's client is a PyPI package rather than an npm one, so this
+# build starts from an official Python image instead of the shared Node.js one. The
+# minor version is named because hermes-agent declares requires-python ">=3.11,<3.14"
+# and refuses to install on 3.14; the patch level still floats, as does the package
+# itself, so a rebuild picks up the current release and any upstream regression
+# surfaces here. --agentic-rebuild re-resolves both. The image tag embeds a hash of
+# this file (see tests/agentic/_podman.py:image_tag).
+FROM docker.io/library/python:3.13-slim
+
+#: Space-separated npm specifiers, always empty here: this group installs no npm
+#: package. Declared so the shared build call (tests/agentic/_podman.py:build_image)
+#: passes --build-arg PACKAGES to every group's build file alike.
+ARG PACKAGES=""
+
+# ripgrep backs the agent's search_files tool and git backs its diff/checkpoint
+# probes; both are absent from the slim base. hermes-agent itself is unpinned for the
+# same reason every other tool in this lane floats; the version installed is recorded
+# just below.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git ripgrep \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir hermes-agent
+
+# Recorded at build time so the test session header can report the exact versions
+# that were installed, in the same shape the Node.js image's "npm ls" output has.
+RUN python -c "import json; from importlib.metadata import version; \
+    print(json.dumps({'dependencies': {name: {'version': version(name)} for name in \
+    ('hermes-agent', 'openai', 'anthropic')}}))" \
+    > /opt/agentic-packages.json
+
+# The tests bind-mount a per-test working directory and run with --userns=keep-id,
+# so the runtime UID is the host user's and never needs to match a baked-in account.
+WORKDIR /work

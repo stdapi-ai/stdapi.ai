@@ -1,0 +1,37 @@
+{
+  "id": "stdapi-test",
+  "name": "stdapi.ai anthropic messages",
+  "active": false,
+  "settings": {},
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "3b1f0000-0000-4000-8000-000000000001",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "resource": "text",
+        "operation": "message",
+        "modelId": {"__rl": true, "mode": "id", "value": "__MODEL__"},
+        "messages": {"values": [{"content": "__PROMPT__", "role": "user"}]},
+        "simplify": true,
+        "options": {"maxTokens": 256, "includeMergedResponse": true}
+      },
+      "id": "3b1f0000-0000-4000-8000-000000000002",
+      "name": "Message",
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [220, 0],
+      "credentials": {
+        "anthropicApi": {"id": "stdapi-anthropic", "name": "stdapi.ai anthropic"}
+      }
+    }
+  ],
+  "connections": {
+    "Start": {"main": [[{"node": "Message", "type": "main", "index": 0}]]}
+  }
+}

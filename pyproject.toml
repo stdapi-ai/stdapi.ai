@@ -47,6 +47,10 @@ test = [
     "openai",
     "anthropic[bedrock]",
     "cohere>=7.0.5",
+    "wyoming",
+    "pydantic-ai-slim[openai]",
+    "langchain-openai",
+    "langchain-anthropic",
 ]
 lint = [
     "stdapi[opentelemetry, uvicorn]",

@@ -1,0 +1,50 @@
+{
+  "id": "stdapi-test",
+  "name": "stdapi.ai images generations",
+  "active": false,
+  "settings": {},
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "3b1f0000-0000-4000-8000-000000000001",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "generate",
+        "modelId": {"__rl": true, "mode": "id", "value": "__MODEL__"},
+        "prompt": "__PROMPT__",
+        "options": {"size": "__SIZE__", "binaryPropertyOutput": "data"}
+      },
+      "id": "3b1f0000-0000-4000-8000-000000000002",
+      "name": "Generate",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [220, 0],
+      "credentials": {
+        "openAiApi": {"id": "stdapi-openai", "name": "stdapi.ai"}
+      }
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "__FILES__/generated.png",
+        "dataPropertyName": "data",
+        "options": {}
+      },
+      "id": "3b1f0000-0000-4000-8000-000000000003",
+      "name": "Save",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [440, 0]
+    }
+  ],
+  "connections": {
+    "Start": {"main": [[{"node": "Generate", "type": "main", "index": 0}]]},
+    "Generate": {"main": [[{"node": "Save", "type": "main", "index": 0}]]}
+  }
+}

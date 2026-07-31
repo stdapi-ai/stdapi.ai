@@ -1,0 +1,95 @@
+{
+  "id": "stdapi-test",
+  "name": "stdapi.ai files",
+  "active": false,
+  "settings": {},
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "3b1f0000-0000-4000-8000-000000000001",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {"mode": "raw", "jsonOutput": "{\"note\": \"__PROMPT__\"}", "options": {}},
+      "id": "3b1f0000-0000-4000-8000-000000000002",
+      "name": "Note",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "note",
+        "binaryPropertyName": "data",
+        "options": {"fileName": "stdapi-agentic-note.txt"}
+      },
+      "id": "3b1f0000-0000-4000-8000-000000000003",
+      "name": "To File",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "binaryPropertyName": "data",
+        "options": {"purpose": "__PURPOSE__"}
+      },
+      "id": "3b1f0000-0000-4000-8000-000000000004",
+      "name": "Upload",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [660, 0],
+      "credentials": {
+        "openAiApi": {"id": "stdapi-openai", "name": "stdapi.ai"}
+      }
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "list",
+        "options": {"purpose": "__PURPOSE__"}
+      },
+      "id": "3b1f0000-0000-4000-8000-000000000005",
+      "name": "List",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [880, 0],
+      "credentials": {
+        "openAiApi": {"id": "stdapi-openai", "name": "stdapi.ai"}
+      }
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "deleteFile",
+        "fileId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Upload').first().json.id }}"
+        }
+      },
+      "id": "3b1f0000-0000-4000-8000-000000000006",
+      "name": "Delete",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [1100, 0],
+      "executeOnce": true,
+      "credentials": {
+        "openAiApi": {"id": "stdapi-openai", "name": "stdapi.ai"}
+      }
+    }
+  ],
+  "connections": {
+    "Start": {"main": [[{"node": "Note", "type": "main", "index": 0}]]},
+    "Note": {"main": [[{"node": "To File", "type": "main", "index": 0}]]},
+    "To File": {"main": [[{"node": "Upload", "type": "main", "index": 0}]]},
+    "Upload": {"main": [[{"node": "List", "type": "main", "index": 0}]]},
+    "List": {"main": [[{"node": "Delete", "type": "main", "index": 0}]]}
+  }
+}

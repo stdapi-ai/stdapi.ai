@@ -1,0 +1,39 @@
+{
+  "id": "stdapi-test",
+  "name": "stdapi.ai responses",
+  "active": false,
+  "settings": {},
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "3b1f0000-0000-4000-8000-000000000001",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "resource": "text",
+        "operation": "response",
+        "modelId": {"__rl": true, "mode": "id", "value": "__MODEL__"},
+        "responses": {
+          "values": [{"type": "text", "role": "user", "content": "__PROMPT__"}]
+        },
+        "simplify": true,
+        "options": {"maxTokens": 256}
+      },
+      "id": "3b1f0000-0000-4000-8000-000000000002",
+      "name": "Respond",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [220, 0],
+      "credentials": {
+        "openAiApi": {"id": "stdapi-openai", "name": "stdapi.ai"}
+      }
+    }
+  ],
+  "connections": {
+    "Start": {"main": [[{"node": "Respond", "type": "main", "index": 0}]]}
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "id": "stdapi-test",
+  "name": "stdapi.ai embeddings",
+  "active": false,
+  "settings": {},
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "3b1f0000-0000-4000-8000-000000000001",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "{\"documents\":[{\"text\":\"The Brindlewick relay module is tuned by its quartz oscillator.\"},{\"text\":\"Photosynthesis converts light energy into stored chemical energy.\"},{\"text\":\"A quarterly audit reconciles every ledger entry against the bank.\"},{\"text\":\"Volcanic basalt fractures into columns when it cools under seawater.\"},{\"text\":\"Migrating terns navigate by polarised light at dusk.\"},{\"text\":\"Sourdough starters ferment faster in a warm kitchen.\"}]}",
+        "options": {}
+      },
+      "id": "3b1f0000-0000-4000-8000-000000000002",
+      "name": "Corpus",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {"fieldToSplitOut": "documents", "options": {}},
+      "id": "3b1f0000-0000-4000-8000-000000000003",
+      "name": "Split",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "memoryKey": {"__rl": true, "mode": "id", "value": "stdapi-agentic"},
+        "clearStore": true,
+        "embeddingBatchSize": 200
+      },
+      "id": "3b1f0000-0000-4000-8000-000000000004",
+      "name": "Insert",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreInMemory",
+      "typeVersion": 1.3,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {"dataType": "json", "jsonMode": "allInputData", "options": {}},
+      "id": "3b1f0000-0000-4000-8000-000000000005",
+      "name": "Loader",
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1.1,
+      "position": [660, 220]
+    },
+    {
+      "parameters": {"model": "__MODEL__", "options": {}},
+      "id": "3b1f0000-0000-4000-8000-000000000006",
+      "name": "Embeddings",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1.2,
+      "position": [440, 440],
+      "credentials": {
+        "openAiApi": {"id": "stdapi-openai", "name": "stdapi.ai"}
+      }
+    },
+    {
+      "parameters": {
+        "mode": "load",
+        "memoryKey": {"__rl": true, "mode": "id", "value": "stdapi-agentic"},
+        "prompt": "__PROMPT__",
+        "topK": 3,
+        "includeDocumentMetadata": false
+      },
+      "id": "3b1f0000-0000-4000-8000-000000000007",
+      "name": "Query",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreInMemory",
+      "typeVersion": 1.3,
+      "position": [880, 0],
+      "executeOnce": true
+    }
+  ],
+  "connections": {
+    "Start": {"main": [[{"node": "Corpus", "type": "main", "index": 0}]]},
+    "Corpus": {"main": [[{"node": "Split", "type": "main", "index": 0}]]},
+    "Split": {"main": [[{"node": "Insert", "type": "main", "index": 0}]]},
+    "Insert": {"main": [[{"node": "Query", "type": "main", "index": 0}]]},
+    "Loader": {"ai_document": [[{"node": "Insert", "type": "ai_document", "index": 0}]]},
+    "Embeddings": {
+      "ai_embedding": [
+        [
+          {"node": "Insert", "type": "ai_embedding", "index": 0},
+          {"node": "Query", "type": "ai_embedding", "index": 0}
+        ]
+      ]
+    }
+  }
+}

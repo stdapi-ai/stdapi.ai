@@ -1,12 +1,19 @@
 """n8n driven end-to-end over the gateway routes no coding agent ever calls.
 
-Claude Code, Codex and pi are chat clients: between them they cover
-``/v1/chat/completions``, ``/v1/responses`` and ``/anthropic/v1/messages`` and
-nothing else. n8n is not an agent at all -- it is a workflow runner whose OpenAI
-node implements the whole OpenAI REST surface, and whose credential carries a base
-URL that redirects every one of those calls at this gateway. One npm package
-therefore reaches nine routes that had no end-to-end coverage from a real client:
+Claude Code, Codex and pi are chat clients: between them they already cover
+``/v1/chat/completions``, ``/v1/responses`` and ``/anthropic/v1/messages``. n8n is
+not an agent at all -- it is a workflow runner whose OpenAI and Anthropic nodes
+implement those same three routes among the rest of their REST surface, and whose
+credentials carry a base URL that redirects every one of those calls at this
+gateway. That makes it a second, independent client on the three conversational
+routes: pi reaches them through one synthetic provider extension, while the OpenAI
+Chat node, the OpenAI Responses node and the Anthropic node below are exactly what
+a real n8n user drags onto a canvas, each with its own request shape and its own
+parsing of the reply. One npm package therefore reaches twelve routes that had no
+end-to-end coverage from a real client:
 
+- ``/v1/chat/completions``, ``/v1/responses`` and ``/anthropic/v1/messages``, each
+  through the node a real workflow would use, on a Claude and a non-Claude model;
 - ``/v1/embeddings`` through a vector store that inserts *and* queries;
 - ``/v1/audio/speech``, ``/v1/audio/transcriptions`` and ``/v1/audio/translations``;
 - ``/v1/files`` upload, list and delete;
@@ -22,6 +29,7 @@ Requires ``--agentic``, podman, and Bedrock credentials.
 
 Ref: https://docs.n8n.io/deploy/host-n8n/configure-n8n/use-the-command-line
      https://docs.n8n.io/integrations/builtin/app-nodes/n8n-nodes-langchain.openai/
+     https://docs.n8n.io/integrations/builtin/app-nodes/n8n-nodes-langchain.anthropic/
      docs/use_cases_n8n.md
      tests/agentic/_tools.py:AGENTIC_TOOLS
 """
@@ -38,12 +46,15 @@ from tests.conftest import SAMPLES_DIR, smallest_image_size
 
 from ._runner import ModelConfig, assert_result, log_metrics, run_agent
 from ._tools import (
+    N8N_CHAT_COMPLETIONS,
     N8N_COMPLETIONS,
     N8N_EMBEDDINGS,
     N8N_FILES,
     N8N_IMAGES_EDITS,
     N8N_IMAGES_GENERATIONS,
+    N8N_MESSAGES,
     N8N_MODERATIONS,
+    N8N_RESPONSES,
     N8N_RUN_OUTPUT,
     N8N_SPEECH,
     N8N_TRANSCRIPTIONS,
@@ -456,6 +467,228 @@ class TestLegacyCompletions:
         _assert_called(
             _gateway_calls(agentic_server, log_start),
             "/v1/completions",
+            model_config.model,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Conversational routes — /v1/chat/completions, /v1/responses and
+# /anthropic/v1/messages
+# ---------------------------------------------------------------------------
+
+#: Prompt every conversational-route test asks, with an unambiguous right answer.
+_CAPITAL_PROMPT = "Name the capital city of Japan. Answer with the city name only."
+
+#: Models exercised on every conversational-route test.
+#:
+#: A Claude model is required: the point of exercising these three routes through
+#: n8n -- on top of the coverage pi's provider extension already gives them -- is
+#: Claude's reasoning-signature round trip through the node a real n8n user would
+#: actually pick. Amazon Nova covers a second, native Converse family so a
+#: Claude-only quirk cannot be mistaken for a route bug.
+_CHAT_MODEL_CONFIGS = [
+    pytest.param(
+        ModelConfig(model="amazon.nova-micro-v1:0", timeout=_TIMEOUT), id="nova-micro"
+    ),
+    pytest.param(
+        ModelConfig(model="anthropic.claude-haiku-4-5-20251001-v1:0", timeout=_TIMEOUT),
+        id="claude-haiku-4-5",
+    ),
+]
+
+#: Bedrock Mantle model verified (tests/probes/results/) to accept
+#: /v1/chat/completions; other Mantle models in this module reject that route.
+_MANTLE_CHAT_COMPLETIONS_MODEL = pytest.param(
+    ModelConfig(model="qwen.qwen3-32b", timeout=_TIMEOUT), id="qwen3-32b"
+)
+
+#: Bedrock Mantle model verified (tests/probes/results/) to accept /v1/responses;
+#: it rejects /v1/chat/completions outright.
+_MANTLE_RESPONSES_MODEL = pytest.param(
+    ModelConfig(model="openai.gpt-5.6-luna", timeout=_TIMEOUT), id="gpt-5.6-luna"
+)
+
+#: Bedrock Mantle model verified (tests/probes/results/) to accept
+#: /anthropic/v1/messages; it rejects /v1/chat/completions outright.
+_MANTLE_MESSAGES_MODEL = pytest.param(
+    ModelConfig(model="google.gemma-4-31b", timeout=_TIMEOUT), id="gemma-4-31b"
+)
+
+
+class TestChatCompletions:
+    """n8n's OpenAI node, Message a Model operation, against Chat Completions.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+         stdapi/routes/openai_chat_completions.py:create_chat_completion
+    """
+
+    @pytest.fixture
+    def agentic_tool(self) -> AgenticTool:
+        """The n8n entry under test; read by the autouse model-identity fixture."""
+        return N8N_CHAT_COMPLETIONS
+
+    @pytest.mark.parametrize(
+        "model_config", [*_CHAT_MODEL_CONFIGS, _MANTLE_CHAT_COMPLETIONS_MODEL]
+    )
+    def test_completes_a_chat_prompt(
+        self,
+        request: pytest.FixtureRequest,
+        agentic_tool: AgenticTool,
+        model_config: ModelConfig,
+        agentic_server: AgenticServer,
+        agentic_image: str,
+        agentic_workdir: Path,
+    ) -> None:
+        """The node's answer round-trips through ``POST /v1/chat/completions``.
+
+        The node sends a ``messages`` array to this route rather than the bare
+        ``prompt`` string the legacy Completions node sends, so a gateway that
+        silently rerouted it would be caught by the logged path.
+
+        Ref: stdapi/types/openai_chat_completions.py:CreateChatCompletionParams
+        """
+        log_start = len(agentic_server.logs)
+        result = run_agent(
+            tool=agentic_tool,
+            server=agentic_server,
+            image=agentic_image,
+            config=model_config,
+            prompt=_CAPITAL_PROMPT,
+            workdir=agentic_workdir,
+            test_name=request.node.originalname or request.node.name,
+        )
+        log_metrics(agentic_tool, result, model_config, "test_completes_a_chat_prompt")
+        assert_result(result, config=model_config, contains="tokyo", min_steps=2)
+
+        entry = n8n_node_items(_record(agentic_workdir), "Chat")[0]
+        message = entry["message"]
+        assert isinstance(message, dict)
+        assert "tokyo" in str(message["content"]).lower()
+
+        _assert_called(
+            _gateway_calls(agentic_server, log_start),
+            "/v1/chat/completions",
+            model_config.model,
+        )
+
+
+class TestResponses:
+    """n8n's OpenAI node, Generate a Model Response operation, against Responses.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         stdapi/routes/openai_responses.py:create_response
+    """
+
+    @pytest.fixture
+    def agentic_tool(self) -> AgenticTool:
+        """The n8n entry under test; read by the autouse model-identity fixture."""
+        return N8N_RESPONSES
+
+    @pytest.mark.parametrize(
+        "model_config", [*_CHAT_MODEL_CONFIGS, _MANTLE_RESPONSES_MODEL]
+    )
+    def test_completes_a_response(
+        self,
+        request: pytest.FixtureRequest,
+        agentic_tool: AgenticTool,
+        model_config: ModelConfig,
+        agentic_server: AgenticServer,
+        agentic_image: str,
+        agentic_workdir: Path,
+    ) -> None:
+        """The node's answer round-trips through ``POST /v1/responses``.
+
+        The node sends its prompt as an ``input`` item list and reads the answer
+        back out of ``output[].content[].text``, the Responses-specific shape
+        Chat Completions does not have.
+
+        Ref: stdapi/types/openai_responses.py:CreateResponseParams
+        """
+        log_start = len(agentic_server.logs)
+        result = run_agent(
+            tool=agentic_tool,
+            server=agentic_server,
+            image=agentic_image,
+            config=model_config,
+            prompt=_CAPITAL_PROMPT,
+            workdir=agentic_workdir,
+            test_name=request.node.originalname or request.node.name,
+        )
+        log_metrics(agentic_tool, result, model_config, "test_completes_a_response")
+        assert_result(result, config=model_config, contains="tokyo", min_steps=2)
+
+        entry = n8n_node_items(_record(agentic_workdir), "Respond")[0]
+        output = entry["output"]
+        assert isinstance(output, list)
+        assert output, "the Responses node produced no output message"
+        message = output[0]
+        assert isinstance(message, dict)
+        content = message["content"]
+        assert isinstance(content, list)
+        assert content, "the Responses node's message carried no content part"
+        part = content[0]
+        assert isinstance(part, dict)
+        assert "tokyo" in str(part["text"]).lower()
+
+        _assert_called(
+            _gateway_calls(agentic_server, log_start),
+            "/v1/responses",
+            model_config.model,
+        )
+
+
+class TestAnthropicMessages:
+    """n8n's Anthropic node, Message a Model operation, against Anthropic Messages.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         stdapi/routes/anthropic_messages.py:create_message
+    """
+
+    @pytest.fixture
+    def agentic_tool(self) -> AgenticTool:
+        """The n8n entry under test; read by the autouse model-identity fixture."""
+        return N8N_MESSAGES
+
+    @pytest.mark.parametrize(
+        "model_config", [*_CHAT_MODEL_CONFIGS, _MANTLE_MESSAGES_MODEL]
+    )
+    def test_completes_a_message(
+        self,
+        request: pytest.FixtureRequest,
+        agentic_tool: AgenticTool,
+        model_config: ModelConfig,
+        agentic_server: AgenticServer,
+        agentic_image: str,
+        agentic_workdir: Path,
+    ) -> None:
+        """The node's answer round-trips through ``POST /anthropic/v1/messages``.
+
+        The node authenticates with the Anthropic ``x-api-key`` header rather than
+        the OpenAI nodes' bearer token, over a credential of its own pointed at the
+        gateway's ``/anthropic`` prefix -- so this also pins that second credential
+        wiring, not just the route.
+
+        Ref: stdapi/types/anthropic_messages.py:CreateMessageParams
+        """
+        log_start = len(agentic_server.logs)
+        result = run_agent(
+            tool=agentic_tool,
+            server=agentic_server,
+            image=agentic_image,
+            config=model_config,
+            prompt=_CAPITAL_PROMPT,
+            workdir=agentic_workdir,
+            test_name=request.node.originalname or request.node.name,
+        )
+        log_metrics(agentic_tool, result, model_config, "test_completes_a_message")
+        assert_result(result, config=model_config, contains="tokyo", min_steps=2)
+
+        entry = n8n_node_items(_record(agentic_workdir), "Message")[0]
+        assert "tokyo" in str(entry["merged_response"]).lower()
+
+        _assert_called(
+            _gateway_calls(agentic_server, log_start),
+            "/anthropic/v1/messages",
             model_config.model,
         )
 

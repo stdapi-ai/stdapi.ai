@@ -1,0 +1,48 @@
+{
+  "id": "stdapi-test",
+  "name": "stdapi.ai legacy completions",
+  "active": false,
+  "settings": {},
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "3b1f0000-0000-4000-8000-000000000001",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {"promptType": "define", "text": "__PROMPT__"},
+      "id": "3b1f0000-0000-4000-8000-000000000002",
+      "name": "Complete",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "model": {"__rl": true, "mode": "id", "value": "__MODEL__"},
+        "options": {
+          "baseURL": "http://127.0.0.1:__PORT__/v1",
+          "maxTokens": 256,
+          "temperature": 0
+        }
+      },
+      "id": "3b1f0000-0000-4000-8000-000000000003",
+      "name": "Completion Model",
+      "type": "@n8n/n8n-nodes-langchain.lmOpenAi",
+      "typeVersion": 1,
+      "position": [220, 220],
+      "credentials": {
+        "openAiApi": {"id": "stdapi-openai", "name": "stdapi.ai"}
+      }
+    }
+  ],
+  "connections": {
+    "Start": {"main": [[{"node": "Complete", "type": "main", "index": 0}]]},
+    "Completion Model": {
+      "ai_languageModel": [[{"node": "Complete", "type": "ai_languageModel", "index": 0}]]
+    }
+  }
+}

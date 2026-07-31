@@ -1,0 +1,31 @@
+# Image running the Haystack RAG pipeline under test in isolation from the host.
+#
+# The "rag" image group's client is a Python library rather than a CLI, so this build
+# starts from deepset's own Haystack image -- which carries the framework, its OpenAI
+# client and their transitive dependencies as a set upstream tests together -- and
+# adds only the Cohere integration the reranker needs. The tag floats, like every
+# other tool in this lane, so a rebuild picks up the current release and any upstream
+# regression surfaces here; --agentic-rebuild re-resolves it. The image tag embeds a
+# hash of this file (see tests/agentic/_podman.py:image_tag).
+FROM docker.io/deepset/haystack:base-main
+
+#: Space-separated npm specifiers, always empty here: this group installs no npm
+#: package. Declared so the shared build call (tests/agentic/_podman.py:build_image)
+#: passes --build-arg PACKAGES to every group's build file alike.
+ARG PACKAGES=""
+
+# Cohere integration providing CohereRanker, the only Haystack component that speaks
+# the gateway's Cohere Rerank route. Unpinned for the same reason the base image
+# floats; the exact version installed is recorded just below.
+RUN pip install --no-cache-dir cohere-haystack
+
+# Recorded at build time so the test session header can report the exact versions
+# that were installed, in the same shape the Node.js image's "npm ls" output has.
+RUN python -c "import json; from importlib.metadata import version; \
+    print(json.dumps({'dependencies': {name: {'version': version(name)} for name in \
+    ('haystack-ai', 'cohere-haystack', 'cohere', 'openai')}}))" \
+    > /opt/agentic-packages.json
+
+# The tests bind-mount a per-test working directory and run with --userns=keep-id,
+# so the runtime UID is the host user's and never needs to match a baked-in account.
+WORKDIR /work

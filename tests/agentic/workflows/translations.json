@@ -1,0 +1,54 @@
+{
+  "id": "stdapi-test",
+  "name": "stdapi.ai audio translations",
+  "active": false,
+  "settings": {},
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "3b1f0000-0000-4000-8000-000000000001",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "resource": "audio",
+        "operation": "generate",
+        "model": "__SPEECH_MODEL__",
+        "input": "__PROMPT__",
+        "voice": "nova",
+        "options": {"response_format": "mp3", "binaryPropertyOutput": "data"}
+      },
+      "id": "3b1f0000-0000-4000-8000-000000000002",
+      "name": "Synthesise",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [220, 0],
+      "credentials": {
+        "openAiApi": {"id": "stdapi-openai", "name": "stdapi.ai"}
+      }
+    },
+    {
+      "parameters": {
+        "resource": "audio",
+        "operation": "translate",
+        "binaryPropertyName": "data",
+        "options": {}
+      },
+      "id": "3b1f0000-0000-4000-8000-000000000003",
+      "name": "Translate",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [440, 0],
+      "credentials": {
+        "openAiApi": {"id": "stdapi-openai", "name": "stdapi.ai"}
+      }
+    }
+  ],
+  "connections": {
+    "Start": {"main": [[{"node": "Synthesise", "type": "main", "index": 0}]]},
+    "Synthesise": {"main": [[{"node": "Translate", "type": "main", "index": 0}]]}
+  }
+}

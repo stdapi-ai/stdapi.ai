@@ -1,0 +1,36 @@
+{
+  "id": "stdapi-test",
+  "name": "stdapi.ai moderations",
+  "active": false,
+  "settings": {},
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "3b1f0000-0000-4000-8000-000000000001",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "resource": "text",
+        "operation": "classify",
+        "input": "__PROMPT__",
+        "simplify": false,
+        "options": {}
+      },
+      "id": "3b1f0000-0000-4000-8000-000000000002",
+      "name": "Classify",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [220, 0],
+      "credentials": {
+        "openAiApi": {"id": "stdapi-openai", "name": "stdapi.ai"}
+      }
+    }
+  ],
+  "connections": {
+    "Start": {"main": [[{"node": "Classify", "type": "main", "index": 0}]]}
+  }
+}
