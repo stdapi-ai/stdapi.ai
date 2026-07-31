@@ -13,9 +13,10 @@ Ref: https://platform.claude.com/docs/en/api/messages
 import base64
 import json as _json
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from anthropic import (
     Anthropic,
@@ -27,7 +28,7 @@ from anthropic import (
 )
 
 import stdapi.models as _models_mod
-from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR
+from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, PERFORMANCE_CONFIG_VAR
 from stdapi.aws_bedrock_mantle import mantle_request_headers
 from stdapi.config import SETTINGS
 from stdapi.models import ModelDetails
@@ -44,6 +45,12 @@ if TYPE_CHECKING:
 
 #: Non-Anthropic model used to validate that extended thinking is rejected for non-Claude models.
 NON_ANTHROPIC_THINKING = "amazon.nova-2-lite-v1:0"
+
+#: Third-party HTTPS image used to exercise the ``{"type": "url"}`` image source.
+_REMOTE_IMAGE_URL = (
+    "https://raw.githubusercontent.com/JGoutin/asus-s14na-u12-uefi/"
+    "refs/heads/master/data/block_diagram.png"
+)
 
 #: Single-parameter custom tool used by every tool-calling test on this route.
 _WEATHER_TOOL: dict[str, object] = {
@@ -1052,6 +1059,58 @@ class TestAnthropicMessages:
         assert len(response.content[0].text) > 0
         assert response.usage.input_tokens > 0, "image tokens must be counted"
 
+    def test_image_url_source_is_fetched(
+        self, anthropic_client: Anthropic, anthropic_chat_vision_model: str
+    ) -> None:
+        """A ``{"type": "url"}`` image source is resolved and billed as input tokens.
+
+        Upstream hands the URL to the model provider, whereas Bedrock Converse takes
+        only inline bytes or an S3 location, so the gateway downloads the image
+        itself.  A dropped download would still produce a plausible answer to the
+        question, which is why the input-token count is the assertion that matters.
+
+        The URL is probed first: a third-party outage or a repository rename must
+        skip rather than be reported as a gateway failure.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_image_to_bedrock
+             stdapi/input_file.py:InputFile.to_bedrock_content_block
+        """
+        try:
+            probe = httpx.get(_REMOTE_IMAGE_URL, timeout=15, follow_redirects=True)
+            probe.raise_for_status()
+        except httpx.HTTPError as exc:
+            pytest.skip(f"Remote image is unreachable: {exc}")
+        assert probe.headers["content-type"].startswith("image/"), (
+            "the fixture URL must still serve an image"
+        )
+
+        response = anthropic_client.messages.create(
+            model=anthropic_chat_vision_model,
+            max_tokens=200,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {"type": "url", "url": _REMOTE_IMAGE_URL},
+                        },
+                        {"type": "text", "text": "What do you see in this image?"},
+                    ],
+                }
+            ],
+        )
+
+        assert response.type == "message"
+        assert response.content
+        assert response.content[0].type == "text"
+        assert response.content[0].text
+        assert response.usage.input_tokens > 100, (
+            f"the fetched image must dominate the prompt cost, got "
+            f"{response.usage.input_tokens} input tokens"
+        )
+
     # --- Max tokens ---
 
     def test_max_tokens_limit(
@@ -1468,18 +1527,24 @@ class TestAnthropicMessages:
 
     # --- Service tier ---
 
+    @pytest.mark.parametrize("service_tier", ["auto", "standard_only"])
     def test_service_tier_parameter(
-        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
+        self,
+        anthropic_client: Anthropic,
+        anthropic_chat_basic_model: str,
+        service_tier: Literal["auto", "standard_only"],
     ) -> None:
-        """``service_tier`` ``auto`` is accepted and leaves generation unaffected.
+        """Both documented ``service_tier`` values are accepted and leave generation unaffected.
 
-        ``auto`` has no Bedrock counterpart, so the gateway sends no explicit tier
-        and the response carries none either; the observable contract is that the
-        request is not rejected.
+        ``auto`` has no Bedrock counterpart, so the gateway sends no explicit tier;
+        ``standard_only`` is translated to the tier Bedrock spells ``default``. Neither
+        is echoed in the response, so the observable contract on this route is that
+        the backend accepts the translated value instead of rejecting the request.
 
         Ref: https://platform.claude.com/docs/en/api/messages
              https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html
              stdapi/types/anthropic_messages.py:ServiceTiers
+             stdapi/models/chat/_adapters/_anthropic_message.py:_SERVICES_TIERS
         """
         if isinstance(anthropic_client, AnthropicBedrock):
             pytest.xfail("Bedrock does not support service_tier parameter")
@@ -1488,7 +1553,7 @@ class TestAnthropicMessages:
             model=anthropic_chat_basic_model,
             max_tokens=50,
             messages=[{"role": "user", "content": "Say hi."}],
-            service_tier="auto",
+            service_tier=service_tier,
         )
 
         assert response.type == "message"
@@ -3870,29 +3935,24 @@ class TestMessagesBedrockHeaders:
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html
          stdapi/main.py:_middleware
          stdapi/aws_bedrock.py:set_guardrail_configuration
+         stdapi/aws_bedrock.py:set_performance_configuration
     """
 
     pytestmark = pytest.mark.local
 
-    def test_guardrail_headers_reach_the_bedrock_call(
-        self, anthropic_app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    @staticmethod
+    def _capture_context_vars(
+        monkeypatch: pytest.MonkeyPatch,
+        details: ModelDetails,
+        captured: dict[str, object],
     ) -> None:
-        """The three guardrail headers become the request's Bedrock guardrail config.
-
-        The override is opt-in: without ``aws_bedrock_allow_guardrail_override`` the
-        headers are ignored in favor of the server-wide configuration, so the
-        setting is enabled here to exercise the header branch.
-        """
-        details = _register_test_model(
-            monkeypatch, "test.guardrail-headers-model", "Guardrail Headers Test"
-        )
-        monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_guardrail_override", True)
-        captured: dict[str, object] = {}
+        """Stub the chat model so it records the header-derived context vars."""
 
         async def _create_message(
             *_args: object, **_kwargs: object
         ) -> dict[str, object]:
             captured["guardrail"] = GUARDRAIL_CONFIG_VAR.get(None)
+            captured["performance"] = PERFORMANCE_CONFIG_VAR.get(None)
             return {
                 "id": "msg_1",
                 "type": "message",
@@ -3908,6 +3968,72 @@ class TestMessagesBedrockHeaders:
             "get_chat_model",
             lambda _: SimpleNamespace(create_message=_create_message),
         )
+
+    def test_performance_headers_reach_the_bedrock_call(
+        self, anthropic_app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The latency and service-tier headers become the request's performance config.
+
+        Unlike the guardrail ones these headers need no opt-in setting: they only
+        select a latency and billing tier for the caller's own request.  Both values
+        travel unchanged and are kept apart, because Bedrock spells the baseline
+        differently in each -- ``standard`` for the latency knob, ``default`` for the
+        service tier.
+        """
+        details = _register_test_model(
+            monkeypatch, "test.performance-headers-model", "Performance Headers Test"
+        )
+        captured: dict[str, object] = {}
+        self._capture_context_vars(monkeypatch, details, captured)
+
+        response = anthropic_app_client.post(
+            "/anthropic/v1/messages",
+            json={"model": details.id, "messages": [{"role": "user", "content": "hi"}]},
+            headers={
+                "X-Amzn-Bedrock-PerformanceConfig-Latency": "optimized",
+                "X-Amzn-Bedrock-Service-Tier": "priority",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert captured["performance"] == ("optimized", "priority")
+
+    def test_performance_headers_are_absent_without_them(
+        self, anthropic_app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A request sending neither header selects neither latency nor service tier.
+
+        The context var is bound on every request, so a missing header has to resolve
+        to ``None`` rather than leave the previous request's tier in place -- a leak
+        would bill an unrelated caller at the priority tier.
+        """
+        details = _register_test_model(
+            monkeypatch, "test.performance-headers-off-model", "Performance Headers Off"
+        )
+        captured: dict[str, object] = {}
+        self._capture_context_vars(monkeypatch, details, captured)
+
+        response = anthropic_app_client.post(
+            "/anthropic/v1/messages",
+            json={"model": details.id, "messages": [{"role": "user", "content": "hi"}]},
+        )
+        assert response.status_code == 200, response.text
+        assert captured["performance"] == (None, None)
+
+    def test_guardrail_headers_reach_the_bedrock_call(
+        self, anthropic_app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The three guardrail headers become the request's Bedrock guardrail config.
+
+        The override is opt-in: without ``aws_bedrock_allow_guardrail_override`` the
+        headers are ignored in favor of the server-wide configuration, so the
+        setting is enabled here to exercise the header branch.
+        """
+        details = _register_test_model(
+            monkeypatch, "test.guardrail-headers-model", "Guardrail Headers Test"
+        )
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_guardrail_override", True)
+        captured: dict[str, object] = {}
+        self._capture_context_vars(monkeypatch, details, captured)
 
         response = anthropic_app_client.post(
             "/anthropic/v1/messages",
@@ -3939,26 +4065,7 @@ class TestMessagesBedrockHeaders:
         monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_guardrail_override", False)
         monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", None)
         captured: dict[str, object] = {}
-
-        async def _create_message(
-            *_args: object, **_kwargs: object
-        ) -> dict[str, object]:
-            captured["guardrail"] = GUARDRAIL_CONFIG_VAR.get(None)
-            return {
-                "id": "msg_1",
-                "type": "message",
-                "role": "assistant",
-                "content": [{"type": "text", "text": "hi"}],
-                "model": details.id,
-                "stop_reason": "end_turn",
-                "usage": {"input_tokens": 1, "output_tokens": 1},
-            }
-
-        monkeypatch.setattr(
-            anthropic_messages,
-            "get_chat_model",
-            lambda _: SimpleNamespace(create_message=_create_message),
-        )
+        self._capture_context_vars(monkeypatch, details, captured)
 
         response = anthropic_app_client.post(
             "/anthropic/v1/messages",

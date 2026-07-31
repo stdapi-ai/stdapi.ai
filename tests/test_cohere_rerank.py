@@ -459,6 +459,43 @@ class TestCohereRerankV1Route:
         (call,) = rerank_backend.calls
         assert call["extra_params"] == {"custom_knob": 3}
 
+    def test_reranked_documents_are_not_written_to_the_request_log(
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
+    ) -> None:
+        """The logged v1 response keeps ``meta`` but never the reranked ``results``.
+
+        v1 echoes the document text back inside ``results`` when
+        ``return_documents`` is set, so dropping its own ``exclude`` argument
+        would copy whole customer documents into the structured request log.
+
+        Ref: https://stdapi.ai/api_cohere_rerank/
+             stdapi/routes/cohere_rerank_v1.py:rerank_v1
+             stdapi/monitoring.py:log_response_params
+        """
+        from stdapi import monitoring  # noqa: PLC0415
+
+        written: list[dict[str, Any]] = []
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(monitoring, "write_log_event", written.append)
+            response = app_client.post(
+                "/cohere/v1/rerank",
+                json={
+                    "model": "cohere.rerank-v3-5:0",
+                    "query": "q",
+                    "documents": ["a", "secret document"],
+                    "return_documents": True,
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        (result,) = response.json()["results"]
+        assert result["document"] == {"text": "secret document"}
+        (log,) = [entry for entry in written if entry.get("type") == "request"]
+        logged = log["request_response"]
+        assert "results" not in logged
+        assert logged["id"] == response.json()["id"], "only `results` is excluded"
+        assert logged["meta"]["billed_units"]["search_units"] == 1
+
     def test_single_key_text_object_documents_are_passed_through(
         self, app_client: TestClient, rerank_backend: _StubRerankModel
     ) -> None:

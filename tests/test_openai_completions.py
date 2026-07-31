@@ -14,25 +14,37 @@ Ref: https://developers.openai.com/api/reference/resources/completions/methods/c
 """
 
 import io
-from typing import TYPE_CHECKING, Any
+import json
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from openai import BadRequestError, NotFoundError, OpenAI
 from pybase64 import b64encode
+from starlette.requests import Request
 
+from stdapi.aws_bedrock import PROMPT_CACHING_DEFAULT
 from stdapi.models.chat._adapters._openai_completion import (
     _FINISH_REASONS as _LEGACY_FINISH_REASONS,
 )
 from stdapi.models.chat._adapters._openai_completion import (
     _map_finish_reason,
     build_user_messages,
+    format_stream,
     translate_request,
 )
 from stdapi.models.chat._mantle._convert import chat_response_as_text_completion
-from stdapi.types.openai_completions import CompletionCreateParams
+from stdapi.models.chat.anthropic_claude_46 import ChatModel as ClaudeChatModel
+from stdapi.monitoring import REQUEST
+from stdapi.types.openai_completions import Completion, CompletionCreateParams
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Generator
+
     from starlette.testclient import TestClient as TestClientType
+    from types_aiobotocore_bedrock_runtime.type_defs import ConverseResponseTypeDef
+
+    from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
+    from stdapi.types.openai_chat_completions import ServiceTiers
 
 #: Every ``finish_reason`` the legacy adapter can emit for a successful request.
 _TERMINAL_REASONS = {"stop", "length"}
@@ -832,3 +844,290 @@ class TestMantleTextCompletionPassthrough:
         completion = chat_response_as_text_completion(self._raw(), "cmpl-2")
         assert completion.system_fingerprint is None
         assert completion.service_tier is None
+
+
+#: Bedrock Converse response the capturing model answers with, one text block.
+_CANNED_CONVERSE_RESPONSE: dict[str, Any] = {
+    "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 5, "outputTokens": 1, "totalTokens": 6},
+}
+
+#: Claude model identifier: the family enabling prompt caching with extended TTLs.
+_CACHING_MODEL_ID = "anthropic.claude-sonnet-4-6-20260210-v1:0"
+
+
+class _CapturingChatModel(ClaudeChatModel):
+    """Claude chat model recording Converse requests instead of calling Bedrock."""
+
+    def __init__(self, model_id: str) -> None:
+        """Initialize the model with an empty capture buffer.
+
+        Args:
+            model_id: Bedrock model identifier.
+        """
+        super().__init__(model_id)
+        self.requests: list[ConverseRequestBaseTypeDef] = []
+
+    async def converse(
+        self, request: ConverseRequestBaseTypeDef
+    ) -> ConverseResponseTypeDef:
+        """Record *request* and answer with a canned response.
+
+        Args:
+            request: Bedrock Converse request payload.
+
+        Returns:
+            A minimal successful Converse response.
+        """
+        self.requests.append(request)
+        return cast("ConverseResponseTypeDef", _CANNED_CONVERSE_RESPONSE)
+
+
+class TestLegacyPromptCaching:
+    """``prompt_cache_key`` marks every fanned-out prompt with a cache point.
+
+    The legacy route turns a batch prompt into one model call per element and
+    applies caching to each of them independently.  A cache point is what a cache
+    write is billed on, so whether one is written -- and with which retention --
+    is the whole feature.
+
+    Ref: https://developers.openai.com/api/docs/guides/prompt-caching
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CachePointBlock.html
+         stdapi/models/chat/_default.py:ChatModel.create_text_completion
+    """
+
+    pytestmark = pytest.mark.local
+
+    @pytest.fixture(autouse=True)
+    @staticmethod
+    def _http_request() -> Generator[None]:
+        """Bind a header-less HTTP request for the model's header passthrough.
+
+        Ref: stdapi/models/chat/_default.py:ChatModel._get_passthrough_header_fields
+        """
+        token = REQUEST.set(
+            Request({"type": "http", "method": "POST", "headers": [], "path": "/"})
+        )
+        try:
+            yield
+        finally:
+            REQUEST.reset(token)
+
+    @staticmethod
+    async def _converse_requests(**kwargs: object) -> list[ConverseRequestBaseTypeDef]:
+        """Run a two-prompt completion and return the captured Converse requests.
+
+        Args:
+            **kwargs: Extra request fields merged onto ``model``/``prompt``.
+
+        Returns:
+            One Bedrock Converse request per prompt of the batch.
+        """
+        model = _CapturingChatModel(_CACHING_MODEL_ID)
+        request = CompletionCreateParams.model_validate(
+            {"model": "model", "prompt": ["first prompt", "second prompt"], **kwargs}
+        )
+        completion = await model.create_text_completion(request, "cmpl-1", 0)
+        assert isinstance(completion, Completion)
+        assert len(model.requests) == 2, "one call per prompt of the batch"
+        return model.requests
+
+    @staticmethod
+    def _cache_points(request: ConverseRequestBaseTypeDef) -> list[Any]:
+        """Return the cache-point blocks a Converse request carries.
+
+        Args:
+            request: Captured Bedrock Converse request payload.
+
+        Returns:
+            Every ``cachePoint`` block found in the request messages.
+        """
+        return [
+            block
+            for message in request["messages"]
+            for block in message["content"]
+            if "cachePoint" in block
+        ]
+
+    async def test_no_cache_key_writes_no_cache_point(self) -> None:
+        """Omitting ``prompt_cache_key`` leaves every prompt uncached.
+
+        Caching is opt-in on this route, so an unmarked request must never be
+        billed for a cache write.
+        """
+        requests = await self._converse_requests()
+        assert [self._cache_points(request) for request in requests] == [[], []]
+
+    @pytest.mark.parametrize("key", ["messages", "opaque-client-hash"])
+    async def test_cache_key_marks_each_prompt_of_the_batch(self, key: str) -> None:
+        """Every fanned-out prompt gets its own cache point, not just the first.
+
+        ``messages`` selects the component explicitly and an opaque key -- what an
+        upstream client sends, since OpenAI treats the value as a bucket name --
+        falls through to caching every component, so both mark the messages.
+        """
+        requests = await self._converse_requests(prompt_cache_key=key)
+        assert [self._cache_points(request) for request in requests] == [
+            [PROMPT_CACHING_DEFAULT],
+            [PROMPT_CACHING_DEFAULT],
+        ]
+
+    async def test_system_selector_finds_nothing_to_cache(self) -> None:
+        """``prompt_cache_key="system"`` writes nothing: the route has no system prompt.
+
+        This is the selector's negative case: an unrelated component must not fall
+        back to caching the messages.
+        """
+        requests = await self._converse_requests(prompt_cache_key="system")
+        assert [self._cache_points(request) for request in requests] == [[], []]
+
+    @pytest.mark.parametrize(
+        ("retention", "ttl"), [("24h", "1h"), ("1h", "1h"), ("5m", "5m")]
+    )
+    async def test_retention_sets_the_cache_point_ttl(
+        self, retention: str, ttl: str
+    ) -> None:
+        """``prompt_cache_retention`` reaches the cache point of every prompt.
+
+        ``24h`` is clamped to the longest retention this backend offers, so a
+        client asking for a day of retention still gets a valid request rather
+        than a rejected one.
+        """
+        requests = await self._converse_requests(
+            prompt_cache_key="messages", prompt_cache_retention=retention
+        )
+        assert [self._cache_points(request) for request in requests] == [
+            [{"cachePoint": {"type": "default", "ttl": ttl}}],
+            [{"cachePoint": {"type": "default", "ttl": ttl}}],
+        ]
+
+    async def test_in_memory_retention_keeps_the_default_cache_point(self) -> None:
+        """``in_memory`` asks for no explicit retention and emits no TTL."""
+        requests = await self._converse_requests(
+            prompt_cache_key="messages", prompt_cache_retention="in_memory"
+        )
+        assert [self._cache_points(request) for request in requests] == [
+            [PROMPT_CACHING_DEFAULT],
+            [PROMPT_CACHING_DEFAULT],
+        ]
+
+
+async def _stub_stream(events: list[dict[str, Any]]) -> AsyncIterator[dict[str, Any]]:
+    """Yield the given Bedrock Converse stream event dicts one by one.
+
+    Args:
+        events: Converse stream event dicts to replay.
+
+    Yields:
+        Each event dict, in order.
+    """
+    for event in events:
+        yield event
+
+
+class TestLegacyStreamChunks:
+    """Every legacy SSE chunk carries the echoed tier and a terminal finish reason.
+
+    The streaming path formats its chunks independently of the non-streaming one,
+    so the service tier echo and the stop-reason mapping have to hold on both.  A
+    filtered generation is only observable here through ``finish_reason``: the
+    chunk text is already gone.
+
+    Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+         stdapi/models/chat/_adapters/_openai_completion.py:format_stream
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    async def _chunks(
+        events: list[dict[str, Any]], service_tier: ServiceTiers | None = None
+    ) -> list[dict[str, Any]]:
+        """Format one stubbed Bedrock stream and decode the emitted chunks.
+
+        Args:
+            events: Converse stream event dicts to replay.
+            service_tier: Effective OpenAI service tier to echo.
+
+        Returns:
+            The JSON-decoded chunks, excluding the ``[DONE]`` sentinel.
+        """
+        sse_events = [
+            event
+            async for event in format_stream(
+                "cmpl-1",
+                0,
+                "model",
+                [_stub_stream(events)],  # type: ignore[list-item]
+                service_tier,
+                include_usage=False,
+            )
+        ]
+        assert sse_events[-1].data == "[DONE]", "the stream must end with the sentinel"
+        return [
+            json.loads(event.data)
+            for event in sse_events
+            if isinstance(event.data, str) and event.data != "[DONE]"
+        ]
+
+    async def test_every_chunk_echoes_the_effective_service_tier(self) -> None:
+        """The tier is repeated on the delta chunks and on the terminal one.
+
+        A client reading the tier off the last chunk and one reading it off the
+        first must agree, so it cannot be attached to the terminal chunk only.
+        """
+        chunks = await self._chunks(
+            [
+                {"contentBlockDelta": {"delta": {"text": "hi"}}},
+                {"messageStop": {"stopReason": "end_turn"}},
+            ],
+            service_tier="flex",
+        )
+        assert len(chunks) == 2
+        assert {chunk["service_tier"] for chunk in chunks} == {"flex"}
+
+    async def test_absent_service_tier_is_omitted_from_the_chunks(self) -> None:
+        """No requested tier means no ``service_tier`` key rather than a null one."""
+        chunks = await self._chunks([{"contentBlockDelta": {"delta": {"text": "hi"}}}])
+        assert all("service_tier" not in chunk for chunk in chunks)
+
+    @pytest.mark.parametrize(
+        ("stop_reason", "expected"),
+        [
+            ("guardrail_intervened", "content_filter"),
+            ("content_filtered", "content_filter"),
+            ("model_context_window_exceeded", "length"),
+            ("end_turn", "stop"),
+        ],
+    )
+    async def test_terminal_chunk_reports_the_mapped_finish_reason(
+        self, stop_reason: str, expected: str
+    ) -> None:
+        """A filtered or truncated stream says so instead of claiming completion.
+
+        The delta chunks carry no ``finish_reason``; only the terminal chunk does,
+        and it is the client's sole signal that the text it concatenated is not
+        the whole answer.
+        """
+        chunks = await self._chunks(
+            [
+                {"contentBlockDelta": {"delta": {"text": "hi"}}},
+                {"messageStop": {"stopReason": stop_reason}},
+            ]
+        )
+        assert "finish_reason" not in chunks[0]["choices"][0]
+        assert chunks[-1]["choices"][0]["finish_reason"] == expected
+        assert chunks[-1]["choices"][0]["text"] == "", "the terminal chunk adds no text"
+
+    async def test_stream_without_message_stop_still_terminates(self) -> None:
+        """A stream ending without ``messageStop`` still gets a terminal chunk.
+
+        The chunk falls back to ``stop`` so the client is never left waiting for a
+        finish reason that will not come.
+        """
+        chunks = await self._chunks([{"contentBlockDelta": {"delta": {"text": "hi"}}}])
+        assert [chunk["choices"][0].get("finish_reason") for chunk in chunks] == [
+            None,
+            "stop",
+        ]

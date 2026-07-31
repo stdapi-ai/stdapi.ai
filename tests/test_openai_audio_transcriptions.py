@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from starlette.responses import Response
 
 from stdapi import usage
-from stdapi.api_errors import ApiError, UnsupportedModelError, UnsupportedParameterError
+from stdapi.api_errors import UnsupportedModelError, UnsupportedParameterError
 from stdapi.input_file import InputFile
 from stdapi.models.audio.amazon_transcribe import AudioModel
 from stdapi.routes import openai_audio_transcriptions
@@ -1233,6 +1233,8 @@ class TestTranscribeUnsupportedParameters:
     ``prompt``, ``temperature`` and ``logprobs`` are accepted by the request
     model (they are valid OpenAI fields) and refused by the backend, so the
     caller gets a 400 instead of a transcript produced while ignoring them.
+    Each rejection is an ``unsupported_parameter`` error naming the offending
+    field, which is what lets a client tell it apart from a malformed request.
 
     Ref: https://stdapi.ai/api_openai_audio_transcriptions/
          stdapi/models/audio/amazon_transcribe.py:AudioModel._transcribe
@@ -1250,32 +1252,42 @@ class TestTranscribeUnsupportedParameters:
 
     async def test_prompt_is_rejected(self) -> None:
         """A ``prompt`` fails with 400 before the transcription job is started."""
-        with pytest.raises(ApiError) as exc_info:
+        with pytest.raises(UnsupportedParameterError) as exc_info:
             await AudioModel("amazon.transcribe").stt(
                 self._audio(), "json", prompt="Transcribe carefully", logprobs=False
             )
 
         assert exc_info.value.status == 400
+        assert exc_info.value.code == "unsupported_parameter"
+        assert exc_info.value.param == "prompt"
         assert "prompt" in str(exc_info.value)
 
     async def test_temperature_is_rejected(self) -> None:
         """A non-zero ``temperature`` fails with 400: Transcribe has no sampling knob."""
-        with pytest.raises(ApiError) as exc_info:
+        with pytest.raises(UnsupportedParameterError) as exc_info:
             await AudioModel("amazon.transcribe").stt(
                 self._audio(), "json", temperature=0.5, logprobs=False
             )
 
         assert exc_info.value.status == 400
+        assert exc_info.value.code == "unsupported_parameter"
+        assert exc_info.value.param == "temperature"
         assert "temperature" in str(exc_info.value)
 
     async def test_logprobs_is_rejected(self) -> None:
-        """``include=["logprobs"]`` fails with 400: token confidences are not available."""
-        with pytest.raises(ApiError) as exc_info:
+        """``include=["logprobs"]`` fails with 400: token confidences are not available.
+
+        The blamed parameter is the ``include`` entry the caller sent, not the
+        internal flag it was parsed into.
+        """
+        with pytest.raises(UnsupportedParameterError) as exc_info:
             await AudioModel("amazon.transcribe").stt(
                 self._audio(), "json", logprobs=True
             )
 
         assert exc_info.value.status == 400
+        assert exc_info.value.code == "unsupported_parameter"
+        assert exc_info.value.param == "include.logprobs"
         assert "logprobs" in str(exc_info.value)
 
     @pytest.mark.usefixtures("request_log")

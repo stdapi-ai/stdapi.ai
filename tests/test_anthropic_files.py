@@ -18,17 +18,26 @@ Ref: https://platform.claude.com/docs/en/build-with-claude/files
 
 import io
 from contextlib import suppress
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
 from anthropic import Anthropic
 from anthropic import NotFoundError as AnthropicNotFoundError
 
+from stdapi import input_file as input_file_mod
+from stdapi.aws_s3 import BUCKET_TO_REGION
+from stdapi.files import FileRecord
+from stdapi.routes import anthropic_files
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
     from anthropic.types.beta import FileMetadata
     from openai import OpenAI
+    from starlette.testclient import TestClient
+
+    from stdapi.input_file import InputFile
 
 #: The Files API is one namespace shared by the whole account, and the cursor
 #: pagination tests here read it across two requests. Without a group,
@@ -38,6 +47,9 @@ pytestmark = pytest.mark.xdist_group("anthropic_files")
 
 #: Simple plain-text file bytes for general tests.
 _TEXT_FILE: bytes = b"The capital of France is Paris."
+
+#: Bucket added to the input allowlist so an ``s3://`` body reaches the resolver.
+_ALLOWED_BUCKET: str = "stdapi-test-accepted-bucket"
 
 
 @pytest.fixture
@@ -450,3 +462,122 @@ class TestAnthropicFilesJsonBody:
             headers={"Authorization": f"Bearer {openai_client.api_key}"},
         )
         assert delete_response.status_code == 200
+
+
+class TestAnthropicFilesJsonBodySources:
+    """Which ``file`` string forms the ``application/json`` upload body accepts.
+
+    The remote forms are the ones highlighted for MCP tools and agents, and they
+    are the only ones that never carry their bytes in the request: the body string
+    is parsed into an ``IngestInputFile`` whose content is fetched server-side. The
+    storage call is stubbed here so the accepted-source contract is pinned without
+    reading S3 or the network.
+
+    Ref: stdapi/routes/anthropic_files.py:upload
+         stdapi/types/anthropic_files.py:AnthropicFileUploadJsonBody
+         stdapi/input_file.py:IngestInputFile
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    @pytest.fixture
+    def uploaded_source(monkeypatch: pytest.MonkeyPatch) -> list[InputFile]:
+        """Record the ``InputFile`` the route hands to the storage layer."""
+        recorded: list[InputFile] = []
+
+        async def _fake_upload_file(file: InputFile, *_args: object) -> FileRecord:
+            recorded.append(file)
+            return FileRecord(
+                file_id="a" * 32,
+                filename="remote.png",
+                content_type="image/png",
+                purpose="",
+                size=11,
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                expires_at=None,
+            )
+
+        monkeypatch.setattr(anthropic_files, "upload_file", _fake_upload_file)
+        return recorded
+
+    def test_https_url_body_is_handed_to_the_resolver(
+        self, anthropic_app_client: TestClient, uploaded_source: list[InputFile]
+    ) -> None:
+        """An HTTPS URL in ``file`` is stored as a remote reference, not as its own text.
+
+        Detecting it as a URL rather than as raw base64 is the whole difference
+        between ingesting the remote document and storing the URL string itself.
+        """
+        response = anthropic_app_client.post(
+            "/anthropic/v1/files", json={"file": "https://example.com/document.pdf"}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["id"] == f"file_{'a' * 32}"
+        (source,) = uploaded_source
+        assert source.is_s3 is False
+        assert str(source) == "https://example.com/document.pdf"
+
+    def test_s3_uri_body_is_handed_to_the_resolver(
+        self,
+        anthropic_app_client: TestClient,
+        uploaded_source: list[InputFile],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An ``s3://`` URI for an allowed bucket resolves to that bucket's region.
+
+        The bucket allowlist is the SSRF guard for this input: a URI is only routed
+        to S3 once its bucket is configured, and the region bound at that point is
+        what the later object read is issued against.
+        """
+        monkeypatch.setattr(
+            input_file_mod, "_ACCEPTED_BUCKETS", frozenset({_ALLOWED_BUCKET})
+        )
+        monkeypatch.setitem(BUCKET_TO_REGION, _ALLOWED_BUCKET, "us-east-1")
+
+        response = anthropic_app_client.post(
+            "/anthropic/v1/files",
+            json={"file": f"s3://{_ALLOWED_BUCKET}/inbox/document.pdf"},
+        )
+        assert response.status_code == 200, response.text
+        (source,) = uploaded_source
+        assert source.is_s3 is True
+        assert source.region == "us-east-1"
+
+    def test_s3_uri_outside_the_allow_list_is_rejected(
+        self, anthropic_app_client: TestClient, uploaded_source: list[InputFile]
+    ) -> None:
+        """An ``s3://`` URI for an unconfigured bucket is refused before any S3 call.
+
+        Ref: https://platform.claude.com/docs/en/api/errors
+             stdapi/input_file.py:InputFile._normalize_and_detect_origin
+        """
+        response = anthropic_app_client.post(
+            "/anthropic/v1/files",
+            json={"file": "s3://an-unconfigured-external-bucket-xyz/document.pdf"},
+        )
+        assert response.status_code == 400, response.text
+        body = response.json()
+        assert body["error"]["type"] == "invalid_request_error"
+        assert not uploaded_source, "the rejected bucket must never be read"
+
+    def test_file_id_reference_is_rejected(
+        self, anthropic_app_client: TestClient, uploaded_source: list[InputFile]
+    ) -> None:
+        """A ``file-id:`` reference is refused: an ingest endpoint takes content only.
+
+        Resolving it here would clone an existing stored object into a second one,
+        billing the same bytes twice, so this source is excluded from the ingest
+        variant of the input parser even though the Messages route accepts it.
+
+        Ref: https://platform.claude.com/docs/en/api/errors
+             stdapi/input_file.py:IngestInputFile
+        """
+        response = anthropic_app_client.post(
+            "/anthropic/v1/files", json={"file": f"file-id:file_{'0' * 32}"}
+        )
+        assert response.status_code == 400, response.text
+        body = response.json()
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "invalid_request_error"
+        assert not uploaded_source, "no object may be created for a rejected source"

@@ -6,7 +6,8 @@ Ref: https://docs.cohere.com/reference/embed
      stdapi/routes/cohere_embed_v1.py:embed_v1
 """
 
-from base64 import b64decode
+from asyncio import run
+from base64 import b64decode, b64encode
 from os import getenv
 from struct import unpack
 from typing import TYPE_CHECKING, Any
@@ -41,6 +42,41 @@ _COHERE_V4_DIMENSIONS = frozenset({256, 512, 1024, 1536})
 
 #: Default output dimension of Amazon Titan Text Embeddings V2.
 _TITAN_V2_DIMENSIONS = 1024
+
+#: Minimal 1x1 PNG image bytes served by the stubbed URL and S3 sources.
+_PNG = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\xff"
+    b"\xff?\x00\x05\xfe\x02\xfe\xa75\x81\x84\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+#: The data URI Bedrock Cohere Embed expects for the 1x1 PNG.
+_PNG_DATA_URI = f"data:image/png;base64,{b64encode(_PNG).decode()}"
+
+#: Bucket name allow-listed by the stubbed S3 image-input test.
+_S3_BUCKET = "embed-inputs"
+
+
+def _serve_png(monkeypatch: pytest.MonkeyPatch, source_name: str) -> None:
+    """Make the named ``InputFile`` source backend yield ``_PNG`` without any I/O.
+
+    Args:
+        monkeypatch: Patch context.
+        source_name: ``_HttpSource`` or ``_S3Source``.
+    """
+    from stdapi import input_file  # noqa: PLC0415
+
+    async def _resolve_metadata(source: Any) -> None:  # noqa: ANN401
+        source._content_type = "image/png"  # noqa: SLF001
+        source._size = len(_PNG)  # noqa: SLF001
+        source._filename = "image.png"  # noqa: SLF001
+
+    async def _read(_source: Any) -> bytes:  # noqa: ANN401
+        return _PNG
+
+    source = getattr(input_file, source_name)
+    monkeypatch.setattr(source, "_resolve_metadata", _resolve_metadata)
+    monkeypatch.setattr(source, "_read", _read)
 
 
 class _StubEmbeddingModel:
@@ -278,6 +314,79 @@ class TestCohereEmbedRoute:
         assert len(call["inputs"]) == 3
         assert call["inputs"][:2] == ["hello", "world"]
         assert isinstance(call["inputs"][2], InputFile)
+
+    def test_https_image_url_is_accepted_and_re_encoded_as_a_data_uri(
+        self,
+        app_client: TestClient,
+        embed_backend: _StubEmbeddingModel,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An `https://` image is accepted and rendered as the data URI Bedrock requires.
+
+        Cohere's own API only takes data URIs in `images`; this gateway also
+        accepts URLs, which is only usable if the fetched body is re-encoded
+        with the content type resolved from the response.
+
+        Ref: https://docs.cohere.com/reference/embed
+             stdapi/types/cohere_embed.py:_EmbedRequestBase
+             stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
+        """
+        _serve_png(monkeypatch, "_HttpSource")
+
+        response = app_client.post(
+            "/cohere/v2/embed",
+            json={
+                "model": "cohere.embed-v4:0",
+                "input_type": "image",
+                "images": ["https://example.invalid/image.png"],
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["meta"]["billed_units"] == {
+            "input_tokens": 7,
+            "images": 1,
+        }
+        (call,) = embed_backend.calls
+        (image,) = call["inputs"]
+        assert isinstance(image, InputFile)
+        assert run(image.to_data_uri()) == _PNG_DATA_URI
+
+    def test_s3_image_uri_is_accepted_and_re_encoded_as_a_data_uri(
+        self,
+        app_client: TestClient,
+        embed_backend: _StubEmbeddingModel,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An `s3://` image is accepted and rendered as the data URI Bedrock requires.
+
+        The content type comes from the stored object metadata rather than
+        from a data-URI header, so this is a distinct resolution path.
+
+        Ref: https://docs.cohere.com/reference/embed
+             stdapi/types/cohere_embed.py:_EmbedRequestBase
+             stdapi/input_file.py:_S3Source
+        """
+        from stdapi import input_file  # noqa: PLC0415
+
+        monkeypatch.setattr(input_file, "_ACCEPTED_BUCKETS", frozenset({_S3_BUCKET}))
+        monkeypatch.setattr(input_file, "BUCKET_TO_REGION", {_S3_BUCKET: "us-east-1"})
+        _serve_png(monkeypatch, "_S3Source")
+
+        response = app_client.post(
+            "/cohere/v2/embed",
+            json={
+                "model": "cohere.embed-v4:0",
+                "input_type": "image",
+                "images": [f"s3://{_S3_BUCKET}/image.png"],
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        (call,) = embed_backend.calls
+        (image,) = call["inputs"]
+        assert isinstance(image, InputFile)
+        assert run(image.to_data_uri()) == _PNG_DATA_URI
 
     def test_no_input_is_rejected(
         self, app_client: TestClient, embed_backend: _StubEmbeddingModel
@@ -892,7 +1001,12 @@ class TestCohereEmbedV1Route:
     ) -> None:
         """Cohere-specific fields are not forwarded to non-Cohere models.
 
+        Titan Embed rejects unknown body fields, so both `input_type` and
+        `truncate` — every Cohere-only field the v1 schema declares — must be
+        consumed by the route instead of reaching InvokeModel.
+
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
+             stdapi/routes/cohere_embed_v1.py:embed_v1
         """
         response = app_client.post(
             "/cohere/v1/embed",
@@ -900,12 +1014,51 @@ class TestCohereEmbedV1Route:
                 "model": "amazon.titan-embed-text-v2:0",
                 "input_type": "search_document",
                 "texts": ["hello"],
+                "truncate": "START",
             },
         )
         assert response.status_code == 200, response.text
         assert response.json()["embeddings"] == [[0.1, 0.2]]
         (call,) = embed_backend.calls
         assert call["extra_params"] == {}
+
+    @pytest.mark.parametrize("embedding_types", [None, ["float"]])
+    def test_embedding_vectors_are_not_written_to_the_request_log(
+        self,
+        app_client: TestClient,
+        embed_backend: _StubEmbeddingModel,
+        embedding_types: list[str] | None,
+    ) -> None:
+        """Neither v1 envelope carries its embedding vectors into the request log.
+
+        v1 builds two different response models — the legacy floats shape and
+        the by-type shape — each with its own `exclude`; losing either would
+        copy every vector of every request into the structured log.
+
+        Ref: https://docs.cohere.com/v1/reference/embed
+             stdapi/routes/cohere_embed_v1.py:embed_v1
+             stdapi/monitoring.py:log_response_params
+        """
+        from stdapi import monitoring  # noqa: PLC0415
+
+        body: dict[str, Any] = {
+            "model": "cohere.embed-multilingual-v3",
+            "texts": ["hello"],
+        }
+        if embedding_types is not None:
+            body["embedding_types"] = embedding_types
+        written: list[dict[str, Any]] = []
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(monitoring, "write_log_event", written.append)
+            response = app_client.post("/cohere/v1/embed", json=body)
+
+        assert response.status_code == 200, response.text
+        assert response.json()["embeddings"]
+        (log,) = [entry for entry in written if entry.get("type") == "request"]
+        logged = log["request_response"]
+        assert "embeddings" not in logged
+        assert logged["texts"] == ["hello"], "only `embeddings` is excluded"
+        assert logged["meta"]["billed_units"]["input_tokens"] == 7
 
     def test_image_data_uri_input(
         self, app_client: TestClient, embed_backend: _StubEmbeddingModel

@@ -18,7 +18,7 @@ import pytest
 from openai import BadRequestError, NotFoundError, OpenAI
 from starlette.responses import Response
 
-from stdapi.api_errors import ApiError
+from stdapi.api_errors import UnsupportedParameterError
 from stdapi.input_file import InputFile
 from stdapi.models.audio.amazon_transcribe import AudioModel
 from tests.conftest import _sample_cache_file, logged_usage_entries
@@ -519,7 +519,9 @@ class TestTranslateUnsupportedParameters:
 
     ``prompt`` and ``temperature`` are valid OpenAI translation fields with no
     Transcribe equivalent: forwarding them would change nothing, so the backend
-    fails the request instead of transcribing while ignoring them.
+    fails the request instead of transcribing while ignoring them. The
+    translation path runs its own validation, so it can regress independently
+    of the transcription one.
 
     Ref: https://stdapi.ai/api_openai_audio_translations/
          stdapi/models/audio/amazon_transcribe.py:AudioModel.stt_translate
@@ -537,22 +539,26 @@ class TestTranslateUnsupportedParameters:
 
     async def test_prompt_is_rejected(self) -> None:
         """A ``prompt`` fails with 400 before the transcription job is started."""
-        with pytest.raises(ApiError) as exc_info:
+        with pytest.raises(UnsupportedParameterError) as exc_info:
             await AudioModel("amazon.transcribe").stt_translate(
                 self._audio(), "json", prompt="Translate carefully"
             )
 
         assert exc_info.value.status == 400
+        assert exc_info.value.code == "unsupported_parameter"
+        assert exc_info.value.param == "prompt"
         assert "prompt" in str(exc_info.value)
 
     async def test_temperature_is_rejected(self) -> None:
         """A non-zero ``temperature`` fails with 400: Transcribe has no sampling knob."""
-        with pytest.raises(ApiError) as exc_info:
+        with pytest.raises(UnsupportedParameterError) as exc_info:
             await AudioModel("amazon.transcribe").stt_translate(
                 self._audio(), "json", prompt=None, temperature=0.5
             )
 
         assert exc_info.value.status == 400
+        assert exc_info.value.code == "unsupported_parameter"
+        assert exc_info.value.param == "temperature"
         assert "temperature" in str(exc_info.value)
 
     @pytest.mark.usefixtures("request_log")

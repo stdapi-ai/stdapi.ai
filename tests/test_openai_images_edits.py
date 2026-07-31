@@ -14,6 +14,7 @@ from openai import BadRequestError, OpenAI
 from pydantic import ValidationError
 
 from stdapi.api_errors import UnsupportedModelError
+from stdapi.models.image import ImageGenerationResponse
 from stdapi.routes import openai_images_edits
 from stdapi.types.openai_images import ImageEditParams
 
@@ -993,3 +994,183 @@ class TestImagesEditsJsonBodyMask:
         assert response.status_code == 400
         assert edit_job_calls["images"] == ["aW1hZ2U="]
         assert edit_job_calls["mask"] is None
+
+
+@pytest.mark.local
+@pytest.mark.usefixtures("_stub_edit_job")
+class TestImagesEditsMaskUsageAccounting:
+    """A mask is billed as an input image, not as prompt text.
+
+    The response usage splits the job's ``input_tokens`` into image tokens --
+    capped at the number of inputs the request carried -- and the remaining
+    text tokens. The mask is one of those inputs, so leaving it out of the count
+    would silently reattribute it to the prompt.
+
+    Ref: https://stdapi.ai/api_openai_images_edits/
+         stdapi/routes/openai_images_edits.py:edit_images
+         stdapi/routes/_images_common.py:build_images_response
+    """
+
+    @pytest.fixture
+    def _stub_edit_job(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Stub model resolution and the edit job so nothing reaches Bedrock.
+
+        The job reports fixed token counts, leaving the image/text split as the
+        only variable in the response usage.
+        """
+
+        class _StubJob:
+            """Edit job returning one image with fixed billed token counts."""
+
+            input_tokens = 6
+            output_tokens = 1
+            output_format = "png"
+            width = 512
+            height = 512
+            quality = "medium"
+
+            async def edit_images(
+                self, images: list[str], mask: str | None
+            ) -> list[ImageGenerationResponse]:
+                """Return a single edited image, whatever the inputs were."""
+                return [ImageGenerationResponse(image="ZWRpdA==", index=0)]
+
+        class _StubModel:
+            """Image model returning the fixed-usage edit job."""
+
+            def get_image_edit_job(self, **_kwargs: object) -> _StubJob:
+                """Return the stub job, ignoring the job parameters."""
+                return _StubJob()
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> object:
+            """Accept any model ID without calling AWS."""
+            return SimpleNamespace(id=model_id)
+
+        monkeypatch.setattr(openai_images_edits, "validate_model", _validate_model)
+        monkeypatch.setattr(
+            openai_images_edits, "get_image_model", lambda _model_id: _StubModel()
+        )
+
+    def test_mask_is_billed_as_a_second_input_image(
+        self, app_client: TestClient
+    ) -> None:
+        """An edit with a mask reports two image tokens and the rest as text."""
+        response = app_client.post(
+            "/v1/images/edits",
+            json={
+                "model": "stub-model",
+                "prompt": "Make it darker",
+                "images": [{"image_url": "data:image/png;base64,aW1hZ2U="}],
+                "mask": {"image_url": "data:image/png;base64,bWFzaw=="},
+                "response_format": "b64_json",
+            },
+        )
+
+        assert response.status_code == 200
+        usage = response.json()["usage"]
+        assert usage["input_tokens"] == 6
+        assert usage["input_tokens_details"] == {"image_tokens": 2, "text_tokens": 4}
+
+    def test_without_a_mask_only_the_source_image_is_billed(
+        self, app_client: TestClient
+    ) -> None:
+        """The same edit without a mask attributes one token less to the images."""
+        response = app_client.post(
+            "/v1/images/edits",
+            json={
+                "model": "stub-model",
+                "prompt": "Make it darker",
+                "images": [{"image_url": "data:image/png;base64,aW1hZ2U="}],
+                "response_format": "b64_json",
+            },
+        )
+
+        assert response.status_code == 200
+        usage = response.json()["usage"]
+        assert usage["input_tokens"] == 6
+        assert usage["input_tokens_details"] == {"image_tokens": 1, "text_tokens": 5}
+
+
+@pytest.mark.local
+class TestImagesEditsOutputEncodingParameters:
+    """``output_format`` and ``output_compression`` reach the edit job.
+
+    Both are documented as supported on this route, and both are only
+    observable at the job boundary: the job is stubbed and the request stops
+    there, since the produced bytes depend on the backend image.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/routes/openai_images_edits.py:edit_images
+    """
+
+    @pytest.fixture
+    def job_kwargs(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+        """Stub model resolution and the image model, recording the job parameters.
+
+        Returns:
+            The dict the stub records the edit job keyword arguments into.
+        """
+        captured: dict[str, object] = {}
+
+        class _StubModel:
+            """Image model recording the requested edit job parameters."""
+
+            def get_image_edit_job(self, **kwargs: object) -> object:
+                """Record the job parameters, then fail the request with a 400."""
+                captured.update(kwargs)
+                model_id = "stub-model"
+                raise UnsupportedModelError(model_id, status=400)
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> object:
+            """Accept any model ID without calling AWS."""
+            return SimpleNamespace(id=model_id)
+
+        monkeypatch.setattr(openai_images_edits, "validate_model", _validate_model)
+        monkeypatch.setattr(
+            openai_images_edits, "get_image_model", lambda _model_id: _StubModel()
+        )
+        return captured
+
+    def test_output_encoding_reaches_the_job(
+        self, app_client: TestClient, job_kwargs: dict[str, object]
+    ) -> None:
+        """A jpeg request at 42% compression is forwarded verbatim to the job."""
+        response = app_client.post(
+            "/v1/images/edits",
+            json={
+                "model": "stub-model",
+                "prompt": "Make it darker",
+                "images": [{"image_url": "data:image/png;base64,aW1hZ2U="}],
+                "output_format": "jpeg",
+                "output_compression": 42,
+                "response_format": "b64_json",
+            },
+        )
+
+        assert response.status_code == 400
+        assert job_kwargs["output_format"] == "jpeg"
+        assert job_kwargs["output_compression"] == 42
+
+    def test_output_compression_below_the_minimum_is_rejected(
+        self, app_client: TestClient
+    ) -> None:
+        """``output_compression=0`` is outside the documented 1-100 range."""
+        response = app_client.post(
+            "/v1/images/edits",
+            json={
+                "model": "stub-model",
+                "prompt": "Make it darker",
+                "images": [{"image_url": "data:image/png;base64,aW1hZ2U="}],
+                "output_format": "jpeg",
+                "output_compression": 0,
+            },
+        )
+
+        assert response.status_code == 400
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "output_compression" in error["message"]

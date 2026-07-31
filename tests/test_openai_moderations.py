@@ -43,6 +43,9 @@ _PNG = (
 #: The 1x1 PNG as the ``data:`` URI form the moderations route accepts.
 _PNG_DATA_URI = f"data:image/png;base64,{b64encode(_PNG).decode()}"
 
+#: Bucket name allow-listed by the stubbed S3 image-input tests.
+_S3_BUCKET = "moderation-inputs"
+
 #: A guardrail response with one flagged and one clean content filter.
 _FLAGGED_RESPONSE: dict[str, Any] = {
     "action": "GUARDRAIL_INTERVENED",
@@ -477,6 +480,94 @@ class TestModerationsRoute:
                     {
                         "type": "image_url",
                         "image_url": {"url": "https://example.invalid/image.png"},
+                    }
+                ]
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        (request,) = stub.requests
+        (block,) = request["content"]
+        assert block["image"]["format"] == "png"
+        assert block["image"]["source"]["bytes"] == _PNG
+
+    def test_s3_image_uri_is_fetched_and_forwarded_as_bytes(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An ``s3://`` image URI is downloaded and sent to the guardrail as raw bytes.
+
+        The image format comes from the object's stored content type
+        (``HeadObject``) rather than from a data-URI header, so this is a
+        distinct resolution path from the inline and HTTPS forms.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html
+             stdapi/models/moderation/amazon_bedrock_guardrail.py:_to_content_block
+             stdapi/input_file.py:_S3Source
+        """
+        from stdapi import input_file  # noqa: PLC0415
+
+        async def _resolve_metadata(source: Any) -> None:  # noqa: ANN401
+            source._content_type = "image/png"  # noqa: SLF001
+            source._size = len(_PNG)  # noqa: SLF001
+            source._filename = "image.png"  # noqa: SLF001
+
+        async def _read(_source: Any) -> bytes:  # noqa: ANN401
+            return _PNG
+
+        monkeypatch.setattr(
+            input_file, "_ACCEPTED_BUCKETS", frozenset({_S3_BUCKET}), raising=True
+        )
+        monkeypatch.setattr(
+            input_file, "BUCKET_TO_REGION", {_S3_BUCKET: "us-east-1"}, raising=True
+        )
+        monkeypatch.setattr(
+            input_file._S3Source,  # noqa: SLF001
+            "_resolve_metadata",
+            _resolve_metadata,
+        )
+        monkeypatch.setattr(input_file._S3Source, "_read", _read)  # noqa: SLF001
+        stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
+
+        response = app_client.post(
+            "/v1/moderations",
+            json={
+                "input": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"s3://{_S3_BUCKET}/image.png"},
+                    }
+                ]
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        (request,) = stub.requests
+        (block,) = request["content"]
+        assert block["image"]["format"] == "png"
+        assert block["image"]["source"]["bytes"] == _PNG
+
+    def test_bare_base64_image_is_sniffed_and_forwarded_as_bytes(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bare base64 payload (no ``data:`` header) is accepted and typed by content sniffing.
+
+        ``image_url.url`` documents a plain base64 string as an accepted form;
+        with no MIME header to read, the guardrail ``format`` can only come
+        from sniffing the decoded bytes.
+
+        Ref: https://stdapi.ai/api_openai_moderations/
+             stdapi/types/openai_moderations.py:ModerationImageURL
+             stdapi/input_file.py:_Base64Source
+        """
+        stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
+
+        response = app_client.post(
+            "/v1/moderations",
+            json={
+                "input": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": b64encode(_PNG).decode()},
                     }
                 ]
             },
@@ -1642,6 +1733,28 @@ class TestComprehendModerationsRoute:
         assert result["flagged"] is False
         assert not any(result["categories"].values())
         assert batches == []
+
+    def test_whitespace_only_text_is_still_sent_to_comprehend(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only a falsy (empty) input short-circuits; ``"   "`` is classified and billed.
+
+        The guard is ``if text:``, not a ``strip()`` on the input, so a
+        whitespace-padded string reaches ``DetectToxicContent`` unchanged and
+        its verdict comes from the service rather than from the shortcut.
+
+        Ref: https://stdapi.ai/api_openai_moderations/
+             stdapi/models/moderation/amazon_comprehend.py:ModerationModel.moderate
+        """
+        batches = _stub_toxicity(monkeypatch, [[_TOXIC_RESULT]])
+
+        response = app_client.post("/v1/moderations", json={"input": "   "})
+
+        assert response.status_code == 200, response.text
+        assert batches == [["   "]]
+        (result,) = response.json()["results"]
+        assert result["flagged"] is True
+        assert result["categories"]["violence"] is True
 
     def test_detected_language_is_used_for_toxicity_detection(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch

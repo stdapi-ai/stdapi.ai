@@ -9,7 +9,7 @@ from __future__ import annotations
 import base64
 import json
 from itertools import pairwise
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, get_args
 
 import pytest
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
@@ -18,9 +18,17 @@ from openai import BadRequestError, NotFoundError, OpenAI
 from stdapi import usage
 from stdapi.config import SETTINGS
 from stdapi.models.chat._adapters._openai_common import JSON_OBJECT_SYSTEM_INSTRUCTION
-from stdapi.models.chat._adapters._openai_responses import _classify_stream_error
+from stdapi.models.chat._adapters._openai_responses import (
+    _classify_stream_error,
+    _includes_encrypted_reasoning,
+)
 from stdapi.models.chat._default import ChatModel
-from stdapi.types.openai_responses import Response, ResponseCreateParams
+from stdapi.types.openai_responses import (
+    Response,
+    ResponseCreateParams,
+    ResponseIncludable,
+    ResponseOutputMessage,
+)
 from stdapi.usage import record_bedrock_usage
 from tests._helpers import strip_code_fence
 
@@ -2842,4 +2850,225 @@ class TestStreamErrorHidesTheEndpointHost:
         assert code == "server_error"
         assert "bedrock-runtime.us-east-1.amazonaws.com" in log_message, (
             "the raw endpoint detail must still reach the server-side log"
+        )
+
+
+async def _converse_roundtrip(
+    monkeypatch: pytest.MonkeyPatch, request: ResponseCreateParams, text: str = ""
+) -> tuple[dict[str, Any], Response]:
+    """Run ``create_response`` against a stubbed Converse call.
+
+    Args:
+        monkeypatch: Fixture used to stub ``ChatModel.converse``.
+        request: Responses API request to translate.
+        text: Assistant text the stubbed Converse call answers with.
+
+    Returns:
+        Tuple of the captured Converse request body and the built Response.
+    """
+    captured: dict[str, Any] = {}
+
+    async def fake_converse(
+        _self: ChatModel, bedrock_request: dict[str, Any]
+    ) -> dict[str, Any]:
+        captured.update(bedrock_request)
+        return {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"text": text}] if text else [],
+                }
+            },
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        }
+
+    monkeypatch.setattr(ChatModel, "converse", fake_converse)
+    response = await ChatModel("amazon.nova-2-lite-v1:0").create_response(
+        request, "resp-1", 0.0
+    )
+    assert isinstance(response, Response)
+    return captured, response
+
+
+@pytest.mark.local
+class TestTextVerbosityIsAcceptedAndIgnored:
+    """``text.verbosity`` is accepted on /v1/responses and never reaches the model.
+
+    ``/v1/chat/completions`` rejects ``verbosity`` with a 400 while this surface
+    accepts it: Converse has no verbosity control, but the answer is still the
+    answer that was asked for, and rejecting it would break clients that send it
+    on every request. Only ``text.format`` is translated.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         stdapi/types/openai_responses.py:ResponseTextConfig
+         stdapi/models/chat/_adapters/_openai_responses.py:_build_output_config
+    """
+
+    @pytest.mark.parametrize("verbosity", ["low", "medium", "high"])
+    async def test_verbosity_is_accepted_echoed_and_dropped(
+        self,
+        verbosity: str,
+        monkeypatch: pytest.MonkeyPatch,
+        request_log: dict[str, Any],
+    ) -> None:
+        """Every level is accepted, echoed on ``text``, and absent from the request.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:_build_response_object
+        """
+        del request_log
+        request = ResponseCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "input": "hi",
+                "text": {"verbosity": verbosity, "format": {"type": "text"}},
+            }
+        )
+
+        captured, response = await _converse_roundtrip(monkeypatch, request)
+
+        assert response.text is not None
+        assert response.text.verbosity == verbosity, (
+            "the requested verbosity must be echoed back to the client"
+        )
+        assert "verbosity" not in json.dumps(captured, default=str), (
+            "verbosity has no Converse equivalent and must not be forwarded"
+        )
+        assert "outputConfig" not in captured
+
+    async def test_verbosity_does_not_disturb_the_output_format(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """A ``json_schema`` format alongside ``verbosity`` still builds the schema.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:_build_output_config
+        """
+        del request_log
+        request = ResponseCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "input": "hi",
+                "text": {
+                    "verbosity": "low",
+                    "format": {
+                        "type": "json_schema",
+                        "name": "answer",
+                        "schema": {"type": "object"},
+                    },
+                },
+            }
+        )
+
+        captured, _ = await _converse_roundtrip(monkeypatch, request)
+
+        json_schema = captured["outputConfig"]["textFormat"]["structure"]["jsonSchema"]
+        assert json_schema["name"] == "answer"
+        assert "verbosity" not in json.dumps(captured, default=str)
+
+
+@pytest.mark.local
+class TestIncludeValuesAreAcceptedAndIgnored:
+    """Every ``include`` value is accepted; only ``reasoning.encrypted_content`` acts.
+
+    Clients (web-search callers in particular) send these values routinely, so
+    an unlisted value must not fail validation. None of them changes the request
+    sent to the model: the single honored value only decides whether reasoning
+    items carry their round-trip envelope.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         stdapi/types/openai_responses.py:ResponseIncludable
+         stdapi/models/chat/_adapters/_openai_responses.py:_includes_encrypted_reasoning
+    """
+
+    def test_the_accepted_values_match_the_upstream_enum(self) -> None:
+        """The literal covers exactly the values the OpenAI SDK accepts.
+
+        The SDK literal is what clients validate against before sending, so a
+        drift either way turns a valid upstream request into a local 400.
+
+        Ref: installed ``openai`` package: openai.types.responses.response_includable
+        """
+        from openai.types.responses.response_includable import (  # noqa: PLC0415
+            ResponseIncludable as SdkResponseIncludable,
+        )
+
+        assert set(get_args(ResponseIncludable)) == set(get_args(SdkResponseIncludable))
+
+    @pytest.mark.parametrize("include", get_args(ResponseIncludable))
+    async def test_include_never_changes_the_request(
+        self, include: str, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """Each value is accepted and produces the same request as sending none.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:translate_request
+        """
+        del request_log
+        body: dict[str, Any] = {"model": "test-model", "input": "hi"}
+        baseline, _ = await _converse_roundtrip(
+            monkeypatch, ResponseCreateParams.model_validate(body), text="ok"
+        )
+
+        request = ResponseCreateParams.model_validate({**body, "include": [include]})
+        captured, response = await _converse_roundtrip(monkeypatch, request, text="ok")
+
+        assert response.status == "completed"
+        assert captured == baseline, f"'{include}' altered the request to the model"
+
+    @pytest.mark.parametrize("include", get_args(ResponseIncludable))
+    def test_only_encrypted_reasoning_is_honored(self, include: str) -> None:
+        """``reasoning.encrypted_content`` alone turns on the reasoning envelope.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:_includes_encrypted_reasoning
+        """
+        request = ResponseCreateParams.model_validate(
+            {"model": "test-model", "input": "hi", "include": [include]}
+        )
+
+        assert _includes_encrypted_reasoning(request) is (
+            include == "reasoning.encrypted_content"
+        )
+
+
+@pytest.mark.local
+class TestTopLogprobsIsEchoedWithoutLogprobs:
+    """``top_logprobs`` is echoed on the response, which never carries logprobs.
+
+    Bedrock Converse returns no token log probabilities, so the documented
+    behaviour is to accept the parameter, report it back, and leave every
+    ``output_text`` part's ``logprobs`` unset rather than fabricating one. The
+    official-API test covering the populated case skips on this lane.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         stdapi/models/chat/_adapters/_openai_responses.py:_build_response_object
+    """
+
+    async def test_echoed_value_comes_back_without_logprobs(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """``top_logprobs=3`` is echoed and no output text part reports logprobs.
+
+        Ref: stdapi/types/openai_responses.py:ResponseOutputText
+        """
+        del request_log
+        request = ResponseCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "input": "hi",
+                "top_logprobs": 3,
+                "include": ["message.output_text.logprobs"],
+            }
+        )
+
+        _, response = await _converse_roundtrip(monkeypatch, request, text="yes")
+
+        assert response.top_logprobs == 3
+        parts = [
+            part
+            for item in response.output
+            if isinstance(item, ResponseOutputMessage)
+            for part in item.content
+        ]
+        assert parts, "the stubbed answer must produce an output_text part"
+        assert all(getattr(part, "logprobs", None) in (None, []) for part in parts), (
+            "Converse returns no log probabilities, so none may be reported"
         )

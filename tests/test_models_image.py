@@ -545,3 +545,95 @@ class TestStabilityMultiImageTokenAccumulation:
         assert [image.index for image in images] == [0, 1, 2]
         assert job.input_tokens == 15
         assert job.output_tokens == 27
+
+
+def _b64_noisy_rgb_png(size: int = 64) -> str:
+    """Encode a deterministic noisy RGB PNG, whose JPEG size tracks the quality."""
+    image = Image.new("RGB", (size, size))
+    image.putdata(
+        [
+            ((x * 37) % 256, (y * 91) % 256, (x * y) % 256)
+            for y in range(size)
+            for x in range(size)
+        ]
+    )
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return b64encode(buffer.getvalue()).decode()
+
+
+class TestOutputCompressionReEncoding:
+    """``output_compression`` is applied when the image is re-encoded, and only then.
+
+    The parameter is documented as supported over 1-100% on generations and
+    edits, but it only reaches the encoder through the format conversion: a
+    backend already producing the requested format streams its bytes through
+    untouched. Asserting the produced payload, rather than the value handed to
+    the job, is what distinguishes a forwarded parameter from an applied one.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/models/image/__init__.py:ImageGenerationJobBase._ensure_image_output_format
+         stdapi/utils.py:convert_base64_image
+    """
+
+    @staticmethod
+    def _job(
+        output_format: str, output_compression: int
+    ) -> ImageGenerationJobBase[Any]:
+        """Build a job converting into *output_format* at *output_compression*."""
+        return ImageGenerationJobBase(
+            model=cast("Any", None),
+            prompt="a cat",
+            count=1,
+            width=64,
+            height=64,
+            quality=None,
+            style=None,
+            output_format=cast("Any", output_format),
+            output_compression=output_compression,
+            extra_params={},
+        )
+
+    async def test_lower_compression_produces_a_smaller_jpeg(self) -> None:
+        """The same source image encodes to fewer bytes at a lower compression level."""
+        source = _b64_noisy_rgb_png()
+
+        best = await self._job("jpeg", 100)._ensure_image_output_format(  # noqa: SLF001
+            ImageGenerationResponse(image=source, index=0)
+        )
+        lossy = await self._job("jpeg", 10)._ensure_image_output_format(  # noqa: SLF001
+            ImageGenerationResponse(image=source, index=0)
+        )
+
+        best_bytes = pybase64_b64decode(best.image)
+        lossy_bytes = pybase64_b64decode(lossy.image)
+        assert best_bytes.startswith(b"\xff\xd8\xff"), "not a JPEG payload"
+        assert lossy_bytes.startswith(b"\xff\xd8\xff"), "not a JPEG payload"
+        assert len(lossy_bytes) < len(best_bytes)
+
+    async def test_conversion_reports_the_size_of_the_produced_image(self) -> None:
+        """The echoed size is measured on the re-encoded image, not on the request."""
+        job = self._job("jpeg", 50)
+
+        await job._ensure_image_output_format(  # noqa: SLF001
+            ImageGenerationResponse(image=_b64_noisy_rgb_png(), index=0)
+        )
+
+        assert (job.width, job.height) == (64, 64)
+        assert job.output_format == "jpeg"
+
+    async def test_no_conversion_leaves_the_payload_untouched(self) -> None:
+        """A backend image already in the requested format is not re-encoded.
+
+        ``output_compression`` therefore has no effect on it, which is why a
+        compression assertion has to be made on a converted payload.
+        """
+        source = _b64_noisy_rgb_png()
+        job = self._job("png", 10)
+
+        result = await job._ensure_image_output_format(  # noqa: SLF001
+            ImageGenerationResponse(image=source, index=0)
+        )
+
+        assert result.image == source
+        assert (job.width, job.height) == (64, 64)
