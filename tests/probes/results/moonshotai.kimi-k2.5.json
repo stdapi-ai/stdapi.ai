@@ -1,0 +1,412 @@
+{
+ "schema_version": 1,
+ "model_id": "moonshotai.kimi-k2.5",
+ "invoked_id": "moonshotai.kimi-k2.5",
+ "region": "us-east-1",
+ "probed_at": "2026-07-31",
+ "probes": [
+  {
+   "name": "baseline",
+   "feature": "Plain text request",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {}
+  },
+  {
+   "name": "system_prompt",
+   "feature": "System prompt block",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "system": [
+     {
+      "text": "You always answer in exactly one word."
+     }
+    ]
+   }
+  },
+  {
+   "name": "temperature",
+   "feature": "inferenceConfig.temperature",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "inferenceConfig": {
+     "maxTokens": 64,
+     "temperature": 0.2
+    }
+   }
+  },
+  {
+   "name": "top_p",
+   "feature": "inferenceConfig.topP",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "inferenceConfig": {
+     "maxTokens": 64,
+     "topP": 0.5
+    }
+   }
+  },
+  {
+   "name": "temperature_and_top_p",
+   "feature": "temperature and topP together",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "inferenceConfig": {
+     "maxTokens": 64,
+     "temperature": 0.2,
+     "topP": 0.5
+    }
+   }
+  },
+  {
+   "name": "stop_sequences",
+   "feature": "inferenceConfig.stopSequences",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: This model doesn't support the stopSequences field. Remove stopSequences and try again.",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "text": "Write exactly: BEGIN STOPHERE END"
+       }
+      ]
+     }
+    ],
+    "inferenceConfig": {
+     "maxTokens": 64,
+     "stopSequences": [
+      "STOPHERE"
+     ]
+    }
+   }
+  },
+  {
+   "name": "top_k",
+   "feature": "additionalModelRequestFields.top_k",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "additionalModelRequestFields": {
+     "top_k": 10
+    }
+   }
+  },
+  {
+   "name": "tool_use",
+   "feature": "toolConfig with an auto tool choice",
+   "outcome": "supported",
+   "detail": "toolUse: get_weather",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "text": "What is the weather in Lisbon?"
+       }
+      ]
+     }
+    ],
+    "toolConfig": {
+     "tools": [
+      {
+       "toolSpec": {
+        "name": "get_weather",
+        "description": "Get the current weather for a city.",
+        "inputSchema": {
+         "json": {
+          "type": "object",
+          "properties": {
+           "city": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "city"
+          ]
+         }
+        }
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "tool_choice_any",
+   "feature": "toolChoice.any",
+   "outcome": "supported",
+   "detail": "toolUse: get_weather",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "text": "Say hello."
+       }
+      ]
+     }
+    ],
+    "toolConfig": {
+     "tools": [
+      {
+       "toolSpec": {
+        "name": "get_weather",
+        "description": "Get the current weather for a city.",
+        "inputSchema": {
+         "json": {
+          "type": "object",
+          "properties": {
+           "city": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "city"
+          ]
+         }
+        }
+       }
+      }
+     ],
+     "toolChoice": {
+      "any": {}
+     }
+    }
+   }
+  },
+  {
+   "name": "tool_choice_tool",
+   "feature": "toolChoice.tool (forced function)",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "text": "Say hello."
+       }
+      ]
+     }
+    ],
+    "toolConfig": {
+     "tools": [
+      {
+       "toolSpec": {
+        "name": "get_weather",
+        "description": "Get the current weather for a city.",
+        "inputSchema": {
+         "json": {
+          "type": "object",
+          "properties": {
+           "city": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "city"
+          ]
+         }
+        }
+       }
+      }
+     ],
+     "toolChoice": {
+      "tool": {
+       "name": "get_weather"
+      }
+     }
+    }
+   }
+  },
+  {
+   "name": "thinking_enabled",
+   "feature": "additionalModelRequestFields.thinking = {\"type\": \"enabled\"}",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "text": "Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only."
+       }
+      ]
+     }
+    ],
+    "inferenceConfig": {
+     "maxTokens": 4096
+    },
+    "additionalModelRequestFields": {
+     "thinking": {
+      "type": "enabled"
+     }
+    }
+   }
+  },
+  {
+   "name": "reasoning_config_enabled",
+   "feature": "additionalModelRequestFields.reasoning_config = {\"type\": \"enabled\"}",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: {\"error\":{\"code\":\"validation_error\",\"message\":\"Failed to deserialize the JSON body into the target type: Invalid 'reasoning_effort': unknown variant `budget_tokens`, expected one of `high`, `low`, `medium`, `minimal`, `none`, `xhigh` at line 1 column 357\",\"param\":null,\"type\":\"invalid_request_error\"}}",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "text": "Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only."
+       }
+      ]
+     }
+    ],
+    "inferenceConfig": {
+     "maxTokens": 4096
+    },
+    "additionalModelRequestFields": {
+     "reasoning_config": {
+      "type": "enabled",
+      "budget_tokens": 1024
+     }
+    }
+   }
+  },
+  {
+   "name": "reasoning_effort_high",
+   "feature": "additionalModelRequestFields.reasoning_effort = high",
+   "outcome": "supported",
+   "detail": "reasoningContent block, 525 chars",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "text": "Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only."
+       }
+      ]
+     }
+    ],
+    "inferenceConfig": {
+     "maxTokens": 4096
+    },
+    "additionalModelRequestFields": {
+     "reasoning_effort": "high"
+    }
+   }
+  },
+  {
+   "name": "reasoning_effort_low",
+   "feature": "additionalModelRequestFields.reasoning_effort = low",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "text": "Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only."
+       }
+      ]
+     }
+    ],
+    "inferenceConfig": {
+     "maxTokens": 4096
+    },
+    "additionalModelRequestFields": {
+     "reasoning_effort": "low"
+    }
+   }
+  },
+  {
+   "name": "reasoning_effort_minimal",
+   "feature": "additionalModelRequestFields.reasoning_effort = minimal",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: {\"error\":{\"code\":\"validation_error\",\"message\":\"SubmitRequestFailure: SubmitRequestFailure: code=-32602, msg=1 validation error for ChatCompletionRequest\\nreasoning_effort\\n  Input should be 'none', 'low', 'medium' or 'high' [type=literal_error, input_value='minimal', input_type=str]\\n    For further information visit https://errors.pydantic.dev/2.13/v/literal_error\",\"param\":null,\"type\":\"invalid_request_error\"}}",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "text": "Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only."
+       }
+      ]
+     }
+    ],
+    "inferenceConfig": {
+     "maxTokens": 4096
+    },
+    "additionalModelRequestFields": {
+     "reasoning_effort": "minimal"
+    }
+   }
+  },
+  {
+   "name": "prompt_cache",
+   "feature": "cachePoint in the message content",
+   "outcome": "error",
+   "detail": "An error occurred (AccessDeniedException) when calling the Converse operation: You invoked an unsupported model or your request did not allow prompt caching. See the documentation for more information.",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "text": "The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects."
+       },
+       {
+        "cachePoint": {
+         "type": "default"
+        }
+       },
+       {
+        "text": "Reply with the single word OK."
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "json_mode",
+   "feature": "A prompt demanding a JSON object",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "text": "Return a JSON object with the keys city and country for Lisbon. Output JSON only."
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "service_tier_flex",
+   "feature": "performanceConfig latency=optimized",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: Latency performance configuration is not supported for moonshotai.kimi-k2.5 in us-east-1",
+   "request": {
+    "performanceConfig": {
+     "latency": "optimized"
+    }
+   }
+  }
+ ]
+}
