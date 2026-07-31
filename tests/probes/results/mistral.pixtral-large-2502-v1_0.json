@@ -1,7 +1,7 @@
 {
  "schema_version": 4,
- "model_id": "amazon.nova-micro-v1:0",
- "invoked_id": "amazon.nova-micro-v1:0",
+ "model_id": "mistral.pixtral-large-2502-v1:0",
+ "invoked_id": "us.mistral.pixtral-large-2502-v1:0",
  "transport": "converse",
  "region": "us-east-1",
  "probed_at": "2026-08-01",
@@ -66,8 +66,8 @@
   {
    "name": "stop_sequences",
    "feature": "inferenceConfig.stopSequences",
-   "outcome": "supported",
-   "detail": "halted at the sequence, stopReason=end_turn",
+   "outcome": "accepted",
+   "detail": "no observable effect",
    "request": {
     "messages": [
      {
@@ -91,7 +91,7 @@
    "name": "top_k",
    "feature": "additionalModelRequestFields.top_k",
    "outcome": "rejected",
-   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: Malformed input request: #: extraneous key [top_k] is not permitted, please reformat your input and try again.",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: {\"detail\":[{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"ChatCompletionRequest\",\"top_k\"],\"msg\":\"Extra inputs are not permitted\",\"input\":10},{\"type\":\"missing\",\"loc\":[\"body\",\"CompletionRequest\",\"prompt\"],\"msg\":\"Field required\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Reply with the single word OK.\"}]}],\"max_tokens\":64,\"top_k\":10}},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"CompletionRequest\",\"messages\"],\"msg\":\"Extra inputs are not permitted\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Reply with the single word OK.\"}]}]},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"CompletionRequest\",\"top_k\"],\"msg\":\"Extra inputs are not permitted\",\"input\":10},{\"type\":\"missing\",\"loc\":[\"body\",\"FIMCompletionRequest\",\"prompt\"],\"msg\":\"Field required\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Reply with the single word OK.\"}]}],\"max_tokens\":64,\"top_k\":10}},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"FIMCompletionRequest\",\"messages\"],\"msg\":\"Extra inputs are not permitted\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Reply with the single word OK.\"}]}]},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"FIMCompletionRequest\",\"top_k\"],\"msg\":\"Extra inputs are not permitted\",\"input\":10},{\"type\":\"missing\",\"loc\":[\"body\",\"OCRRequest\",\"document\"],\"msg\":\"Field required\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Reply with the single word OK.\"}]}],\"max_tokens\":64,\"top_k\":10}},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"OCRRequest\",\"messages\"],\"msg\":\"Extra inputs are not permitted\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Reply with the single word OK.\"}]}]},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"OCRRequest\",\"max_tokens\"],\"msg\":\"Extra inputs are not permitted\",\"input\":64},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"OCRRequest\",\"top_k\"],\"msg\":\"Extra inputs are not permitted\",\"input\":10}],\"body\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Reply with the single word OK.\"}]}],\"max_tokens\":64,\"top_k\":10}}",
    "request": {
     "additionalModelRequestFields": {
      "top_k": 10
@@ -186,8 +186,8 @@
   {
    "name": "tool_choice_tool",
    "feature": "toolChoice.tool (forced function)",
-   "outcome": "supported",
-   "detail": "toolUse: get_weather",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: This model doesn't support the toolConfig.toolChoice.tool field. Remove toolConfig.toolChoice.tool and try again.",
    "request": {
     "messages": [
      {
@@ -233,7 +233,7 @@
    "name": "thinking_enabled",
    "feature": "additionalModelRequestFields.thinking = {\"type\": \"enabled\"}",
    "outcome": "rejected",
-   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: Malformed input request: #: extraneous key [thinking] is not permitted, please reformat your input and try again.",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: {\"detail\":[{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"ChatCompletionRequest\",\"thinking\"],\"msg\":\"Extra inputs are not permitted\",\"input\":{\"type\":\"enabled\"}},{\"type\":\"missing\",\"loc\":[\"body\",\"CompletionRequest\",\"prompt\"],\"msg\":\"Field required\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}],\"max_tokens\":4096,\"thinking\":{\"type\":\"enabled\"}}},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"CompletionRequest\",\"messages\"],\"msg\":\"Extra inputs are not permitted\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}]},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"CompletionRequest\",\"thinking\"],\"msg\":\"Extra inputs are not permitted\",\"input\":{\"type\":\"enabled\"}},{\"type\":\"missing\",\"loc\":[\"body\",\"FIMCompletionRequest\",\"prompt\"],\"msg\":\"Field required\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}],\"max_tokens\":4096,\"thinking\":{\"type\":\"enabled\"}}},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"FIMCompletionRequest\",\"messages\"],\"msg\":\"Extra inputs are not permitted\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}]},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"FIMCompletionRequest\",\"thinking\"],\"msg\":\"Extra inputs are not permitted\",\"input\":{\"type\":\"enabled\"}},{\"type\":\"missing\",\"loc\":[\"body\",\"OCRRequest\",\"document\"],\"msg\":\"Field required\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}],\"max_tokens\":4096,\"thinking\":{\"type\":\"enabled\"}}},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"OCRRequest\",\"messages\"],\"msg\":\"Extra inputs are not permitted\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}]},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"OCRRequest\",\"max_tokens\"],\"msg\":\"Extra inputs are not permitted\",\"input\":4096},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"OCRRequest\",\"thinking\"],\"msg\":\"Extra inputs are not permitted\",\"input\":{\"type\":\"enabled\"}}],\"body\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}],\"max_tokens\":4096,\"thinking\":{\"type\":\"enabled\"}}}",
    "request": {
     "messages": [
      {
@@ -259,7 +259,7 @@
    "name": "reasoning_config_enabled",
    "feature": "additionalModelRequestFields.reasoning_config = {\"type\": \"enabled\"}",
    "outcome": "rejected",
-   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: Malformed input request: #: extraneous key [reasoning_config] is not permitted, please reformat your input and try again.",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: {\"detail\":[{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"ChatCompletionRequest\",\"reasoning_config\"],\"msg\":\"Extra inputs are not permitted\",\"input\":{\"budget_tokens\":1024,\"type\":\"enabled\"}},{\"type\":\"missing\",\"loc\":[\"body\",\"CompletionRequest\",\"prompt\"],\"msg\":\"Field required\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}],\"max_tokens\":4096,\"reasoning_config\":{\"budget_tokens\":1024,\"type\":\"enabled\"}}},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"CompletionRequest\",\"messages\"],\"msg\":\"Extra inputs are not permitted\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}]},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"CompletionRequest\",\"reasoning_config\"],\"msg\":\"Extra inputs are not permitted\",\"input\":{\"budget_tokens\":1024,\"type\":\"enabled\"}},{\"type\":\"missing\",\"loc\":[\"body\",\"FIMCompletionRequest\",\"prompt\"],\"msg\":\"Field required\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}],\"max_tokens\":4096,\"reasoning_config\":{\"budget_tokens\":1024,\"type\":\"enabled\"}}},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"FIMCompletionRequest\",\"messages\"],\"msg\":\"Extra inputs are not permitted\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}]},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"FIMCompletionRequest\",\"reasoning_config\"],\"msg\":\"Extra inputs are not permitted\",\"input\":{\"budget_tokens\":1024,\"type\":\"enabled\"}},{\"type\":\"missing\",\"loc\":[\"body\",\"OCRRequest\",\"document\"],\"msg\":\"Field required\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}],\"max_tokens\":4096,\"reasoning_config\":{\"budget_tokens\":1024,\"type\":\"enabled\"}}},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"OCRRequest\",\"messages\"],\"msg\":\"Extra inputs are not permitted\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}]},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"OCRRequest\",\"max_tokens\"],\"msg\":\"Extra inputs are not permitted\",\"input\":4096},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"OCRRequest\",\"reasoning_config\"],\"msg\":\"Extra inputs are not permitted\",\"input\":{\"budget_tokens\":1024,\"type\":\"enabled\"}}],\"body\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}],\"max_tokens\":4096,\"reasoning_config\":{\"budget_tokens\":1024,\"type\":\"enabled\"}}}",
    "request": {
     "messages": [
      {
@@ -286,7 +286,7 @@
    "name": "reasoning_effort_high",
    "feature": "additionalModelRequestFields.reasoning_effort = high",
    "outcome": "rejected",
-   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: Malformed input request: #: extraneous key [reasoning_effort] is not permitted, please reformat your input and try again.",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: {\"detail\":[{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"ChatCompletionRequest\",\"reasoning_effort\"],\"msg\":\"Extra inputs are not permitted\",\"input\":\"high\"},{\"type\":\"missing\",\"loc\":[\"body\",\"CompletionRequest\",\"prompt\"],\"msg\":\"Field required\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}],\"max_tokens\":4096,\"reasoning_effort\":\"high\"}},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"CompletionRequest\",\"messages\"],\"msg\":\"Extra inputs are not permitted\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}]},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"CompletionRequest\",\"reasoning_effort\"],\"msg\":\"Extra inputs are not permitted\",\"input\":\"high\"},{\"type\":\"missing\",\"loc\":[\"body\",\"FIMCompletionRequest\",\"prompt\"],\"msg\":\"Field required\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}],\"max_tokens\":4096,\"reasoning_effort\":\"high\"}},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"FIMCompletionRequest\",\"messages\"],\"msg\":\"Extra inputs are not permitted\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}]},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"FIMCompletionRequest\",\"reasoning_effort\"],\"msg\":\"Extra inputs are not permitted\",\"input\":\"high\"},{\"type\":\"missing\",\"loc\":[\"body\",\"OCRRequest\",\"document\"],\"msg\":\"Field required\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}],\"max_tokens\":4096,\"reasoning_effort\":\"high\"}},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"OCRRequest\",\"messages\"],\"msg\":\"Extra inputs are not permitted\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}]},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"OCRRequest\",\"max_tokens\"],\"msg\":\"Extra inputs are not permitted\",\"input\":4096},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"OCRRequest\",\"reasoning_effort\"],\"msg\":\"Extra inputs are not permitted\",\"input\":\"high\"}],\"body\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}],\"max_tokens\":4096,\"reasoning_effort\":\"high\"}}",
    "request": {
     "messages": [
      {
@@ -310,7 +310,7 @@
    "name": "reasoning_effort_low",
    "feature": "additionalModelRequestFields.reasoning_effort = low",
    "outcome": "rejected",
-   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: Malformed input request: #: extraneous key [reasoning_effort] is not permitted, please reformat your input and try again.",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: {\"detail\":[{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"ChatCompletionRequest\",\"reasoning_effort\"],\"msg\":\"Extra inputs are not permitted\",\"input\":\"low\"},{\"type\":\"missing\",\"loc\":[\"body\",\"CompletionRequest\",\"prompt\"],\"msg\":\"Field required\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}],\"max_tokens\":4096,\"reasoning_effort\":\"low\"}},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"CompletionRequest\",\"messages\"],\"msg\":\"Extra inputs are not permitted\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}]},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"CompletionRequest\",\"reasoning_effort\"],\"msg\":\"Extra inputs are not permitted\",\"input\":\"low\"},{\"type\":\"missing\",\"loc\":[\"body\",\"FIMCompletionRequest\",\"prompt\"],\"msg\":\"Field required\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}],\"max_tokens\":4096,\"reasoning_effort\":\"low\"}},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"FIMCompletionRequest\",\"messages\"],\"msg\":\"Extra inputs are not permitted\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}]},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"FIMCompletionRequest\",\"reasoning_effort\"],\"msg\":\"Extra inputs are not permitted\",\"input\":\"low\"},{\"type\":\"missing\",\"loc\":[\"body\",\"OCRRequest\",\"document\"],\"msg\":\"Field required\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}],\"max_tokens\":4096,\"reasoning_effort\":\"low\"}},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"OCRRequest\",\"messages\"],\"msg\":\"Extra inputs are not permitted\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}]},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"OCRRequest\",\"max_tokens\"],\"msg\":\"Extra inputs are not permitted\",\"input\":4096},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"OCRRequest\",\"reasoning_effort\"],\"msg\":\"Extra inputs are not permitted\",\"input\":\"low\"}],\"body\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}],\"max_tokens\":4096,\"reasoning_effort\":\"low\"}}",
    "request": {
     "messages": [
      {
@@ -334,7 +334,7 @@
    "name": "reasoning_effort_minimal",
    "feature": "additionalModelRequestFields.reasoning_effort = minimal",
    "outcome": "rejected",
-   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: Malformed input request: #: extraneous key [reasoning_effort] is not permitted, please reformat your input and try again.",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: {\"detail\":[{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"ChatCompletionRequest\",\"reasoning_effort\"],\"msg\":\"Extra inputs are not permitted\",\"input\":\"minimal\"},{\"type\":\"missing\",\"loc\":[\"body\",\"CompletionRequest\",\"prompt\"],\"msg\":\"Field required\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}],\"max_tokens\":4096,\"reasoning_effort\":\"minimal\"}},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"CompletionRequest\",\"messages\"],\"msg\":\"Extra inputs are not permitted\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}]},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"CompletionRequest\",\"reasoning_effort\"],\"msg\":\"Extra inputs are not permitted\",\"input\":\"minimal\"},{\"type\":\"missing\",\"loc\":[\"body\",\"FIMCompletionRequest\",\"prompt\"],\"msg\":\"Field required\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}],\"max_tokens\":4096,\"reasoning_effort\":\"minimal\"}},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"FIMCompletionRequest\",\"messages\"],\"msg\":\"Extra inputs are not permitted\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}]},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"FIMCompletionRequest\",\"reasoning_effort\"],\"msg\":\"Extra inputs are not permitted\",\"input\":\"minimal\"},{\"type\":\"missing\",\"loc\":[\"body\",\"OCRRequest\",\"document\"],\"msg\":\"Field required\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}],\"max_tokens\":4096,\"reasoning_effort\":\"minimal\"}},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"OCRRequest\",\"messages\"],\"msg\":\"Extra inputs are not permitted\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}]},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"OCRRequest\",\"max_tokens\"],\"msg\":\"Extra inputs are not permitted\",\"input\":4096},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"OCRRequest\",\"reasoning_effort\"],\"msg\":\"Extra inputs are not permitted\",\"input\":\"minimal\"}],\"body\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only.\"}]}],\"max_tokens\":4096,\"reasoning_effort\":\"minimal\"}}",
    "request": {
     "messages": [
      {
@@ -357,8 +357,8 @@
   {
    "name": "prompt_cache",
    "feature": "cachePoint in the message content",
-   "outcome": "supported",
-   "detail": "cacheWrite=1760 cacheRead=0",
+   "outcome": "rejected",
+   "detail": "An error occurred (AccessDeniedException) when calling the Converse operation: You invoked an unsupported model or your request did not allow prompt caching. See the documentation for more information.",
    "request": {
     "messages": [
      {
@@ -383,8 +383,8 @@
   {
    "name": "json_mode",
    "feature": "A prompt demanding a JSON object",
-   "outcome": "supported",
-   "detail": "JSON object with keys ['city', 'country']",
+   "outcome": "accepted",
+   "detail": "no observable effect",
    "request": {
     "messages": [
      {
@@ -402,7 +402,7 @@
    "name": "service_tier_flex",
    "feature": "performanceConfig latency=optimized",
    "outcome": "rejected",
-   "detail": "An error occurred (ValidationException) when calling the Converse operation: Latency performance configuration is not supported for amazon.nova-micro-v1:0 in us-east-1",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: Latency performance configuration is not supported for mistral.pixtral-large-2502-v1:0 in us-east-1",
    "request": {
     "performanceConfig": {
      "latency": "optimized"
@@ -471,8 +471,8 @@
   {
    "name": "assistant_prefill",
    "feature": "A trailing assistant turn the model must continue",
-   "outcome": "accepted",
-   "detail": "no observable effect",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model that you are using requires the last turn in the conversation to be a user message. Add a user message to the conversation and try again.",
    "request": {
     "messages": [
      {
@@ -497,8 +497,8 @@
   {
    "name": "tool_result_round_trip",
    "feature": "A toolResult block replayed on the next turn",
-   "outcome": "accepted",
-   "detail": "no observable effect",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: Tool call id was t1 but must be a-z, A-Z, 0-9, with a length of 9.",
    "request": {
     "messages": [
      {
@@ -596,8 +596,8 @@
   {
    "name": "image_input",
    "feature": "An image content block",
-   "outcome": "rejected",
-   "detail": "An error occurred (ValidationException) when calling the Converse operation: This model doesn't support the image content block that you provided. Update the content block and try again.",
+   "outcome": "accepted",
+   "detail": "no observable effect",
    "request": {
     "messages": [
      {
@@ -622,8 +622,8 @@
   {
    "name": "document_input",
    "feature": "A document content block",
-   "outcome": "rejected",
-   "detail": "An error occurred (ValidationException) when calling the Converse operation: This model doesn't support documents.",
+   "outcome": "accepted",
+   "detail": "no observable effect",
    "request": {
     "messages": [
      {
@@ -661,7 +661,7 @@
    "name": "unknown_additional_field",
    "feature": "An unknown key in additionalModelRequestFields",
    "outcome": "rejected",
-   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: Malformed input request: #: extraneous key [stdapi_probe_unknown] is not permitted, please reformat your input and try again.",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: {\"detail\":[{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"ChatCompletionRequest\",\"stdapi_probe_unknown\"],\"msg\":\"Extra inputs are not permitted\",\"input\":1},{\"type\":\"missing\",\"loc\":[\"body\",\"CompletionRequest\",\"prompt\"],\"msg\":\"Field required\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Reply with the single word OK.\"}]}],\"max_tokens\":64,\"stdapi_probe_unknown\":1}},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"CompletionRequest\",\"messages\"],\"msg\":\"Extra inputs are not permitted\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Reply with the single word OK.\"}]}]},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"CompletionRequest\",\"stdapi_probe_unknown\"],\"msg\":\"Extra inputs are not permitted\",\"input\":1},{\"type\":\"missing\",\"loc\":[\"body\",\"FIMCompletionRequest\",\"prompt\"],\"msg\":\"Field required\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Reply with the single word OK.\"}]}],\"max_tokens\":64,\"stdapi_probe_unknown\":1}},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"FIMCompletionRequest\",\"messages\"],\"msg\":\"Extra inputs are not permitted\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Reply with the single word OK.\"}]}]},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"FIMCompletionRequest\",\"stdapi_probe_unknown\"],\"msg\":\"Extra inputs are not permitted\",\"input\":1},{\"type\":\"missing\",\"loc\":[\"body\",\"OCRRequest\",\"document\"],\"msg\":\"Field required\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Reply with the single word OK.\"}]}],\"max_tokens\":64,\"stdapi_probe_unknown\":1}},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"OCRRequest\",\"messages\"],\"msg\":\"Extra inputs are not permitted\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Reply with the single word OK.\"}]}]},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"OCRRequest\",\"max_tokens\"],\"msg\":\"Extra inputs are not permitted\",\"input\":64},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"OCRRequest\",\"stdapi_probe_unknown\"],\"msg\":\"Extra inputs are not permitted\",\"input\":1}],\"body\":{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Reply with the single word OK.\"}]}],\"max_tokens\":64,\"stdapi_probe_unknown\":1}}",
    "request": {
     "additionalModelRequestFields": {
      "stdapi_probe_unknown": 1

@@ -1,0 +1,17 @@
+{
+ "schema_version": 4,
+ "model_id": "meta.llama4-scout-17b-instruct-v1:0",
+ "invoked_id": "meta.llama4-scout-17b-instruct-v1:0",
+ "transport": "converse",
+ "region": "us-east-1",
+ "probed_at": "2026-08-01",
+ "probes": [
+  {
+   "name": "baseline",
+   "feature": "Plain text request",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: Access to Meta Llama models is not allowed from unsupported countries, regions, or territories. Please refer to Meta's EULA (https://aws.amazon.com/legal/bedrock/third-party-models/) for more information on restrictions related to the countries and regions they currently support",
+   "request": {}
+  }
+ ]
+}

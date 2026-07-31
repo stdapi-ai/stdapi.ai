@@ -1,0 +1,17 @@
+{
+ "schema_version": 4,
+ "model_id": "cohere.command-r-v1:0",
+ "invoked_id": "cohere.command-r-v1:0",
+ "transport": "converse",
+ "region": "us-east-1",
+ "probed_at": "2026-08-01",
+ "probes": [
+  {
+   "name": "baseline",
+   "feature": "Plain text request",
+   "outcome": "error",
+   "detail": "An error occurred (ResourceNotFoundException) when calling the Converse operation: Access denied. This Model is marked by provider as Legacy and you have not been actively using the model in the last 30 days. Please upgrade to an active model on Amazon Bedrock",
+   "request": {}
+  }
+ ]
+}

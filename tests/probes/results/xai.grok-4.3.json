@@ -1,0 +1,17 @@
+{
+ "schema_version": 4,
+ "model_id": "xai.grok-4.3",
+ "invoked_id": "xai.grok-4.3",
+ "transport": "mantle",
+ "region": "us-east-1",
+ "probed_at": "2026-08-01",
+ "probes": [
+  {
+   "name": "baseline",
+   "feature": "Plain text request",
+   "outcome": "rejected",
+   "detail": "model `xai.grok-4.3` isn't supported on this route",
+   "request": {}
+  }
+ ]
+}

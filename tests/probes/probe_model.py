@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     import re
     from collections.abc import Callable, Sequence
 
+    from aiobotocore.config import AioConfig
     from types_aiobotocore_bedrock.literals import RegionName
 
     from stdapi.monitoring import EventLog
@@ -59,7 +60,7 @@ if TYPE_CHECKING:
 RESULTS_DIR = Path(__file__).parent / "results"
 
 #: Bumped when the probe set changes in a way that invalidates older records.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 #: Outcome of a single probe.
 Outcome = Literal["supported", "accepted", "rejected", "error", "skipped"]
@@ -878,6 +879,11 @@ STREAM_PROBES: tuple[Probe, ...] = (
 #: Backend refusals that arrive as something other than a ValidationException.
 _REFUSAL_MARKERS = ("unsupported model", "does not support", "isn't supported")
 
+#: Seconds one probe may take. Botocore retries a slow model for minutes on its
+#: own, which stalls a whole sweep; a probe that needs longer than this is not
+#: measuring a feature any more.
+_PROBE_TIMEOUT = 90
+
 
 def _classify(exc: Exception) -> Outcome:
     """Tell a backend refusal apart from a fault in the probe itself.
@@ -902,6 +908,25 @@ def _classify(exc: Exception) -> Outcome:
     return "error"
 
 
+def _client_config() -> AioConfig:
+    """Build the bedrock-runtime config the probes call through.
+
+    Botocore defaults to a 60s read timeout and five attempts, so one unhealthy
+    model can hold a probe for minutes.  A probe only needs to learn whether the
+    API accepts a shape, and a refusal comes back immediately.
+
+    Returns:
+        The client configuration.
+    """
+    from aiobotocore.config import AioConfig  # noqa: PLC0415 - optional at import
+
+    return AioConfig(
+        connect_timeout=10,
+        read_timeout=60,
+        retries={"max_attempts": 2, "mode": "standard"},
+    )
+
+
 async def _run_probe(
     client: Any,  # noqa: ANN401 - the aiobotocore client type is not exported
     model_id: str,
@@ -923,7 +948,16 @@ async def _run_probe(
         return ProbeResult(probe.name, probe.feature, "skipped", "not applicable")
     request = {**baseline, **probe.overrides, "modelId": model_id}
     try:
-        response = await client.converse(**request)
+        async with asyncio.timeout(_PROBE_TIMEOUT):
+            response = await client.converse(**request)
+    except TimeoutError:
+        return ProbeResult(
+            probe.name,
+            probe.feature,
+            "error",
+            f"no answer within {_PROBE_TIMEOUT}s",
+            probe.overrides,
+        )
     except Exception as exc:  # noqa: BLE001 - every failure mode is a result
         return ProbeResult(
             probe.name, probe.feature, _classify(exc), str(exc), probe.overrides
@@ -957,10 +991,19 @@ async def _run_stream_probe(
     """
     request = {**baseline, **probe.overrides, "modelId": model_id}
     try:
-        response = await client.converse_stream(**request)
-        events = 0
-        async for _ in response["stream"]:
-            events += 1
+        async with asyncio.timeout(_PROBE_TIMEOUT):
+            response = await client.converse_stream(**request)
+            events = 0
+            async for _ in response["stream"]:
+                events += 1
+    except TimeoutError:
+        return ProbeResult(
+            probe.name,
+            probe.feature,
+            "error",
+            f"no answer within {_PROBE_TIMEOUT}s",
+            probe.overrides,
+        )
     except Exception as exc:  # noqa: BLE001 - every failure mode is a result
         return ProbeResult(
             probe.name, probe.feature, _classify(exc), str(exc), probe.overrides
@@ -995,7 +1038,9 @@ async def probe_model(model_id: str, region: str) -> dict[str, Any]:
     session = get_session()
     invoked = model_id
     baseline_probe = Probe(name="baseline", feature="Plain text request", overrides={})
-    async with session.create_client("bedrock-runtime", region_name=region) as client:
+    async with session.create_client(
+        "bedrock-runtime", region_name=region, config=_client_config()
+    ) as client:
         baseline_result = await _run_probe(client, invoked, baseline_probe, baseline)
         if _needs_inference_profile(baseline_result):
             # Several families are cross-region only; the catalog id alone is
@@ -1048,11 +1093,22 @@ async def probe_mantle_model(model_id: str, region: str) -> dict[str, Any]:
         ):
             payload = {**baseline, **probe.overrides, "model": model_id}
             try:
-                response = await mantle.invoke(
-                    cast("RegionName", region),
-                    "/v1/chat/completions",
-                    payload,
-                    single_region=True,
+                async with asyncio.timeout(_PROBE_TIMEOUT):
+                    response = await mantle.invoke(
+                        cast("RegionName", region),
+                        "/v1/chat/completions",
+                        payload,
+                        single_region=True,
+                    )
+            except TimeoutError:
+                results.append(
+                    ProbeResult(
+                        probe.name,
+                        probe.feature,
+                        "error",
+                        f"no answer within {_PROBE_TIMEOUT}s",
+                        probe.overrides,
+                    )
                 )
             except Exception as exc:  # noqa: BLE001 - every failure mode is a result
                 results.append(

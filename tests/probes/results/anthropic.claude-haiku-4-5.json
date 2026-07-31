@@ -1,0 +1,17 @@
+{
+ "schema_version": 4,
+ "model_id": "anthropic.claude-haiku-4-5",
+ "invoked_id": "anthropic.claude-haiku-4-5",
+ "transport": "mantle",
+ "region": "us-east-1",
+ "probed_at": "2026-08-01",
+ "probes": [
+  {
+   "name": "baseline",
+   "feature": "Plain text request",
+   "outcome": "rejected",
+   "detail": "The model 'anthropic.claude-haiku-4-5' does not support the '/v1/chat/completions' API",
+   "request": {}
+  }
+ ]
+}

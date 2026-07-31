@@ -1,9 +1,9 @@
 {
  "schema_version": 4,
- "model_id": "moonshotai.kimi-k2.5",
- "invoked_id": "moonshotai.kimi-k2.5",
+ "model_id": "mistral.mistral-large-3-675b-instruct",
+ "invoked_id": "mistral.mistral-large-3-675b-instruct",
  "transport": "converse",
- "region": "us-west-2",
+ "region": "us-east-1",
  "probed_at": "2026-08-01",
  "probes": [
   {
@@ -259,7 +259,7 @@
    "name": "reasoning_config_enabled",
    "feature": "additionalModelRequestFields.reasoning_config = {\"type\": \"enabled\"}",
    "outcome": "rejected",
-   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: {\"error\":{\"code\":\"validation_error\",\"message\":\"Failed to deserialize the JSON body into the target type: Invalid 'reasoning_effort': unknown variant `budget_tokens`, expected one of `high`, `low`, `medium`, `minimal`, `none`, `xhigh` at line 1 column 357\",\"param\":null,\"type\":\"invalid_request_error\"}}",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: {\"error\":{\"code\":\"validation_error\",\"message\":\"Failed to deserialize the JSON body into the target type: Invalid 'reasoning_effort': unknown variant `budget_tokens`, expected one of `high`, `low`, `medium`, `minimal`, `none`, `xhigh` at line 1 column 374\",\"param\":null,\"type\":\"invalid_request_error\"}}",
    "request": {
     "messages": [
      {
@@ -285,8 +285,8 @@
   {
    "name": "reasoning_effort_high",
    "feature": "additionalModelRequestFields.reasoning_effort = high",
-   "outcome": "supported",
-   "detail": "reasoningContent block, 545 chars",
+   "outcome": "accepted",
+   "detail": "no observable effect",
    "request": {
     "messages": [
      {
@@ -383,8 +383,8 @@
   {
    "name": "json_mode",
    "feature": "A prompt demanding a JSON object",
-   "outcome": "supported",
-   "detail": "JSON object with keys ['city', 'country']",
+   "outcome": "accepted",
+   "detail": "no observable effect",
    "request": {
     "messages": [
      {
@@ -402,7 +402,7 @@
    "name": "service_tier_flex",
    "feature": "performanceConfig latency=optimized",
    "outcome": "rejected",
-   "detail": "An error occurred (ValidationException) when calling the Converse operation: Latency performance configuration is not supported for moonshotai.kimi-k2.5 in us-west-2",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: Latency performance configuration is not supported for mistral.mistral-large-3-675b-instruct in us-east-1",
    "request": {
     "performanceConfig": {
      "latency": "optimized"
@@ -471,8 +471,8 @@
   {
    "name": "assistant_prefill",
    "feature": "A trailing assistant turn the model must continue",
-   "outcome": "accepted",
-   "detail": "no observable effect",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: {\"error\":{\"code\":\"validation_error\",\"message\":\"ErrorEvent { error: APIError { type: \\\"BadRequestError\\\", code: Some(400), message: \\\"Cannot set `add_generation_prompt` to True when the last message is from the assistant. Consider using `continue_final_message` instead.\\\", param: None } }\",\"param\":null,\"type\":\"invalid_request_error\"}}",
    "request": {
     "messages": [
      {
@@ -497,8 +497,8 @@
   {
    "name": "tool_result_round_trip",
    "feature": "A toolResult block replayed on the next turn",
-   "outcome": "accepted",
-   "detail": "no observable effect",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: {\"error\":{\"code\":\"validation_error\",\"message\":\"ErrorEvent { error: APIError { type: \\\"BadRequestError\\\", code: Some(400), message: \\\"Tool call id was t1 but must be a-z, A-Z, 0-9, with a length of 9.\\\", param: None } }\",\"param\":null,\"type\":\"invalid_request_error\"}}",
    "request": {
     "messages": [
      {
@@ -567,8 +567,8 @@
   {
    "name": "output_config_json_schema",
    "feature": "outputConfig with a JSON schema",
-   "outcome": "accepted",
-   "detail": "no observable effect",
+   "outcome": "supported",
+   "detail": "JSON object with keys ['city', 'country']",
    "request": {
     "messages": [
      {

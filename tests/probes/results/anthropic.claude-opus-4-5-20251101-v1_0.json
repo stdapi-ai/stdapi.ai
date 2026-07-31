@@ -1,9 +1,9 @@
 {
  "schema_version": 4,
- "model_id": "moonshotai.kimi-k2.5",
- "invoked_id": "moonshotai.kimi-k2.5",
+ "model_id": "anthropic.claude-opus-4-5-20251101-v1:0",
+ "invoked_id": "us.anthropic.claude-opus-4-5-20251101-v1:0",
  "transport": "converse",
- "region": "us-west-2",
+ "region": "us-east-1",
  "probed_at": "2026-08-01",
  "probes": [
   {
@@ -53,8 +53,8 @@
   {
    "name": "temperature_and_top_p",
    "feature": "temperature and topP together",
-   "outcome": "accepted",
-   "detail": "no observable effect",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: `temperature` and `top_p` cannot both be specified for this model. Please use only one.",
    "request": {
     "inferenceConfig": {
      "maxTokens": 64,
@@ -66,8 +66,8 @@
   {
    "name": "stop_sequences",
    "feature": "inferenceConfig.stopSequences",
-   "outcome": "rejected",
-   "detail": "An error occurred (ValidationException) when calling the Converse operation: This model doesn't support the stopSequences field. Remove stopSequences and try again.",
+   "outcome": "accepted",
+   "detail": "no observable effect",
    "request": {
     "messages": [
      {
@@ -186,8 +186,8 @@
   {
    "name": "tool_choice_tool",
    "feature": "toolChoice.tool (forced function)",
-   "outcome": "accepted",
-   "detail": "no observable effect",
+   "outcome": "supported",
+   "detail": "toolUse: get_weather",
    "request": {
     "messages": [
      {
@@ -232,8 +232,8 @@
   {
    "name": "thinking_enabled",
    "feature": "additionalModelRequestFields.thinking = {\"type\": \"enabled\"}",
-   "outcome": "accepted",
-   "detail": "no observable effect",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: thinking.enabled.budget_tokens: Field required",
    "request": {
     "messages": [
      {
@@ -258,8 +258,8 @@
   {
    "name": "reasoning_config_enabled",
    "feature": "additionalModelRequestFields.reasoning_config = {\"type\": \"enabled\"}",
-   "outcome": "rejected",
-   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: {\"error\":{\"code\":\"validation_error\",\"message\":\"Failed to deserialize the JSON body into the target type: Invalid 'reasoning_effort': unknown variant `budget_tokens`, expected one of `high`, `low`, `medium`, `minimal`, `none`, `xhigh` at line 1 column 357\",\"param\":null,\"type\":\"invalid_request_error\"}}",
+   "outcome": "supported",
+   "detail": "reasoningContent block, 443 chars",
    "request": {
     "messages": [
      {
@@ -285,8 +285,8 @@
   {
    "name": "reasoning_effort_high",
    "feature": "additionalModelRequestFields.reasoning_effort = high",
-   "outcome": "supported",
-   "detail": "reasoningContent block, 545 chars",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: reasoning_effort: Extra inputs are not permitted",
    "request": {
     "messages": [
      {
@@ -309,8 +309,8 @@
   {
    "name": "reasoning_effort_low",
    "feature": "additionalModelRequestFields.reasoning_effort = low",
-   "outcome": "accepted",
-   "detail": "no observable effect",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: reasoning_effort: Extra inputs are not permitted",
    "request": {
     "messages": [
      {
@@ -334,7 +334,7 @@
    "name": "reasoning_effort_minimal",
    "feature": "additionalModelRequestFields.reasoning_effort = minimal",
    "outcome": "rejected",
-   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: {\"error\":{\"code\":\"validation_error\",\"message\":\"SubmitRequestFailure: SubmitRequestFailure: code=-32602, msg=1 validation error for ChatCompletionRequest\\nreasoning_effort\\n  Input should be 'none', 'low', 'medium' or 'high' [type=literal_error, input_value='minimal', input_type=str]\\n    For further information visit https://errors.pydantic.dev/2.13/v/literal_error\",\"param\":null,\"type\":\"invalid_request_error\"}}",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: reasoning_effort: Extra inputs are not permitted",
    "request": {
     "messages": [
      {
@@ -357,8 +357,8 @@
   {
    "name": "prompt_cache",
    "feature": "cachePoint in the message content",
-   "outcome": "rejected",
-   "detail": "An error occurred (AccessDeniedException) when calling the Converse operation: You invoked an unsupported model or your request did not allow prompt caching. See the documentation for more information.",
+   "outcome": "accepted",
+   "detail": "no observable effect",
    "request": {
     "messages": [
      {
@@ -402,7 +402,7 @@
    "name": "service_tier_flex",
    "feature": "performanceConfig latency=optimized",
    "outcome": "rejected",
-   "detail": "An error occurred (ValidationException) when calling the Converse operation: Latency performance configuration is not supported for moonshotai.kimi-k2.5 in us-west-2",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: Latency performance configuration is not supported for anthropic.claude-opus-4-5-20251101-v1:0 in us-east-1",
    "request": {
     "performanceConfig": {
      "latency": "optimized"
@@ -412,8 +412,8 @@
   {
    "name": "service_tier_priority",
    "feature": "serviceTier priority",
-   "outcome": "accepted",
-   "detail": "no observable effect",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The provided service tier is not supported for this model.",
    "request": {
     "serviceTier": {
      "type": "priority"
@@ -423,8 +423,8 @@
   {
    "name": "service_tier_flex_structured",
    "feature": "serviceTier flex",
-   "outcome": "accepted",
-   "detail": "no observable effect",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The provided service tier is not supported for this model.",
    "request": {
     "serviceTier": {
      "type": "flex"
@@ -567,8 +567,8 @@
   {
    "name": "output_config_json_schema",
    "feature": "outputConfig with a JSON schema",
-   "outcome": "accepted",
-   "detail": "no observable effect",
+   "outcome": "supported",
+   "detail": "JSON object with keys ['city', 'country']",
    "request": {
     "messages": [
      {
@@ -622,8 +622,8 @@
   {
    "name": "document_input",
    "feature": "A document content block",
-   "outcome": "rejected",
-   "detail": "An error occurred (ValidationException) when calling the Converse operation: This model doesn't support documents.",
+   "outcome": "accepted",
+   "detail": "no observable effect",
    "request": {
     "messages": [
      {
@@ -660,8 +660,8 @@
   {
    "name": "unknown_additional_field",
    "feature": "An unknown key in additionalModelRequestFields",
-   "outcome": "accepted",
-   "detail": "no observable effect",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: stdapi_probe_unknown: Extra inputs are not permitted",
    "request": {
     "additionalModelRequestFields": {
      "stdapi_probe_unknown": 1
@@ -672,7 +672,7 @@
    "name": "streaming",
    "feature": "ConverseStream",
    "outcome": "supported",
-   "detail": "6 events",
+   "detail": "5 events",
    "request": {}
   }
  ]

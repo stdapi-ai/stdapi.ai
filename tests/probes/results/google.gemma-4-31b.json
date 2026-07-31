@@ -1,0 +1,17 @@
+{
+ "schema_version": 4,
+ "model_id": "google.gemma-4-31b",
+ "invoked_id": "google.gemma-4-31b",
+ "transport": "mantle",
+ "region": "us-east-1",
+ "probed_at": "2026-08-01",
+ "probes": [
+  {
+   "name": "baseline",
+   "feature": "Plain text request",
+   "outcome": "rejected",
+   "detail": "model `google.gemma-4-31b` isn't supported on this route",
+   "request": {}
+  }
+ ]
+}

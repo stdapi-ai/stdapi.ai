@@ -1,9 +1,10 @@
 {
- "schema_version": 1,
+ "schema_version": 4,
  "model_id": "anthropic.claude-haiku-4-5-20251001-v1:0",
  "invoked_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+ "transport": "converse",
  "region": "us-east-1",
- "probed_at": "2026-07-31",
+ "probed_at": "2026-08-01",
  "probes": [
   {
    "name": "baseline",
@@ -258,7 +259,7 @@
    "name": "reasoning_config_enabled",
    "feature": "additionalModelRequestFields.reasoning_config = {\"type\": \"enabled\"}",
    "outcome": "supported",
-   "detail": "reasoningContent block, 575 chars",
+   "detail": "reasoningContent block, 603 chars",
    "request": {
     "messages": [
      {
@@ -407,6 +408,272 @@
      "latency": "optimized"
     }
    }
+  },
+  {
+   "name": "service_tier_priority",
+   "feature": "serviceTier priority",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The provided service tier is not supported for this model.",
+   "request": {
+    "serviceTier": {
+     "type": "priority"
+    }
+   }
+  },
+  {
+   "name": "service_tier_flex_structured",
+   "feature": "serviceTier flex",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The provided service tier is not supported for this model.",
+   "request": {
+    "serviceTier": {
+     "type": "flex"
+    }
+   }
+  },
+  {
+   "name": "whitespace_stop_sequence",
+   "feature": "A whitespace-only stop sequence",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The stop sequence value at inferenceConfig.stopSequences.0 is blank. Try again with a non blank stop sequence.",
+   "request": {
+    "inferenceConfig": {
+     "maxTokens": 64,
+     "stopSequences": [
+      " "
+     ]
+    }
+   }
+  },
+  {
+   "name": "system_only",
+   "feature": "A system block with no user text beyond it",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "system": [
+     {
+      "text": "Answer every question with the word OK."
+     }
+    ],
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "text": "Anything."
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "assistant_prefill",
+   "feature": "A trailing assistant turn the model must continue",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "text": "Name a colour."
+       }
+      ]
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "text": "The colour is"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "tool_result_round_trip",
+   "feature": "A toolResult block replayed on the next turn",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "text": "Weather in Lisbon?"
+       }
+      ]
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "toolUse": {
+         "toolUseId": "t1",
+         "name": "get_weather",
+         "input": {
+          "city": "Lisbon"
+         }
+        }
+       }
+      ]
+     },
+     {
+      "role": "user",
+      "content": [
+       {
+        "toolResult": {
+         "toolUseId": "t1",
+         "content": [
+          {
+           "text": "18C and sunny"
+          }
+         ]
+        }
+       }
+      ]
+     }
+    ],
+    "toolConfig": {
+     "tools": [
+      {
+       "toolSpec": {
+        "name": "get_weather",
+        "description": "Get the current weather for a city.",
+        "inputSchema": {
+         "json": {
+          "type": "object",
+          "properties": {
+           "city": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "city"
+          ]
+         }
+        }
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "output_config_json_schema",
+   "feature": "outputConfig with a JSON schema",
+   "outcome": "supported",
+   "detail": "JSON object with keys ['city', 'country']",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "text": "Describe Lisbon as city and country."
+       }
+      ]
+     }
+    ],
+    "outputConfig": {
+     "textFormat": {
+      "type": "json_schema",
+      "structure": {
+       "jsonSchema": {
+        "schema": "{\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\"}, \"country\": {\"type\": \"string\"}}, \"required\": [\"city\", \"country\"], \"additionalProperties\": false}",
+        "name": "place"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "name": "image_input",
+   "feature": "An image content block",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "text": "Reply with the single word OK."
+       },
+       {
+        "image": {
+         "format": "png",
+         "source": {
+          "bytes": "<156 bytes>"
+         }
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "document_input",
+   "feature": "A document content block",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "text": "Reply with the single word OK."
+       },
+       {
+        "document": {
+         "format": "txt",
+         "name": "note",
+         "source": {
+          "bytes": "<12 bytes>"
+         }
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "request_metadata",
+   "feature": "requestMetadata attribution",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "requestMetadata": {
+     "probe": "stdapi"
+    }
+   }
+  },
+  {
+   "name": "unknown_additional_field",
+   "feature": "An unknown key in additionalModelRequestFields",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: stdapi_probe_unknown: Extra inputs are not permitted",
+   "request": {
+    "additionalModelRequestFields": {
+     "stdapi_probe_unknown": 1
+    }
+   }
+  },
+  {
+   "name": "streaming",
+   "feature": "ConverseStream",
+   "outcome": "supported",
+   "detail": "5 events",
+   "request": {}
   }
  ]
 }

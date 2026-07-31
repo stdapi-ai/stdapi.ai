@@ -1,0 +1,17 @@
+{
+ "schema_version": 4,
+ "model_id": "twelvelabs.pegasus-1-2-v1:0",
+ "invoked_id": "twelvelabs.pegasus-1-2-v1:0",
+ "transport": "converse",
+ "region": "us-east-1",
+ "probed_at": "2026-08-01",
+ "probes": [
+  {
+   "name": "baseline",
+   "feature": "Plain text request",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: This action doesn't support the model that you provided. Try again with a supported text or chat model.",
+   "request": {}
+  }
+ ]
+}

@@ -1,0 +1,431 @@
+{
+ "schema_version": 4,
+ "model_id": "qwen.qwen3-next-80b-a3b-instruct",
+ "invoked_id": "qwen.qwen3-next-80b-a3b-instruct",
+ "transport": "mantle",
+ "region": "us-east-1",
+ "probed_at": "2026-08-01",
+ "probes": [
+  {
+   "name": "baseline",
+   "feature": "Plain text request",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {}
+  },
+  {
+   "name": "system_prompt",
+   "feature": "A system-role message",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "messages": [
+     {
+      "role": "system",
+      "content": "You always answer in one word."
+     },
+     {
+      "role": "user",
+      "content": "Reply with the single word OK."
+     }
+    ]
+   }
+  },
+  {
+   "name": "temperature",
+   "feature": "temperature",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "temperature": 0.2
+   }
+  },
+  {
+   "name": "top_p",
+   "feature": "top_p",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "top_p": 0.5
+   }
+  },
+  {
+   "name": "temperature_and_top_p",
+   "feature": "temperature and top_p together",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "temperature": 0.2,
+    "top_p": 0.5
+   }
+  },
+  {
+   "name": "stop_sequences",
+   "feature": "stop",
+   "outcome": "supported",
+   "detail": "halted at the sequence",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Write exactly: BEGIN STOPHERE END"
+     }
+    ],
+    "stop": [
+     "STOPHERE"
+    ]
+   }
+  },
+  {
+   "name": "frequency_penalty",
+   "feature": "frequency_penalty",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "frequency_penalty": 0.5
+   }
+  },
+  {
+   "name": "seed",
+   "feature": "seed",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "seed": 42
+   }
+  },
+  {
+   "name": "logprobs",
+   "feature": "logprobs",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "logprobs": true
+   }
+  },
+  {
+   "name": "n_choices",
+   "feature": "n = 2",
+   "outcome": "rejected",
+   "detail": "'n' is not supported for values greater than 1",
+   "request": {
+    "n": 2
+   }
+  },
+  {
+   "name": "tool_use",
+   "feature": "tools with an auto tool choice",
+   "outcome": "supported",
+   "detail": "tool_call: get_weather",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "What is the weather in Lisbon?"
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "get_weather",
+       "description": "Get the current weather for a city.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "city": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "city"
+        ]
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "tool_choice_any",
+   "feature": "tool_choice = \"required\"",
+   "outcome": "supported",
+   "detail": "tool_call: get_weather",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Say hello."
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "get_weather",
+       "description": "Get the current weather for a city.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "city": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "city"
+        ]
+       }
+      }
+     }
+    ],
+    "tool_choice": "required"
+   }
+  },
+  {
+   "name": "tool_choice_tool",
+   "feature": "tool_choice naming one function",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Say hello."
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "get_weather",
+       "description": "Get the current weather for a city.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "city": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "city"
+        ]
+       }
+      }
+     }
+    ],
+    "tool_choice": {
+     "type": "function",
+     "function": {
+      "name": "get_weather"
+     }
+    }
+   }
+  },
+  {
+   "name": "parallel_tool_calls_false",
+   "feature": "parallel_tool_calls = false",
+   "outcome": "supported",
+   "detail": "tool_call: get_weather",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Weather in Lisbon and Porto?"
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "get_weather",
+       "description": "Get the current weather for a city.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "city": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "city"
+        ]
+       }
+      }
+     }
+    ],
+    "parallel_tool_calls": false
+   }
+  },
+  {
+   "name": "reasoning_effort_high",
+   "feature": "reasoning_effort = high",
+   "outcome": "supported",
+   "detail": "reasoning: 1359 chars",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only."
+     }
+    ],
+    "max_tokens": 4096,
+    "reasoning_effort": "high"
+   }
+  },
+  {
+   "name": "reasoning_effort_low",
+   "feature": "reasoning_effort = low",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only."
+     }
+    ],
+    "max_tokens": 4096,
+    "reasoning_effort": "low"
+   }
+  },
+  {
+   "name": "reasoning_effort_minimal",
+   "feature": "reasoning_effort = minimal",
+   "outcome": "rejected",
+   "detail": "SubmitRequestFailure: SubmitRequestFailure: code=-32602, msg=1 validation error for ChatCompletionRequest\nreasoning_effort\n  Input should be 'none', 'low', 'medium' or 'high' [type=literal_error, input_value='minimal', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/literal_error",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only."
+     }
+    ],
+    "max_tokens": 4096,
+    "reasoning_effort": "minimal"
+   }
+  },
+  {
+   "name": "reasoning_request_object",
+   "feature": "OpenRouter-style reasoning object",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Three friends split a bill. Ana paid 3/5 of the total, Ben paid 12 euros, and Cleo paid the rest, which was half of what Ben paid. What was the total? Answer with the number only."
+     }
+    ],
+    "max_tokens": 4096,
+    "reasoning": {
+     "effort": "high"
+    }
+   }
+  },
+  {
+   "name": "prompt_cache",
+   "feature": "A prompt long enough to be cached",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "messages": [
+     {
+      "role": "system",
+      "content": "The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects. The gateway translates requests between API dialects."
+     },
+     {
+      "role": "user",
+      "content": "Reply with the single word OK."
+     }
+    ]
+   }
+  },
+  {
+   "name": "json_mode",
+   "feature": "response_format = {\"type\": \"json_object\"}",
+   "outcome": "supported",
+   "detail": "JSON object with keys ['city', 'country']",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Return a JSON object with the keys city and country for Lisbon."
+     }
+    ],
+    "response_format": {
+     "type": "json_object"
+    }
+   }
+  },
+  {
+   "name": "json_schema",
+   "feature": "response_format = {\"type\": \"json_schema\"}",
+   "outcome": "supported",
+   "detail": "JSON object with keys ['city', 'country']",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Describe Lisbon as city and country."
+     }
+    ],
+    "response_format": {
+     "type": "json_schema",
+     "json_schema": {
+      "name": "place",
+      "schema": {
+       "type": "object",
+       "properties": {
+        "city": {
+         "type": "string"
+        },
+        "country": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "city",
+        "country"
+       ],
+       "additionalProperties": false
+      }
+     }
+    }
+   }
+  },
+  {
+   "name": "image_input",
+   "feature": "An image_url content part",
+   "outcome": "rejected",
+   "detail": "Model does not support image modality",
+   "request": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "text",
+        "text": "Reply with the single word OK."
+       },
+       {
+        "type": "image_url",
+        "image_url": {
+         "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAY0lEQVR4nO3PQQ3AIADAQEAJ0pCG1IngcVnSU9DOfe74s6UDXjWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgfYleAaD1eAzYAAAAAElFTkSuQmCC"
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "unknown_field",
+   "feature": "An unknown top-level request field",
+   "outcome": "accepted",
+   "detail": "no observable effect",
+   "request": {
+    "stdapi_probe_unknown": 1
+   }
+  }
+ ]
+}

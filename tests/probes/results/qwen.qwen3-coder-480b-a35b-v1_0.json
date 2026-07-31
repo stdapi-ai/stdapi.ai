@@ -1,7 +1,7 @@
 {
  "schema_version": 4,
- "model_id": "moonshotai.kimi-k2.5",
- "invoked_id": "moonshotai.kimi-k2.5",
+ "model_id": "qwen.qwen3-coder-480b-a35b-v1:0",
+ "invoked_id": "qwen.qwen3-coder-480b-a35b-v1:0",
  "transport": "converse",
  "region": "us-west-2",
  "probed_at": "2026-08-01",
@@ -259,7 +259,7 @@
    "name": "reasoning_config_enabled",
    "feature": "additionalModelRequestFields.reasoning_config = {\"type\": \"enabled\"}",
    "outcome": "rejected",
-   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: {\"error\":{\"code\":\"validation_error\",\"message\":\"Failed to deserialize the JSON body into the target type: Invalid 'reasoning_effort': unknown variant `budget_tokens`, expected one of `high`, `low`, `medium`, `minimal`, `none`, `xhigh` at line 1 column 357\",\"param\":null,\"type\":\"invalid_request_error\"}}",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: {\"error\":{\"code\":\"validation_error\",\"message\":\"Failed to deserialize the JSON body into the target type: Invalid 'reasoning_effort': unknown variant `budget_tokens`, expected one of `high`, `low`, `medium`, `minimal`, `none`, `xhigh` at line 1 column 368\",\"param\":null,\"type\":\"invalid_request_error\"}}",
    "request": {
     "messages": [
      {
@@ -285,8 +285,8 @@
   {
    "name": "reasoning_effort_high",
    "feature": "additionalModelRequestFields.reasoning_effort = high",
-   "outcome": "supported",
-   "detail": "reasoningContent block, 545 chars",
+   "outcome": "accepted",
+   "detail": "no observable effect",
    "request": {
     "messages": [
      {
@@ -402,7 +402,7 @@
    "name": "service_tier_flex",
    "feature": "performanceConfig latency=optimized",
    "outcome": "rejected",
-   "detail": "An error occurred (ValidationException) when calling the Converse operation: Latency performance configuration is not supported for moonshotai.kimi-k2.5 in us-west-2",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: Latency performance configuration is not supported for qwen.qwen3-coder-480b-a35b-v1:0 in us-west-2",
    "request": {
     "performanceConfig": {
      "latency": "optimized"
@@ -596,8 +596,8 @@
   {
    "name": "image_input",
    "feature": "An image content block",
-   "outcome": "accepted",
-   "detail": "no observable effect",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: This model doesn't support the image content block that you provided. Update the content block and try again.",
    "request": {
     "messages": [
      {

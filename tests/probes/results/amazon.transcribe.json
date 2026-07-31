@@ -1,0 +1,17 @@
+{
+ "schema_version": 4,
+ "model_id": "amazon.transcribe",
+ "invoked_id": "amazon.transcribe",
+ "transport": "converse",
+ "region": "us-east-1",
+ "probed_at": "2026-08-01",
+ "probes": [
+  {
+   "name": "baseline",
+   "feature": "Plain text request",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The provided model identifier is invalid.",
+   "request": {}
+  }
+ ]
+}
