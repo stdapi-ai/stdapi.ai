@@ -47,6 +47,7 @@ class Invocation:
     session_id: str
     effort: str | None = None
     extra_env: Mapping[str, str] = field(default_factory=dict)
+    extra_args: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -303,6 +304,7 @@ def _codex_build(invocation: Invocation) -> Command:
         "danger-full-access",
         "-C",
         SRC_MOUNT,
+        *invocation.extra_args,
         invocation.prompt,
     ]
     return Command(tuple(argv), env)

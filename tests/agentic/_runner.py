@@ -65,6 +65,8 @@ class ModelConfig:
         flaky: Whether content-quality failures downgrade to xfail. Set only for
             models known to answer inconsistently; every other failure signature
             still fails the test, so real regressions stay visible.
+        extra_args: CLI arguments appended to the command line, for a test that
+            needs a capability the shared configuration turns off.
     """
 
     model: str
@@ -72,6 +74,7 @@ class ModelConfig:
     supports_effort: bool = False
     timeout: int = 300
     flaky: bool = False
+    extra_args: tuple[str, ...] = ()
 
 
 def xfail_if_flaky(config: ModelConfig, signature: str) -> None:
@@ -133,6 +136,7 @@ def run_agent(
         session_id=session_id(config.model, test_name),
         effort=effort,
         extra_env=config.extra_env,
+        extra_args=config.extra_args,
     )
     tool.prepare_workdir(invocation)
     command = tool.build(invocation)
@@ -238,6 +242,33 @@ def log_metrics(
         f"| steps={result.steps:>3} "
         f"| in={result.input_tokens:>6} out={result.output_tokens:>5}{cache}"
     )
+
+
+def grounding_requests(server: AgenticServer, log_start: int) -> int:
+    """Return the billed web-grounding calls the gateway logged since *log_start*.
+
+    Amazon Bedrock runs the search inside the model invocation, so a grounded
+    answer leaves no trace in the CLI's own transcript beyond the text. The
+    gateway's usage log is where it is observable -- and where AWS bills it.
+
+    Args:
+        server: Gateway whose log is inspected.
+        log_start: Log index captured before the test ran.
+
+    Returns:
+        Sum of ``grounding_requests`` over the usage entries recorded since.
+    """
+    total = 0
+    for entry in server.log_entries(log_start):
+        usages = entry.get("usage")
+        if not isinstance(usages, list):
+            continue
+        total += sum(
+            int(usage.get("grounding_requests") or 0)
+            for usage in usages
+            if isinstance(usage, dict)
+        )
+    return total
 
 
 def assert_model_identity(

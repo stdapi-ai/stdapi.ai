@@ -22,7 +22,13 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from ._runner import ModelConfig, assert_result, log_metrics, run_agent
+from ._runner import (
+    ModelConfig,
+    assert_result,
+    grounding_requests,
+    log_metrics,
+    run_agent,
+)
 from ._tools import CODEX, SRC_MOUNT
 
 if TYPE_CHECKING:
@@ -324,4 +330,71 @@ class TestCodexAnalysis:
         log_metrics(TOOL, result, model_config, "test_enumerate_model_overrides")
         assert_result(
             result, config=model_config, any_of=_MODEL_FAMILY_KEYWORDS, min_steps=3
+        )
+
+
+#: Nova 2 Lite with Codex's built-in web search turned back on for one test.
+_WEB_SEARCH_CONFIG = ModelConfig(
+    model="amazon.nova-2-lite-v1:0",
+    timeout=_TIMEOUT,
+    extra_args=("-c", 'web_search="live"'),
+)
+
+_PROMPT_WEB_SEARCH = """\
+Search the web for the current stable version number of the Linux kernel.
+
+Answer with the version number and the URL you took it from, nothing else.
+Do not guess from memory and do not run any shell command.
+"""
+
+
+class TestCodexWebSearch:
+    """Codex's built-in web search, served by Amazon Nova's grounding tool.
+
+    Codex declares its own ``web_search`` tool rather than a function the harness
+    supplies, so this is the only test covering the gateway's translation of a
+    third-party client's hosted-tool declaration. The rest of the module turns the
+    tool off: it is answered with a ``400`` on any model that has no grounding
+    behind it, which every other entry in ``_MODEL_CONFIGS`` is.
+
+    Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/web-grounding.html
+         https://developers.openai.com/codex/reference/settings
+         stdapi/models/chat/_default.py:ChatModel._canonical_name_for
+    """
+
+    @pytest.mark.expensive
+    def test_web_search_reaches_the_grounding_tool(
+        self,
+        request: pytest.FixtureRequest,
+        agentic_server: AgenticServer,
+        agentic_image: str,
+        agentic_workdir: Path,
+    ) -> None:
+        """A Codex run asking for the web bills a grounding call and answers from it.
+
+        Bedrock runs the search inside the invocation, so the grounding call is
+        visible only in the gateway's usage log -- which is also where AWS bills
+        it. Nova 2 Lite is pinned to ``us-east-1`` by the suite's configuration
+        because no EU inference profile serves the grounding tool.
+
+        ``expensive``: AWS charges per grounding request on top of the tokens.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/web-grounding.html
+             stdapi/usage.py:record_bedrock_usage
+        """
+        log_start = len(agentic_server.logs)
+        result = run_agent(
+            tool=TOOL,
+            server=agentic_server,
+            image=agentic_image,
+            config=_WEB_SEARCH_CONFIG,
+            prompt=_PROMPT_WEB_SEARCH,
+            workdir=agentic_workdir,
+            test_name=request.node.originalname,
+        )
+        log_metrics(TOOL, result, _WEB_SEARCH_CONFIG, "test_web_search")
+        assert_result(result, config=_WEB_SEARCH_CONFIG, any_of=("http", "linux"))
+        assert grounding_requests(agentic_server, log_start) > 0, (
+            "Codex asked for the web but the gateway billed no grounding request, "
+            "so its web_search declaration never reached the model's search tool"
         )
