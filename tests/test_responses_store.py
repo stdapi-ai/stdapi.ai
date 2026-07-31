@@ -8,7 +8,12 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import (
+    ClientError,
+    ConnectTimeoutError,
+    EndpointConnectionError,
+    EndpointResolutionError,
+)
 from pydantic_core import to_json
 
 from stdapi import responses_store
@@ -314,6 +319,54 @@ class TestStoredResponseSessions:
         )
         assert session_id is None
         assert any("session storage" in str(warning) for warning in warnings)
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            pytest.param(
+                EndpointConnectionError(endpoint_url="https://x.invalid"),
+                id="endpoint-unreachable",
+            ),
+            pytest.param(EndpointResolutionError(msg="no endpoint"), id="no-endpoint"),
+            pytest.param(
+                ConnectTimeoutError(endpoint_url="https://x.invalid"), id="timeout"
+            ),
+        ],
+    )
+    async def test_try_create_session_unreachable_region_returns_none(
+        self,
+        stub: _StubSessionClient,
+        monkeypatch: pytest.MonkeyPatch,
+        error: Exception,
+    ) -> None:
+        """A region that does not serve the session API degrades instead of failing.
+
+        Amazon Bedrock session storage covers fewer regions than model
+        inference, so a deployment can sit where the endpoint does not resolve
+        at all. That is the operator's regional choice, not a fault in the
+        request: the generation the model already produced must still be
+        returned, with ``store`` ignored and a warning naming the cause.
+
+        Ref: stdapi/responses_store.py:try_create_stored_response_session
+        """
+
+        async def _unreachable(**_params: Any) -> dict[str, Any]:  # noqa: ANN401
+            raise error
+
+        warnings: list[Any] = []
+        monkeypatch.setattr(stub, "create_session", _unreachable)
+        monkeypatch.setattr(
+            responses_store, "log_error_details", lambda *a, **_k: warnings.extend(a)
+        )
+
+        session_id = await responses_store.try_create_stored_response_session(
+            "response"
+        )
+
+        assert session_id is None
+        assert any("not available in the configured" in str(w) for w in warnings), (
+            "the warning must name the region as the cause, not a permission"
+        )
 
     async def test_try_create_session_other_errors_propagate(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch

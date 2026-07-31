@@ -753,6 +753,26 @@ unchanged and the conversation continues normally; only the earlier chain of
 thought is no longer visible to the model. Every other model family receives the
 replayed reasoning as-is.
 
+What this does **not** affect, measured on Claude Haiku 4.5:
+
+- **Reasoning on the new turn.** The model still thinks, and still returns
+  `reasoning_content` — the reasoning setting for the turn being generated is
+  independent of the history. It re-derives rather than continuing the earlier
+  chain.
+- **Tool-call continuations.** A turn that carried a tool call is answered
+  correctly with the earlier reasoning left out.
+- **[Prompt caching](#prompt-caching).** Cache hits are unaffected, including
+  when the cache point sits inside the conversation immediately after the turn
+  whose reasoning is left out — measured across three turns, each one reading
+  the previous turn's cache in full and extending it. The omission is the same
+  on every turn, so the cached prefix stays identical and keeps growing.
+
+!!! tip "Keeping the reasoning in context on Claude"
+    Use the [Responses API](api_openai_responses.md), which carries the thinking
+    passage in a form Claude accepts. Request
+    `include: ["reasoning.encrypted_content"]` and echo the reasoning items back,
+    and the model continues from its own earlier reasoning.
+
 ## Available Request Headers
 
 This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.

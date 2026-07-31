@@ -3335,6 +3335,11 @@ The `amazon-bedrock-guardrailConfig` object in the request body is supported for
 
 Requests with `store=true` on the [Responses](api_openai_responses.md#stored-responses) and [Chat Completions](api_openai_chat_completions.md#stored-chat-completions) APIs persist generations in Amazon Bedrock sessions. No environment variable is needed to enable this — it requires the [Bedrock Session Storage IAM permissions](operations_iam_permissions.md#bedrock-session-storage-optional).
 
+!!! warning "Not available in every region"
+    Amazon Bedrock session storage covers fewer regions than model inference. When the primary Bedrock region — the first entry of [`AWS_BEDROCK_REGIONS`](#aws-bedrock-regions), which is where all sessions are created — does not provide it, `store=true` is **ignored**: the generation is still returned, and a warning naming the region as the cause is recorded in the request log. Retrieving a stored object then returns `404`.
+
+    Nothing fails and no request is lost, but stored responses and stored chat completions are simply unavailable. To rely on them, make the primary Bedrock region one that offers session storage — check the [Amazon Bedrock session management endpoints](https://docs.aws.amazon.com/general/latest/gr/bedrock.html) for current coverage.
+
 #### `AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN` { #aws-bedrock-session-encryption-key-arn }
 
 :octicons-package-24: **Purpose**

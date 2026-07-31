@@ -19,7 +19,12 @@ from datetime import UTC, datetime, timedelta
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any, Literal, Never
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import (
+    ClientError,
+    ConnectTimeoutError,
+    EndpointConnectionError,
+    EndpointResolutionError,
+)
 from pydantic_core import from_json, to_json
 
 from stdapi.api_errors import ApiError
@@ -88,6 +93,17 @@ _UNTAGGED: str = ""
 
 #: AWS error code meaning session storage is not enabled on this server.
 _ACCESS_DENIED_CODE = "AccessDeniedException"
+
+#: Botocore failures meaning the session API is not reachable in this region.
+#:
+#: Amazon Bedrock session storage is served in fewer regions than Bedrock
+#: inference, so a deployment can sit in a region where the endpoint does not
+#: resolve at all. That is an operator's regional choice, not a request error.
+_UNREACHABLE_ERRORS = (
+    EndpointConnectionError,
+    EndpointResolutionError,
+    ConnectTimeoutError,
+)
 
 #: Stored object kind declared by each document ``response.object`` field.
 _KIND_BY_OBJECT: dict[str, StoredObjectKind] = {
@@ -202,9 +218,11 @@ async def create_stored_response_session(kind: StoredObjectKind) -> str:
 async def try_create_stored_response_session(kind: StoredObjectKind) -> str | None:
     """Create the backing session, or ``None`` when storage is unavailable.
 
-    An AWS ``AccessDeniedException`` is treated as "session storage not
-    enabled on this server": the request proceeds with ``store`` ignored and
-    a warning is recorded in the request log for the administrator.
+    Two conditions are treated as "session storage not available here": an AWS
+    ``AccessDeniedException``, and an endpoint that cannot be reached at all
+    because the region does not serve the session API. Both leave the request to
+    proceed with ``store`` ignored and record a warning for the administrator,
+    rather than failing a generation the model already produced.
 
     Args:
         kind: Stored object kind, recorded as a session tag for listing.
@@ -222,6 +240,15 @@ async def try_create_stored_response_session(kind: StoredObjectKind) -> str | No
             "bedrock:CreateSession): 'store' was ignored. Grant the Bedrock "
             "session storage IAM permissions to enable stored responses and "
             "chat completions.",
+            level="warning",
+        )
+        return None
+    except _UNREACHABLE_ERRORS:
+        log_error_details(
+            "Amazon Bedrock session storage is not available in the configured "
+            "region: 'store' was ignored. Session storage is offered in fewer "
+            "regions than model inference; configure a region that provides it "
+            "to store responses and chat completions.",
             level="warning",
         )
         return None
