@@ -45,6 +45,29 @@ _SERVER_TOOL_SERIALIZE_EXCLUDE: frozenset[str] = frozenset(
 #: Claude server tool keys
 _SERVER_TOOL_KEYS = frozenset({"name", "type"})
 
+#: JSON Schema keywords marking a real function schema rather than a server-tool stub.
+#:
+#: A server tool is declared by name with no parameters, optionally carrying
+#: configuration such as ``display_width_px``.  A client is free to declare its own
+#: function that happens to share the name, and pi's ``bash`` tool does exactly
+#: that; promoting it would replace its schema with a typed server tool and forward
+#: the schema keys as tool configuration, which Anthropic rejects outright.
+_JSON_SCHEMA_KEYWORDS = frozenset(
+    {
+        "$defs",
+        "$ref",
+        "additionalProperties",
+        "allOf",
+        "anyOf",
+        "enum",
+        "items",
+        "oneOf",
+        "patternProperties",
+        "properties",
+        "required",
+    }
+)
+
 #: Default reasoning config for Claude models
 _REASONING_CONFIG: dict[str, str] = {"type": "adaptive"}
 
@@ -135,10 +158,15 @@ class AnthropicClaudeChatModel(_BaseChatModel):
         """Detect Claude server tools in *tool_config* by matching names against ``SERVER_TOOL_NAME_TO_TYPE``.
 
         A ``toolSpec`` entry is a server tool when its ``name`` matches a key in
-        ``SERVER_TOOL_NAME_TO_TYPE``.  The versioned type is looked up from that
-        map.  Extra fields in ``inputSchema.json`` (e.g. ``display_width_px``)
-        become additional tool params, and the stub schema is reset to
-        ``{"type": "object"}`` so Bedrock accepts it in multi-turn mode.
+        ``SERVER_TOOL_NAME_TO_TYPE`` *and* it declares no function schema of its
+        own.  The versioned type is looked up from that map.  Extra fields in
+        ``inputSchema.json`` (e.g. ``display_width_px``) become additional tool
+        params, and the stub schema is reset to ``{"type": "object"}`` so Bedrock
+        accepts it in multi-turn mode.
+
+        The schema check is what keeps a client's own function safe: a tool
+        declaring ``properties``/``required`` is that client's function, not
+        Anthropic's server tool, however it happens to be named.
 
         Args:
             tool_config: Bedrock tool configuration before system tool promotion.
@@ -160,6 +188,8 @@ class AnthropicClaudeChatModel(_BaseChatModel):
                 continue
             tool_type = self.SERVER_TOOL_NAME_TO_TYPE[tool_name]
             json_params: JsonMapping = (spec.get("inputSchema") or {}).get("json") or {}  # type: ignore[assignment]
+            if json_params.keys() & _JSON_SCHEMA_KEYWORDS:
+                continue
             if (
                 extra := {
                     k: v for k, v in json_params.items() if k not in _SERVER_TOOL_KEYS

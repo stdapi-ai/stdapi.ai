@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from fastapi import Request
+    from types_aiobotocore_bedrock_runtime.type_defs import ToolConfigurationTypeDef
 
     from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
     from stdapi.models.chat._anthropic_claude import AnthropicClaudeChatModel
@@ -191,6 +192,71 @@ class TestReasoningDisabled:
             "Reasoning cannot be disabled on this model" in str(detail)
             for detail in request_log["error_detail"]
         ), "the dropped configuration must be reported in the request log"
+
+
+class TestClientToolNameCollision:
+    """A client function is never mistaken for the Anthropic server tool of that name.
+
+    Server tools are declared by name with no parameters, so the gateway detects
+    them by name. A third-party client is free to declare its own function called
+    ``bash``, ``memory`` or ``str_replace_editor`` with a real schema -- the pi
+    coding agent ships exactly such a ``bash`` tool -- and promoting it would swap
+    the client's schema for a typed server tool and forward the schema keys as
+    tool configuration. Anthropic rejects that outright:
+    ``tools.4.bash_20250124.properties: Extra inputs are not permitted`` (measured
+    against a live gateway on 2026-07-31), so a whole class of agentic clients
+    could not use the gateway at all.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
+         stdapi/models/chat/_anthropic_claude.py:_req_extract_server_tools
+    """
+
+    @staticmethod
+    def _tool_config(json_schema: JsonMapping) -> ToolConfigurationTypeDef:
+        """Return a tool config declaring a single ``bash`` tool with *json_schema*."""
+        return {
+            "tools": [
+                {"toolSpec": {"name": "bash", "inputSchema": {"json": json_schema}}}
+            ]
+        }
+
+    def test_schema_bearing_tool_is_left_alone(self) -> None:
+        """A ``bash`` tool carrying properties stays a plain client function."""
+        model = _claude_model("anthropic.claude-haiku-4-5-20251001-v1:0")
+        config = self._tool_config(
+            {
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"],
+            }
+        )
+
+        assert model._req_extract_server_tools(config) == [], (  # noqa: SLF001
+            "a function declaring its own schema is the client's, not Anthropic's"
+        )
+        assert config["tools"][0]["toolSpec"]["inputSchema"]["json"]["properties"], (
+            "the client's schema must survive untouched"
+        )
+
+    def test_schemaless_tool_is_still_promoted(self) -> None:
+        """A parameterless ``bash`` entry is still recognised as the server tool."""
+        model = _claude_model("anthropic.claude-haiku-4-5-20251001-v1:0")
+
+        promoted = model._req_extract_server_tools(self._tool_config({}))  # noqa: SLF001
+
+        assert promoted == [{"name": "bash", "type": "bash_20250124"}]
+
+    def test_configuration_only_tool_is_still_promoted(self) -> None:
+        """Server-tool configuration keys are not a function schema."""
+        model = _claude_model("anthropic.claude-haiku-4-5-20251001-v1:0")
+
+        promoted = model._req_extract_server_tools(  # noqa: SLF001
+            self._tool_config({"type": "object", "display_width_px": 1024})
+        )
+
+        assert promoted == [
+            {"name": "bash", "type": "bash_20250124", "display_width_px": 1024}
+        ]
 
 
 class TestServerToolRePromotion:

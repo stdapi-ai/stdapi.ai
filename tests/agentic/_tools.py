@@ -446,6 +446,8 @@ def _pi_build(api: str, route: str) -> Callable[[Invocation], Command]:
             "--no-skills",
             "--extension",
             f"{WORK_MOUNT}/pi-ext/stdapi.js",
+            "--api-key",
+            invocation.api_key,
             "--provider",
             "stdapi",
             "--model",
