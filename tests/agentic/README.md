@@ -58,6 +58,17 @@ Each run is a throwaway container:
 Only the gateway package is mounted. The agent cannot read `tests/.env`, `.git`,
 `~/.aws` or the virtualenv, so no credential on the machine is reachable from a run.
 
+The repository is **copied** into a staging directory the test process owns rather
+than bind-mounted. Under SELinux a tree carries whatever label it was last given,
+and one stamped with a container's private MCS categories is unreadable from every
+other container — the CLI then reports an empty source tree and the run fails for a
+reason that looks nothing like a labelling problem. The copy is relabelled instead,
+so a test run never changes a label on the checkout.
+
+The CLIs' own sandboxes are off inside the container. Codex's is built on Landlock,
+which the runtime's seccomp profile denies, and it refuses to run any shell command
+at all rather than continue unsandboxed. The container above is the boundary.
+
 ## Adding a tool
 
 1. Append an `AgenticTool` to `AGENTIC_TOOLS` in `_tools.py`, supplying the npm
