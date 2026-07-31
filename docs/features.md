@@ -544,6 +544,64 @@ export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
 
 ---
 
+## :material-clipboard-check: Quality Assurance
+
+"OpenAI-compatible" is easy to claim and hard to keep. The gateway sits between your application and a set of backends that change underneath it — new model generations, new parameters, silently altered behaviour — so its test suite is built to catch that drift before you do.
+
+<div class="grid cards" markdown>
+
+- :material-test-tube: __4,100+ automated tests__
+  <br>Every endpoint, parameter and error path, run against real AWS services rather than mocks.
+
+- :material-shield-check: __~94% code coverage__
+  <br>Branch coverage, measured with every optional test tier enabled.
+
+- :material-account-check: __Validated against the vendors__
+  <br>The same tests run against the real OpenAI, Anthropic and Cohere APIs.
+
+- :material-robot-happy: __Driven by real client software__
+  <br>Actual AI agents and applications, in containers, end to end.
+
+</div>
+
+### Compatibility is proven against the real APIs, not against our own docs
+
+A gateway tested only against itself proves only that it is self-consistent. The suite runs **the same test bodies against the genuine OpenAI, Anthropic and Cohere endpoints**, changing nothing but the URL. A test that passes here and fails there is treated as a compatibility bug in this product — not as an acceptable difference.
+
+That distinction is enforced when a test is written, before the feature exists: the expected behaviour is captured from the vendor's own API first, so the implementation is written to match a contract that was verified, not assumed.
+
+### Real applications, not just API calls
+
+Passing an HTTP test says nothing about whether a real coding agent, chatbot or automation platform actually works. So the suite runs them: **complete third-party client software, unmodified, inside containers, against a live gateway** — driving multi-turn tool-calling sessions across dozens of models and all three API dialects. A regression that only appears in a real agent loop is caught here, not by you.
+
+### Every model is measured, not assumed
+
+Model documentation describes what a model is supposed to accept. What it actually accepts is something else, and it changes between generations of the same model family. Each supported model is **probed empirically** for the parameters and features it genuinely honours — including the parameters it accepts and then quietly ignores, which are the ones that silently produce a wrong answer. The results are recorded and the behaviour is pinned by tests.
+
+### What runs, and when
+
+| | Runs | Covers |
+|---|---|---|
+| **Fast checks** | Every change | Request/response contracts, validation, error mapping — no cloud calls |
+| **Full AWS suite** | Every change to affected areas | All endpoints against live AWS services and models |
+| **Vendor compatibility** | Regularly | The same tests against the real OpenAI, Anthropic and Cohere APIs |
+| **Real client applications** | Regularly | Third-party AI clients driving the gateway end to end |
+| **Release validation** | **Every release** | The complete suite, twice: locally, then against a deployed release candidate |
+
+No release ships without the full suite passing against a real deployment of the exact build being released.
+
+### Beyond automated tests
+
+- **Static analysis and strict typing** on every line of source and test code
+- **Documented behaviour is tested behaviour** — the compatibility tables on these pages are derived from what the tests assert, so a change in behaviour that the docs do not reflect fails the build
+- **Continuous review** — periodic audits of the codebase and of the test suite itself, because a passing test that asserts nothing is worse than no test
+- **Security scanning** of dependencies and container images, with the commercial image validated against AWS Security Hub's Foundational Security Best Practices
+
+!!! tip "Found something anyway?"
+    No suite catches everything. If you hit a compatibility difference between stdapi.ai and the API it mirrors, [tell us](contact.md) — that class of bug is treated as a defect, not as expected behaviour.
+
+---
+
 ## :material-rocket-launch: Deployment
 
 ### Community vs Commercial
