@@ -15,7 +15,7 @@ from sse_starlette import JSONServerSentEvent, ServerSentEvent
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import build_system_blocks, set_inference_configuration
 from stdapi.models.audio import synthesize_speech
-from stdapi.models.chat._adapters import _openai_common
+from stdapi.models.chat._adapters import _common, _openai_common
 from stdapi.monitoring import log_response_params
 from stdapi.types.openai import (
     FunctionDefinition,
@@ -729,30 +729,6 @@ def _extract_function_blocks(
     return [{"toolResult": {"toolUseId": message_param.name, "content": content}}]
 
 
-def _append_or_merge(
-    bedrock_messages: list[MessageTypeDef],
-    role: ConversationRoleType,
-    blocks: list[ContentBlockTypeDef],
-) -> None:
-    """Append ``blocks`` to ``bedrock_messages`` under ``role``, merging with the last.
-
-    Merges into the trailing message when its ``role`` matches; otherwise appends
-    a new message.  Bedrock requires strictly alternating user/assistant turns and
-    rejects empty content, so empty ``blocks`` lists are a no-op.
-
-    Args:
-        bedrock_messages: Mutable Bedrock messages list to append to.
-        role: Bedrock role of the blocks to append.
-        blocks: Content blocks to append.
-    """
-    if not blocks:
-        return
-    if bedrock_messages and bedrock_messages[-1]["role"] == role:
-        bedrock_messages[-1]["content"] += blocks  # type: ignore[operator]
-    else:
-        bedrock_messages.append({"role": role, "content": blocks})
-
-
 async def map_messages(
     messages: list[ChatCompletionMessageParam],
     *,
@@ -813,7 +789,7 @@ async def map_messages(
                 message_param.content, cache_point
             )
 
-        _append_or_merge(bedrock_messages, role, content_blocks)
+        _common.append_or_merge(bedrock_messages, role, content_blocks)
 
     return bedrock_messages, system_blocks
 

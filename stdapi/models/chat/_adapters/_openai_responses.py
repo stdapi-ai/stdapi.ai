@@ -28,7 +28,7 @@ from stdapi.aws_bedrock import (
 )
 from stdapi.input_file import FileIdInputFile, InputFile
 from stdapi.models import validate_model
-from stdapi.models.chat._adapters import _openai_common
+from stdapi.models.chat._adapters import _common, _openai_common
 from stdapi.models.image import get_image_model
 from stdapi.monitoring import (
     SseHandledStreamError,
@@ -799,29 +799,6 @@ async def _convert_input_content(part: ResponseInputContent) -> ContentBlockType
             raise ApiError(msg)
 
 
-def _append_or_merge(
-    bedrock_messages: list[MessageTypeDef],
-    role: Literal["assistant", "user"],
-    blocks: list[ContentBlockTypeDef],
-) -> None:
-    """Append ``blocks`` to ``bedrock_messages`` under ``role``, merging with the last.
-
-    Merges into the trailing message when its ``role`` matches; otherwise appends
-    a new message.  Empty ``blocks`` lists are a no-op.
-
-    Args:
-        bedrock_messages: Mutable Bedrock messages list to append to.
-        role: Bedrock role of the blocks to append.
-        blocks: Content blocks to append.
-    """
-    if not blocks:
-        return
-    if bedrock_messages and bedrock_messages[-1]["role"] == role:
-        bedrock_messages[-1]["content"] += blocks  # type: ignore[operator]
-    else:
-        bedrock_messages.append({"role": role, "content": blocks})
-
-
 def _has_cache_breakpoint(part: object) -> bool:
     """Whether an input content part carries an explicit prompt-cache breakpoint.
 
@@ -885,7 +862,7 @@ async def _map_message_item(
     bedrock_role: Literal["assistant", "user"] = (
         "assistant" if role == "assistant" else "user"
     )
-    _append_or_merge(bedrock_messages, bedrock_role, blocks)
+    _common.append_or_merge(bedrock_messages, bedrock_role, blocks)
 
 
 def _map_output_message(
@@ -903,7 +880,7 @@ def _map_output_message(
         item: The output message to map.
         bedrock_messages: Mutable Bedrock messages list to append to.
     """
-    _append_or_merge(
+    _common.append_or_merge(
         bedrock_messages,
         "assistant",
         [
@@ -949,7 +926,7 @@ def _map_function_call(
         "name": item.name,
         "input": _tool_use_input(item.arguments) if item.arguments else {},
     }
-    _append_or_merge(bedrock_messages, "assistant", [{"toolUse": tool_input}])
+    _common.append_or_merge(bedrock_messages, "assistant", [{"toolUse": tool_input}])
 
 
 async def _map_function_call_output(
@@ -988,7 +965,7 @@ async def _map_function_call_output(
                         await _convert_input_content(part),
                     )
                 )
-    _append_or_merge(
+    _common.append_or_merge(
         bedrock_messages,
         "user",
         [{"toolResult": {"toolUseId": item.call_id, "content": tool_content}}],
@@ -1013,7 +990,7 @@ def _map_custom_tool_call(
         "name": item.name,
         "input": _tool_use_input(item.input) if item.input else {},
     }
-    _append_or_merge(bedrock_messages, "assistant", [{"toolUse": tool_use}])
+    _common.append_or_merge(bedrock_messages, "assistant", [{"toolUse": tool_use}])
 
 
 def _map_custom_tool_call_output(
@@ -1038,7 +1015,7 @@ def _map_custom_tool_call_output(
             if isinstance(part, (ResponseInputText, ResponseOutputTextContent))
         ]
     )
-    _append_or_merge(
+    _common.append_or_merge(
         bedrock_messages,
         "user",
         [{"toolResult": {"toolUseId": item.call_id, "content": tool_content}}],
@@ -1089,11 +1066,11 @@ def _map_image_generation_call(
         "name": "image_generation",
         "input": {},
     }
-    _append_or_merge(bedrock_messages, "assistant", [{"toolUse": tool_use}])
+    _common.append_or_merge(bedrock_messages, "assistant", [{"toolUse": tool_use}])
     tool_content: list[ToolResultContentBlockUnionTypeDef] = [
         {"image": {"format": _sniff_image_format(image), "source": {"bytes": image}}}
     ]
-    _append_or_merge(
+    _common.append_or_merge(
         bedrock_messages,
         "user",
         [{"toolResult": {"toolUseId": item.id, "content": tool_content}}],
@@ -1224,7 +1201,7 @@ def _map_compaction_item(
         summary = b64decode(encoded, altchars=b"-_", validate=True).decode()
     except (ValueError, UnicodeDecodeError) as exc:
         raise ApiError(msg) from exc
-    _append_or_merge(
+    _common.append_or_merge(
         bedrock_messages,
         "user",
         [{"text": f"Summary of the earlier conversation:\n{summary}"}],
@@ -1321,7 +1298,7 @@ def _map_reasoning_item(
             reasoning_text["signature"] = signatures[index]
         blocks.append({"reasoningContent": {"reasoningText": reasoning_text}})
     blocks.extend({"reasoningContent": {"redactedContent": data}} for data in redacted)
-    _append_or_merge(bedrock_messages, "assistant", blocks)
+    _common.append_or_merge(bedrock_messages, "assistant", blocks)
 
 
 def _citation_sources(

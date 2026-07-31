@@ -23,6 +23,7 @@ from stdapi.aws_bedrock import (
     handle_bedrock_client_error,
     set_inference_configuration,
 )
+from stdapi.models.chat._adapters import _common
 from stdapi.monitoring import log_response_params
 from stdapi.types.anthropic_messages import (
     Base64ImageSource,
@@ -102,7 +103,6 @@ if TYPE_CHECKING:
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_bedrock_runtime.literals import (
         CacheTTLType,
-        ConversationRoleType,
         ServiceTierTypeType,
         StopReasonType,
     )
@@ -557,30 +557,6 @@ def _prepare_messages_and_system(
     return kept, _merge_system_content(system, system_blocks)
 
 
-def _append_or_merge(
-    result: list[MessageTypeDef],
-    role: ConversationRoleType,
-    content: list[ContentBlockTypeDef],
-) -> None:
-    """Append ``content`` to ``result`` under ``role``, merging with the trailing message.
-
-    Merges into the trailing message when its ``role`` matches; otherwise appends a
-    new message.  Bedrock requires strictly alternating user/assistant turns and
-    rejects empty content, so an empty ``content`` list is a no-op.
-
-    Args:
-        result: Mutable Bedrock messages list to append to.
-        role: Bedrock role of the content to append.
-        content: Content blocks to append.
-    """
-    if not content:
-        return
-    if result and result[-1]["role"] == role:
-        result[-1]["content"] += content  # type: ignore[operator]
-    else:
-        result.append({"role": role, "content": content})
-
-
 async def _map_messages(
     messages: list[MessageParam],
     *,
@@ -648,7 +624,7 @@ async def _map_messages(
                         and (cache_control := block.cache_control)
                     ):
                         content.append(_build_cache_point(cache_control))
-        _append_or_merge(result, msg.role, content)
+        _common.append_or_merge(result, msg.role, content)
     return result
 
 

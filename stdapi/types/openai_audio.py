@@ -466,8 +466,8 @@ class TranscriptionCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=
         if self.stream and self.response_format in SUBTITLE_FORMATS:
             msg = (
                 f"response_format='{self.response_format}' is not available with "
-                "stream=true: subtitle cues are produced from the finished "
-                "transcript, and streaming emits plain text deltas."
+                "stream=true. Request the subtitles without streaming, or stream "
+                "with response_format='text' or 'json'."
             )
             raise ValueError(msg)
         if isinstance(self.chunking_strategy, dict) or self.chunking_strategy != "auto":
