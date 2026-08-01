@@ -82,6 +82,7 @@ from stdapi.types.openai_responses import (
     ResponseOutputItemAddedEvent,
     ResponseOutputItemDoneEvent,
     ResponseOutputMessage,
+    ResponseOutputRefusal,
     ResponseOutputText,
     ResponseOutputTextAnnotationAddedEvent,
     ResponseOutputTextContent,
@@ -869,6 +870,35 @@ async def _map_message_item(
     _common.append_or_merge(bedrock_messages, bedrock_role, blocks)
 
 
+def _output_message_text(part: object) -> str:
+    """Return the text an echoed assistant content part carries.
+
+    Args:
+        part: One content part of a ``ResponseOutputMessageInput``, which widens
+            the output shapes with the input ones because clients relabel their
+            replayed text parts.
+
+    Returns:
+        The part's text, or its refusal message.
+
+    Raises:
+        ApiError: If the part carries no text, as an image or file part does.
+    """
+    match part:
+        case (
+            ResponseOutputText(text=text)
+            | ResponseInputText(text=text)
+            | ResponseOutputTextContent(text=text)
+        ):
+            return text
+        case ResponseOutputRefusal(refusal=refusal):
+            return refusal
+        case _:
+            kind = getattr(part, "type", type(part).__name__)
+            msg = f"Unsupported assistant message content type: {kind}"
+            raise ApiError(msg)
+
+
 def _map_output_message(
     item: ResponseOutputMessage, bedrock_messages: list[MessageTypeDef]
 ) -> None:
@@ -887,14 +917,7 @@ def _map_output_message(
     _common.append_or_merge(
         bedrock_messages,
         "assistant",
-        [
-            {
-                "text": part.text
-                if isinstance(part, ResponseOutputText)
-                else part.refusal
-            }
-            for part in item.content
-        ],
+        [{"text": _output_message_text(part)} for part in item.content],
     )
 
 

@@ -122,6 +122,31 @@ def agentic_workdir(tmp_path: Path) -> Path:
     return tmp_path
 
 
+#: Line the gateway's stderr starts an unhandled-exception report with.
+_TRACEBACK_MARKER = "Traceback (most recent call last)"
+
+
+@pytest.fixture(autouse=True)
+def _no_gateway_traceback(request: pytest.FixtureRequest) -> Generator[None]:
+    """Fail the test when the gateway logged an unhandled exception during it.
+
+    A CLI reports a 500 as an opaque "API call failed", and several of them retry
+    it silently, so without this the only symptom of a gateway crash is a client
+    that gave up. The traceback itself is on the server's stderr, which nothing
+    else in the lane reads.
+    """
+    if podman_argv() is None or "agentic_server" not in request.fixturenames:
+        yield
+        return
+    server: AgenticServer = request.getfixturevalue("agentic_server")
+    start = len(server.stderr_lines)
+    yield
+    produced = server.stderr_lines[start:]
+    if any(_TRACEBACK_MARKER in line for line in produced):
+        report = "\n".join(produced)
+        pytest.fail(f"the gateway raised while serving this test:\n{report}")
+
+
 @pytest.fixture(autouse=True)
 def _model_identity_check(request: pytest.FixtureRequest) -> Generator[None]:
     """Assert every request the test produced targeted the parametrized model.

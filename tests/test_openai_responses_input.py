@@ -10,6 +10,7 @@ from typing import Any, cast
 import pytest
 from pydantic import TypeAdapter
 
+from stdapi.api_errors import ApiError
 from stdapi.models.chat._adapters import _openai_responses as adapter
 from stdapi.models.chat._adapters._openai_responses import (
     _map_tool_choice,
@@ -1030,6 +1031,73 @@ class TestRefusalParts:
         assert messages == [
             {"role": "assistant", "content": [{"text": "I cannot help with that."}]}
         ]
+
+
+class TestEchoedAssistantContentShapes:
+    """Every content shape an echoed assistant message may carry maps to text.
+
+    ``ResponseOutputMessageInput`` widens ``content`` with the input part types,
+    because clients relabel the parts they replay. The mapper must therefore
+    accept each of them: a part shape it does not know is an unhandled attribute
+    access, which surfaces to the client as an opaque 500 mid-conversation.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         stdapi/models/chat/_adapters/_openai_responses.py:_output_message_text
+         stdapi/types/openai_responses.py:ResponseOutputMessageInput
+    """
+
+    @staticmethod
+    def _echo(part: dict[str, object]) -> dict[str, object]:
+        """Return an echoed assistant message carrying a single content *part*."""
+        return {
+            "type": "message",
+            "role": "assistant",
+            "id": "msg_1",
+            "status": "completed",
+            "content": [part],
+        }
+
+    @pytest.mark.parametrize(
+        "part",
+        [
+            pytest.param(
+                {"type": "output_text", "text": "hi", "annotations": []},
+                id="output-text-with-annotations",
+            ),
+            pytest.param({"type": "output_text", "text": "hi"}, id="output-text-bare"),
+            pytest.param({"type": "input_text", "text": "hi"}, id="input-text"),
+        ],
+    )
+    async def test_every_text_part_shape_maps_to_assistant_text(
+        self, part: dict[str, object]
+    ) -> None:
+        """A text part maps to assistant text whichever shape the client replayed.
+
+        ``output_text`` without ``annotations`` is the shape Hermes replays; it
+        validates as ``ResponseOutputTextContent`` rather than
+        ``ResponseOutputText``, which the mapper used to handle only by falling
+        through to a refusal attribute that shape does not have.
+        """
+        item = _parse(self._echo(part))
+        assert isinstance(item, ResponseOutputMessageInput)
+        messages, _ = await map_input(cast("list[ResponseInputItem]", [item]), None)
+        assert messages == [{"role": "assistant", "content": [{"text": "hi"}]}]
+
+    async def test_a_non_text_part_is_refused_rather_than_crashing(self) -> None:
+        """An image part in an echoed assistant message raises a client error.
+
+        Bedrock's assistant role carries no image, so the turn cannot be
+        replayed; what matters is that it is refused as a request error instead
+        of escaping as an unhandled exception.
+        """
+        item = _parse(
+            self._echo(
+                {"type": "input_image", "image_url": "https://example.com/a.png"}
+            )
+        )
+        assert isinstance(item, ResponseOutputMessageInput)
+        with pytest.raises(ApiError, match="input_image"):
+            await map_input(cast("list[ResponseInputItem]", [item]), None)
 
 
 class TestExtractReasoning:
