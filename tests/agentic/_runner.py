@@ -182,6 +182,33 @@ def run_agent(
 #: that is deleted when the run ends.
 SAMPLE_DIR_VAR = "AGENTIC_SAMPLE_DIR"
 
+#: Characters of raw CLI output kept at each end of a transcript.
+#:
+#: A client that streams token by token prints megabytes for one run -- pi's
+#: reach 14 MB -- and a file that size is no longer an example of anything. The
+#: two ends are what a reader wants: how the client opens the conversation, and
+#: how it closes it.
+_SAMPLE_EDGE_CHARS = 40_000
+
+
+def _clip(text: str) -> str:
+    """Return *text*, or its two ends around a marker naming what was dropped.
+
+    Args:
+        text: Raw output to record.
+
+    Returns:
+        Text short enough to read.
+    """
+    if len(text) <= 2 * _SAMPLE_EDGE_CHARS:
+        return text
+    dropped = len(text) - 2 * _SAMPLE_EDGE_CHARS
+    return (
+        f"{text[:_SAMPLE_EDGE_CHARS]}\n"
+        f"\n[... {dropped} characters of streamed output omitted ...]\n\n"
+        f"{text[-_SAMPLE_EDGE_CHARS:]}"
+    )
+
 
 def _record_sample(
     tool: AgenticTool,
@@ -217,8 +244,8 @@ def _record_sample(
         f"# steps:  {result.steps}\n"
         f"# tokens: in={result.input_tokens} out={result.output_tokens}\n"
         f"\n===== PROMPT =====\n{prompt}\n"
-        f"\n===== RAW CLI OUTPUT =====\n{stdout}\n"
-        f"\n===== PARSED ANSWER =====\n{result.text}\n",
+        f"\n===== RAW CLI OUTPUT =====\n{_clip(stdout)}\n"
+        f"\n===== PARSED ANSWER =====\n{_clip(result.text)}\n",
         encoding="utf-8",
     )
 

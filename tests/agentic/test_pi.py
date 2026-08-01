@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import pytest
 from openai import OpenAI
@@ -415,7 +415,7 @@ _REASONING_FIELD_MODEL = "deepseek.v3.2"
 #: ``reasoning_effort_high`` as producing a reasoningContent block. Asking for
 #: less leaves nothing for the setting under test to relocate, so every value
 #: would pass without proving anything.
-_REASONING_FIELD_EFFORT = "high"
+_REASONING_FIELD_EFFORT: Literal["high"] = "high"
 
 #: Values the operator setting accepts, each proven against a live response.
 _REASONING_FIELD_VALUES = ["reasoning_content", "reasoning", "none"]
