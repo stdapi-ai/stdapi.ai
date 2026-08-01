@@ -102,11 +102,20 @@ _MANTLE_MODELS = {
     HERMES_ANTHROPIC.id: ("gemma-4-31b", "google.gemma-4-31b"),
 }
 
+#: Models that sometimes give up on the task rather than answering it.
+#:
+#: Observed on gemma-4-31b: 18 steps and 583K input tokens spent inside /work,
+#: then "I am unable to find the /src directory" -- while Claude and Nova answer
+#: over the same transport, from the same mount, in the same container. The
+#: gateway carried every one of those 18 tool round trips, so this is the model
+#: failing to explore, not a routing fault.
+_MAY_GIVE_UP = {"google.gemma-4-31b"}
+
 #: One (transport, model) pair per run, since the two are not independent.
 _CASES = [
     pytest.param(
         tool,
-        ModelConfig(model=model, timeout=_TIMEOUT),
+        ModelConfig(model=model, timeout=_TIMEOUT, flaky=model in _MAY_GIVE_UP),
         id=f"{_TRANSPORT_LABELS[tool.id]}-{label}",
     )
     for tool in (HERMES_CHAT_COMPLETIONS, HERMES_RESPONSES, HERMES_ANTHROPIC)

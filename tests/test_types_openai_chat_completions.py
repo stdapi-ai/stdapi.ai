@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from stdapi.api_errors import UnsupportedParameterError
 from stdapi.config import SETTINGS
@@ -25,6 +26,15 @@ pytestmark = pytest.mark.local
 _BASE_REQUEST: dict[str, Any] = {
     "model": "model",
     "messages": [{"role": "user", "content": "hi"}],
+}
+
+#: Tool result carrying the extra ``name`` field clients inherited from the
+#: deprecated function-calling API.
+_NAMED_TOOL_RESULT: dict[str, Any] = {
+    "role": "tool",
+    "tool_call_id": "call_1",
+    "content": "42",
+    "name": "compute",
 }
 
 
@@ -155,6 +165,50 @@ class TestUnsupportedParameters:
         assert excinfo.value.code == "unsupported_parameter"
         assert excinfo.value.param == "verbosity"
         assert "'verbosity' is not supported" in str(excinfo.value)
+
+
+class TestStrictValidationOfMessageFields:
+    """``strict_input_validation`` decides the fate of an undeclared message field.
+
+    The setting is what makes the difference between a deployment that tolerates
+    a client's extra field and one that refuses the request, and it is read when
+    the models are built, so only a whole session can hold one value. This pins
+    the strict half; the permissive half is the shipped default and what the
+    agentic lane's clients are run against.
+
+    ``name`` on a ``tool`` message is the real case: it belongs to the legacy
+    ``function`` role, is absent from the tool message the OpenAI SDK defines,
+    and clients still send it -- Hermes does on every tool result.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+         stdapi/types/__init__.py:BaseModelRequest
+         stdapi/config.py:Settings.strict_input_validation
+         tests/agentic/_server.py:_OVERRIDDEN_SETTINGS
+    """
+
+    @pytest.mark.skipif(
+        not SETTINGS.strict_input_validation,
+        reason="the models were built permissive; extra fields are ignored",
+    )
+    def test_an_undeclared_tool_message_field_is_refused(self) -> None:
+        """Strict mode rejects ``name`` on a tool message, naming the field."""
+        with pytest.raises(ValidationError) as excinfo:
+            CompletionCreateParams.model_validate(
+                _BASE_REQUEST | {"messages": [_NAMED_TOOL_RESULT]}
+            )
+        assert "name" in str(excinfo.value)
+
+    def test_the_declared_fields_still_validate(self) -> None:
+        """The same message without the extra field validates in either mode.
+
+        The control: it is the undeclared field that is refused above, not the
+        tool result itself.
+        """
+        message = {k: v for k, v in _NAMED_TOOL_RESULT.items() if k != "name"}
+        request = CompletionCreateParams.model_validate(
+            _BASE_REQUEST | {"messages": [message]}
+        )
+        assert request.messages[0].tool_call_id == "call_1"  # type: ignore[union-attr]
 
 
 @pytest.mark.local

@@ -37,6 +37,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 #: Seconds allowed for the server to answer /health after launch.
 _STARTUP_TIMEOUT = 60
 
+#: Settings this module sets itself, dropped from the inherited environment first.
+#:
+#: ``strict_input_validation`` is one of them because this lane runs the gateway
+#: as a deployment does, and its default is off. Real clients send fields the
+#: OpenAI schema does not define -- Hermes puts ``name`` on a ``tool`` message,
+#: which the legacy ``function`` role carried -- and rejecting those here would
+#: report a working client as a gateway failure. What strict mode rejects is
+#: asserted in the unit suite, against the schemas rather than against a CLI.
+_OVERRIDDEN_SETTINGS = frozenset({"api_key", "strict_input_validation"})
+
 
 def find_free_port() -> int:
     """Return an available TCP port on localhost."""
@@ -111,8 +121,9 @@ def start_server() -> AgenticServer:
     # is the one the server actually enforces.
     from os import environ  # noqa: PLC0415
 
-    env = {k: v for k, v in environ.items() if k.lower() != "api_key"}
+    env = {k: v for k, v in environ.items() if k.lower() not in _OVERRIDDEN_SETTINGS}
     env["API_KEY"] = api_key
+    env["STRICT_INPUT_VALIDATION"] = "false"
 
     process = subprocess.Popen(  # noqa: S603
         [

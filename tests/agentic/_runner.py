@@ -192,9 +192,10 @@ def _record_sample(
 ) -> None:
     """Write one successful run's prompt, raw output and metrics to a file.
 
-    Only called once a run has parsed, so a captured file always shows a client
-    working as intended rather than a failure mode. One file per tool and model;
-    a later run of the same pair overwrites it.
+    A run that parsed but reported an error is skipped: parsing only proves the
+    CLI printed something readable, and the point of a captured file is to show
+    a client working as intended. One file per tool and model; a later run of the
+    same pair overwrites it.
 
     Args:
         tool: CLI that produced the output.
@@ -204,7 +205,7 @@ def _record_sample(
         result: Parsed result, for the summary header.
     """
     directory = os.environ.get(SAMPLE_DIR_VAR)
-    if not directory:
+    if not directory or result.is_error:
         return
     target = Path(directory)
     target.mkdir(parents=True, exist_ok=True)
