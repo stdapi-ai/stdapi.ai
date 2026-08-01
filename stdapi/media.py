@@ -1,6 +1,6 @@
 """Media-related utilities."""
 
-from asyncio import CancelledError, create_subprocess_exec, create_task
+from asyncio import CancelledError, create_subprocess_exec, create_task, wait_for
 from contextlib import suppress
 from subprocess import PIPE
 from typing import TYPE_CHECKING
@@ -9,6 +9,7 @@ from stdapi.api_errors import ApiError
 from stdapi.monitoring import log_error_details
 
 if TYPE_CHECKING:
+    from asyncio import Task
     from asyncio.streams import StreamReader, StreamWriter
     from collections.abc import AsyncGenerator
 
@@ -17,6 +18,64 @@ _FFMPEG_FORMAT_ALIASES = {"aac": "adts", "pcm": "s16le", "vorbis": "ogg"}
 
 #: Streaming chunk size (64KB optimal for network streaming with encoding)
 _CHUNK_SIZE = 65536
+
+#: Seconds ffmpeg may go without producing output before the encode is abandoned.
+_ENCODE_CHUNK_TIMEOUT = 120
+
+#: Seconds a killed ffmpeg is given to be reaped.
+_PROCESS_EXIT_TIMEOUT = 10
+
+#: Bytes of ffmpeg stderr kept for diagnostics; the head, where ffmpeg errors first.
+_STDERR_KEPT = 4096
+
+
+async def _drain(stderr: StreamReader | None, seen: bytearray) -> None:
+    """Consume ffmpeg's stderr so its pipe buffer can never fill.
+
+    Args:
+        stderr: The process's stderr stream.
+        seen: Buffer receiving the first :data:`_STDERR_KEPT` bytes, for diagnostics.
+    """
+    if stderr is None:  # pragma: no cover
+        return
+    while chunk := await stderr.read(_CHUNK_SIZE):
+        if len(seen) < _STDERR_KEPT:
+            seen.extend(chunk[: _STDERR_KEPT - len(seen)])
+
+
+def _input_state(task: Task[None]) -> str:
+    """Describe what became of the task feeding ffmpeg's stdin.
+
+    A stalled encode is either ffmpeg's fault or its input's, and those need
+    opposite fixes; this says which without a second reproduction.
+
+    Args:
+        task: The task running :func:`_process_input_stream`.
+
+    Returns:
+        A short phrase naming the task's state, and its error if it had one.
+    """
+    if not task.done():
+        return "still feeding"
+    if task.cancelled():  # pragma: no cover
+        return "cancelled"
+    if (error := task.exception()) is not None:
+        return f"failed with {error!r}"
+    return "finished, stdin closed"
+
+
+def _decode_stderr(seen: bytearray) -> str:
+    """Return ffmpeg's captured stderr as a loggable suffix.
+
+    Args:
+        seen: Stderr head captured so far, even while the drain is still running.
+
+    Returns:
+        A prefixed one-line suffix, or an empty string when nothing was captured.
+    """
+    if captured := bytes(seen).decode("utf-8", "replace").strip():
+        return f" ffmpeg said: {captured}"
+    return ""
 
 
 async def _process_input_stream(
@@ -38,7 +97,67 @@ async def _process_input_stream(
         finally:
             stdin.close()
             await stream.aclose()
-            await stdin.wait_closed()
+            with suppress(OSError):
+                await stdin.wait_closed()
+
+
+def _ffmpeg_args(
+    output_format: str,
+    input_format: str | None,
+    sample_rate: int | None,
+    channels: int | None,
+    output_sample_rate: int | None,
+) -> list[str]:
+    """Build the ffmpeg command line for one encode.
+
+    Args:
+        output_format: Target audio format.
+        input_format: Input audio format, or None to let ffmpeg autodetect.
+        sample_rate: Input sample rate in Hz.
+        channels: Input channel count.
+        output_sample_rate: Rate to resample the output to, if any.
+
+    Returns:
+        The full argument vector, reading stdin and writing stdout.
+
+    Raises:
+        ValueError: If raw PCM is specified without sample_rate or channels.
+    """
+    args = ["ffmpeg"]
+
+    # Input format specification (required for raw PCM, optional for encoded formats)
+    if input_format:
+        # -f: input format (e.g., s16le for raw PCM)
+        args.extend(("-f", _FFMPEG_FORMAT_ALIASES.get(input_format, input_format)))
+        if sample_rate:
+            # -ar: audio sample rate in Hz
+            args.extend(("-ar", str(sample_rate)))
+        elif not channels:
+            msg = "sample_rate or channels must be specified for raw PCM"
+            raise ValueError(msg)
+        if channels:
+            # -ac: audio channels (1=mono, 2=stereo)
+            args.extend(("-ac", str(channels)))
+
+    args.extend(
+        (
+            "-i",  # Input from stdin
+            "pipe:0",
+            "-q:a",  # Audio quality (0=highest)
+            "0",
+        )
+    )
+    if output_sample_rate:
+        # -ar: resample the output to a specific sample rate in Hz
+        args.extend(("-ar", str(output_sample_rate)))
+    args.extend(
+        (
+            "-f",  # Output format
+            _FFMPEG_FORMAT_ALIASES.get(output_format, output_format),
+            "pipe:1",  # Output to stdout
+        )
+    )
+    return args
 
 
 async def encode_audio_stream(
@@ -75,41 +194,8 @@ async def encode_audio_stream(
         ValueError: If raw PCM is specified without sample_rate or channels.
         ApiError: If ffmpeg is not installed on the server.
     """
-    ffmpeg_args = ["ffmpeg"]
-
-    # Input format specification (required for raw PCM, optional for encoded formats)
-    if input_format:
-        # -f: input format (e.g., s16le for raw PCM)
-        ffmpeg_args.extend(
-            ("-f", _FFMPEG_FORMAT_ALIASES.get(input_format, input_format))
-        )
-        if sample_rate:
-            # -ar: audio sample rate in Hz
-            ffmpeg_args.extend(("-ar", str(sample_rate)))
-        elif not channels:  # pragma: no cover
-            msg = "sample_rate or channels must be specified for raw PCM"
-            raise ValueError(msg)
-        if channels:
-            # -ac: audio channels (1=mono, 2=stereo)
-            ffmpeg_args.extend(("-ac", str(channels)))
-
-    ffmpeg_args.extend(
-        (
-            "-i",  # Input from stdin
-            "pipe:0",
-            "-q:a",  # Audio quality (0=highest)
-            "0",
-        )
-    )
-    if output_sample_rate:
-        # -ar: resample the output to a specific sample rate in Hz
-        ffmpeg_args.extend(("-ar", str(output_sample_rate)))
-    ffmpeg_args.extend(
-        (
-            "-f",  # Output format
-            _FFMPEG_FORMAT_ALIASES.get(output_format, output_format),
-            "pipe:1",  # Output to stdout
-        )
+    ffmpeg_args = _ffmpeg_args(
+        output_format, input_format, sample_rate, channels, output_sample_rate
     )
 
     try:
@@ -126,24 +212,59 @@ async def encode_audio_stream(
         )
         raise ApiError(msg) from exception
 
+    stderr_head = bytearray()
     input_task = create_task(_process_input_stream(stream, process.stdin))
+    # ffmpeg writes progress and warnings to stderr for the whole encode. asyncio
+    # buffers that pipe only up to its stream limit; past it reading pauses, the
+    # OS pipe fills, and ffmpeg blocks writing to stderr -- so it stops consuming
+    # stdin and producing stdout, and the encode never completes.
+    stderr_task = create_task(_drain(process.stderr, stderr_head))
 
     try:
         while True:
             if process.stdout:
-                chunk = await process.stdout.read(_CHUNK_SIZE)
+                chunk = await wait_for(
+                    process.stdout.read(_CHUNK_SIZE), _ENCODE_CHUNK_TIMEOUT
+                )
                 if not chunk:
                     break
                 yield chunk
             else:  # pragma: no cover
                 break
+        # ffmpeg closed stdout; a nonzero exit means the body is incomplete.
+        with suppress(TimeoutError):
+            await wait_for(process.wait(), _PROCESS_EXIT_TIMEOUT)
+            await wait_for(stderr_task, _PROCESS_EXIT_TIMEOUT)
+        if process.returncode != 0:
+            log_error_details(
+                f"ffmpeg exited with code {process.returncode} after closing its "
+                f"output. Command: {' '.join(ffmpeg_args)}. "
+                f"Input: {_input_state(input_task)}.{_decode_stderr(stderr_head)}"
+            )
+            msg = f"Failed to encode the audio to '{output_format}'."
+            raise ApiError(msg, status=500)
+    except TimeoutError as exception:
+        details = _decode_stderr(stderr_head)
+        log_error_details(
+            f"ffmpeg produced no output for {_ENCODE_CHUNK_TIMEOUT}s and was "
+            f"terminated. Command: {' '.join(ffmpeg_args)}. "
+            f"Exit code: {process.returncode}. Input: {_input_state(input_task)}."
+            f"{details}"
+        )
+        msg = f"Timed out encoding the audio to '{output_format}'."
+        raise ApiError(msg, status=504) from exception
     finally:
-        input_task.cancel()
-        with suppress(CancelledError):
-            await input_task
+        # Killing first breaks the pipes, so no task can stay blocked on one.
         with suppress(ProcessLookupError):
-            process.terminate()
-            await process.wait()
+            process.kill()
+        for task in (input_task, stderr_task):
+            task.cancel()
+            with suppress(CancelledError, OSError, TimeoutError):
+                await wait_for(task, _PROCESS_EXIT_TIMEOUT)
+        # Reaping is bounded too: a process that ignores the kill must not strand
+        # the request that spawned it.
+        with suppress(TimeoutError):
+            await wait_for(process.wait(), _PROCESS_EXIT_TIMEOUT)
 
 
 async def stream_body(stream: StreamReader) -> AsyncGenerator[bytes]:
