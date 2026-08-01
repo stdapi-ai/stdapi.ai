@@ -768,7 +768,9 @@ def _advertised_model_ids(
     target otherwise.
     """
     if test_client is not None:
-        response: httpx.Response = test_client.get(
+        # Starlette types its TestClient against httpx2; the alias in conftest makes
+        # the response it returns at runtime the httpx one this annotation names.
+        response: httpx.Response = test_client.get(  # type: ignore[assignment]
             "/search_models",
             params={"route": "openai_video_generation"},
             headers={"authorization": f"Bearer {api_key}"},

@@ -1190,7 +1190,9 @@ def live_client(
     """Authenticated client for the local live server or the --server-url target."""
     if test_client is not None:
         test_client.headers["authorization"] = f"Bearer {api_key}"
-        yield test_client
+        # Starlette types its TestClient against httpx2; the alias in conftest makes
+        # it an httpx.Client at runtime, which is what this fixture promises.
+        yield test_client  # type: ignore[misc]
         del test_client.headers["authorization"]
     elif server_url:
         with httpx.Client(

@@ -135,8 +135,7 @@ pydantic-ai's `OpenAIChatModel` reaches the gateway through an `OpenAIProvider` 
     model = OpenAIChatModel(
         "anthropic.claude-fable-5",
         provider=OpenAIProvider(
-            base_url="https://YOUR_STDAPI_URL/v1",
-            api_key="YOUR_STDAPI_KEY",
+            base_url="https://YOUR_STDAPI_URL/v1", api_key="YOUR_STDAPI_KEY"
         ),
     )
     agent = Agent(model, system_prompt="You are a helpful assistant.")

@@ -29,6 +29,7 @@ from secrets import token_hex
 from typing import TYPE_CHECKING
 
 import cohere
+import httpx
 import pytest
 from aiobotocore.session import get_session
 from anthropic import Anthropic, AnthropicBedrock
@@ -36,7 +37,23 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from PIL import Image as PILImage
 from pybase64 import b64encode
-from starlette.testclient import TestClient
+
+# Starlette's TestClient subclasses whichever HTTP library it can import, and
+# prefers httpx2. Every vendor SDK below type- and runtime-checks its
+# ``http_client`` against httpx, so a TestClient built on httpx2 is rejected
+# outright -- and httpx2 is in this environment only because pydantic-ai pulls
+# genai-prices in for the agentic lane. Aliasing the name while starlette binds
+# it takes the fallback branch starlette still documents, so the test client is
+# an httpx.Client again. The alias is dropped immediately: genai-prices imports
+# the real httpx2 later and must get it.
+assert "starlette.testclient" not in sys.modules, (
+    "starlette.testclient was imported before this alias could be installed"
+)
+sys.modules["httpx2"] = httpx
+try:
+    from starlette.testclient import TestClient
+finally:
+    del sys.modules["httpx2"]
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -930,7 +947,9 @@ def openai_client(
             api_key=api_key,
             max_retries=0,
             organization=_OPENAI_ORGANIZATION,
-            http_client=test_client,
+            # Starlette type-checks its TestClient against httpx2 unconditionally;
+            # the alias at the top of this module fixes only the runtime class.
+            http_client=test_client,  # type: ignore[arg-type]
         )
 
     # Official API test
@@ -1296,7 +1315,8 @@ def anthropic_client(
             base_url="http://testserver/anthropic/",
             api_key=api_key,
             max_retries=0,
-            http_client=test_client,
+            # See the OpenAI client fixture: only the static type is still httpx2's.
+            http_client=test_client,  # type: ignore[arg-type]
         )
     if use_official_api:
         if getenv("ANTHROPIC_API_KEY"):
@@ -1392,7 +1412,8 @@ def _build_cohere_client[ClientT: cohere.Client](
         return client_class(
             api_key=api_key,
             base_url="http://testserver/cohere",
-            httpx_client=test_client,
+            # See the OpenAI client fixture: only the static type is still httpx2's.
+            httpx_client=test_client,  # type: ignore[arg-type]
         )
     if use_official_api:
         if not getenv("CO_API_KEY"):
