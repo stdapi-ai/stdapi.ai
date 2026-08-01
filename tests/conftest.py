@@ -19,7 +19,9 @@ Ref: stdapi/config.py:_Settings
 from __future__ import annotations
 
 import base64
+import faulthandler
 import re
+import signal
 import sys
 from io import BytesIO
 from json import JSONDecodeError, dumps, loads
@@ -54,6 +56,12 @@ try:
     from starlette.testclient import TestClient
 finally:
     del sys.modules["httpx2"]
+
+# Many tests here drive live AWS through an in-process app, so a stall has no
+# traceback of its own and the suite simply stops. SIGUSR1 makes the interpreter
+# print every thread's stack, which is the only way to see where from outside:
+# this host restricts ptrace, so no debugger can attach.
+faulthandler.register(signal.SIGUSR1, all_threads=True)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
