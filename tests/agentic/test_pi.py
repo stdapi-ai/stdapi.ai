@@ -408,6 +408,15 @@ class TestPiReasoning:
 #: model in this module whose reasoning comes back as ``reasoning_content``.
 _REASONING_FIELD_MODEL = "deepseek.v3.2"
 
+#: Effort level this model actually reasons at.
+#:
+#: It is a hybrid: ``tests/probes/results/deepseek.v3.2.json`` records
+#: ``reasoning_effort_low`` as accepted with "no observable effect" and only
+#: ``reasoning_effort_high`` as producing a reasoningContent block. Asking for
+#: less leaves nothing for the setting under test to relocate, so every value
+#: would pass without proving anything.
+_REASONING_FIELD_EFFORT = "high"
+
 #: Values the operator setting accepts, each proven against a live response.
 _REASONING_FIELD_VALUES = ["reasoning_content", "reasoning", "none"]
 
@@ -483,9 +492,11 @@ class TestChatCompletionsReasoningField:
         ``reasoning_content`` and ``reasoning`` are mutually exclusive: the
         response must carry the text under the field this gateway was started
         with, under no other field, and under neither once the setting is
-        ``"none"``.
+        ``"none"``. The effort asked for is the one this model reasons at, so
+        the ``"none"`` case proves suppression rather than absence.
 
         Ref: https://developers.openai.com/api/docs/guides/reasoning
+             tests/probes/results/deepseek.v3.2.json
              stdapi/models/chat/deepseek_v3.py:ChatModel._req_configure_reasoning
         """
         server, field = reasoning_field_server.server, reasoning_field_server.field
@@ -497,7 +508,7 @@ class TestChatCompletionsReasoningField:
             messages=[
                 {"role": "user", "content": "What is 6 times 7? Reply with the number."}
             ],
-            reasoning_effort="low",
+            reasoning_effort=_REASONING_FIELD_EFFORT,
         )
         message = response.choices[0].message
         assert message.content, f"no answer content came back: {response!r}"
