@@ -324,6 +324,7 @@ Choose **one** method (mutually exclusive):
 | Variable                                                            | Default | Description                                                                             |
 |---------------------------------------------------------------------|---------|-----------------------------------------------------------------------------------------|
 | [`ENABLE_MCP_STREAMABLE_HTTP`](#enable-mcp-streamable-http)         | `false` | Enable MCP server via Streamable HTTP at `/mcp` — recommended transport                 |
+| [`MCP_STATELESS_HTTP`](#mcp-stateless-http)                         | `false` | Serve `/mcp` without server-side sessions — any replica may serve any request           |
 | [`ENABLE_MCP_SSE`](#enable-mcp-sse)                                 | `false` | Enable MCP server via Server-Sent Events at `/sse` — legacy transport for older clients |
 | [`MCP_INCLUDE_TOOLS`](#mcp-include-tools)                           | None    | Comma-separated tool names to expose exclusively; all others are hidden                 |
 | [`MCP_EXCLUDE_TOOLS`](#mcp-exclude-tools)                           | None    | Comma-separated tool names to hide; all others remain exposed                           |
@@ -2421,6 +2422,32 @@ Both transport types can be enabled independently or simultaneously.
 
 # Enable MCP Streamable HTTP transport
 export ENABLE_MCP_STREAMABLE_HTTP=true
+```
+
+#### `MCP_STATELESS_HTTP` { #mcp-stateless-http }
+
+:octicons-package-24: **Purpose**
+:   Serve the Streamable HTTP transport without server-side sessions
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false`
+
+:octicons-workflow-24: **Behavior**
+:   Each request to `/mcp` is handled by a fresh transport that keeps no state. Clients may call `tools/list` and `tools/call` without an `initialize` handshake, an `Mcp-Session-Id` the server never issued is accepted rather than rejected, and any replica may serve any request.
+
+:octicons-alert-24: **Requires**
+:   `ENABLE_MCP_STREAMABLE_HTTP=true`. Ignored otherwise.
+
+```bash
+# Sessions enabled (default)
+# No environment variable needed
+
+# Stateless transport
+export ENABLE_MCP_STREAMABLE_HTTP=true
+export MCP_STATELESS_HTTP=true
 ```
 
 #### `ENABLE_MCP_SSE` { #enable-mcp-sse }

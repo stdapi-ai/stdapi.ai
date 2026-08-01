@@ -1186,6 +1186,20 @@ class _Settings(BaseSettings):
         ),
     )
 
+    mcp_stateless_http: bool = Field(
+        default=False,
+        description=(
+            "Serve the MCP Streamable HTTP transport in stateless mode. "
+            "Each request is then handled by a fresh transport that keeps no session "
+            "state, so any client may call /mcp without initializing a session first "
+            "and any replica may serve any request. "
+            "Required by hosts that provide their own session isolation and inject an "
+            "Mcp-Session-Id header the server never issued, such as Amazon Bedrock "
+            "AgentCore Runtime. "
+            "Requires enable_mcp_streamable_http. Default: false."
+        ),
+    )
+
     enable_mcp_sse: bool = Field(
         default=False,
         description=(

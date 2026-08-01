@@ -18,10 +18,13 @@ from contextvars import Context
 from typing import TYPE_CHECKING
 
 import pytest
+from fastapi import FastAPI
+from fastapi_mcp import FastApiMCP  # type: ignore[import-untyped]
 from starlette.requests import Request as StarletteRequest
 
 from stdapi import server
 from stdapi.config import SETTINGS
+from stdapi.mcp import _make_stateless
 from stdapi.monitoring import REQUEST_ID, log_error_details, log_request_event
 from stdapi.utils import webuuid
 
@@ -437,3 +440,102 @@ class TestMCPIntegration:
         )
         assert response.status_code == 200
         assert "x-request-id" in response.headers
+
+
+def _mcp_only_app(*, stateless: bool) -> FastAPI:
+    """Build a throwaway app exposing one tool over the streamable-HTTP transport.
+
+    The gateway's own app mounts MCP once per session from the settings, so the
+    two transport modes cannot both be observed on it. This isolates the mount
+    itself, which is all the mode changes.
+
+    Args:
+        stateless: Whether to apply :func:`~stdapi.mcp._make_stateless`.
+
+    Returns:
+        The app, ready to serve ``/mcp``.
+    """
+    app = FastAPI()
+
+    @app.get("/echo", operation_id="echo")
+    async def echo() -> dict[str, str]:
+        """Return a fixed payload."""
+        return {"echo": "ok"}
+
+    mcp = FastApiMCP(app, name="test", description="test")
+    mcp.mount_http()
+    if stateless:
+        _make_stateless(mcp)
+    return app
+
+
+def _tools_list(app: FastAPI, *, session_id: str | None) -> Any:  # noqa: ANN401
+    """POST a bare ``tools/list`` to *app*, without initializing a session first.
+
+    Args:
+        app: App exposing the transport.
+        session_id: Value for the ``Mcp-Session-Id`` header, or None to omit it.
+
+    Returns:
+        The raw HTTP response.
+    """
+    from starlette.testclient import TestClient  # noqa: PLC0415
+
+    headers = {"Accept": "application/json, text/event-stream"}
+    if session_id is not None:
+        headers["mcp-session-id"] = session_id
+    with TestClient(app) as client:
+        return client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+            headers=headers,
+        )
+
+
+class TestStatelessStreamableHttp:
+    """``mcp_stateless_http`` makes /mcp answer a request that owns no session.
+
+    Amazon Bedrock AgentCore Runtime provides its own session isolation and
+    stamps an ``Mcp-Session-Id`` header on every request that lacks one, so the
+    server sees an ID it never issued and no ``initialize`` handshake of its own.
+    ``fastapi_mcp`` hard-codes the session manager to stateful, where that is a
+    rejected request; the stateless mode AgentCore requires is what this setting
+    turns on.
+
+    Ref: https://docs.aws.amazon.com/marketplace/latest/userguide/bedrock-agentcore-runtime.html
+         stdapi/mcp.py:_make_stateless
+         stdapi/config.py:Settings.mcp_stateless_http
+    """
+
+    def test_unknown_session_id_is_served(self) -> None:
+        """A ``tools/list`` bearing a session ID the server never issued succeeds.
+
+        This is the exact shape AgentCore forwards, and the reason the default
+        transport cannot be deployed there unchanged.
+        """
+        response = _tools_list(
+            _mcp_only_app(stateless=True), session_id="agentcore-injected-id"
+        )
+        assert response.status_code == 200
+        names = [tool["name"] for tool in response.json()["result"]["tools"]]
+        assert names == ["echo"]
+
+    def test_no_session_id_is_served(self) -> None:
+        """A ``tools/list`` with no session header at all succeeds too.
+
+        Stateless mode has no handshake to skip, so the first request a client
+        makes is answered whether or not the host stamped an ID on it.
+        """
+        response = _tools_list(_mcp_only_app(stateless=True), session_id=None)
+        assert response.status_code == 200
+
+    @pytest.mark.parametrize("session_id", [None, "agentcore-injected-id"])
+    def test_the_default_transport_rejects_the_same_request(
+        self, session_id: str | None
+    ) -> None:
+        """Without the setting, the same request is refused rather than served.
+
+        The negative control: it is the mode, not the payload, that decides.
+        """
+        response = _tools_list(_mcp_only_app(stateless=False), session_id=session_id)
+        assert response.status_code != 200

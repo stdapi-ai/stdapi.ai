@@ -23,6 +23,13 @@ class HealthResponse:
     status: str = "ok"
 
 
+@dataclass(slots=True, frozen=True)
+class PingResponse:
+    """Response for the /ping endpoint."""
+
+    status: str = "Healthy"
+
+
 #: Welcome message payload for root endpoint
 _WELCOME = {
     "message": "Welcome to the stdapi.ai API! Documentation is available at "
@@ -188,3 +195,13 @@ async def health_check() -> HealthResponse:
         HealthResponse with status "ok" when the service is operational
     """
     return HealthResponse()
+
+
+@router.get("/ping")
+async def ping() -> PingResponse:
+    """Report readiness in the shape Amazon Bedrock AgentCore Runtime expects.
+
+    Returns:
+        PingResponse with status "Healthy" when the service is operational.
+    """
+    return PingResponse()

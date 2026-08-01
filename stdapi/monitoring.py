@@ -139,6 +139,7 @@ LOGGING_PATHS_IGNORE: frozenset[str] = frozenset(
         "/favicon.ico",
         "/health",
         "/openapi.json",
+        "/ping",
         "/redoc",
         "/.well-known/api-catalog",
         "/.well-known/mcp/server-card.json",

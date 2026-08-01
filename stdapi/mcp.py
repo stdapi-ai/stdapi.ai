@@ -92,6 +92,28 @@ class _McpLogHandler(Handler):
             pass
 
 
+def _make_stateless(mcp: FastApiMCP) -> None:
+    """Switch the mounted Streamable HTTP transport to stateless mode.
+
+    ``fastapi_mcp`` hard-codes ``stateless=False`` on the session manager it
+    builds, and exposes no way to configure it. The flag is only read when a
+    request is dispatched, so flipping it on the manager the transport creates
+    is equivalent to having constructed it stateless.
+
+    Args:
+        mcp: The FastApiMCP instance whose HTTP transport was just mounted.
+    """
+    transport = mcp._http_transport  # noqa: SLF001
+    start = transport._ensure_session_manager_started  # noqa: SLF001
+
+    async def start_stateless() -> None:
+        await start()
+        if (manager := transport._session_manager) is not None:  # noqa: SLF001
+            manager.stateless = True
+
+    transport._ensure_session_manager_started = start_stateless  # noqa: SLF001
+
+
 def mount_mcp(app: FastAPI) -> None:
     """Attach FastApiMCP to *app* and mount the enabled transports.
 
@@ -103,6 +125,8 @@ def mount_mcp(app: FastAPI) -> None:
     the discovered tool list so the server card reflects real tools at startup.
     Strips the auto-generated response/example section from each tool description
     (see :func:`_strip_response_docs`) to reduce MCP context cost.
+    With ``mcp_stateless_http`` the Streamable HTTP transport is switched to
+    stateless mode (see :func:`_make_stateless`).
 
     Args:
         app: FastAPI application to attach MCP to.
@@ -130,6 +154,8 @@ def mount_mcp(app: FastAPI) -> None:
 
     if SETTINGS.enable_mcp_streamable_http:
         mcp.mount_http()
+        if SETTINGS.mcp_stateless_http:
+            _make_stateless(mcp)
     if SETTINGS.enable_mcp_sse:
         mcp.mount_sse()
 
