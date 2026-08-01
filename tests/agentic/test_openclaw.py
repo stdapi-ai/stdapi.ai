@@ -91,16 +91,26 @@ _CONVERSE_MODELS = (
 #: back under ``reasoning`` rather than ``reasoning_content``, which no other
 #: client test covers.
 _MANTLE_MODELS = {
-    OPENCLAW_OPENAI.id: ("qwen3-32b", "qwen.qwen3-32b"),
+    OPENCLAW_OPENAI.id: ("qwen3-next-80b", "qwen.qwen3-next-80b-a3b-instruct"),
     OPENCLAW_RESPONSES.id: ("gpt-5-6-luna", "openai.gpt-5.6-luna"),
     OPENCLAW_ANTHROPIC.id: ("gemma-4-31b", "google.gemma-4-31b"),
 }
+
+#: Models that sometimes answer this prompt without calling a tool at all.
+#:
+#: Observed on qwen3-next-80b over Chat Completions: a full turn, 188K input
+#: tokens, and no tool call. The gateway forwards the tools either way -- Claude
+#: and Nova drive the loop over the same wire format -- so this is the model
+#: declining to explore, not a routing fault.
+_MAY_ANSWER_WITHOUT_TOOLS = {"qwen.qwen3-next-80b-a3b-instruct"}
 
 #: One (wire format, model) pair per run, since the two are not independent.
 _CASES = [
     pytest.param(
         tool,
-        ModelConfig(model=model, timeout=_TIMEOUT),
+        ModelConfig(
+            model=model, timeout=_TIMEOUT, flaky=model in _MAY_ANSWER_WITHOUT_TOOLS
+        ),
         id=f"{_COMPATIBILITY_LABELS[tool.id]}-{label}",
     )
     for tool in (OPENCLAW_OPENAI, OPENCLAW_RESPONSES, OPENCLAW_ANTHROPIC)

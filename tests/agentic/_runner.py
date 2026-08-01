@@ -11,9 +11,11 @@ Ref: tests/agentic/_tools.py:AgenticTool
 
 from __future__ import annotations
 
+import os
 import subprocess
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -24,7 +26,6 @@ from ._tools import SRC_MOUNT, AgenticResult, Invocation
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
-    from pathlib import Path
 
     from ._server import AgenticServer
     from ._tools import AgenticTool
@@ -170,7 +171,55 @@ def run_agent(
         xfail_if_flaky(config, "unparsable output")
         pytest.fail(str(exc))
     _completed_runs.append(invocation.session_id)
+    _record_sample(tool, config, prompt, process.stdout, result)
     return result
+
+
+#: Environment variable naming a directory to drop one transcript per run into.
+#:
+#: Unset in a normal run: this exists to collect examples of what each client
+#: actually sends and prints, which is otherwise only visible inside a container
+#: that is deleted when the run ends.
+SAMPLE_DIR_VAR = "AGENTIC_SAMPLE_DIR"
+
+
+def _record_sample(
+    tool: AgenticTool,
+    config: ModelConfig,
+    prompt: str,
+    stdout: str,
+    result: AgenticResult,
+) -> None:
+    """Write one successful run's prompt, raw output and metrics to a file.
+
+    Only called once a run has parsed, so a captured file always shows a client
+    working as intended rather than a failure mode. One file per tool and model;
+    a later run of the same pair overwrites it.
+
+    Args:
+        tool: CLI that produced the output.
+        config: Model the run used.
+        prompt: Task the agent was given.
+        stdout: Everything the CLI printed.
+        result: Parsed result, for the summary header.
+    """
+    directory = os.environ.get(SAMPLE_DIR_VAR)
+    if not directory:
+        return
+    target = Path(directory)
+    target.mkdir(parents=True, exist_ok=True)
+    slug = f"{tool.id}__{config.model}".replace("/", "_").replace(":", "_")
+    (target / f"{slug}.txt").write_text(
+        f"# tool:   {tool.id}\n"
+        f"# model:  {config.model}\n"
+        f"# route:  {tool.route}\n"
+        f"# steps:  {result.steps}\n"
+        f"# tokens: in={result.input_tokens} out={result.output_tokens}\n"
+        f"\n===== PROMPT =====\n{prompt}\n"
+        f"\n===== RAW CLI OUTPUT =====\n{stdout}\n"
+        f"\n===== PARSED ANSWER =====\n{result.text}\n",
+        encoding="utf-8",
+    )
 
 
 def assert_result(

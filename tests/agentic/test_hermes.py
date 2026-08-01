@@ -97,7 +97,7 @@ _CONVERSE_MODELS = (
 #: back under ``reasoning`` rather than ``reasoning_content``, which no other
 #: client test covers.
 _MANTLE_MODELS = {
-    HERMES_CHAT_COMPLETIONS.id: ("qwen3-32b", "qwen.qwen3-32b"),
+    HERMES_CHAT_COMPLETIONS.id: ("qwen3-next-80b", "qwen.qwen3-next-80b-a3b-instruct"),
     HERMES_RESPONSES.id: ("gpt-5-6-luna", "openai.gpt-5.6-luna"),
     HERMES_ANTHROPIC.id: ("gemma-4-31b", "google.gemma-4-31b"),
 }

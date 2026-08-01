@@ -63,7 +63,7 @@ flowchart LR
 
 ## ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI-Compatible Coding Assistants
 
-**Popular Tools:** [Cline](https://github.com/cline/cline) | [OpenCode](https://opencode.ai/) | [Pi Agent](https://github.com/earendil-works/pi) | [OpenAI Codex CLI](https://developers.openai.com/codex) | [Qwen Code](https://github.com/QwenLM/qwen-code) | [Zed](https://zed.dev/) | [JetBrains AI Assistant](https://www.jetbrains.com/ai/)
+**Popular Tools:** [Cline](https://github.com/cline/cline) | [OpenCode](https://opencode.ai/) | [Pi Agent](https://github.com/earendil-works/pi) | [OpenClaw](https://github.com/openclaw/openclaw) | [OpenAI Codex CLI](https://developers.openai.com/codex) | [Qwen Code](https://github.com/QwenLM/qwen-code) | [Zed](https://zed.dev/) | [JetBrains AI Assistant](https://www.jetbrains.com/ai/)
 
 Most IDE coding assistants use the OpenAI-compatible API. Configure them by pointing to stdapi.ai's `/v1` endpoint.
 
@@ -175,6 +175,34 @@ Most AI coding assistants follow a similar configuration pattern. The exact menu
     Set `api` on the provider to apply it to every model under it, or on an individual model to override it. Declare several providers side by side in the same file to reach more than one route.
 
     List one entry in `models` per model you want to select. Each entry also accepts pi's own client-side accounting — `contextWindow` and `maxTokens` — and setting them generously lets the gateway report the model's real limit instead of pi truncating the prompt first.
+
+!!! example "OpenClaw"
+    [OpenClaw](https://github.com/openclaw/openclaw) is a personal-assistant and coding-agent CLI (npm package `openclaw`). Custom endpoints are registered through its onboarding wizard, not through the `agent` command itself:
+
+    ```bash
+    openclaw onboard \
+      --custom-provider-id stdapi \
+      --custom-base-url https://YOUR_STDAPI_URL/v1 \
+      --custom-model-id anthropic.claude-fable-5 \
+      --custom-compatibility openai \
+      --custom-api-key YOUR_STDAPI_API_KEY
+    ```
+
+    Omit `--custom-api-key` to read the key from `CUSTOM_API_KEY` in the environment instead. Then run the agent with the model qualified by the provider id:
+
+    ```bash
+    openclaw agent --model stdapi/anthropic.claude-fable-5
+    ```
+
+    `--custom-compatibility` is the standout setting here: one flag picks which of stdapi.ai's three chat dialects OpenClaw speaks, and `--custom-base-url` has to match the route serving it:
+
+    | `--custom-compatibility` | `--custom-base-url` | API |
+    |---|---|---|
+    | `openai` | `https://YOUR_STDAPI_URL/v1` | [Chat Completions](api_openai_chat_completions.md) |
+    | `openai-responses` | `https://YOUR_STDAPI_URL/v1` | [Responses](api_openai_responses.md) |
+    | `anthropic` | `https://YOUR_STDAPI_URL/anthropic` | [Anthropic Messages](api_anthropic_messages.md) |
+
+    Re-run `openclaw onboard` with a different `--custom-provider-id` to register more than one route side by side.
 
 !!! tip "Model Selection for Coding"
     **Recommended models for different tasks:**
@@ -398,6 +426,8 @@ Claude Code skips validation for this model ID, so any Bedrock model ID accepted
 Any tool using the Anthropic SDK or messages API can be configured the same way—set the `ANTHROPIC_BASE_URL` to `https://YOUR_STDAPI_URL/anthropic` and `ANTHROPIC_API_KEY` (or equivalent) to your stdapi.ai API key.
 
 [pi](https://github.com/earendil-works/pi) also speaks this API: register its provider with `api: "anthropic-messages"` and the `/anthropic` base URL, as shown in [the pi configuration above](#configuration).
+
+[OpenClaw](https://github.com/openclaw/openclaw) also speaks this API: set `--custom-compatibility anthropic` and point `--custom-base-url` at `/anthropic`, as shown in [the OpenClaw configuration above](#configuration).
 
 ---
 

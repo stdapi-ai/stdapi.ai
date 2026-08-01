@@ -119,11 +119,15 @@ _OPENAI_WEATHER_TOOL = {
 }
 
 #: Structured-output schema for the outputConfig probe, serialized as Bedrock wants it.
+#:
+#: ``additionalProperties: false`` is mandatory on every object Bedrock decodes
+#: against; without it the request is refused before the model ever sees it.
 _PLACE_SCHEMA = json.dumps(
     {
         "type": "object",
         "properties": {"city": {"type": "string"}, "country": {"type": "string"}},
         "required": ["city", "country"],
+        "additionalProperties": False,
     }
 )
 
@@ -533,8 +537,10 @@ PROBES: tuple[Probe, ...] = (
                     "type": "json_schema",
                     "structure": {
                         # The schema travels as a JSON string, not as a nested
-                        # document: botocore types this member as `str`.
-                        "jsonSchema": {"schema": _PLACE_SCHEMA}
+                        # document: botocore types this member as `str`. `name`
+                        # is what the gateway sends, and omitting it is itself
+                        # a rejection, so the probe would measure the prober.
+                        "jsonSchema": {"schema": _PLACE_SCHEMA, "name": "place"}
                     },
                 }
             },

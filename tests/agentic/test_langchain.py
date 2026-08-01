@@ -113,6 +113,24 @@ _CHAT_COMPLETIONS_MODEL_CONFIGS = [
     pytest.param(ModelConfig(model="qwen.qwen3-32b"), id="qwen3-32b"),
 ]
 
+#: Models whose backend decodes a JSON schema, which `with_structured_output` needs.
+#:
+#: `json_schema` structured output is model-specific (see the request-field table
+#: in `docs/api_openai_chat_completions.md`): Converse serves it through
+#: `outputConfig`, which only some model families implement.
+_STRUCTURED_OUTPUT_MODEL_CONFIGS = [
+    pytest.param(
+        ModelConfig(model="anthropic.claude-haiku-4-5-20251001-v1:0"),
+        id="claude-haiku-4-5",
+    ),
+    pytest.param(ModelConfig(model="qwen.qwen3-32b"), id="qwen3-32b"),
+]
+
+#: Model whose backend has no schema decoder, used for the refusal case.
+_NO_STRUCTURED_OUTPUT_MODEL_CONFIG = pytest.param(
+    ModelConfig(model="amazon.nova-2-lite-v1:0"), id="nova-2-lite"
+)
+
 #: Small Bedrock-native embedding model; embeddings are not a Claude capability.
 _EMBEDDING_MODEL_CONFIG = pytest.param(
     ModelConfig(model="amazon.titan-embed-text-v2:0"), id="titan-embed-text-v2"
@@ -222,10 +240,20 @@ class _NumericAnswer(BaseModel):
     value: int = Field(description="The numeric result.")
 
 
-@pytest.mark.parametrize("model_config", _CHAT_COMPLETIONS_MODEL_CONFIGS)
 class TestStructuredOutput:
-    """`with_structured_output` parses the reply into a Pydantic model."""
+    """`with_structured_output` parses the reply into a Pydantic model.
 
+    LangChain turns the Pydantic model into `response_format: json_schema`, which
+    the gateway serves from the backend's own schema decoder rather than emulating.
+    Support is therefore per model, and both outcomes are asserted here: the parse
+    on a backend that decodes schemas, and a clear refusal on one that does not.
+
+    Ref: https://reference.langchain.com/python/langchain_core/runnables/#langchain_core.runnables.base.Runnable.with_structured_output
+         docs/api_openai_chat_completions.md
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:build_output_config
+    """
+
+    @pytest.mark.parametrize("model_config", _STRUCTURED_OUTPUT_MODEL_CONFIGS)
     def test_with_structured_output_parses_pydantic_model(
         self,
         model_config: ModelConfig,
@@ -241,6 +269,27 @@ class TestStructuredOutput:
         )
         assert isinstance(result, _NumericAnswer)
         assert result.value == 42
+
+    @pytest.mark.parametrize("model_config", [_NO_STRUCTURED_OUTPUT_MODEL_CONFIG])
+    def test_model_without_a_schema_decoder_is_refused_clearly(
+        self,
+        model_config: ModelConfig,
+        agentic_tool: AgenticTool,
+        agentic_server: AgenticServer,
+    ) -> None:
+        """A backend with no schema decoder refuses, naming the field it cannot take.
+
+        The request is forwarded rather than pre-screened, so the message the
+        caller sees is the backend's own. It has to stay specific enough to act
+        on: a bare 400 would leave a LangChain user with no way to tell an
+        unsupported model from a malformed schema.
+        """
+        model = _chat_model(agentic_server, model_config).with_structured_output(
+            _NumericAnswer
+        )
+        with pytest.raises(BadRequestError) as refusal:
+            model.invoke("What is 12 plus 30? Respond with only the numeric result.")
+        assert "outputConfig" in str(refusal.value), refusal.value
 
 
 @pytest.mark.parametrize("model_config", [_EMBEDDING_MODEL_CONFIG])

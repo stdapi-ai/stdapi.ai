@@ -18,16 +18,24 @@ ARG PACKAGES=""
 # probes; both are absent from the slim base. hermes-agent itself is unpinned for the
 # same reason every other tool in this lane floats; the version installed is recorded
 # just below.
+#
+# The provider clients are named explicitly because hermes-agent installs them on
+# demand at first use, and this image runs with lazy installs disabled: without
+# `anthropic` its anthropic_messages transport refuses to start at all.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates git ripgrep \
     && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir hermes-agent
+    && pip install --no-cache-dir hermes-agent anthropic openai
 
 # Recorded at build time so the test session header can report the exact versions
 # that were installed, in the same shape the Node.js image's "npm ls" output has.
-RUN python -c "import json; from importlib.metadata import version; \
-    print(json.dumps({'dependencies': {name: {'version': version(name)} for name in \
-    ('hermes-agent', 'openai', 'anthropic')}}))" \
+# A name is reported only when it is actually installed: hermes-agent pulls its
+# provider clients in on demand, so requiring one here fails the build instead of
+# recording what the image holds.
+RUN python -c "import json; from importlib.metadata import distributions; \
+    have = {d.metadata['Name'].lower(): d.version for d in distributions()}; \
+    print(json.dumps({'dependencies': {n: {'version': have[n]} for n in \
+    ('hermes-agent', 'openai', 'anthropic') if n in have}}))" \
     > /opt/agentic-packages.json
 
 # The tests bind-mount a per-test working directory and run with --userns=keep-id,

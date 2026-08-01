@@ -74,7 +74,7 @@ Enhance your development workflow with AI-powered coding assistants. stdapi.ai i
 - **Code generation** - Natural language to code with Claude and specialized coding models
 - **Codebase understanding** - Chat with your codebase, explain functions, refactor code
 
-**Popular tools:** Claude Code, Cline, OpenCode, Pi Agent, Zed, JetBrains AI Assistant
+**Popular tools:** Claude Code, Cline, OpenCode, Pi Agent, OpenClaw, Zed, JetBrains AI Assistant
 
 **[AI Coding Assistants Guide](use_cases_coding_assistants.md)** — Universal setup for IDEs and development frameworks
 
@@ -99,6 +99,8 @@ Build self-directed AI agents that can plan, execute, and refine complex tasks a
 All agent frameworks that support OpenAI or Anthropic SDKs work immediately — point the SDK's base URL to stdapi.ai. See the [API overview](api_overview.md) for connection details.
 
 **[Python Client Libraries Guide](use_cases_python_libraries.md)** — Configuring LangChain and pydantic-ai directly against stdapi.ai
+
+**[Autonomous Agent CLIs Guide](use_cases_autonomous_agents.md)** — Configuring Hermes and OpenClaw directly against stdapi.ai
 
 !!! tip "Give your agents AI capabilities via MCP"
     stdapi.ai is also a native [MCP server](api_overview.md#mcp-model-context-protocol): agents can call image generation, speech synthesis, transcription, file management, and model discovery as MCP tools — no custom integration code needed.

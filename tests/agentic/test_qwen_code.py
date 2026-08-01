@@ -78,17 +78,23 @@ _MODEL_CONFIGS = [
 #: Models whose reasoning text the client can read back and replay.
 #:
 #: DeepSeek is the family whose reasoning arrives as ``reasoning_content`` on the
-#: Converse path today, which is the field Qwen Code mirrors. Qwen3-32B is served
+#: Converse path today, which is the field Qwen Code mirrors. Qwen3-Next is served
 #: by Bedrock Mantle, which names the same field ``reasoning``, so the two cover
-#: both spellings the gateway has to normalise before the client sees them.
+#: both spellings the gateway has to normalise before the client sees them. The
+#: Mantle entry needs a context window an agent loop fits in: Qwen3-32B's 32K is
+#: smaller than this prompt plus the output the client asks for.
 _REASONING_MODEL_CONFIGS = [
     pytest.param(
         ModelConfig(model="deepseek.v3.2", timeout=_TIMEOUT, supports_effort=True),
         id="deepseek-v3.2",
     ),
     pytest.param(
-        ModelConfig(model="qwen.qwen3-32b", timeout=_TIMEOUT, supports_effort=True),
-        id="qwen3-32b",
+        ModelConfig(
+            model="qwen.qwen3-next-80b-a3b-instruct",
+            timeout=_TIMEOUT,
+            supports_effort=True,
+        ),
+        id="qwen3-next-80b",
     ),
 ]
 

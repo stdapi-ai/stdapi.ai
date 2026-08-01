@@ -446,11 +446,13 @@ _PI_CONTEXT_WINDOW = 200_000
 #: prompts generate.
 _PI_MAX_TOKENS = 32_768
 
-#: Environment variable pi's ``models.json`` names as the provider's API key.
+#: Environment variable carrying the key into the container for pi.
 #:
-#: ``apiKey`` resolves an environment variable when its value names one, so the
-#: live key travels through the run's private env file rather than through a
-#: committed config or a command line readable in ``/proc``.
+#: The released pi sends ``apiKey`` verbatim rather than resolving a variable it
+#: names, so the value itself goes into ``models.json``. That file lives in the
+#: run's own throwaway workdir, which keeps the key out of the command line and
+#: out of any committed file; the variable is kept only so the environment the
+#: container gets still carries it, as every other tool here expects.
 _PI_API_KEY_VAR = "STDAPI_API_KEY"
 
 
@@ -482,7 +484,7 @@ def _pi_prepare(api: str, route: str) -> Callable[[Invocation], None]:
                             "name": "stdapi.ai",
                             "baseUrl": f"http://127.0.0.1:{invocation.port}{route}",
                             "api": api,
-                            "apiKey": _PI_API_KEY_VAR,
+                            "apiKey": invocation.api_key,
                             "authHeader": True,
                             "models": [
                                 {
@@ -1267,8 +1269,11 @@ _OPENCLAW_WORK_DIRS = ("home", "openclaw", "workspace")
 #: Tool policy for the agent turn: read files, run commands, nothing else.
 #:
 #: ``profile: "minimal"`` is the narrowest base OpenClaw ships (``session_status``
-#: alone); ``allow`` adds back exactly the two tools the task needs, and ``deny``
+#: alone); ``alsoAllow`` adds back exactly the tools the task needs, and ``deny``
 #: restates the mutating and outbound ones because deny wins over everything.
+#: ``alsoAllow`` rather than ``allow``: a configured tool section no longer widens
+#: a profile implicitly, so ``allow`` alone leaves the agent with no tools at all.
+#: ``process`` rides along because OpenClaw refuses ``exec`` without it.
 #:
 #: ``exec.mode: "full"`` runs host commands without an approval prompt. That is
 #: required, not incidental: a headless run has no UI to answer a prompt with, so
@@ -1286,12 +1291,11 @@ _OPENCLAW_WORK_DIRS = ("home", "openclaw", "workspace")
 _OPENCLAW_POLICY: dict[str, object] = {
     "tools": {
         "profile": "minimal",
-        "allow": ["read", "exec"],
+        "alsoAllow": ["read", "exec", "process"],
         "deny": [
             "write",
             "edit",
             "apply_patch",
-            "process",
             "code_execution",
             "group:web",
             "group:ui",
@@ -1315,7 +1319,7 @@ _OPENCLAW_SCRIPT = f"""\
 set -e
 openclaw onboard --non-interactive --accept-risk \
     --auth-choice custom-api-key \
-    --secret-input-mode ref \
+    --secret-input-mode plaintext \
     --custom-provider-id {_OPENCLAW_PROVIDER_ID} \
     --custom-base-url "$OPENCLAW_BASE_URL" \
     --custom-model-id "$OPENCLAW_MODEL" \
@@ -1350,9 +1354,11 @@ def _openclaw_build(compatibility: str, route: str) -> Callable[[Invocation], Co
 
     The gateway's API key reaches the CLI as ``CUSTOM_API_KEY``, the environment
     variable onboarding falls back to when no key flag is passed, and
-    ``--secret-input-mode ref`` then stores a reference to that variable rather
-    than the key itself. The key therefore never lands on a command line or in a
-    config file -- it lives only in the run's private env file.
+    ``--secret-input-mode plaintext`` writes it into the config OpenClaw builds.
+    ``ref`` would store a reference instead, but resolving one goes through
+    OpenClaw's own Gateway daemon over a WebSocket, which a one-shot container
+    run has no reason to start. The key still never reaches a command line, and
+    the config holding it is inside the run's throwaway workdir.
 
     Args:
         compatibility: ``openai``, ``openai-responses`` or ``anthropic``.
@@ -1493,6 +1499,14 @@ _HERMES_TOOLSETS = "file"
 #: Tool-calling iterations one turn may take, as a runaway-loop backstop.
 _HERMES_MAX_TURNS = 30
 
+#: Output token ceiling requested per call, as for pi (:data:`_PI_MAX_TOKENS`).
+#:
+#: Left to itself Hermes asks for more than the model allows and the request is
+#: refused before it starts: "the maximum tokens you requested exceeds the model
+#: limit of 64000" on Claude Haiku 4.5, 65535 on Nova 2 Lite. Well under every
+#: limit in the lane, and far above what these prompts generate.
+_HERMES_MAX_TOKENS = 32_768
+
 #: File the final answer is written to, then echoed to stdout.
 #:
 #: ``-z`` prints the final response text and nothing else, so the answer and the
@@ -1551,9 +1565,16 @@ def _hermes_prepare(transport: str, route: str) -> Callable[[Invocation], None]:
                     "key_env": _HERMES_API_KEY_VAR,
                     "transport": transport,
                     "default_model": invocation.model,
+                    "max_tokens": _HERMES_MAX_TOKENS,
                 }
             },
-            "model": {"provider": "stdapi", "model": invocation.model},
+            # The ceiling is set on both blocks: which one a given transport
+            # reads is not documented, and setting the other is inert.
+            "model": {
+                "provider": "stdapi",
+                "model": invocation.model,
+                "max_tokens": _HERMES_MAX_TOKENS,
+            },
             "agent": {"max_turns": _HERMES_MAX_TURNS},
             # Several optional code paths pip-install on demand; the container
             # cannot reach an index, so a lazy install would fail slowly instead

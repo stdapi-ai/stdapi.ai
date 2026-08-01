@@ -242,15 +242,18 @@ class TestPiAcrossRoutes:
         )
 
 
-#: One Bedrock Mantle model per route, each verified (tests/probes/results/) to
-#: accept only that route: qwen.qwen3-32b rejects Responses and Anthropic
-#: Messages, while openai.gpt-5.6-luna and google.gemma-4-31b both reject
-#: Chat Completions outright.
+#: One Bedrock Mantle model per route rather than a cross product.
+#:
+#: The probe corpus (tests/probes/results/) covers Chat Completions only, and on
+#: that route qwen.qwen3-next-80b-a3b-instruct answers while openai.gpt-5.6-luna
+#: and google.gemma-4-31b refuse outright -- so each of the latter two is paired
+#: with the route Mantle does serve it on. Qwen3-Next rather than Qwen3-32B
+#: because an agent loop does not fit the latter's 32K context.
 _MANTLE_ROUTE_MODELS = [
     pytest.param(
         PI_CHAT_COMPLETIONS,
-        ModelConfig(model="qwen.qwen3-32b", timeout=_TIMEOUT),
-        id="qwen3-32b-chat-completions",
+        ModelConfig(model="qwen.qwen3-next-80b-a3b-instruct", timeout=_TIMEOUT),
+        id="qwen3-next-80b-chat-completions",
     ),
     pytest.param(
         PI_RESPONSES,
@@ -259,7 +262,11 @@ _MANTLE_ROUTE_MODELS = [
     ),
     pytest.param(
         PI_MESSAGES,
-        ModelConfig(model="google.gemma-4-31b", timeout=_TIMEOUT),
+        # Measured at ~45 min for two runs, and Mantle answers it with an
+        # upstream 500 often enough to matter -- the same reason
+        # `test_claude_code.py` already carries this model as flaky. Both are
+        # upstream conditions: the conversion itself completes its tool loop.
+        ModelConfig(model="google.gemma-4-31b", timeout=3600, flaky=True),
         id="gemma-4-31b-messages",
     ),
 ]
