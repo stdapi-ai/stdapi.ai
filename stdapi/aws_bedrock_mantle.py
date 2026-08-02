@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypedDict
 from weakref import finalize
 
 from aiohttp import ClientError as AiohttpClientError
-from aiohttp import ClientSession, ClientTimeout
+from aiohttp import ClientSession, ClientTimeout, SocketTimeoutError
 from aiohttp.http_exceptions import HttpProcessingError
 from botocore.auth import SigV4QueryAuth
 from botocore.awsrequest import AWSRequest
@@ -364,7 +364,9 @@ async def _request(
         The open :class:`aiohttp.ClientResponse` (status already checked).
 
     Raises:
-        MantleError: On upstream errors or connection failures.
+        MantleError: On upstream errors or connection failures; a post-send
+            read timeout is never flagged for failover since the invocation
+            already reached Mantle and is billed regardless.
     """
     if _SESSION is None:  # pragma: no cover
         msg = "Bedrock Mantle support is not initialized on this server."
@@ -380,6 +382,16 @@ async def _request(
                 **(headers or {}),
             },
         )
+    except SocketTimeoutError as error:
+        # Imported here: stdapi.monitoring imports stdapi.aws_bedrock, which
+        # imports stdapi.aws, which imports this module (import cycle).
+        from stdapi.monitoring import log_error_details  # noqa: PLC0415
+
+        log_error_details(f"Timed out reading the Bedrock Mantle response in {region}.")
+        # The request already reached Mantle and is billed regardless of this
+        # client-side read timeout, so failing over would double-bill it.
+        msg = "The service is temporarily unavailable. Retry the request."
+        raise MantleError(msg, status=503) from error
     except (AiohttpClientError, TimeoutError) as error:
         # Imported here: stdapi.monitoring imports stdapi.aws_bedrock, which
         # imports stdapi.aws, which imports this module (import cycle).
