@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, Never
 
 from fastapi import APIRouter, Depends, Path, Query, Request
 from pydantic import ValidationError
+from pydantic_core import from_json
 
 from stdapi.api_errors import ApiError
 from stdapi.api_providers.openai import TAG_OPENAI
@@ -324,19 +325,45 @@ def _store_message_content(message: dict[str, Any]) -> dict[str, Any]:
 
 
 def _metadata_filters(request: Request) -> dict[str, str]:
-    """Extract ``metadata[key]=value`` filters from the request query string.
+    """Extract the metadata filters from the request query string.
+
+    Accepts the OpenAI SDK's ``metadata[key]=value`` pairs, and a single
+    ``metadata={"key": "value"}`` JSON object for clients that cannot send
+    bracketed keys (MCP tool calls, which serialize a whole object into one
+    query parameter).
 
     Args:
         request: The incoming HTTP request.
 
     Returns:
         Metadata key-value pairs to filter stored chat completions by.
+
+    Raises:
+        ApiError: With 400 if a bare ``metadata`` parameter is not a JSON
+            object of string values.
     """
-    return {
+    filters = {
         key[len("metadata[") : -1]: value
         for key, value in request.query_params.items()
         if key.startswith("metadata[") and key.endswith("]")
     }
+    raw = request.query_params.get("metadata")
+    if raw is None:
+        return filters
+    msg = (
+        "Invalid 'metadata' filter: expected a JSON object of string values, "
+        'such as metadata={"key": "value"}, or one metadata[key]=value '
+        "parameter per key."
+    )
+    try:
+        parsed = from_json(raw)
+    except ValueError as error:
+        raise ApiError(msg, status=400) from error
+    if not isinstance(parsed, dict) or not all(
+        isinstance(value, str) for value in parsed.values()
+    ):
+        raise ApiError(msg, status=400)
+    return parsed | filters
 
 
 def _matches_filters(
@@ -365,8 +392,9 @@ async def _load_completion_candidate(completion_id: str) -> ChatCompletion | Non
         completion_id: Stored chat completion identifier.
 
     Returns:
-        The chat completion, or None if it was deleted between the session
-        scan and the read, or if its stored document is corrupt.
+        The chat completion, or None if its document cannot be read: still
+        being generated, deleted between the session scan and the read, or
+        corrupt.
 
     Raises:
         ApiError: When the load fails for any reason other than 404.
@@ -376,7 +404,9 @@ async def _load_completion_candidate(completion_id: str) -> ChatCompletion | Non
         return ChatCompletion.model_validate(stored["response"])
     except ApiError as error:
         if error.status == 404:
-            return None  # Deleted between the session scan and the read.
+            # Session tagged at creation, but with no document yet (generation
+            # in flight) or no longer any document (deleted).
+            return None
         raise
     except (ValueError, KeyError, ValidationError) as error:
         log_error_details(
@@ -393,12 +423,16 @@ async def _load_completion_candidate(completion_id: str) -> ChatCompletion | Non
     description=(
         "Returns the chat completions persisted with `store=true`, sorted by "
         "creation time (OpenAI Chat Completions API).\n\n"
-        "Filter by `model` and by metadata pairs passed as "
-        "`metadata[key]=value` query parameters. Listings cover the most "
-        "recent 1,000 stored chat completions; older ones may not appear."
+        "Filter by `model` and by metadata, passed either as a JSON object in "
+        'the `metadata` query parameter (`metadata={"key": "value"}`) or as '
+        "one `metadata[key]=value` query parameter per key. Listings cover the "
+        "most recent 1,000 stored chat completions; older ones may not appear."
     ),
     response_description="A paginated list of stored chat completions.",
-    responses={200: {"description": "The stored chat completions."}},
+    responses={
+        200: {"description": "The stored chat completions."},
+        400: {"description": "Invalid metadata filter."},
+    },
     response_model_exclude_none=True,
     openapi_extra={
         "parameters": [
@@ -406,15 +440,14 @@ async def _load_completion_candidate(completion_id: str) -> ChatCompletion | Non
                 "name": "metadata",
                 "in": "query",
                 "required": False,
-                "style": "deepObject",
-                "explode": True,
-                "schema": {
-                    "type": "object",
-                    "additionalProperties": {"type": "string"},
-                },
+                # A string, not a deepObject: clients that cannot send
+                # bracketed keys serialize an object into this one parameter.
+                "schema": {"type": "string"},
+                "example": '{"project": "alpha"}',
                 "description": (
-                    "Filter by metadata key-value pairs, passed as "
-                    "`metadata[key]=value` (one query parameter per key)."
+                    "Filter by metadata key-value pairs, as a JSON object of "
+                    'string values (`{"project": "alpha"}`). The equivalent '
+                    "`metadata[key]=value` parameters are also accepted."
                 ),
             }
         ]
@@ -456,6 +489,10 @@ async def list_chat_completions(
 
     Returns:
         Paginated list of stored chat completions.
+
+    Raises:
+        ApiError: With 400 for an invalid ``metadata`` filter, or 404 if
+            ``after`` does not match any stored chat completion.
     """
     metadata = _metadata_filters(request)
     log_request_params(
@@ -476,27 +513,30 @@ async def list_chat_completions(
             msg = f"No chat completion with id '{after}' found."
             raise ApiError(msg, status=404)
         ids = ids[index + 1 :]
-    # Unfiltered: every remaining ID is a match by definition, so has_more is
-    # answered from the ID count alone, and only the first `limit` documents
-    # need to be loaded (no probe load of a limit+1'th document).
+    # Scans in order until `limit` readable completions are collected or the
+    # IDs are exhausted: dropping unreadable candidates after truncating to
+    # ids[:limit] could yield a short or empty page with has_more=True,
+    # stalling SDK pagers that stop on an empty page. Unfiltered, only the
+    # unreadable candidates cost an extra read.
     filtered = bool(model or metadata)
-    candidate_ids = ids if filtered else ids[:limit]
     completions: list[ChatCompletion] = []
-    has_more = not filtered and len(ids) > limit
-    for batch_start in range(0, len(candidate_ids), _LIST_LOAD_BATCH_SIZE):
-        batch = candidate_ids[batch_start : batch_start + _LIST_LOAD_BATCH_SIZE]
-        candidates = await gather(*(_load_completion_candidate(id_) for id_ in batch))
-        for completion in candidates:
-            if completion is None or (
-                filtered and not _matches_filters(completion, model, metadata)
-            ):
-                continue
-            if filtered and len(completions) == limit:
-                has_more = True
-                break
-            completions.append(completion)
-        if filtered and has_more:
-            break
+    scanned = 0
+    while scanned < len(ids) and len(completions) < limit:
+        size = (
+            _LIST_LOAD_BATCH_SIZE
+            if filtered
+            else min(_LIST_LOAD_BATCH_SIZE, limit - len(completions))
+        )
+        batch = ids[scanned : scanned + size]
+        scanned += len(batch)
+        completions.extend(
+            completion
+            for completion in await gather(*map(_load_completion_candidate, batch))
+            if completion is not None
+            and (not filtered or _matches_filters(completion, model, metadata))
+        )
+    has_more = scanned < len(ids) or len(completions) > limit
+    del completions[limit:]
     return log_response_params(
         ChatCompletionList(
             data=completions,

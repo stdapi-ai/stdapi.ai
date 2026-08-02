@@ -956,6 +956,59 @@ class TestListChatCompletions:
         assert [item["metadata"] for item in body["data"]] == [{"team": "a"}]
         assert body["has_more"] is False
 
+    def test_metadata_json_object_filter(
+        self, app_client: TestClient, store: _StubStore
+    ) -> None:
+        """A JSON object in the bare metadata parameter filters like the bracketed form.
+
+        MCP tool calls cannot send bracketed keys: the whole object lands in a
+        single ``metadata`` query parameter.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/list
+             stdapi/routes/openai_chat_completions.py:_metadata_filters
+        """
+        store.sessions = [
+            ("s1", datetime(2024, 1, 1, tzinfo=UTC)),
+            ("s2", datetime(2024, 1, 2, tzinfo=UTC)),
+        ]
+        _store_completion(store, "s1", metadata={"team": "a"})
+        _store_completion(store, "s2", metadata={"team": "b"})
+        response = app_client.get(
+            "/v1/chat/completions", params={"metadata": '{"team": "a"}'}
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [item["id"] for item in body["data"]] == ["chatcmpl-s1"]
+        assert body["has_more"] is False
+
+    def test_unusable_metadata_filter_is_rejected(
+        self, app_client: TestClient, store: _StubStore
+    ) -> None:
+        """A metadata parameter that is not a JSON object 400s instead of listing everything.
+
+        A client that serializes a dict without deepObject support (httpx, as
+        used by the MCP bridge) sends its repr in one parameter; answering that
+        with an unfiltered listing would silently return wrong results.
+
+        Ref: https://developers.openai.com/api/docs/guides/error-codes
+             stdapi/routes/openai_chat_completions.py:_metadata_filters
+        """
+        store.sessions = [
+            ("s1", datetime(2024, 1, 1, tzinfo=UTC)),
+            ("s2", datetime(2024, 1, 2, tzinfo=UTC)),
+        ]
+        _store_completion(store, "s1", metadata={"team": "a"})
+        _store_completion(store, "s2", metadata={"team": "b"})
+        response = app_client.get(
+            # The MCP bridge hands httpx the dict as-is, which stringifies it.
+            "/v1/chat/completions",
+            params={"metadata": cast("Any", {"team": "a"})},
+        )
+        assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "metadata[key]=value" in error["message"]
+
     def test_response_envelope(self, app_client: TestClient, store: _StubStore) -> None:
         """The list response carries the list envelope fields."""
         store.sessions = [
@@ -1052,6 +1105,53 @@ class TestListChatCompletions:
         assert store.load_calls == ["chatcmpl-s1", "chatcmpl-s2"], (
             "the corrupt candidate must be attempted, then dropped from the page"
         )
+
+    def test_unreadable_session_does_not_consume_a_page_slot(
+        self, app_client: TestClient, store: _StubStore
+    ) -> None:
+        """An unreadable session is replaced in the page, not counted against the limit.
+
+        A session created for an in-flight ``store=true`` generation is already
+        tagged but has no document yet; skipping it after truncating to the
+        limit would return a short page with has_more=True.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/list
+             stdapi/routes/openai_chat_completions.py:list_chat_completions
+        """
+        store.sessions = [
+            (f"s{i}", datetime(2024, 1, i + 1, tzinfo=UTC)) for i in range(3)
+        ]
+        _store_completion(store, "s1")
+        _store_completion(store, "s2")
+        response = app_client.get("/v1/chat/completions?limit=2")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [item["id"] for item in body["data"]] == ["chatcmpl-s1", "chatcmpl-s2"]
+        assert body["has_more"] is False
+        assert body["first_id"] == "chatcmpl-s1"
+        assert body["last_id"] == "chatcmpl-s2"
+
+    def test_page_of_unreadable_sessions_does_not_stall_the_pager(
+        self, app_client: TestClient, store: _StubStore
+    ) -> None:
+        """A page whose leading sessions are all unreadable still returns the later ones.
+
+        An empty page with has_more=True and no cursor stops SDK auto-pagers,
+        making every completion behind it unreachable.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/list
+             stdapi/routes/openai_chat_completions.py:list_chat_completions
+        """
+        store.sessions = [
+            (f"s{i}", datetime(2024, 1, i + 1, tzinfo=UTC)) for i in range(3)
+        ]
+        _store_completion(store, "s2")
+        response = app_client.get("/v1/chat/completions?limit=2")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [item["id"] for item in body["data"]] == ["chatcmpl-s2"]
+        assert body["has_more"] is False
+        assert body["last_id"] == "chatcmpl-s2"
 
 
 @pytest.mark.local
