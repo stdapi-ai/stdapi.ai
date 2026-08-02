@@ -28,6 +28,8 @@ Feel free to get in touch to discuss your needs.
     3. **Accept it** in AWS Marketplace.
     4. **Pay $0.09/container-hour** — billed automatically, same pay-per-use model as the public listing.
 
+    Your request is handled by an automated AI agent — it creates the offer and replies in your language, typically within minutes. A human follows every conversation and steps in whenever needed.
+
 ---
 
 <div class="grid" markdown>
