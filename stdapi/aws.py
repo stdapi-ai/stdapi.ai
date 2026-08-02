@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
     from types import TracebackType
 
+    from botocore.model import OperationModel
     from types_aiobotocore_bedrock.literals import RegionName
 
     class AwsEnvironment(TypedDict):
@@ -66,6 +67,80 @@ CONFIG = AioConfig(
 
 
 getLogger("aiobotocore").setLevel("CRITICAL")
+
+
+def _aws_request_id(response: dict[str, Any]) -> str:
+    """Extract the AWS-side request ID from a parsed AWS response.
+
+    Args:
+        response: Parsed AWS response, including ``ResponseMetadata``.
+
+    Returns:
+        The request ID, or "" when the response carries none.
+    """
+    metadata = response.get("ResponseMetadata") or {}
+    request_id: str = metadata.get("RequestId") or (
+        metadata.get("HTTPHeaders") or {}
+    ).get("x-amzn-requestid", "")
+    return request_id
+
+
+def _record_after_call(
+    parsed: dict[str, Any], model: OperationModel, **_kwargs: object
+) -> None:
+    """Record a completed AWS API call's request ID (``after-call`` hook).
+
+    Also fires for HTTP error responses, before botocore raises the matching
+    ``ClientError``, so failed calls are captured with their error code.
+
+    Args:
+        parsed: Parsed AWS response, including ``ResponseMetadata``.
+        model: Operation model of the call.
+        **_kwargs: Unused botocore event arguments.
+    """
+    if not (request_id := _aws_request_id(parsed)):
+        return
+    # Imported here: stdapi.monitoring transitively imports this module.
+    from stdapi.monitoring import record_aws_api_call  # noqa: PLC0415
+
+    record_aws_api_call(
+        model.service_model.service_id.hyphenize(),
+        model.name,
+        request_id,
+        (parsed.get("Error") or {}).get("Code"),
+    )
+
+
+def _record_after_call_error(
+    event_name: str, exception: Exception, **_kwargs: object
+) -> None:
+    """Record a failed AWS API call's request ID (``after-call-error`` hook).
+
+    Only errors carrying a parsed AWS response (``ClientError`` subclasses)
+    expose a request ID; transport errors without a response are skipped.
+
+    Args:
+        event_name: Full event name, ``after-call-error.<service>.<operation>``.
+        exception: The exception that aborted the call.
+        **_kwargs: Unused botocore event arguments.
+    """
+    response = getattr(exception, "response", None)
+    if not isinstance(response, dict) or not (request_id := _aws_request_id(response)):
+        return
+    from stdapi.monitoring import record_aws_api_call  # noqa: PLC0415
+
+    _, service, operation = event_name.split(".", 2)
+    record_aws_api_call(
+        service, operation, request_id, (response.get("Error") or {}).get("Code")
+    )
+
+
+# Registered on the shared session so every client created from it (including
+# per-region pools and ad-hoc STS clients) inherits the hooks at creation.
+AWS_SESSION.register("after-call", _record_after_call, unique_id="stdapi-request-id")
+AWS_SESSION.register(
+    "after-call-error", _record_after_call_error, unique_id="stdapi-request-id-error"
+)
 
 
 def raise_first_exception(results: Sequence[Any]) -> None:

@@ -122,6 +122,8 @@ Each event shares core fields and may add type‑specific ones.
 |       `request_user_id`, `request_org_id` | request                             | Propagated identifiers (if applicable)                                                      |
 |                          `request_params` | request                             | Sanitized request payload (if `LOG_REQUEST_PARAMS=true`)                                    |
 |                        `request_response` | request                             | Sanitized response payload (if `LOG_REQUEST_PARAMS=true`)                                   |
+| `amzn_trace_id`, `apigw_request_id`, `cloudfront_request_id` | request          | Edge correlation IDs copied from the `X-Amzn-Trace-Id`, `x-amz-apigw-id` and `X-Amz-Cf-Id` request headers (when present) |
+|                            `aws_requests` | request, request_stream, background | AWS-side request IDs of downstream AWS API calls (see [AWS Service Correlation Metadata](#aws-service-correlation-metadata)) |
 |                                   `event` | background                          | Background operation name                                                                   |
 | `server_start_time_ms`, `server_warnings` | start                               | Startup metrics and warnings                                                                |
 |                        `server_uptime_ms` | stop                                | Uptime at shutdown                                                                          |
@@ -446,6 +448,11 @@ Coverage and how to use it varies by service:
 - **Bedrock — asynchronous batch jobs**: identifiers are attached as resource tags on the job, visible in the AWS Console and searchable via the CLI/API.
 - **Bedrock Mantle**: the Mantle endpoint accepts no request metadata. Attribute those requests with a [Project/Workspace](operations_configuration.md#bedrock-mantle-project) instead.
 - **Transcribe — audio transcription**: identifiers are attached as job tags. stdapi.ai deletes completed transcription jobs automatically, so tags are only available while the job is still running.
+
+Correlation also works in the other direction — from a stdapi.ai log event to the exact AWS API calls it made:
+
+- **`aws_requests`** (on `request`, `request_stream` and `background` events): one entry per downstream AWS API call, with `service`, `operation`, `request_id` and — for failed calls — the AWS `error` code. The `request_id` value is the AWS-side request ID (`ResponseMetadata.RequestId` / `x-amzn-requestid` header): the identifier AWS Support asks for, and the `requestID` field of CloudTrail records. Each event keeps at most the 50 most recent calls.
+- **Edge headers** (on the `request` event, when present): `amzn_trace_id` (`X-Amzn-Trace-Id`, injected by ALB and used by X-Ray), `apigw_request_id` (`x-amz-apigw-id`, API Gateway) and `cloudfront_request_id` (`X-Amz-Cf-Id`, CloudFront) tie the gateway's `id` to the edge service's own access logs. They are recorded as-is for correlation and never replace the gateway-generated request ID.
 
 !!! note "Security"
     Any `stdapi-ai.*` key supplied by the client is silently dropped before the service call. Only values injected by stdapi.ai itself are forwarded under that prefix.

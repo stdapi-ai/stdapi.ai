@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator, Iterable, Mapping
     from contextvars import Token
 
+    from opentelemetry.trace.span import Span
     from pydantic.main import IncEx
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_meteringmarketplace.type_defs import (
@@ -63,6 +64,15 @@ otel_manager = OpenTelemetryManager()
 
 #: Per-region latency stat keys reported in the "start" event's region_latencies.
 RegionLatenciesStatsKeys = Literal["latency_ms", "stddev_ms"]
+
+
+class AwsApiCallLog(TypedDict):
+    """Correlation identifiers of one downstream AWS API call."""
+
+    service: str  # AWS service (client pool key, e.g. "bedrock-runtime")
+    operation: str  # AWS API operation name (e.g. "Converse")
+    request_id: str  # AWS-side request ID (ResponseMetadata.RequestId)
+    error: NotRequired[str]  # AWS error code, failed calls only
 
 
 class EventLog(TypedDict):
@@ -107,6 +117,14 @@ class EventLog(TypedDict):
     request_user_id: NotRequired[str]  # User ID passed from request
     request_org_id: NotRequired[str]  # Org ID passed from request
 
+    # Edge correlation headers from the incoming request, when present
+    amzn_trace_id: NotRequired[str]  # X-Amzn-Trace-Id (ALB / X-Ray)
+    apigw_request_id: NotRequired[str]  # x-amz-apigw-id (API Gateway)
+    cloudfront_request_id: NotRequired[str]  # X-Amz-Cf-Id (CloudFront)
+
+    # AWS-side request IDs of downstream AWS API calls (capped, oldest dropped)
+    aws_requests: NotRequired[list[AwsApiCallLog]]
+
     request_params: NotRequired[
         JsonMappingOrList
     ]  # Request params (Body, form, query, ...)
@@ -130,6 +148,18 @@ REQUEST_LOG: ContextVar[EventLog] = ContextVar("request_log")
 
 #: HTTP request object
 REQUEST: ContextVar[Request] = ContextVar("request")
+
+#: Per-request accumulator of downstream AWS API call correlation entries
+_AWS_API_CALLS: ContextVar[list[AwsApiCallLog]] = ContextVar("aws_api_calls")
+
+#: Maximum AWS API call entries kept per log event (oldest dropped first)
+_AWS_REQUESTS_MAX = 50
+
+#: Maximum length kept from an edge correlation header value
+_EDGE_HEADER_MAX_LENGTH = 256
+
+#: Strips non-printable-ASCII characters from edge correlation header values.
+_EDGE_HEADER_STRIP_RE = re_compile(r"[^\x20-\x7e]")
 
 #: Paths to ignore in logging
 LOGGING_PATHS_IGNORE: frozenset[str] = frozenset(
@@ -233,6 +263,45 @@ def _finalize_usage_safely(log: EventLog) -> None:
         _add_warnings(log, ["\n".join(format_exception(exc))], level="error")
 
 
+def record_aws_api_call(
+    service: str, operation: str, request_id: str, error_code: str | None = None
+) -> None:
+    """Record a downstream AWS API call's request ID into the current request scope.
+
+    No-op outside a request scope. The accumulator is capped at
+    ``_AWS_REQUESTS_MAX`` entries, dropping the oldest first.
+
+    Args:
+        service: AWS service name (e.g. ``bedrock-runtime``).
+        operation: AWS API operation name (e.g. ``Converse``).
+        request_id: AWS-side request ID of the call.
+        error_code: AWS error code when the call failed.
+    """
+    if (calls := _AWS_API_CALLS.get(None)) is None:
+        return
+    if len(calls) >= _AWS_REQUESTS_MAX:
+        del calls[0]
+    entry = AwsApiCallLog(service=service, operation=operation, request_id=request_id)
+    if error_code:
+        entry["error"] = error_code
+    calls.append(entry)
+
+
+def _attach_aws_api_calls(log: EventLog) -> None:
+    """Move accumulated AWS API call entries onto *log* and clear the accumulator.
+
+    Like the ``USAGE`` drain, the accumulator is shared with tasks spawned in
+    the request scope: whichever event finalizes next picks up the entries
+    recorded since the previous drain.
+
+    Args:
+        log: The event log to populate in place.
+    """
+    if calls := _AWS_API_CALLS.get(None):
+        log["aws_requests"] = calls.copy()
+        calls.clear()
+
+
 def add_server_warning(start_event: EventLog, warning: JsonValue) -> None:
     """Append a warning to a "start" event log and raise its level to ``warning``.
 
@@ -265,6 +334,7 @@ def _reset_request_context(
     request_time_token: Token[AwareDatetime],
     usage_token: Token[dict[UsageKey, UsageRecord]],
     model_state_token: Token[dict[str, ModelInvocationState]],
+    aws_api_calls_token: Token[list[AwsApiCallLog]],
 ) -> None:
     """Reset every per-request ContextVar.
 
@@ -276,6 +346,7 @@ def _reset_request_context(
         request_time_token: Token restoring ``REQUEST_TIME``.
         usage_token: Token restoring ``USAGE``.
         model_state_token: Token restoring ``MODEL_STATE``.
+        aws_api_calls_token: Token restoring ``_AWS_API_CALLS``.
     """
     REQUEST_ID.reset(request_id_token)
     REQUEST.reset(request_token)
@@ -284,9 +355,52 @@ def _reset_request_context(
     REQUEST_TIME.reset(request_time_token)
     USAGE.reset(usage_token)
     MODEL_STATE.reset(model_state_token)
+    _AWS_API_CALLS.reset(aws_api_calls_token)
     # Token-less: set mid-request by image jobs; cleared defensively so a
     # failed invoke can't leak a stale spec into a later request context.
     IMAGE_SPEC.set("")
+
+
+def _edge_header_value(request: Request, header: str) -> str:
+    """Return a sanitized edge correlation header value.
+
+    The value is client-supplied input: non-printable-ASCII characters are
+    stripped and the result is truncated before it reaches the log.
+
+    Args:
+        request: Incoming HTTP request.
+        header: Header name to read.
+
+    Returns:
+        The sanitized value, or "" when the header is absent or empty.
+    """
+    if value := request.headers.get(header, ""):
+        value = _EDGE_HEADER_STRIP_RE.sub("", value)[:_EDGE_HEADER_MAX_LENGTH]
+    return value
+
+
+def _record_edge_headers(
+    log: EventLog, request: Request, span_context: Span | None
+) -> None:
+    """Record edge correlation headers from *request*, when present.
+
+    Args:
+        log: The event log to populate in place.
+        request: Incoming HTTP request.
+        span_context: Active span to annotate, if any.
+    """
+    if trace_id := _edge_header_value(request, "x-amzn-trace-id"):
+        log["amzn_trace_id"] = trace_id
+        if span_context:
+            span_context.set_attribute("aws.amzn_trace_id", trace_id)
+    if apigw_id := _edge_header_value(request, "x-amz-apigw-id"):
+        log["apigw_request_id"] = apigw_id
+        if span_context:
+            span_context.set_attribute("aws.apigw_request_id", apigw_id)
+    if cf_id := _edge_header_value(request, "x-amz-cf-id"):
+        log["cloudfront_request_id"] = cf_id
+        if span_context:
+            span_context.set_attribute("aws.cloudfront_request_id", cf_id)
 
 
 @contextmanager
@@ -329,6 +443,7 @@ def log_request_event(request: Request) -> Generator[EventLog]:
     )
     usage_token = init_usage()
     model_state_token = init_model_state()
+    aws_api_calls_token = _AWS_API_CALLS.set([])
     operation_token = OPERATION.set(request.url.path)
     request_token = REQUEST.set(request)
     span_context = otel_manager.start_span(
@@ -353,6 +468,7 @@ def log_request_event(request: Request) -> Generator[EventLog]:
             span_context.set_attribute("client.address", request.client.host)
             if request.client.port:
                 span_context.set_attribute("client.port", request.client.port)
+    _record_edge_headers(log, request, span_context)
     start = perf_counter_ns()
 
     try:
@@ -370,6 +486,7 @@ def log_request_event(request: Request) -> Generator[EventLog]:
     finally:
         log["execution_time_ms"] = (perf_counter_ns() - start) // 1000000
         _finalize_usage_safely(log)
+        _attach_aws_api_calls(log)
         _reset_request_context(
             request_id_token,
             request_token,
@@ -378,6 +495,7 @@ def log_request_event(request: Request) -> Generator[EventLog]:
             request_time_token,
             usage_token,
             model_state_token,
+            aws_api_calls_token,
         )
         if span_context:
             span_context.set_attribute("http.status_code", log.get("status_code", 200))
@@ -518,6 +636,7 @@ def log_background_event(event: str, request_id: str) -> Generator[EventLog]:
         raise
     finally:
         log["execution_time_ms"] = (perf_counter_ns() - start) // 1000000
+        _attach_aws_api_calls(log)
         write_log_event(log)
 
 
@@ -622,6 +741,7 @@ async def _rebuild_and_log_stream[T](
         finally:
             log["execution_time_ms"] = (perf_counter_ns() - start) // 1000000
             _finalize_usage_safely(log)
+            _attach_aws_api_calls(log)
             write_log_event(log)
     finally:
         await stream.aclose()
