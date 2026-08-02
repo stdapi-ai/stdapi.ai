@@ -20,10 +20,10 @@ flag the gateway injects on its behalf:
   where the gateway maps it to the Bedrock ``nova_grounding`` system tool
 - ``code_execution_20250522`` and ``web_fetch_20250910``: absent from Bedrock
 
-Every test needs the local gateway, so the autouse ``_skip_on_official_api`` fixture
-skips the module under ``--use-official-api``.  For the two tool types Bedrock does
-not implement (``code_execution`` and ``web_fetch``) only the rejection path is
-reachable here, so that is all these classes assert.
+Every test needs the local gateway, so the module-level ``gateway`` marker skips it
+under ``--use-official-api``.  For the two tool types Bedrock does not implement
+(``code_execution`` and ``web_fetch``) only the rejection path is reachable here, so
+that is all these classes assert.
 
 Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
      https://platform.claude.com/docs/en/build-with-claude/claude-on-amazon-bedrock-legacy
@@ -48,24 +48,10 @@ _CLAUDE_SYSTEM_TOOLS = (
     "anthropic.claude-opus-5",
 )
 
-# ===========================================================================
-# Module-level fixture: skip when running with --use-official-api
-# ===========================================================================
-
-
-@pytest.fixture(autouse=True)
-def _skip_on_official_api(use_official_api: bool) -> None:
-    """Skip all tests in this file when running against the official Anthropic API.
-
-    These tests validate gateway behavior for Anthropic system tools. When
-    ``--use-official-api`` is set, requests go directly to the Anthropic API,
-    bypassing the gateway entirely, so there's nothing to test.
-    """
-    if use_official_api:
-        pytest.skip(
-            "These tests validate gateway behavior for Anthropic system tools, "
-            "which require the local gateway (run without --use-official-api)"
-        )
+pytestmark = pytest.mark.gateway(
+    "These tests validate gateway behavior for Anthropic system tools, "
+    "which require the local gateway (run without --use-official-api)"
+)
 
 
 # ---------------------------------------------------------------------------

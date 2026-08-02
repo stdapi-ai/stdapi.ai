@@ -976,6 +976,31 @@ class TestBuildOutputConfig:
             "name": "answer",
         }
 
+    def test_schema_name_and_description_reach_bedrock(self) -> None:
+        """``name`` and ``description`` are forwarded, as on the Responses adapter.
+
+        Bedrock's ``JsonSchemaDefinition`` carries both alongside the schema, and
+        they steer the model's structured output. Dropping them silently weakened
+        every Chat Completions structured-output request.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:build_output_config
+        """
+        response_format = ResponseFormatJSONSchema.model_validate(
+            {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "answer",
+                    "description": "The final answer.",
+                    "schema": {"type": "object"},
+                },
+            }
+        )
+        assert build_output_config(response_format) == {
+            "schema": '{"type":"object"}',
+            "name": "answer",
+            "description": "The final answer.",
+        }
+
     def test_json_object_and_text_formats(self) -> None:
         """``json_object`` and plain text both send no outputConfig schema.
 

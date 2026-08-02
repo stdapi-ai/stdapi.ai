@@ -529,13 +529,17 @@ class TestStatelessStreamableHttp:
         response = _tools_list(_mcp_only_app(stateless=True), session_id=None)
         assert response.status_code == 200
 
-    @pytest.mark.parametrize("session_id", [None, "agentcore-injected-id"])
+    @pytest.mark.parametrize(
+        ("session_id", "expected_status"), [(None, 400), ("agentcore-injected-id", 404)]
+    )
     def test_the_default_transport_rejects_the_same_request(
-        self, session_id: str | None
+        self, session_id: str | None, expected_status: int
     ) -> None:
         """Without the setting, the same request is refused rather than served.
 
-        The negative control: it is the mode, not the payload, that decides.
+        The negative control: it is the mode, not the payload, that decides. A
+        missing session ID is a bad request; an unrecognised one is a session
+        the stateful manager never issued.
         """
         response = _tools_list(_mcp_only_app(stateless=False), session_id=session_id)
-        assert response.status_code != 200
+        assert response.status_code == expected_status

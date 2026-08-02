@@ -26,13 +26,6 @@ NOVA_CANVAS_SIZE = smallest_image_size(NOVA_CANVAS_V1)
 pytestmark = pytest.mark.skip(reason="Amazon Nova Canvas is deprecated")
 
 
-@pytest.fixture(autouse=True)
-def _skip_on_official_api(use_official_api: bool) -> None:
-    """Skip every test here: Nova Canvas has no official OpenAI equivalent."""
-    if use_official_api:
-        pytest.skip("Amazon Nova Canvas is not available on the official OpenAI API")
-
-
 class TestAmazonNovaCanvas:
     """Text-to-image generation with Amazon Nova Canvas."""
 

@@ -51,13 +51,6 @@ def _decoded_png(b64_json: str | None) -> bytes:
     return data
 
 
-@pytest.fixture(autouse=True)
-def _skip_on_official_api(use_official_api: bool) -> None:
-    """Skip every test here: Nova Canvas has no official OpenAI equivalent."""
-    if use_official_api:
-        pytest.skip("Amazon Nova Canvas is not available on the official OpenAI API")
-
-
 class TestAmazonNovaCanvasEditing:
     """Nova Canvas ``taskType`` dispatch and provider extras on the edits route.
 
@@ -346,28 +339,14 @@ class TestAmazonNovaCanvasEditing:
         source_image = (SAMPLES_DIR / "vto_upper_body_source.jpg").read_bytes()
         reference_image = (SAMPLES_DIR / "vto_upper_body_reference.jpg").read_bytes()
 
-        # Build the request based on maskType
-        # Each maskType uses the prompt differently:
-        # - PROMPT: prompt is used for maskPrompt (default behavior)
-        # - GARMENT: prompt is used for garmentClass
-        # - IMAGE: prompt is used for maskImage (base64 encoded mask)
         extra_body = {"taskType": "VIRTUAL_TRY_ON"}
 
         if mask_type == "PROMPT":
-            # For PROMPT maskType, let default values be used
-            # The prompt will be used for maskPrompt automatically
-            # Describe the reference garment (pink/salmon button-up shirt)
             prompt = "pink button-up shirt on upper body"
         elif mask_type == "GARMENT":
-            # For GARMENT maskType, prompt is used for garmentClass
             prompt = "UPPER_BODY"
             extra_body["virtualTryOnParams"] = {"maskType": "GARMENT"}  # type: ignore[assignment]
         elif mask_type == "IMAGE":
-            # For IMAGE maskType, we need to provide a base64 encoded mask image
-            # We'll use a simple mask that covers the upper body area
-            # For this test, we'll pass the reference image as the mask in the prompt field
-
-            # Python Openai library limits the prompt field to 1024 characters, so pass maskImage instead
             prompt = "ignored"
             extra_body["virtualTryOnParams"] = {  # type: ignore[assignment]
                 "maskType": "IMAGE",

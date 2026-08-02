@@ -1,9 +1,9 @@
 """Factories, normalizers and assertions shared by more than one test module.
 
 Anything used by a single module belongs in that module; this is for the shapes
-that were being copy-pasted, where a drifting copy is the real risk. Fixtures
-live in ``tests/conftest.py`` instead -- only plain callables belong here, so a
-test module can import them without pytest fixture resolution getting involved.
+where a drifting copy is the real risk. Fixtures live in ``tests/conftest.py``
+instead -- only plain callables belong here, so a test module can import them
+without pytest fixture resolution getting involved.
 
 Ref: stdapi/models/__init__.py:ModelDetails
      stdapi/monitoring.py:EventLog
@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from botocore.exceptions import ClientError
-from pybase64 import b64encode
+from pybase64 import b64decode, b64encode
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -67,8 +67,6 @@ def decoded_png(b64_json: str | None) -> bytes:
         The decoded image bytes.
     """
     assert b64_json is not None, "response carries no b64_json payload"
-    from pybase64 import b64decode  # noqa: PLC0415
-
     data = b64decode(b64_json)
     assert data.startswith(b"\x89PNG\r\n\x1a\n"), "payload is not a PNG"
     return data

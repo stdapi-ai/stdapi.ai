@@ -22,15 +22,6 @@ TITAN_SIZE = smallest_image_size(TITAN_V2)
 pytestmark = pytest.mark.skip(reason="Amazon Titan Image Generator is deprecated")
 
 
-@pytest.fixture(autouse=True)
-def _skip_on_official_api(use_official_api: bool) -> None:
-    """Skip every test here: Titan Image Generator has no official OpenAI equivalent."""
-    if use_official_api:
-        pytest.skip(
-            "Amazon Titan Image Generator is not available on the official OpenAI API"
-        )
-
-
 class TestAmazonTitanImageGenerator:
     """Text-to-image generation with the Amazon Titan Image Generator family."""
 

@@ -39,16 +39,7 @@ if TYPE_CHECKING:
     from anthropic import Anthropic
     from anthropic.types import Message
 
-
-@pytest.fixture(autouse=True)
-def _skip_on_official_api(use_official_api: bool) -> None:
-    """Skip the whole module when a remote Anthropic-compatible target is selected.
-
-    The matrices name Bedrock model IDs, which only the local gateway serves.
-    """
-    if use_official_api:
-        pytest.skip("Multi-model tests only run against the local server")
-
+pytestmark = pytest.mark.gateway("Multi-model tests only run against the local server")
 
 # ---------------------------------------------------------------------------
 # Model lists — one representative per family, prefer fast/cheap variants
@@ -295,8 +286,8 @@ class TestMultiModelBasics:
         Anthropic's taxonomy is ``message_start`` → per block ``content_block_start`` /
         deltas / ``content_block_stop`` → ``message_delta`` → ``message_stop``.  Bedrock
         sends no ``contentBlockStart`` for plain text and several families open with an
-        empty delta, so the gateway has to synthesize the start event; families that only
-        ever emitted ``message_start``/``delta``/``stop`` were losing their whole answer.
+        empty delta, so the gateway has to synthesize the start event; without it a
+        family emitting only ``message_start``/``delta``/``stop`` loses its whole answer.
 
         Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
              stdapi/models/chat/_adapters/_anthropic_message.py:format_stream

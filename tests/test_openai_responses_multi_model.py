@@ -41,18 +41,10 @@ if TYPE_CHECKING:
 
 
 #: 85 sequential live calls across many model families; requires --expensive --slow.
-pytestmark = pytest.mark.slow
-
-
-@pytest.fixture(autouse=True)
-def _skip_official_api(use_official_api: bool) -> None:
-    """Skip the whole module against the official API.
-
-    The point of these tests is the gateway's per-family mapping, and the model
-    IDs are Bedrock-only.
-    """
-    if use_official_api:
-        pytest.skip("Multi-model tests only run against the local server")
+pytestmark = [
+    pytest.mark.slow,
+    pytest.mark.gateway("Multi-model tests only run against the local server"),
+]
 
 
 @contextmanager
@@ -79,9 +71,7 @@ def _skip_unavailable_model(
         raise
 
 
-# ---------------------------------------------------------------------------
 # Model lists — one representative per family, prefer fast/cheap variants
-# ---------------------------------------------------------------------------
 
 #: One model per provider family for basic/streaming/multi-turn tests.
 _BASIC_MODELS = pytest.mark.parametrize(
@@ -182,9 +172,7 @@ _LIST_DIR_TOOL: list[dict[str, object]] = [
 _PROJECT_ROOT = str(REPO_ROOT)
 
 
-# ---------------------------------------------------------------------------
 # Tests: basic response, streaming, multi-turn
-# ---------------------------------------------------------------------------
 
 
 class TestMultiModelResponses:
@@ -342,9 +330,7 @@ class TestMultiModelResponses:
         assert response.usage.input_tokens > 0
 
 
-# ---------------------------------------------------------------------------
 # Tests: function tool calling
-# ---------------------------------------------------------------------------
 
 
 class TestMultiModelToolUse:
@@ -457,9 +443,7 @@ class TestMultiModelToolUse:
         assert closed[0].call_id
 
 
-# ---------------------------------------------------------------------------
 # Tests: vision / image input
-# ---------------------------------------------------------------------------
 
 
 #: Vision-capable models tested on the Responses API route.

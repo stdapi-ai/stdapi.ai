@@ -764,7 +764,7 @@ def _advertised_model_ids(
 ) -> list[str]:
     """Return the model IDs advertising the video generation route.
 
-    Queries the in-process test app_client when available, or the ``--server-url``
+    Queries the in-process test client when available, or the ``--server-url``
     target otherwise.
     """
     if test_client is not None:

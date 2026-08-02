@@ -32,17 +32,9 @@ if TYPE_CHECKING:
 #: Nova 2 Lite — smallest Nova 2 model, sufficient for code execution tests.
 _NOVA_2_LITE = "amazon.nova-2-lite-v1:0"
 
-
-@pytest.fixture(autouse=True)
-def _skip_on_official_api(use_official_api: bool) -> None:
-    """Skip the module when a remote Anthropic-compatible target is selected.
-
-    ``nova_code_interpreter`` and ``nova_grounding`` are Bedrock system tools with
-    no counterpart on the official Anthropic API.
-    """
-    if use_official_api:
-        pytest.skip("Nova 2 system tools are only available on AWS Bedrock")
-
+pytestmark = pytest.mark.gateway(
+    "Nova 2 system tools are only available on AWS Bedrock"
+)
 
 #: code_execution tool definition (Anthropic canonical format).
 _CODE_EXECUTION_TOOL: dict[str, object] = {

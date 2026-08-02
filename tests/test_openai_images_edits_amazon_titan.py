@@ -43,15 +43,6 @@ def _decoded_png(b64_json: str | None) -> bytes:
     return data
 
 
-@pytest.fixture(autouse=True)
-def _skip_on_official_api(use_official_api: bool) -> None:
-    """Skip every test here: Titan Image Generator has no official OpenAI equivalent."""
-    if use_official_api:
-        pytest.skip(
-            "Amazon Titan Image Generator is not available on the official OpenAI API"
-        )
-
-
 class TestAmazonTitanEditing:
     """Titan ``taskType`` dispatch and provider extras on the edits route.
 

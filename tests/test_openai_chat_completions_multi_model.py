@@ -107,6 +107,7 @@ _AGENTIC_MODELS = _TOOL_MODELS
 # Shared tool definitions and local tool executor
 # ---------------------------------------------------------------------------
 
+#: Read-only filesystem tools offered to every tool-capable model.
 _TOOLS: list[dict[str, object]] = [
     {
         "type": "function",
@@ -185,15 +186,7 @@ def _message_text(completion: ChatCompletion) -> str:
     return completion.choices[0].message.content or ""
 
 
-@pytest.fixture(autouse=True)
-def _skip_official_api(use_official_api: bool) -> None:
-    """Skip every test in this module when a remote official API is targeted.
-
-    The matrix is keyed by Bedrock model ids, which the official OpenAI API does
-    not serve, so no test here has a meaningful remote counterpart.
-    """
-    if use_official_api:
-        pytest.skip("Multi-model tests only run against the local server")
+pytestmark = pytest.mark.gateway("Multi-model tests only run against the local server")
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +424,6 @@ class TestMultiModelToolUse:
         assert choice1.message.tool_calls, "Turn 1: no tool calls"
         tc = choice1.message.tool_calls[0]
 
-        # Execute the tool locally
         tool_result = _run_tool(tc.function.name, tc.function.arguments)  # type: ignore[union-attr]
 
         # Turn 2: provide tool result
@@ -564,7 +556,6 @@ class TestMultiModelToolUse:
             assert response.choices
             choice = response.choices[0]
 
-            # Always append assistant message to history
             messages.append(choice.message)
 
             if choice.finish_reason == "tool_calls" and choice.message.tool_calls:
