@@ -26,6 +26,10 @@ from stdapi import server
 from stdapi.config import SETTINGS
 from stdapi.mcp import _make_stateless
 from stdapi.monitoring import REQUEST_ID, log_error_details, log_request_event
+from stdapi.types.openai_audio import (
+    AudioTranscriptionJsonBody,
+    AudioTranslationJsonBody,
+)
 from stdapi.utils import webuuid
 
 if TYPE_CHECKING:
@@ -470,6 +474,48 @@ class TestMCPIntegration:
             for name, prop in properties.items():
                 if isinstance(prop, dict) and "anyOf" in prop:
                     assert "type" not in prop, (tool["name"], name)
+
+    @pytest.mark.local
+    def test_audio_tool_schemas_are_usable_over_json(
+        self, local_test_client: TestClient, api_key: str, mcp_session_id: str
+    ) -> None:
+        """The audio tools advertise only parameters their JSON body model accepts.
+
+        A tool call always reaches the routes as ``application/json``, validated
+        by ``AudioTranscriptionJsonBody``/``AudioTranslationJsonBody``, while the
+        advertised schema is derived from the routes' multipart form fields. Any
+        property those models do not have — such as the multipart-only ``name[]``
+        aliases — is a parameter no MCP client can successfully send, and
+        ``timestamp_granularities`` must be advertised as the list they require.
+
+        Ref: https://modelcontextprotocol.io/specification/2025-06-18/server/tools
+             stdapi/routes/openai_audio_transcriptions.py:create_transcription
+        """
+        response = _mcp_post(
+            local_test_client,
+            api_key,
+            "tools/list",
+            {},
+            request_id=43,
+            session_id=mcp_session_id,
+        )
+        assert response.status_code == 200
+        tools = {tool["name"]: tool for tool in response.json()["result"]["tools"]}
+
+        for name, model in (
+            ("openai_audio_transcription", AudioTranscriptionJsonBody),
+            ("openai_audio_translation", AudioTranslationJsonBody),
+        ):
+            properties = tools[name]["inputSchema"]["properties"]
+            assert not set(properties) - set(model.model_fields), name
+
+        granularities = tools["openai_audio_transcription"]["inputSchema"][
+            "properties"
+        ]["timestamp_granularities"]
+        assert all(
+            option.get("type") in {"array", "null"}
+            for option in granularities.get("anyOf", [granularities])
+        )
 
     def test_tool_result_is_compact_json(
         self, local_test_client: TestClient, api_key: str, mcp_session_id: str

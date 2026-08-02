@@ -1,6 +1,6 @@
 """OpenAI-compatible Audio Transcription API implementation."""
 
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, cast
 
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
@@ -48,22 +48,27 @@ router = APIRouter(
 )
 
 
-def _merge_form_list[T: str](
-    bare: list[T] | None, bracketed: list[T] | None
+async def _merge_form_list[T: str](
+    http_request: Request, name: str, bare: list[T] | None
 ) -> list[T] | None:
     """Merge a bare-named multipart form list with its ``[]``-suffixed counterpart.
 
     The official OpenAI SDKs send list-valued form fields under a ``name[]``
     key; this gateway also accepts the bare ``name`` key for non-SDK clients.
+    The alias is read from the parsed form rather than declared as a parameter,
+    which keeps it out of the OpenAPI and MCP schemas, where a JSON caller
+    cannot use it.
 
     Args:
+        http_request: Request whose already-parsed form holds the alias values.
+        name: Plain field name, aliased as ``name[]`` by the official SDKs.
         bare: Values collected under the plain field name.
-        bracketed: Values collected under the ``name[]`` alias.
 
     Returns:
-        The combined list in bare-then-bracketed order, or None if both are empty.
+        The combined list in bare-then-alias order, or None if both are empty.
     """
-    merged = [*(bare or []), *(bracketed or [])]
+    alias = cast("list[T]", (await http_request.form()).getlist(f"{name}[]"))
+    merged = [*(bare or []), *alias]
     return merged or None
 
 
@@ -230,18 +235,8 @@ async def create_transcription(
             description=(
                 "Expected input languages in ISO-639-1 format (e.g. `en`) when the "
                 "audio may contain more than one language.\n"
-                "Cannot be combined with `language`.\n"
-                "Repeated `languages[]` form fields (the official SDKs' wire format) "
-                "are also accepted and merged with this field."
+                "Cannot be combined with `language`."
             )
-        ),
-    ] = None,
-    languages_bracket: Annotated[
-        list[str] | None,
-        Form(
-            alias="languages[]",
-            description="Same as `languages`, as repeated form fields "
-            "(official SDKs' wire format).",
         ),
     ] = None,
     keywords: Annotated[
@@ -252,18 +247,8 @@ async def create_transcription(
                 "acronyms).\n"
                 "Supported by Bedrock models (e.g. Mistral Voxtral); rejected by "
                 "`amazon.transcribe` — use a pre-created custom vocabulary via the "
-                "`VocabularyName` extra parameter instead.\n"
-                "Repeated `keywords[]` form fields (the official SDKs' wire format) "
-                "are also accepted and merged with this field."
+                "`VocabularyName` extra parameter instead."
             )
-        ),
-    ] = None,
-    keywords_bracket: Annotated[
-        list[str] | None,
-        Form(
-            alias="keywords[]",
-            description="Same as `keywords`, as repeated form fields "
-            "(official SDKs' wire format).",
         ),
     ] = None,
     prompt: Annotated[
@@ -290,23 +275,13 @@ async def create_transcription(
         AudioResponseFormat, Form(description="Transcript output format.")
     ] = "json",
     timestamp_granularities: Annotated[
-        str,
-        Form(
-            description=(
-                "Comma-separated timestamp granularities to populate (e.g. "
-                "`word,segment`): `word` and/or `segment`. Requires "
-                "`response_format=verbose_json`.\n"
-                "Repeated `timestamp_granularities[]` form fields (the official SDKs' "
-                "wire format) are also accepted and merged with this field."
-            )
-        ),
-    ] = "",
-    timestamp_granularities_bracket: Annotated[
         list[str] | None,
         Form(
-            alias="timestamp_granularities[]",
-            description="Same as `timestamp_granularities`, as repeated form fields "
-            "(official SDKs' wire format).",
+            description=(
+                "Timestamp granularities to populate: `word` and/or `segment` "
+                '(e.g. `["word", "segment"]`).\n'
+                "Requires `response_format=verbose_json`."
+            )
         ),
     ] = None,
     include: Annotated[
@@ -315,18 +290,8 @@ async def create_transcription(
             description=(
                 "Additional information to include in the transcription response.\n"
                 "`logprobs` returns token log probabilities (confidence) and only works "
-                "with `response_format=json`.\n"
-                "Repeated `include[]` form fields (the official SDKs' wire format) are "
-                "also accepted and merged with this field."
+                "with `response_format=json`."
             )
-        ),
-    ] = None,
-    include_bracket: Annotated[
-        list[TranscriptionInclude] | None,
-        Form(
-            alias="include[]",
-            description="Same as `include`, as repeated form fields (official SDKs' "
-            "wire format).",
         ),
     ] = None,
     temperature: Annotated[
@@ -351,19 +316,10 @@ async def create_transcription(
         list[str] | None,
         Form(
             description=(
-                "Speaker names corresponding to the samples in `known_speaker_references[]` "
+                "Speaker names corresponding to the samples in `known_speaker_references` "
                 "(e.g. `customer`, `agent`).\n"
                 "Accepted but ignored: diarization degrades to generic speaker labels."
             )
-        ),
-    ] = None,
-    known_speaker_names_bracket: Annotated[
-        list[str] | None,
-        Form(
-            alias="known_speaker_names[]",
-            description="Same as `known_speaker_names`, as repeated form fields "
-            "(official SDKs' wire format). Accepted but ignored: diarization "
-            "degrades to generic speaker labels.",
         ),
     ] = None,
     known_speaker_references: Annotated[
@@ -371,18 +327,9 @@ async def create_transcription(
         Form(
             description=(
                 "Audio samples (as data URLs, 2-10 seconds each, same formats as `file`) "
-                "for known-speaker diarization, matching `known_speaker_names[]`.\n"
+                "for known-speaker diarization, matching `known_speaker_names`.\n"
                 "Accepted but ignored: diarization degrades to generic speaker labels."
             )
-        ),
-    ] = None,
-    known_speaker_references_bracket: Annotated[
-        list[str] | None,
-        Form(
-            alias="known_speaker_references[]",
-            description="Same as `known_speaker_references`, as repeated form fields "
-            "(official SDKs' wire format). Accepted but ignored: diarization "
-            "degrades to generic speaker labels.",
         ),
     ] = None,
     _: Annotated[None, Depends(authenticate)] = None,
@@ -396,7 +343,9 @@ async def create_transcription(
     """Transcribes audio into the input language.
 
     Accepts ``multipart/form-data`` (binary upload) or ``application/json``
-    (base64, data URI, HTTPS URL, or S3 URI in the ``file`` field).
+    (base64, data URI, HTTPS URL, or S3 URI in the ``file`` field). Every
+    list-valued form field also accepts the ``name[]`` alias the official SDKs
+    send, read from the form by :func:`_merge_form_list`.
 
     Args:
         http_request: FastAPI request object used to detect content-type.
@@ -405,26 +354,20 @@ async def create_transcription(
             speech-to-text model (e.g. Mistral Voxtral).
         language: The language of the input audio (ISO-639-1 code, e.g. `en`). Improves accuracy and latency when provided.
         languages: Expected input languages when the audio may contain more than one language. Cannot be combined with `language`.
-        languages_bracket: Same values as `languages`, as repeated `languages[]` form fields.
         keywords: Literal terms that may appear in the audio. Supported by Bedrock
             models (e.g. Mistral Voxtral); rejected by ``amazon.transcribe`` in
             favour of pre-created custom vocabularies (`VocabularyName`).
-        keywords_bracket: Same values as `keywords`, as repeated `keywords[]` form fields.
         prompt: Optional style guidance for the model. Supported by Bedrock
             models (e.g. Mistral Voxtral); rejected by ``amazon.transcribe``.
         chunking_strategy: Controls how the audio is cut into chunks. `auto` only is supported on this implementation.
         response_format: Output format: `json`, `text`, `srt`, `verbose_json`, `vtt`, or `diarized_json`.
-        timestamp_granularities: For `verbose_json` only; comma-separated values among `word` and `segment` (e.g. `word,segment`).
-        timestamp_granularities_bracket: Same values as `timestamp_granularities`, as repeated `timestamp_granularities[]` form fields.
+        timestamp_granularities: For `verbose_json` only; `word` and/or `segment`. A bare form value may also carry a comma-separated list.
         include: Additional information to include in the transcription response. `logprobs` only works with response_format set to `json`.
-        include_bracket: Same values as `include`, as repeated `include[]` form fields.
         temperature: Sampling temperature. Supported by Bedrock models
             (e.g. Mistral Voxtral); rejected by ``amazon.transcribe``.
         stream: Whether to stream partial results via Server-Sent Events.
         known_speaker_names: Optional list of known speaker names. Accepted but ignored: diarization degrades to generic speaker labels.
-        known_speaker_names_bracket: Same values as `known_speaker_names`, as repeated `known_speaker_names[]` form fields.
         known_speaker_references: Optional list of audio references for known speakers. Accepted but ignored: diarization degrades to generic speaker labels.
-        known_speaker_references_bracket: Same values as `known_speaker_references`, as repeated `known_speaker_references[]` form fields.
 
     Returns:
         The transcribed text in the requested format.
@@ -443,28 +386,34 @@ async def create_transcription(
         missing_file_error()
     else:
         audio_content = InputFile(file)
-        granularities: list[str] = [
-            *(timestamp_granularities.split(",") if timestamp_granularities else []),
-            *(timestamp_granularities_bracket or []),
-        ]
+        granularities = await _merge_form_list(
+            http_request,
+            "timestamp_granularities",
+            [
+                part
+                for value in timestamp_granularities or []
+                for part in value.split(",")
+                if part
+            ],
+        )
         with validation_error_handler():
             request = TranscriptionCreateParams(
                 model=model,
                 language=language,
-                languages=_merge_form_list(languages, languages_bracket),
-                keywords=_merge_form_list(keywords, keywords_bracket),
+                languages=await _merge_form_list(http_request, "languages", languages),
+                keywords=await _merge_form_list(http_request, "keywords", keywords),
                 prompt=prompt,
                 chunking_strategy=chunking_strategy,
                 response_format=response_format,
-                timestamp_granularities=granularities,  # type: ignore[arg-type]
-                include=_merge_form_list(include, include_bracket),
+                timestamp_granularities=granularities or [],  # type: ignore[arg-type]
+                include=await _merge_form_list(http_request, "include", include),
                 temperature=temperature,
                 stream=stream,
-                known_speaker_names=_merge_form_list(
-                    known_speaker_names, known_speaker_names_bracket
+                known_speaker_names=await _merge_form_list(
+                    http_request, "known_speaker_names", known_speaker_names
                 ),
-                known_speaker_references=_merge_form_list(
-                    known_speaker_references, known_speaker_references_bracket
+                known_speaker_references=await _merge_form_list(
+                    http_request, "known_speaker_references", known_speaker_references
                 ),
             )
     log_request_params(request)

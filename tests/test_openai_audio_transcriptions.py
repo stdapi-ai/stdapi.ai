@@ -1292,6 +1292,88 @@ class TestTranscriptionMultipartFormParsing:
 
 
 @pytest.mark.local
+class TestTranscriptionAdvertisedRequestSchema:
+    """The published request schema describes what a JSON caller can send.
+
+    The schema OpenAPI publishes — and that fastapi_mcp copies into the MCP tool
+    definition — is generated from the multipart form fields, while a JSON body
+    is validated by ``AudioTranscriptionJsonBody``. A property that model has no
+    field for, or a scalar where it requires a list, is a call an agent
+    following the schema cannot get right.
+
+    Ref: https://spec.openapis.org/oas/v3.1.0#request-body-object
+         stdapi/routes/openai_audio_transcriptions.py:create_transcription
+    """
+
+    @staticmethod
+    def _form_properties() -> dict[str, Any]:
+        """Return the published request-body properties of the transcription route.
+
+        Returns:
+            The property schemas of the generated request-body model.
+        """
+        from stdapi.main import app  # noqa: PLC0415
+
+        spec = app.openapi()
+        content = spec["paths"]["/v1/audio/transcriptions"]["post"]["requestBody"][
+            "content"
+        ]
+        ref: str = content["multipart/form-data"]["schema"]["$ref"]
+        return spec["components"]["schemas"][ref.rpartition("/")[2]]["properties"]  # type: ignore[no-any-return]
+
+    def test_no_bracket_alias_is_advertised(self) -> None:
+        """The ``name[]`` aliases stay out of the schema: they are multipart-only.
+
+        Sent as JSON, a bracketed key is not merged into its bare field; it lands
+        in the request model's extras and is forwarded to the backend as a
+        provider parameter, so advertising it invites a silently wrong call.
+        """
+        properties = self._form_properties()
+
+        assert properties
+        assert not [name for name in properties if name.endswith("[]")]
+
+    def test_timestamp_granularities_is_advertised_as_a_list(self) -> None:
+        """The advertised type matches the list the JSON body model requires."""
+        granularities = self._form_properties()["timestamp_granularities"]
+
+        assert all(
+            option.get("type") in {"array", "null"}
+            for option in granularities.get("anyOf", [granularities])
+        )
+
+    def test_advertised_granularity_list_is_accepted_as_json(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A JSON body built from the advertised list type passes validation.
+
+        Model resolution is stubbed out to fail, so reaching a ``model_not_found``
+        error proves the body itself was accepted.
+        """
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> None:
+            raise UnsupportedModelError(model_id, status=400)
+
+        monkeypatch.setattr(
+            openai_audio_transcriptions, "validate_model", _validate_model
+        )
+        response = app_client.post(
+            "/v1/audio/transcriptions",
+            json={
+                "file": "data:audio/mp3;base64,AAAA",
+                "model": "probe-model-id",
+                "response_format": "verbose_json",
+                "timestamp_granularities": ["word", "segment"],
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "model_not_found"
+
+
+@pytest.mark.local
 class TestTranscribeUnsupportedParameters:
     """Amazon Transcribe rejects the OpenAI parameters it has no equivalent for.
 
