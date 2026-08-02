@@ -1,29 +1,12 @@
 """Configuration management using Pydantic models.
 
-This module centralizes all environment variable configuration for the server.
-It provides comprehensive validation, type safety, and clear documentation of all configuration parameters.
-
-The configuration system supports:
-- Environment variable loading with type conversion
-- AWS service configuration across multiple regions
-- OpenAI API compatibility settings
-- Authentication and security options
-- OpenTelemetry tracing configuration
-- Model parameter defaults and customization
+Centralizes every environment variable the server reads, with type conversion
+and validation.
 
 Key Components:
 - _DefaultModelParameters: Defines reusable model inference parameters
 - _Settings: Main configuration class loaded from environment variables
 - SETTINGS: Global configuration instance used throughout the application
-
-Environment Variable Examples:
-    AWS_S3_BUCKET=my-stdapi-bucket
-    AWS_BEDROCK_REGIONS=us-east-1,us-west-2
-    API_KEY=your-secret-api-key
-    TIMEZONE=America/New_York
-    OTEL_ENABLED=true
-
-For detailed configuration options, see the _Settings class documentation.
 """
 
 import re
@@ -104,53 +87,9 @@ _ANTHROPIC_BETA_BEDROCK_FLAGS: frozenset[str] = frozenset(
 class _Settings(BaseSettings):
     """Application configuration loaded from environment variables.
 
-    This class manages all application configuration through environment variables,
-    providing type safety, validation, and comprehensive AWS service integration.
-
-    Configuration Categories:
-    1. **AWS Storage**: S3 buckets for file storage and temporary data
-    2. **AWS AI Services**: Bedrock, Polly, Comprehend, Transcribe, Translate
-    3. **Authentication**: API keys from environment, SSM, or Secrets Manager
-    4. **OpenAI Compatibility**: Route prefixes and API emulation
-    5. **Observability**: OpenTelemetry tracing and logging controls
-    6. **Model Defaults**: Per-model inference parameter overrides
-
-    AWS Service Regions:
-    - Most AWS services use optional region settings, falling back to the
-      default boto3 session region if not specified
-    - S3 buckets must be in the same region as their associated services
-    - Bedrock supports multi-region configuration for model availability
-
-    Environment Variable Examples:
-        # Required AWS configuration
-        AWS_S3_BUCKET=my-stdapi-files
-        AWS_BEDROCK_REGIONS=us-east-1,us-west-2,eu-west-1
-
-        # Optional service regions (fallback to default AWS region)
-        AWS_POLLY_REGION=us-east-1
-        AWS_TRANSCRIBE_REGION=us-east-1
-        AWS_TRANSCRIBE_S3_BUCKET=my-transcribe-temp
-
-        # Authentication options (choose one)
-        API_KEY=your-secret-key
-        API_KEY_SSM_PARAMETER=/stdapi/api-key
-        API_KEY_SECRETSMANAGER_SECRET=stdapi-secrets
-
-        # OpenAI compatibility
-        OPENAI_ROUTES_PREFIX=/v1
-
-        # Observability
-        OTEL_ENABLED=true
-        OTEL_SERVICE_NAME=stdapi-prod
-        OTEL_SAMPLE_RATE=0.1
-
-        # Model configuration
-        DEFAULT_MODEL_PARAMS={"anthropic.claude-3-sonnet": {"temperature": 0.7}}
-
-        # Application behavior
-        TIMEZONE=America/New_York
-        STRICT_INPUT_VALIDATION=false
-        LOG_REQUEST_PARAMS=false
+    Service region settings are optional and fall back to the default boto3
+    session region; an S3 bucket must be in the same region as the service
+    using it.
 
     Validation Rules:
     - Bedrock Guardrails require both identifier and version
@@ -158,7 +97,7 @@ class _Settings(BaseSettings):
     - S3 buckets default to shared usage when not specified
     - Timezone must be a valid IANA timezone identifier
 
-    See individual field documentation for detailed parameter descriptions.
+    See individual field descriptions for detailed parameter documentation.
     """
 
     model_config = SettingsConfigDict(env_ignore_empty=True)
@@ -351,7 +290,9 @@ class _Settings(BaseSettings):
         ge=0,
         description=(
             "Maximum number of retries for Bedrock invocations. "
-            "When region routing is enabled, retries cycle through all available regions in order. "
+            "When region routing is enabled, each retry escalates to the next available region "
+            "and every region is tried at most once, so the attempts are also bounded by the "
+            "number of candidate regions. "
             "When region routing is disabled, retries are performed against the single configured region."
         ),
     )
@@ -1347,9 +1288,6 @@ class _Settings(BaseSettings):
     ) -> frozenset[str]:
         """Parse anthropic_beta_allowlist and merge with built-in defaults.
 
-        Converts a comma-separated string to a frozenset and merges with
-        `ANTHROPIC_BETA_BEDROCK_FLAGS`.
-
         Args:
             value: A comma-separated string of extra flags or a frozenset.
 
@@ -1400,7 +1338,6 @@ class _Settings(BaseSettings):
         """
         value = cls._parse_comma_list(value)
         if not value:
-            # Let AWS SDK try to detect the region if not specified
             region = AWS_SESSION.get_config_variable("region")
             if region:
                 value.append(region)
@@ -1414,9 +1351,6 @@ class _Settings(BaseSettings):
     def _parse_timezone(cls, value: ZoneInfo | str) -> ZoneInfo:
         """Parse and validate timezone from environment variable or ZoneInfo object.
 
-        Converts IANA timezone identifier strings to ZoneInfo objects with
-        comprehensive error handling and helpful error messages.
-
         Args:
             value: Either a timezone string (e.g., "America/New_York", "UTC")
                   or an existing ZoneInfo object.
@@ -1427,11 +1361,6 @@ class _Settings(BaseSettings):
         Raises:
             ValueError: When the timezone string is not a valid IANA identifier.
                        Includes a list of available timezones in the error message.
-
-        Examples:
-            "UTC" -> ZoneInfo("UTC")
-            "America/New_York" -> ZoneInfo("America/New_York")
-            "Invalid/Zone" -> ValueError with available options
         """
         if isinstance(value, str):
             try:
@@ -1477,15 +1406,12 @@ class _Settings(BaseSettings):
     def _validate_videos_prefix(cls, value: str) -> str:
         """Validate the S3 prefix used for generated videos.
 
-        The Bedrock output ``s3Uri`` is built from this value verbatim
-        (``stdapi.models.video.AsyncVideoModel.start_video_generation``),
-        while the ownership check that gates ``get_video_job``/listing
-        (``_region_videos_uri_prefix``) appends a "/" when one is missing so
-        it cannot match an unrelated sibling prefix. A prefix without a
-        trailing "/" would therefore be written one way and checked another,
-        so the trailing "/" is required rather than merely recommended. An
-        empty value would widen the ownership check to the whole bucket,
-        which is security-relevant, so empty prefixes are rejected too.
+        The Bedrock output ``s3Uri`` uses this value verbatim, while the
+        ownership check gating ``get_video_job``/listing appends a missing "/"
+        so it cannot match a sibling prefix: without the trailing "/" a prefix
+        would be written one way and checked another, hence it is required. An
+        empty value would widen that ownership check to the whole bucket, so it
+        is rejected too.
 
         Args:
             value: S3 prefix for generated videos.
@@ -1685,15 +1611,11 @@ class _Settings(BaseSettings):
     def _validate(self) -> Self:
         """Perform cross-field validation and apply configuration defaults.
 
-        Validates configuration combinations that span multiple fields and
-        applies intelligent defaults where appropriate. This ensures the
-        configuration is internally consistent and usable.
-
         Validation rules:
         1. Bedrock Guardrails require both identifier and version
-        2. API key sources are mutually exclusive
-        3. Transcribe S3 bucket defaults to main S3 bucket if not specified
-        4. API key configuration options cannot conflict
+        2. The Mantle service header requires Mantle and excludes Guardrails
+        3. API key sources are mutually exclusive
+        4. Transcribe S3 bucket defaults to main S3 bucket if not specified
         5. When both MCP include/exclude are specified, include is filtered by exclude
         6. Non-empty API routes prefixes must be unique across providers
 
@@ -1702,11 +1624,6 @@ class _Settings(BaseSettings):
 
         Raises:
             ValueError: When configuration combinations are invalid or conflicting.
-
-        Examples of invalid configurations:
-        - Guardrail ID without version (or vice versa)
-        - Multiple API key sources specified simultaneously
-        - Two routes prefixes set to the same non-empty value
         """
         self.enable_openapi_json = (
             self.enable_openapi_json or self.enable_docs or self.enable_redoc

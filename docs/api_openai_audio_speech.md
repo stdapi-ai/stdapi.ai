@@ -102,7 +102,7 @@ Each engine supports a different subset of voices and languages — see the [Pol
 
 - **SSML Support** :material-star-circle:{ .highlight }: Fine-grained control over pronunciation, emphasis, pauses, and prosody — [SSML docs](https://docs.aws.amazon.com/polly/latest/dg/ssml.html). With SSML input, the `speed` parameter is rejected: set the speaking rate with SSML `<prosody>` instead.
 - **Flexible Formats**: mp3, ogg, wav, flac, aac, opus, pcm
-- **Streaming Options**: Raw bytes (default) or SSE events with `stream_format: "sse"`
+- **Streaming Options**: Raw bytes (default) or SSE events with `stream_format: "sse"` — once an SSE stream is accepted, a synthesis failure at any point is reported as a terminal `error` event inside the `200` response, and `speech.audio.done` is then omitted
 - **Speed Control**: Adjust playback from 0.2x to 2.0x
 - **Speech Marks**: Word, sentence, viseme, and SSML timing metadata with `SpeechMarkTypes` (returned as JSON instead of audio)
 - **Character-Based Billing**: Usage tracks character counts—the native billing unit for Amazon Polly and Amazon Comprehend—rather than OpenAI-style tokens

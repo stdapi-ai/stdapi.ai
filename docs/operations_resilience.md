@@ -36,7 +36,7 @@ Region routing activates when you have **two or more regions** in `AWS_BEDROCK_R
   <br>Unavailability errors: fixed configurable delay, default 30 s
 
 - :material-rotate-right: __Configurable Retry Count__
-  <br>Set `AWS_BEDROCK_MAX_RETRIES` to control total retries; requests cycle across regions in order
+  <br>Set `AWS_BEDROCK_MAX_RETRIES` to cap the attempts per request; each region is tried at most once
 
 </div>
 
@@ -76,8 +76,8 @@ export AWS_BEDROCK_REGIONS=us-east-1,us-west-2,eu-west-1
 # Strategy (default: ordered)
 export AWS_BEDROCK_REGION_ROUTING=ordered
 
-# Total retries across all regions per request (default: 9)
-# With 3 regions and 9 retries, the cycle is: r1, r2, r3, r1, r2, r3, r1, r2, r3, r1 (10 total attempts)
+# Cap on retries across regions per request (default: 9, i.e. 10 attempts)
+# Each region is tried at most once, so with 3 regions a request makes at most 3 attempts: r1, r2, r3
 export AWS_BEDROCK_MAX_RETRIES=9
 
 # Enable adaptive retry mode — dynamically throttles back retries under congestion (default: false)
@@ -107,7 +107,7 @@ export AWS_BEDROCK_REGION_ROUTING_UNAVAILABLE_BACKOFF_SECONDS=30
 
 1. **Model discovery** — At startup, stdapi.ai discovers which models are available in each configured region.
 2. **Region selection** — When a request arrives, the router picks the best region for that model based on the active strategy and current region health.
-3. **Automatic failover with cycling** — For synchronous and streaming requests without S3 inputs, the retry loop cycles through regions in priority order, wrapping back to the start after exhausting all regions, up to `AWS_BEDROCK_MAX_RETRIES` total retries (see the [Configuration](#configuration) example above for a worked sequence). All retryable errors escalate to the next region immediately, except a read timeout ([`AI_RESPONSE_TIMEOUT`](operations_configuration.md#ai-response-timeout)): the model has already been invoked and is billed by AWS whatever the client does, so the request fails with a `503` rather than paying a second region for the same generation. When S3 inputs are present, the region is pinned and botocore's adaptive retries handle resilience within that region (see [S3-Aware Region Selection](#s3-aware-region-selection)).
+3. **Automatic failover** — For synchronous and streaming requests without S3 inputs, the retry loop walks the regions in priority order and stops once every candidate has been tried, or once `AWS_BEDROCK_MAX_RETRIES` retries are spent — whichever comes first. A region is never attempted twice within the same request: it is still blocked by the backoff its failure just recorded, and a second error there would only deepen that backoff. All retryable errors escalate to the next region immediately, except a read timeout ([`AI_RESPONSE_TIMEOUT`](operations_configuration.md#ai-response-timeout)): the model has already been invoked and is billed by AWS whatever the client does, so the request fails with a `503` rather than paying a second region for the same generation. When S3 inputs are present, the region is pinned and botocore's adaptive retries handle resilience within that region (see [S3-Aware Region Selection](#s3-aware-region-selection)).
 4. **Backoff tracking** — Regions that produce errors are temporarily deprioritized. Quota errors use exponential backoff (base interval doubles per consecutive error, capped at 1 hour); unavailability errors use a fixed backoff. Once the backoff expires, regions rejoin the rotation.
 5. **Client-side backoff hint** — If every attempt is exhausted, the resulting `429` response carries a `retry-after` header set to the shortest quota backoff applied during the request, i.e. the delay after which the first blocked region rejoins the rotation. OpenAI, Anthropic and Cohere SDKs honour it natively, so clients wait exactly as long as needed instead of applying a blind exponential backoff — note that all three cap a server-supplied delay at 60 s and fall back to their own backoff beyond that, so an escalated quota backoff is only partly respected. The header is omitted when no quota backoff was recorded (for example on a single-region deployment, where no routing state exists).
 
@@ -138,8 +138,8 @@ flowchart LR
 
 | API Style | Failover Behavior |
 |---|---|
-| Synchronous (Converse, InvokeModel) | Automatic retry cycling across regions within the same request; S3-pinned requests stay on the pinned region with botocore adaptive retries |
-| Streaming (ConverseStream, InvokeModelWithResponseStream) | Retry cycling across regions **before** the stream opens; once streaming begins the region is locked. S3-pinned requests stay on the pinned region with botocore adaptive retries. |
+| Synchronous (Converse, InvokeModel) | Automatic failover across regions within the same request, each candidate tried once; S3-pinned requests stay on the pinned region with botocore adaptive retries |
+| Streaming (ConverseStream, InvokeModelWithResponseStream) | Failover across regions **before** the stream opens, each candidate tried once; once streaming begins the region is locked. S3-pinned requests stay on the pinned region with botocore adaptive retries. |
 | Asynchronous (StartAsyncInvoke) | Region is selected once at job start; no mid-job failover |
 
 ---
@@ -532,7 +532,7 @@ flowchart LR
 - :material-speedometer: **Use `lowest_latency`** only if your server's network position varies or you want the fastest region chosen automatically.
 - :material-rotate-right: **Use `round_robin`** for high-throughput batch workloads where prompt caching is not needed.
 - :material-timer-check-outline: **Keep backoff values moderate** — The defaults (60 s for quota, 30 s for unavailability) work well for most workloads. Very short backoffs may cause premature retries against a region that is still overloaded.
-- :material-counter: **Tune `AWS_BEDROCK_MAX_RETRIES`** — The default of 9 provides strong resilience across multiple regions. Lower it (e.g. `3`) to fail faster; raise it for workloads that can tolerate longer retry windows during sustained outages.
+- :material-counter: **Tune `AWS_BEDROCK_MAX_RETRIES`** — The default of 9 exceeds any realistic region count, so a routed request already tries every candidate region once. Lower it (e.g. `2`) to give up after fewer regions; raising it only deepens in-region retrying for single-region and S3-pinned requests.
 - :material-pulse: **Consider `AWS_ADAPTIVE_RETRY`** — Enable this when many concurrent clients share the same endpoint and sustained congestion is likely. It paces retries based on real-time error signals, reducing the risk of retry storms — at the cost of potentially higher per-request latency under load. Avoid it for latency-sensitive or low-traffic workloads.
 - :material-magnify: **Monitor `model_regions` in logs** — If one region consistently appears in error logs, consider adjusting its quota or removing it from the region list.
 - :material-bucket-outline: **Declare accepted buckets** — If your users provide S3 URLs from buckets outside the application's own buckets, add them to `AWS_S3_ACCEPTED_BUCKETS` so the router can resolve their region and convert HTTP URLs to S3 URIs.

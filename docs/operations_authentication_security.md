@@ -146,7 +146,7 @@ Users can pass URLs to the API as multimodal content references (images, documen
 stdapi.ai validates every user-supplied URL via DNS resolution before fetching its content — each hostname is resolved and every resulting IP is checked against the blocklist. This protects against DNS rebinding attacks where a seemingly-safe domain resolves to a blocked address.
 
 -   **Baseline Protection**: Always-active blocking of loopback (127.0.0.1, localhost), link-local (169.254.169.254), and reserved address ranges. This prevents access to the AWS EC2/ECS metadata service from within the container.
--   **Private Network Blocking**: By default, the service also blocks all RFC 1918 private networks (10.x.x.x, 172.16.x.x, 192.168.x.x). Disable only in controlled environments where accessing local networks is required (`SSRF_PROTECTION_BLOCK_PRIVATE_NETWORKS=false`).
+-   **Private Network Blocking**: By default, the service also blocks every address that is not globally reachable on the public Internet — RFC 1918 networks (10.x.x.x, 172.16-31.x.x, 192.168.x.x), IPv6 unique local addresses, RFC 6598 shared address space (100.64.0.0/10, used by EKS custom networking and Hybrid Nodes) and the remaining special-purpose ranges, in their IPv4-mapped IPv6 form as well. Disable only in controlled environments where accessing local networks is required (`SSRF_PROTECTION_BLOCK_PRIVATE_NETWORKS=false`).
 -   **Defense in Depth**: Even with SSRF protection enabled, restrict outbound Security Group rules to only the necessary AWS service endpoints.
 
 !!! tip "Network-layer complement: Route 53 Resolver DNS Firewall"

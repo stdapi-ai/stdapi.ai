@@ -184,7 +184,7 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_BEDROCK_REGION_ROUTING_MAX_QUOTA_BACKOFF_SECONDS`](#bedrock-region-routing-max-quota-backoff)     | `3600`    | Hard ceiling in seconds on the exponential quota backoff per region (default: 1 hour)                                    |
 | [`AWS_BEDROCK_REGION_ROUTING_QUOTA_STALE_FACTOR`](#bedrock-region-routing-quota-stale-factor)           | `2`       | Multiplier on max quota backoff to determine when the consecutive-error counter resets                                   |
 | [`AWS_BEDROCK_REGION_ROUTING_UNAVAILABLE_BACKOFF_SECONDS`](#bedrock-region-routing-unavailable-backoff) | `30`      | Seconds to avoid a region after unavailability errors                                                                    |
-| [`AWS_BEDROCK_MAX_RETRIES`](#bedrock-max-retries)                                                       | `9`       | Total retries across all regions per Bedrock invocation; retries cycle through regions in order                          |
+| [`AWS_BEDROCK_MAX_RETRIES`](#bedrock-max-retries)                                                       | `9`       | Cap on the retries per Bedrock invocation; with region routing, each candidate region is tried at most once              |
 | [`AWS_FAILOVER_MAX_RETRIES`](#failover-max-retries)                                                     | `2`       | SDK retries per candidate region for the multi-region failover services (Polly, Transcribe, Translate, Comprehend)       |
 
 ### :material-layers-triple: Bedrock Mantle { #summary-bedrock-mantle }
@@ -1000,7 +1000,7 @@ export AWS_BEDROCK_REGION_ROUTING_QUOTA_STALE_FACTOR=4
 #### `AWS_BEDROCK_MAX_RETRIES` { #bedrock-max-retries }
 
 :octicons-package-24: **Purpose**
-:   Total number of retries per Bedrock invocation, cycling through available regions in order
+:   Maximum number of retries per Bedrock invocation, each retry escalating to the next available region
 
 :octicons-database-24: **Type**
 :   Integer (must be 0 or greater; `0` disables retries)
@@ -1009,7 +1009,7 @@ export AWS_BEDROCK_REGION_ROUTING_QUOTA_STALE_FACTOR=4
 :   `9`
 
 :octicons-workflow-24: **Behavior**
-:   Controls the total retry budget for each Bedrock API call. When region routing is enabled, retries cycle through the available regions in priority order — after exhausting all regions the cycle starts again. For example, with 3 regions and 9 retries the attempt sequence is `r1, r2, r3, r1, r2, r3, r1, r2, r3, r1` (1 initial + 9 retries = 10 total attempts). When routing is disabled, retries are performed against the single configured region.
+:   Controls the retry budget for each Bedrock API call. When region routing is enabled, every retry escalates to the next region in priority order and each candidate region is tried at most once, so the attempts are bounded by the smaller of `AWS_BEDROCK_MAX_RETRIES` + 1 and the number of candidate regions for the model — with 3 regions and the default 9 retries, a request makes at most 3 attempts. A region that just failed is still blocked by its own backoff, and retrying it would only extend that backoff instead of recovering the request. When routing is disabled, or the region is pinned by S3 inputs, the full budget is spent as SDK retries against that single region.
 
 ```bash
 # Default: 9 retries (10 total attempts)
@@ -1018,12 +1018,12 @@ export AWS_BEDROCK_MAX_RETRIES=9
 # Fail faster (e.g. low-latency interactive use cases)
 export AWS_BEDROCK_MAX_RETRIES=3
 
-# More resilient (e.g. batch workloads tolerant of longer waits)
+# Deeper in-region retrying for single-region or S3-pinned requests
 export AWS_BEDROCK_MAX_RETRIES=18
 ```
 
 !!! tip "Related setting"
-    See [`AWS_BEDROCK_REGION_ROUTING`](#bedrock-region-routing) and [Region Routing](operations_resilience.md) for the full retry and cycling behavior.
+    See [`AWS_BEDROCK_REGION_ROUTING`](#bedrock-region-routing) and [Region Routing](operations_resilience.md) for the full retry and failover behavior.
 
 #### `AWS_FAILOVER_MAX_RETRIES` { #failover-max-retries }
 
@@ -2573,15 +2573,15 @@ export SSRF_PROTECTION_BLOCK_PRIVATE_NETWORKS=false
         - :material-network-off: **Multicast Addresses** - Multicast IP ranges
 
     2. **Private Network Protection (Controlled by this setting):**
-        - :material-ip: **RFC 1918 Private Networks** - 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
-        - :material-ip: **Other Private Address Ranges** - Including IPv6 unique local addresses (fc00::/7)
+        - :material-ip: **Every Non-Globally-Reachable Address** - anything outside the public Internet address space, in both families and in IPv4-mapped IPv6 form
+        - :material-ip: **Examples** - RFC 1918 (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16), IPv6 unique local (fc00::/7), RFC 6598 shared address space (100.64.0.0/10), benchmarking (198.18.0.0/15) and documentation ranges
 
 !!! warning "Security Warning"
     **CRITICAL**: Only disable `SSRF_PROTECTION_BLOCK_PRIVATE_NETWORKS` in controlled environments where accessing internal networks is explicitly required and safe.
 
     **If disabled, private network protection is removed:**
 
-    - :material-alert: Attackers may be able to access RFC 1918 private network resources (10.x.x.x, 172.16-31.x.x, 192.168.x.x) through your API
+    - :material-alert: Attackers may be able to reach any non-globally-reachable address (private networks, shared address space, and the other special-purpose ranges) through your API
     - :material-shield-alert: Internal services on private networks (databases, admin panels, internal APIs) may be exposed
     - :material-lock-open: Internal APIs without authentication may be exploited
 
