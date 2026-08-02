@@ -25,8 +25,7 @@ _InputType = Literal[
 _COHERE_NATIVE_EMBEDDING_TYPES = frozenset(
     {"float", "int8", "uint8", "binary", "ubinary"}
 )
-#: Model ID prefix of the only Titan Embed model accepting `embeddingTypes`
-#: (Titan Embed Text G1 and Titan Multimodal Embeddings G1 do not).
+#: Model ID prefix of the only Titan Embed model accepting `embeddingTypes`.
 TITAN_EMBED_V2_PREFIX = "amazon.titan-embed-text-v2"
 #: Embedding types natively supported by Bedrock Titan Embed v2 models.
 _TITAN_NATIVE_EMBEDDING_TYPES = frozenset({"float", "binary"})

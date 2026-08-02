@@ -18,12 +18,10 @@ from stdapi.models.image import (
 # Common Constants
 # ============================================================================
 
-# Aspect ratios supported by text-to-image and image-to-image models
+#: Aspect ratios supported by text-to-image and image-to-image models.
 AspectRatio = Literal["16:9", "1:1", "21:9", "2:3", "3:2", "4:5", "5:4", "9:16", "9:21"]
 
-# Supported image formats per model type
-NO_WEBP_FORMATS = {"png", "jpeg"}
-
+#: Maps a width/height ratio to the closest supported aspect ratio.
 ASPECT_RATIOS: dict[float, AspectRatio] = {
     16 / 9: "16:9",
     1.0: "1:1",

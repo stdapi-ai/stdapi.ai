@@ -63,6 +63,32 @@ def get_amz_quality(quality: ImageOutputQuality | str | None) -> AmzQuality | No
     return AMZ_QUALITY_MAP.get(quality, quality)  # type: ignore[no-any-return,call-overload]
 
 
+def resolve_amz_quality_echo(
+    quality: ImageOutputQuality | str | None,
+) -> tuple[AmzQuality, ImageOutputQuality] | None:
+    """Resolve the Amazon quality value and the response quality to echo back.
+
+    Shared by Titan Image Generator and Nova Canvas, whose ``imageGenerationConfig``
+    both take the same ``standard``/``premium`` values and only distinguish
+    ``low`` from ``medium`` on the client-facing echo, not on the wire.
+
+    Args:
+        quality: Requested OpenAI-style quality, or None.
+
+    Returns:
+        ``(amz_quality, response_quality)`` if *quality* maps to an Amazon
+        quality value, else None (nothing to apply, keep the caller's default).
+    """
+    amz_quality = get_amz_quality(quality)
+    if not amz_quality:
+        return None
+    if amz_quality == "premium":
+        return amz_quality, "high"
+    if quality is not None and quality.lower() == "low":
+        return amz_quality, "low"
+    return amz_quality, "medium"
+
+
 def image_spec(
     width: int,
     height: int,
@@ -579,15 +605,9 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
             if task_key in self._extra_params:
                 request[task_key].update(self._extra_params[task_key])  # type:ignore[literal-required]
 
-        amz_quality = get_amz_quality(self._quality)
-        if amz_quality:
+        if resolved := resolve_amz_quality_echo(self._quality):
+            amz_quality, self._response_quality = resolved
             request["imageGenerationConfig"]["quality"] = amz_quality
-            if amz_quality == "premium":
-                self._response_quality = "high"
-            elif self._quality is not None and self._quality.lower() == "low":
-                self._response_quality = "low"
-            else:
-                self._response_quality = "medium"
 
 
 class ImageModel(ImageModelBase[_Request, _Response, _ImageGenerationJob]):

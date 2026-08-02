@@ -13,7 +13,7 @@ Design:
 """
 
 from asyncio import Lock, as_completed, ensure_future, gather
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
@@ -58,9 +58,6 @@ class ImageGenerationResponse(BaseModel):
     image: str
     partial: bool = False
     index: int
-
-
-ImageModelT = TypeVar("ImageModelT", bound="ImageModelBase[Any, Any, Any]")
 
 
 class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
@@ -559,12 +556,11 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
         )
 
 
-ImageGenerationJobT = TypeVar("ImageGenerationJobT", bound=ImageGenerationJobBase[Any])
-
-
-class ImageModelBase[RequestT, ResponseT, ImageGenerationJobT](
-    ModelBase[RequestT, ResponseT]
-):
+class ImageModelBase[
+    RequestT,
+    ResponseT,
+    ImageGenerationJobT: ImageGenerationJobBase[Any],
+](ModelBase[RequestT, ResponseT]):
     """Base class for provider-specific image models."""
 
     IMAGE_GENERATION_JOB_CLASS: type[ImageGenerationJobT]
@@ -654,7 +650,7 @@ class ImageModelBase[RequestT, ResponseT, ImageGenerationJobT](
         Returns:
             Configured image generation job instance.
         """
-        return self.IMAGE_GENERATION_JOB_CLASS(  # type: ignore[call-arg]
+        return self.IMAGE_GENERATION_JOB_CLASS(
             model=self,
             prompt=prompt,
             count=count,
@@ -695,7 +691,7 @@ class ImageModelBase[RequestT, ResponseT, ImageGenerationJobT](
         Returns:
             Job instance - call edit_images(image, mask) on it.
         """
-        return self.IMAGE_GENERATION_JOB_CLASS(  # type: ignore[call-arg]
+        return self.IMAGE_GENERATION_JOB_CLASS(
             model=self,
             prompt=prompt,
             count=count,
@@ -734,7 +730,7 @@ class ImageModelBase[RequestT, ResponseT, ImageGenerationJobT](
         Returns:
             Job instance - call create_variations(images) on it.
         """
-        return self.IMAGE_GENERATION_JOB_CLASS(  # type: ignore[call-arg]
+        return self.IMAGE_GENERATION_JOB_CLASS(
             model=self,
             prompt="",  # No prompt for variations
             count=count,

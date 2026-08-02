@@ -17,6 +17,7 @@ from stdapi.models.image.amazon_titan_image_generator import (
     get_amz_quality,
     image_spec,
     random_seed,
+    resolve_amz_quality_echo,
 )
 from stdapi.usage import IMAGE_SPEC
 from stdapi.utils import alpha_mask_to_bw, get_data_uri_data
@@ -642,15 +643,11 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
             task_params_key: Key for task-specific params that support style (e.g., "textToImageParams").
         """
         # Apply quality settings
-        amz_quality = get_amz_quality(self._quality)
-        if amz_quality and "imageGenerationConfig" in request:
+        if "imageGenerationConfig" in request and (
+            resolved := resolve_amz_quality_echo(self._quality)
+        ):
+            amz_quality, self._response_quality = resolved
             request["imageGenerationConfig"]["quality"] = amz_quality
-            if amz_quality == "premium":
-                self._response_quality = "high"
-            elif self._quality is not None and self._quality.lower() == "low":
-                self._response_quality = "low"
-            else:
-                self._response_quality = "medium"
 
         # Apply style if specified and supported by the task
         if self._style and task_params_key:
