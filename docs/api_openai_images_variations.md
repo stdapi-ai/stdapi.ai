@@ -149,9 +149,9 @@ curl -X POST "$BASE/v1/images/variations" \
 | `file_id`   | string | Files API file identifier (`file-*` or `file_*` prefix)  |
 | `image_url` | string | HTTP/HTTPS URL, data URI (`data:image/png;base64,...`), S3 URI (`s3://bucket/key`), or Files API reference (`file-id:file-<id>` — see [Files API](api_openai_files.md#referencing-uploaded-files-via-the-file-id-uri-scheme)) |
 
-Exactly one of `file_id` or `image_url` must be provided. `image` may also be
-a plain reference string (equivalent to `image_url`) — the shape MCP clients
-derive from the tool schema:
+Provide one of `file_id` or `image_url`; if both are given, `file_id` takes
+precedence. `image` may also be a plain reference string (equivalent to
+`image_url`) — the shape MCP clients derive from the tool schema:
 
 ```json
 {"model": "amazon.nova-canvas-v1:0", "image": "data:image/png;base64,..."}

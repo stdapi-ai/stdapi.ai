@@ -68,6 +68,9 @@ flowchart LR
 
 ## :material-cog: Configuration
 
+!!! note "Model modality"
+    In every section below, the selected model must match the operation's modality — chat nodes need a chat model, embedding nodes an embedding model, and so on.
+
 ### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI Nodes
 
 #### :material-key: Set Up Your Credentials
@@ -106,8 +109,6 @@ Enables: Text generation and conversational AI in workflows.
     - Sub-node for AI Agent and chain nodes
     - The **Use Responses API** option works either way: enabled calls `POST /v1/responses` (see [Responses API](api_openai_responses.md)), disabled calls `POST /v1/chat/completions` (see [Chat Completions API](api_openai_chat_completions.md))
 
-    In both cases the model must be a text/chat-capable model from the correct family.
-
 #### :material-message-text: Text Generation
 
 Enables: Text generation using the OpenAI Responses or Chat Completions APIs.
@@ -117,7 +118,7 @@ Enables: Text generation using the OpenAI Responses or Chat Completions APIs.
 
     - Model can be selected directly in the `Model` parameter
 
-    n8n calls `POST /v1/responses` (see [Responses API](api_openai_responses.md)), so the model must be a text/chat-capable model from the correct family.
+    n8n calls `POST /v1/responses` (see [Responses API](api_openai_responses.md)).
 
     ---
 
@@ -125,7 +126,7 @@ Enables: Text generation using the OpenAI Responses or Chat Completions APIs.
 
     - Model can be selected directly in the `Model` parameter
 
-    n8n calls `POST /v1/chat/completions` (see [Chat Completions API](api_openai_chat_completions.md)), so the model must be a text/chat-capable model from the correct family.
+    n8n calls `POST /v1/chat/completions` (see [Chat Completions API](api_openai_chat_completions.md)).
 
 #### :material-text-box-outline: Legacy Completions
 
@@ -137,7 +138,7 @@ Enables: raw prompt completion in LangChain-based chains, as an alternative to t
     - Sub-node feeding a Basic LLM Chain or similar LangChain node — distinct from the **`OpenAI Chat Model`** sub-node above
     - Model can be selected directly in the `Model` parameter
 
-    n8n calls `POST /v1/completions` (see [Completions API](api_openai_completions.md)), so the model must be a text-completion-capable model from the correct family.
+    n8n calls `POST /v1/completions` (see [Completions API](api_openai_completions.md)).
 
 #### :material-shield-check: Text Moderation
 
@@ -160,7 +161,7 @@ Enables: Vector embeddings for semantic search and RAG workflows.
 
     - Model can be selected directly in the `Model` parameter
 
-    n8n calls `POST /v1/embeddings` (see [Embeddings API](api_openai_embeddings.md)), so the model must be an embeddings-capable model from the correct family.
+    n8n calls `POST /v1/embeddings` (see [Embeddings API](api_openai_embeddings.md)).
 
 #### :material-image-search: Image Analysis
 
@@ -171,7 +172,7 @@ Enables: Image understanding and analysis in workflows.
 
     - Model can be selected directly in the `Model` parameter
 
-    n8n calls `POST /v1/responses` with image input (see [Responses API](api_openai_responses.md)), so the model must be a vision-capable model from the correct family.
+    n8n calls `POST /v1/responses` with image input (see [Responses API](api_openai_responses.md)); the model must support vision.
 
 #### :material-image: Image Generation
 
@@ -182,7 +183,7 @@ Enables: Text-to-image creation in workflows.
 
     - Model ID can be entered as expression in the `Model` parameter
 
-    n8n calls `POST /v1/images/generations` (see [Images Generations API](api_openai_images_generations.md)), so the model must be an image-generation model from the correct family.
+    n8n calls `POST /v1/images/generations` (see [Images Generations API](api_openai_images_generations.md)).
 
 #### :material-image-edit: Image Editing
 
@@ -193,7 +194,7 @@ Enables: Image transformation and editing in workflows.
 
     - Model ID can be entered as expression in the `Model` parameter
 
-    n8n calls `POST /v1/images/edits` (see [Images Edits API](api_openai_images_edits.md)), so the model must be an image-editing model from the correct family.
+    n8n calls `POST /v1/images/edits` (see [Images Edits API](api_openai_images_edits.md)).
 
 #### :material-video: Video Generation
 
@@ -205,7 +206,7 @@ Enables: Asynchronous text-to-video generation in workflows.
     - Model ID can be entered as expression in the `Model` parameter
     - Set **Wait Time** high enough for the job to finish—the node polls the job until it completes before returning, so the workflow blocks for the full generation time
 
-    n8n calls `POST /v1/videos` (see [Videos API](api_openai_videos.md)), including status polling and content download, so the model must be a video-generation model from the correct family.
+    n8n calls `POST /v1/videos` (see [Videos API](api_openai_videos.md)), including status polling and content download.
 
 #### :material-volume-high: Audio Generation (TTS)
 
@@ -217,7 +218,7 @@ Enables: Text-to-speech audio generation in workflows.
     - Model ID can be entered as expression in the `Model` parameter
     - **Or use OpenAI model names directly:** `tts-1` and `tts-1-hd` work by default thanks to built-in model aliases
 
-    n8n calls `POST /v1/audio/speech` (see [Audio Speech API](api_openai_audio_speech.md)), so the model must match the text-to-speech modality and family.
+    n8n calls `POST /v1/audio/speech` (see [Audio Speech API](api_openai_audio_speech.md)).
 
 #### :material-microphone: Audio Transcription (STT)
 
@@ -229,7 +230,7 @@ Enables: Speech-to-text transcription in workflows.
     - Works out of the box with OpenAI's `whisper-1` model name
     - The model alias automatically maps to `amazon.transcribe`
 
-    n8n calls `POST /v1/audio/transcriptions` (see [Audio Transcriptions API](api_openai_audio_transcriptions.md)), so the model must match the speech-to-text modality.
+    n8n calls `POST /v1/audio/transcriptions` (see [Audio Transcriptions API](api_openai_audio_transcriptions.md)).
 
 #### :material-translate: Audio Translation
 
@@ -241,7 +242,7 @@ Enables: Translating speech in any supported language into English text.
     - Works out of the box with OpenAI's `whisper-1` model name
     - The model alias automatically maps to `amazon.transcribe`; Bedrock speech-to-text models (e.g. Mistral Voxtral) also work
 
-    n8n calls `POST /v1/audio/translations` (see [Audio Translations API](api_openai_audio_translations.md)), so the model must match the speech-to-text modality.
+    n8n calls `POST /v1/audio/translations` (see [Audio Translations API](api_openai_audio_translations.md)).
 
 #### :material-file-upload: Files
 
@@ -328,7 +329,7 @@ Enables: Text generation and conversational AI in workflows.
 
     - Model can be selected directly in the `Model` parameter
 
-    n8n calls `POST /anthropic/v1/messages` (see [Anthropic Messages API](api_anthropic_messages.md)), so the model must be a text/chat-capable model from the correct family.
+    n8n calls `POST /anthropic/v1/messages` (see [Anthropic Messages API](api_anthropic_messages.md)).
 
 #### :material-image-search: Image Analysis
 
@@ -339,7 +340,7 @@ Enables: Image understanding and analysis in workflows.
 
     - Model can be selected directly in the `Model` parameter
 
-    n8n calls `POST /anthropic/v1/messages` with image content (see [Anthropic Messages API](api_anthropic_messages.md)), so the model must support vision capabilities.
+    n8n calls `POST /anthropic/v1/messages` with image content (see [Anthropic Messages API](api_anthropic_messages.md)); the model must support vision.
 
 #### :material-file-document: Document Analysis
 
@@ -350,7 +351,7 @@ Enables: Document understanding and extraction in workflows.
 
     - Model can be selected directly in the `Model` parameter
 
-    n8n calls `POST /anthropic/v1/messages` with document content (see [Anthropic Messages API](api_anthropic_messages.md)), so the model must support document processing capabilities.
+    n8n calls `POST /anthropic/v1/messages` with document content (see [Anthropic Messages API](api_anthropic_messages.md)); the model must support document processing.
 
 #### :material-file-upload: Files
 

@@ -513,7 +513,7 @@ flowchart LR
 
 ### ECS Task Definition Example
 
-The example below uses ARM64 architecture, which requires the `-arm64` image tag. Replace `ARM64` with `X86_64` and `-arm64` with `-amd64` for AMD64. Use a version tag without an architecture suffix (e.g. `:1.14.0`) to let ECS select the architecture automatically via the multi-arch manifest.
+The example below uses ARM64 architecture, which requires the `-arm64` image tag. Replace `ARM64` with `X86_64` and `-arm64` with `-amd64` for AMD64. Use a version tag without an architecture suffix (e.g. `:1.15.0`) to let ECS select the architecture automatically via the multi-arch manifest.
 
 ```json
 {
@@ -531,7 +531,7 @@ The example below uses ARM64 architecture, which requires the `-arm64` image tag
   "containerDefinitions": [
     {
       "name": "main",
-      "image": "709825985650.dkr.ecr.us-east-1.amazonaws.com/j-goutin/stdapi.ai:1.14.0-arm64",
+      "image": "709825985650.dkr.ecr.us-east-1.amazonaws.com/j-goutin/stdapi.ai:1.15.0-arm64",
       "essential": true,
       "readonlyRootFilesystem": true,
       "portMappings": [

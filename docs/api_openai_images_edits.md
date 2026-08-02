@@ -45,7 +45,7 @@ Edit images using inpainting with Amazon Bedrock image models through an OpenAI-
 | JSON body                      | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Structured `images` array with Files API IDs or URLs (the OpenAI edits API is multipart-only)                                                  |
 | **Parameters**                 |                                          |                                                                                                                                                |
 | `image` / `image[]`            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | PNG image(s) to edit; most models accept exactly one source image and reject requests providing more with an error                             |
-| `images` (JSON)                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Array of `{file_id}` or `{image_url}` references (JSON body)                                                                                   |
+| `images` (JSON)                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Array of `{file_id}` or `{image_url}` references (JSON body, 1-16 entries)                                                                     |
 | `prompt`                       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Text description of desired changes                                                                                                            |
 | `mask`                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Optional mask defining edit regions; models that do not use a mask reject requests that include one                                            |
 | `n` (number of images)         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Multiple images per request; accepted range is 1-10, but the effective maximum is model-dependent (e.g. Amazon Titan and Nova Canvas cap at 5) |
@@ -201,7 +201,7 @@ curl -X POST "$BASE/v1/images/edits" \
 
 #### JSON Body (Files API or URL References) :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" }
 
-The modern format — reference images already stored in the Files API or accessible via URL. Send `Content-Type: application/json` with an `images` array, where each element has either `file_id` or `image_url`:
+The modern format — reference images already stored in the Files API or accessible via URL. Send `Content-Type: application/json` with an `images` array (1-16 entries), where each element has either `file_id` or `image_url`:
 
 ```bash
 # Edit using a Files API file ID
@@ -236,10 +236,10 @@ curl -X POST "$BASE/v1/images/edits" \
 | `file_id`   | string | Files API file identifier (`file-*` or `file_*` prefix)  |
 | `image_url` | string | HTTP/HTTPS URL, data URI (`data:image/png;base64,...`), S3 URI (`s3://bucket/key`), or Files API reference (`file-id:file-<id>` — see [Files API](api_openai_files.md#referencing-uploaded-files-via-the-file-id-uri-scheme)) |
 
-Exactly one of `file_id` or `image_url` must be provided per `ImageRef`. Each
-array element may also be a plain reference string (equivalent to `image_url`),
-and the array is additionally accepted under the `image` key — the shapes MCP
-clients derive from the tool schema:
+Provide one of `file_id` or `image_url` per `ImageRef`; if both are given,
+`file_id` takes precedence. Each array element may also be a plain reference
+string (equivalent to `image_url`), and the array is additionally accepted
+under the `image` key — the shapes MCP clients derive from the tool schema:
 
 ```json
 {"model": "amazon.nova-canvas-v1:0", "prompt": "Add a dramatic sky", "image": ["data:image/png;base64,..."]}
@@ -455,7 +455,7 @@ curl -X POST "$BASE/v1/images/edits" \
   -F image=@source.png \
   -F mask=@mask.png \
   -F prompt="A beautiful garden with flowers" \
-  -F model="amazon.nova-canvas-v1:0"
+  -F model="amazon.titan-image-generator-v2:0"
 ```
 
 **Parameter Mapping:**
@@ -494,7 +494,7 @@ curl -X POST "$BASE/v1/images/edits" \
   -H "Content-Type: multipart/form-data" \
   -F image=@photo.png \
   -F prompt="Extend with a forest" \
-  -F model="amazon.nova-canvas-v1:0" \
+  -F model="amazon.titan-image-generator-v2:0" \
   -F taskType="OUTPAINTING"
 
 # Background Removal (v2 only, no prompt needed)
@@ -502,7 +502,7 @@ curl -X POST "$BASE/v1/images/edits" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: multipart/form-data" \
   -F image=@photo.png \
-  -F model="amazon.nova-canvas-v1:0" \
+  -F model="amazon.titan-image-generator-v2:0" \
   -F taskType="BACKGROUND_REMOVAL"
 ```
 
@@ -547,59 +547,6 @@ All Stability AI models use standard OpenAI parameters directly:
 | `stable-image-erase-object-v1:0`      | None                     | `mask` (required)     | Prompt not used                          |
 | `stable-image-remove-background-v1:0` | None                     | Not used              | Prompt not used                          |
 | `stable-fast-upscale-v1:0`            | None                     | Not used              | Prompt not used                          |
-
-**Examples:**
-
-```bash
-# Search & Replace - requires search_prompt form field
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@input.png \
-  -F prompt="a red car" \
-  -F model="stability.stable-image-search-replace-v1:0" \
-  -F search_prompt="blue car"
-
-# Search & Recolor - requires select_prompt form field
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@input.png \
-  -F prompt="bright red color" \
-  -F model="stability.stable-image-search-recolor-v1:0" \
-  -F select_prompt="car"
-
-# Style Transfer - mask parameter is style image
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@content.png \
-  -F mask=@style.png \
-  -F prompt="Apply artistic style" \
-  -F model="stability.stable-style-transfer-v1:0"
-
-# Erase Object - no prompt needed, mask required
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@input.png \
-  -F mask=@object_mask.png \
-  -F model="stability.stable-image-erase-object-v1:0"
-
-# Remove Background - no prompt needed
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@input.png \
-  -F model="stability.stable-image-remove-background-v1:0"
-
-# Fast Upscale - no prompt needed
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@low_res.png \
-  -F model="stability.stable-fast-upscale-v1:0"
-```
 
 !!! info "Full Parameter Reference"
     For all Stability AI parameters, see [Stability AI documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-stability-diffusion.html)

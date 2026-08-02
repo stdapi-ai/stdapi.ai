@@ -167,7 +167,7 @@ No migration required between steps. Your Terraform configuration and applicatio
 !!! note "Fargate Spot does not reduce the license cost"
     The license fee is billed per container-hour regardless of the Fargate pricing model — 720 h × $0.10 = $72/month whether the underlying container runs on Spot or standard Fargate. Spot only discounts the **AWS infrastructure** cost (the ECS/Fargate compute itself), not the Marketplace license. See [Cost Management](operations_cost_management.md#gateway-cost) for the full infrastructure-vs-license breakdown.
 
-Pay with AWS credits — consolidated with your existing AWS bill, no separate invoice or procurement.
+Consolidated AWS billing — one bill, no separate invoice or procurement (AWS promotional credits do not apply to Marketplace charges).
 
 ### After Subscribing
 

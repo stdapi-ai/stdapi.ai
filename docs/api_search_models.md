@@ -16,7 +16,7 @@ Discover available models by capability — filter by modality, route, region, s
 
 ## How It Works
 
-All query parameters are optional. Parameters combine with **AND** logic — only models matching every supplied filter are returned. Results are sorted by model ID. With no filters, every active (non-legacy) model is returned. `legacy=true` does not add deprecated models to that list — it replaces it, returning deprecated models only.
+All query parameters are optional. Parameters combine with **AND** logic — only models matching every supplied filter are returned. Results are sorted by model ID. With no filters, every active (non-legacy) model is returned (see the `legacy` note below for deprecated-model lookups).
 
 **Agent workflow:** call `search_models` first to obtain the correct model ID, then pass it to the target endpoint. To compare costs before picking, pass the shortlisted IDs to the [Model Pricing API](api_model_pricing.md).
 
@@ -55,6 +55,10 @@ Each item in the returned list is a `ModelDetails` object:
 | `regions` | AWS regions where this model is available |
 | `response_streaming` | Whether streaming responses are supported |
 | `legacy` | `true` = deprecated model; `false` or absent = active |
+| `start_of_life_time` | GA date, if known |
+| `end_of_life_time` | Deprecation date, if known |
+| `legacy_time` | Date the model was marked legacy, if known |
+| `public_extended_access_time` | Extended public-access end date, if known |
 | `inference_profiles` | Per-region inference profile IDs as a `region → profile ID` mapping (if any) |
 
 ## Examples
@@ -104,7 +108,7 @@ curl -G "$BASE/search_models" \
   -H "Authorization: Bearer $API_KEY"
 ```
 
-**Look up a deprecated model (e.g. to check its replacement) — `legacy=true` returns deprecated models only, not active ones too:**
+**Look up a deprecated model (see the `legacy=true` note above):**
 
 ```bash
 curl -G "$BASE/search_models" \

@@ -95,6 +95,13 @@ Translate audio from any language to English text with Amazon Transcribe + Trans
     - **File size limit**: ~2MB maximum input file size
     - **Audio channels**: Mono channel audio only (single channel)
 
+### Other Amazon Bedrock Models
+
+Any Amazon Bedrock model that accepts the `SPEECH` input modality through the Converse API can also translate audio out of the box: the gateway sends the audio together with a translation prompt and returns the model's English text output. Models whose speech input is only served by a bidirectional streaming API (e.g. `amazon.nova-2-sonic`) are not available on this route.
+
+!!! tip "Audio Input Formats on Bedrock Models"
+    Bedrock models natively accept `aac`, `flac`, `m4a`, `mka`, `mkv`, `mp3`, `mp4`, `ogg`, `opus`, `pcm`, `wav`, and `webm` uploads. Audio in any other format is automatically converted to FLAC before translation (requires FFmpeg on the server); non-audio uploads are rejected with the accepted format list.
+
 ## Advanced Features
 
 ### ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Transcribe Features
@@ -102,18 +109,21 @@ Translate audio from any language to English text with Amazon Transcribe + Trans
 **Model & Features:**
 
 - Use `amazon.transcribe` with the same interface as OpenAI's Whisper API
-- **Or use OpenAI model name directly**: `whisper-1` works out of the box (maps to `amazon.transcribe`)
+- **Or use OpenAI model names directly**: `whisper-1`, `gpt-transcribe`, `gpt-4o-transcribe`, and `gpt-4o-mini-transcribe` work out of the box (they map to `amazon.transcribe`)
 - Automatic transcription + translation pipeline in one request
 - Multiple output formats: `text`, `json`, `verbose_json`, `srt`, `vtt`
 - Automatic source language detection (zero configuration)
 - **Smart Subtitle Translation** :material-translate:{ .highlight }: Subtitle timing is preserved during translation
 
 !!! tip "OpenAI Model Compatibility"
-    stdapi.ai includes a built-in model alias that maps the OpenAI model name to Amazon Transcribe:
+    stdapi.ai includes built-in model aliases that map the OpenAI model names to Amazon Transcribe:
 
     - `whisper-1` → `amazon.transcribe`
+    - `gpt-transcribe` → `amazon.transcribe`
+    - `gpt-4o-transcribe` → `amazon.transcribe`
+    - `gpt-4o-mini-transcribe` → `amazon.transcribe`
 
-    This alias enables seamless compatibility with OpenAI-based tools and applications without any configuration changes. You can also [customize or override this alias](operations_configuration.md#model-aliases) to suit your needs.
+    These aliases enable seamless compatibility with OpenAI-based tools and applications without any configuration changes (the realtime-oriented `gpt-live-transcribe` is not aliased: it belongs to a streaming API this route does not emulate). You can also [customize or override these aliases](operations_configuration.md#model-aliases) to suit your needs.
 
 **Note:** With `amazon.transcribe`, the `prompt` and `temperature` parameters are rejected with an error to ensure consistent translation accuracy. Bedrock audio models accept both.
 

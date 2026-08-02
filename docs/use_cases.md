@@ -22,7 +22,7 @@ Discover how to integrate stdapi.ai with popular AI applications and tools. stda
 
 ## :material-lightning-bolt: How Integration Works
 
-Every integration on this page follows the same three steps — there is no step four:
+Every integration on this page follows the same three steps, and that's the whole process:
 
 1. **Deploy** stdapi.ai — [on AWS](operations_getting_started.md) or [locally with Docker](operations_getting_started_local.md)
 2. **Copy** your endpoint URL and API key

@@ -350,7 +350,7 @@ Choose **one** method (mutually exclusive):
 :   When enabled, the retry strategy dynamically responds to real-time congestion signals. If errors are occurring frequently, retries are spaced further apart to avoid amplifying load on an already-stressed endpoint. Once conditions improve, the pacing returns to normal. When disabled, retries follow a standard exponential backoff strategy with fixed intervals. Applies to all AWS services (Bedrock, S3, Polly, Transcribe, etc.).
 
 !!! warning "Latency Impact"
-    Adaptive retry can increase the latency of individual requests when throttling is detected, as the client intentionally delays retries to shed load. Avoid enabling it for latency-sensitive, low-traffic workloads.
+    Adaptive retry paces retries based on real-time error signals, reducing the risk of retry storms when many clients share the same endpoint under sustained congestion — at the cost of increased per-request latency when throttling is detected, since the client intentionally delays retries to shed load. Prefer it under sustained high load; keep the default standard mode for latency-sensitive, low-traffic workloads.
 
 ```bash
 # Default: standard exponential backoff
@@ -359,9 +359,6 @@ export AWS_ADAPTIVE_RETRY=false
 # Enable adaptive retry (recommended under sustained high load)
 export AWS_ADAPTIVE_RETRY=true
 ```
-
-!!! tip "When to enable"
-    Adaptive retry is most beneficial when many clients share the same endpoint and sustained congestion is likely. It paces retries based on real-time error signals, reducing the risk of retry storms — at the cost of potentially higher per-request latency under load. For low-traffic or latency-sensitive workloads the default standard mode is preferable.
 
 #### `AWS_MAX_POOL_CONNECTIONS` { #aws-max-pool-connections }
 
@@ -2047,54 +2044,24 @@ Configure Host header validation to protect against Host header injection attack
 :   Use AWS ALB host-based routing rules instead when possible for better performance and management
 
 ```bash
-# Not configured (default) - no Host header validation
-# No environment variable needed
-
 # Production: Specific hosts only
 export TRUSTED_HOSTS='["api.example.com", "www.example.com"]'
-
-# With wildcard subdomains
-export TRUSTED_HOSTS='["*.example.com", "api.myapp.com"]'
-
-# Multiple environments including localhost
-export TRUSTED_HOSTS='["api.example.com", "staging.example.com", "localhost"]'
 ```
 
 !!! info "What is Host Header Validation?"
-    The Host header in HTTP requests specifies the domain name of the server. Host header validation ensures that requests are only processed when they target your legitimate domains, preventing:
+    The Host header in HTTP requests specifies the domain name of the server. Validating it prevents **Host header injection attacks** (manipulated Host headers used to poison caches or exploit application logic) and **web cache poisoning**.
 
-    - :material-shield-alert: **Host header injection attacks** - Malicious manipulation of Host headers to generate poisoned cache entries or exploit application logic
-    - :material-link-variant: **Web cache poisoning** - Attacks that exploit Host header handling in caching layers
+!!! warning "Security Consideration: prefer ALB host-based routing"
+    Configure **AWS ALB listener rules** to validate the Host header and forward traffic only for approved hostnames — this rejects bad requests at the load balancer, before they reach the application, and is centrally managed. See the example below.
 
-!!! warning "Security Consideration"
-    By default, no Host header validation is performed. For production deployments exposed to the internet, configure host validation.
-
-    **Recommended approach for AWS deployments:**
-
-    - Use **AWS ALB host-based routing rules** to restrict which Host headers reach your application
-    - Configure ALB listener rules to only forward traffic for approved hostnames
-    - This provides better performance and centralized management compared to application-level validation
-
-    **Use `TRUSTED_HOSTS` setting when:**
-
-    - You cannot configure host-based routing at the load balancer level
-    - You need application-level defense-in-depth
-    - You're not using AWS ALB or similar services
+    Use `TRUSTED_HOSTS` only when you can't configure host-based routing at the load balancer level (no ALB, or you need application-level defense-in-depth).
 
 !!! tip "Wildcard Support"
-    Wildcard subdomains are supported using the `*` prefix:
-
-    - `*.example.com` - Matches any subdomain of example.com (api.example.com, app.example.com, etc.)
-    - `example.com` - Matches only the exact domain
-    - `*` - Not recommended, but matches all hosts (equivalent to no validation)
+    - `*.example.com` matches any subdomain (`api.example.com`, `app.example.com`, ...)
+    - `example.com` matches only the exact domain
+    - `*` matches all hosts — not recommended, equivalent to no validation
 
 !!! example "Common Configurations"
-
-    **Single Domain Production:**
-
-    ```bash
-    export TRUSTED_HOSTS='["api.example.com"]'
-    ```
 
     **Multi-Domain with Subdomains:**
 
@@ -2109,25 +2076,11 @@ export TRUSTED_HOSTS='["api.example.com", "staging.example.com", "localhost"]'
     ```
 
 !!! note "Host Validation Behavior"
-    - When `TRUSTED_HOSTS` is not configured (default), Host header validation is **not enabled**
-    - When configured, requests with non-matching Host headers are rejected with **HTTP 400 Bad Request**
+    - Not configured (default): Host header validation is **not enabled**
+    - Configured: requests with a non-matching Host header are rejected with **HTTP 400 Bad Request**
 
-!!! tip "When to Configure"
-    Configure `TRUSTED_HOSTS` when:
-
-    - :material-shield-check: You need defense-in-depth beyond load balancer rules
-    - :material-server-off: You cannot configure host-based routing at the load balancer level
-    - :material-web: Deploying without AWS ALB or similar load balancer with host validation
-
-!!! success "AWS ALB Host-Based Routing (Recommended)"
-    Instead of using `TRUSTED_HOSTS`, configure AWS ALB listener rules to validate Host headers:
-
-    **Via AWS Console:**
-
-    1. Navigate to EC2 → Load Balancers → Your ALB → Listeners
-    2. Add rules to listener on port 443 (HTTPS)
-    3. Add condition: "Host header" is "api.example.com"
-    4. Forward to target group only if Host header matches
+!!! success "AWS ALB Host-Based Routing Example"
+    **Via AWS Console:** EC2 → Load Balancers → Your ALB → Listeners → add a rule on the HTTPS (443) listener with condition "Host header" is `api.example.com`, forwarding to the target group only on match.
 
     **Via AWS CLI:**
 
@@ -2139,12 +2092,7 @@ export TRUSTED_HOSTS='["api.example.com", "staging.example.com", "localhost"]'
       --actions Type=forward,TargetGroupArn=arn:aws:elasticloadbalancing:...
     ```
 
-    **Benefits of ALB host validation:**
-
-    - :material-speedometer: Better performance (rejected at load balancer, not application)
-    - :material-shield-check: Centralized security policy management
-    - :material-chart-line: ALB metrics and logging for rejected requests
-    - :material-server-off: Reduced load on application servers
+    Benefits: rejected at the load balancer (better performance, reduced load on application servers), centralized policy management, and ALB metrics/logging for rejected requests.
 
 ---
 

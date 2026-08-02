@@ -237,7 +237,7 @@ curl -X POST "$BASE/v1/images/generations" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "amazon.nova-canvas-v1:0",
+    "model": "amazon.titan-image-generator-v2:0",
     "prompt": "A beautiful landscape with mountains"
   }'
 ```
@@ -273,7 +273,7 @@ curl -X POST "$BASE/v1/images/generations" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "amazon.nova-canvas-v1:0",
+    "model": "amazon.titan-image-generator-v2:0",
     "prompt": "Nature scene with colors",
     "taskType": "COLOR_GUIDED_GENERATION",
     "colorGuidedGenerationParams": {

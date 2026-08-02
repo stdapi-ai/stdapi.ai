@@ -35,13 +35,15 @@ stdapi.ai provides multiple resources for exploring and testing the API—choose
 | Category          | Endpoint                          | Capability                                                                  | Documentation                                          |
 |-------------------|-----------------------------------|-----------------------------------------------------------------------------|--------------------------------------------------------|
 | **💬 Chat**       | `POST /v1/chat/completions`       | Multi-modal conversations with text, images, video, documents               | [Chat Completions →](api_openai_chat_completions.md)   |
-|                   | `GET/DELETE /v1/chat/completions/{id}` | Retrieve or delete stored chat completions                             | [Chat Completions →](api_openai_chat_completions.md)   |
+|                   | `GET /v1/chat/completions`        | List stored chat completions                                                | [Chat Completions →](api_openai_chat_completions.md)   |
+|                   | `GET/POST/DELETE /v1/chat/completions/{id}` | Retrieve, update metadata, or delete a stored chat completion         | [Chat Completions →](api_openai_chat_completions.md)   |
 |                   | `GET /v1/chat/completions/{id}/messages` | List the messages of a stored chat completion                        | [Chat Completions →](api_openai_chat_completions.md)   |
 |                   | `POST /v1/completions`            | Simple prompt-to-text completion — recommended for MCP and text-only agents | [Completions →](api_openai_completions.md)             |
 |                   | `POST /v1/responses`              | Stateless conversational AI with tool calling and streaming                 | [Responses →](api_openai_responses.md)                 |
 |                   | `POST /v1/responses/input_tokens` | Count input tokens without generating a response                            | [Responses →](api_openai_responses.md)                 |
 |                   | `POST /v1/responses/compact`      | Compact a conversation into a reusable summary item                         | [Responses →](api_openai_responses.md)                 |
 |                   | `GET/DELETE /v1/responses/{id}`   | Retrieve or delete stored responses                                         | [Responses →](api_openai_responses.md)                 |
+|                   | `POST /v1/responses/{id}/cancel`  | Cancel a background response                                                 | [Responses →](api_openai_responses.md)                 |
 |                   | `GET /v1/responses/{id}/input_items` | List the input items of a stored response                                | [Responses →](api_openai_responses.md)                 |
 | **🎨 Images**     | `POST /v1/images/generations`     | Text-to-image generation                                                    | [Generations →](api_openai_images_generations.md)      |
 |                   | `POST /v1/images/edits`           | Image editing and transformations                                           | [Edits →](api_openai_images_edits.md)                  |
@@ -90,13 +92,15 @@ stdapi.ai provides multiple resources for exploring and testing the API—choose
 When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, stdapi.ai exposes all its endpoints as MCP tools. OpenAI-, Anthropic-, and Cohere-compatible tool names follow the pattern `provider_action`; the native extension tools use their bare names (`search_models`, `model_pricing`).
 
 !!! tip "JSON body support for file and audio tools"
-    MCP tools send JSON bodies — they cannot construct `multipart/form-data`. All file upload, audio, and upload-part tools therefore accept the file or audio content as a base64 string, data URI (`data:<mime>;base64,<data>`), HTTPS URL, or S3 URI in the `file` / `data` field instead of a binary attachment — as do the video generation tool's `input_reference` image and the moderation tool's `image_url` inputs. The full multipart upload workflow (`openai_upload` → `openai_upload_part` → `openai_upload_complete`) is fully MCP-compatible this way.
+    MCP tools send JSON bodies — they cannot construct `multipart/form-data`. All file upload, audio, and upload-part tools therefore accept the file or audio content as a base64 string, data URI (`data:<mime>;base64,<data>`), HTTPS URL, or S3 URI in the `file` / `data` field instead of a binary attachment — as do the video generation tool's `input_reference` image, the moderation tool's `image_url` input, and the `openai_image_edit`/`openai_image_variation` tools' image inputs (also accepting a bare string in any of these forms, plus a Files API file ID). The full multipart upload workflow (`openai_upload` → `openai_upload_part` → `openai_upload_complete`) is fully MCP-compatible this way.
 
 | MCP Tool                         | Endpoint                                    |
 |----------------------------------|---------------------------------------------|
 | **OpenAI Tools**                 |                                             |
 | `openai_chat_completion`         | `POST /v1/chat/completions`                 |
+| `openai_chat_completion_list`    | `GET /v1/chat/completions`                  |
 | `openai_chat_completion_get`     | `GET /v1/chat/completions/{completion_id}`  |
+| `openai_chat_completion_update`  | `POST /v1/chat/completions/{completion_id}` |
 | `openai_chat_completion_delete`  | `DELETE /v1/chat/completions/{completion_id}` |
 | `openai_chat_completion_messages` | `GET /v1/chat/completions/{completion_id}/messages` |
 | `openai_completion`              | `POST /v1/completions`                      |
@@ -105,6 +109,7 @@ When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, s
 | `openai_response_compact`        | `POST /v1/responses/compact`                |
 | `openai_response_get`            | `GET /v1/responses/{response_id}`           |
 | `openai_response_delete`         | `DELETE /v1/responses/{response_id}`        |
+| `openai_response_cancel`         | `POST /v1/responses/{response_id}/cancel`   |
 | `openai_response_input_items`    | `GET /v1/responses/{response_id}/input_items` |
 | `openai_image_generation`        | `POST /v1/images/generations`               |
 | `openai_image_edit`              | `POST /v1/images/edits`                     |

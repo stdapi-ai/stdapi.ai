@@ -722,7 +722,7 @@ curl -N -X POST "$BASE/v1/messages" \
 
 ```json
 {
-  "model": "amazon.nova-micro-v1:0",
+  "model": "amazon.nova-2-lite-v1:0",
   "max_tokens": 1024,
   "messages": [
     {

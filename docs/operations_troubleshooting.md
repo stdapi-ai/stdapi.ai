@@ -153,11 +153,11 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     - If the deployment sits behind the Terraform module's WAF (`alb_waf_enabled=true`), check for a `SizeConstraintStatement` rule on the request body — see [Request Size & Resource Limits](operations_authentication_security.md#request-size-resource-limits).
     - If fronted by Amazon API Gateway instead of an ALB, remember its hard 10 MB payload limit.
 
-??? failure "`408`/`504` — request times out mid-stream on long generations"
-    A slow or hung generation exceeded a timeout somewhere between the model and the client.
+??? failure "`503`/`504`/`408` — request times out mid-stream on long generations"
+    A slow or hung generation exceeded a timeout somewhere between the model and the client. The status code tells you where: `503` comes from stdapi.ai's own gateway timeout; `504`/`408` come from an edge or proxy timeout in front of it.
 
-    - Check [`AI_RESPONSE_TIMEOUT`](operations_configuration.md#ai-response-timeout) — it closes stalled upstream model connections; raise it for workloads with long-running generations. When it fires, the request fails with a `503` and is **not** retried in another region: the model already ran and AWS bills it either way, so a failover would pay twice for the same generation.
-    - Check the Terraform module's `alb_idle_timeout` (default: 3600 s) — if you lowered it, or front the deployment with your own load balancer at a shorter idle timeout, streaming responses can be cut off mid-flight. See [ALB Resilience](operations_resilience.md#alb-resilience).
+    - **`503` from the gateway**: Check [`AI_RESPONSE_TIMEOUT`](operations_configuration.md#ai-response-timeout) — it closes stalled upstream model connections; raise it for workloads with long-running generations. The request is **not** retried in another region: the model already ran and AWS bills it either way, so a failover would pay twice for the same generation.
+    - **`504`/`408` from the edge/proxy**: Check the Terraform module's `alb_idle_timeout` (default: 3600 s) — if you lowered it, or front the deployment with your own load balancer or reverse proxy at a shorter idle timeout, streaming responses can be cut off mid-flight before the gateway's own timeout fires. See [ALB Resilience](operations_resilience.md#alb-resilience).
 
 ### AWS error → HTTP status mapping
 
@@ -176,7 +176,7 @@ stdapi.ai translates upstream AWS error codes into standard HTTP responses with 
 [^2]: Anthropic-compatible routes return HTTP `529` with error type `overloaded_error` instead.
 
 !!! note "Where to find the detail"
-    For security, `401` and `403` responses returned to clients contain only a generic message. The full diagnostic detail is captured in the server logs under `error_detail` and can be correlated via the `x-request-id` response header — see [Logging & Monitoring](operations_logging_monitoring.md).
+    For security, `401` and `403` responses returned to clients contain only a generic message. The full diagnostic detail is captured in the server logs under `error_detail` and can be correlated via the `x-request-id` response header (`request-id` on Anthropic-compatible `/anthropic/...` routes) — see [Logging & Monitoring](operations_logging_monitoring.md).
 
 ---
 

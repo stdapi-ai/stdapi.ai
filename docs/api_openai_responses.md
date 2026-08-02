@@ -358,7 +358,11 @@ curl -X POST "$BASE/v1/responses" \
   }'
 ```
 
-The chain of thought is returned as a `reasoning` output item preceding the assistant message, with the text in `content` parts of type `reasoning_text`. When streaming on Converse-served models, the item is delivered through `response.output_item.added`, `response.reasoning_text.delta` / `.done`, and `response.output_item.done` events before the message events. Mantle-native models instead return the reasoning as an encrypted-content item with no plaintext `reasoning_text.delta` events — only `response.output_item.added` / `.done` bracket it. Mantle models that do not serve this API natively return their chain of thought the same way, as `content` parts of type `reasoning_text`, opened with `response.content_part.added`, streamed through `response.reasoning_text.delta` / `.done`, and closed with `response.content_part.done` — not as `summary` events. On Converse-served models, Bedrock does not split reasoning tokens out of `outputTokens`, so `usage.output_tokens_details.reasoning_tokens` is always `0`; reasoning tokens are still billed inside `output_tokens`. Mantle-native models report the split they return upstream.
+The chain of thought is returned as a `reasoning` output item preceding the assistant message, with the text in `content` parts of type `reasoning_text`. Streaming shape and token accounting depend on the serving path:
+
+- **Converse-served models**: the item streams through `response.output_item.added`, `response.reasoning_text.delta` / `.done`, and `response.output_item.done` events before the message events. Bedrock does not split reasoning tokens out of `outputTokens`, so `usage.output_tokens_details.reasoning_tokens` is always `0`; reasoning tokens are still billed inside `output_tokens`.
+- **Mantle-native models**: the reasoning is returned as an encrypted-content item with no plaintext `reasoning_text.delta` events — only `response.output_item.added` / `.done` bracket it. The reasoning-token split reported in `usage` is whatever the upstream API returns.
+- **Mantle models converted to another API**: the chain of thought comes back like the Converse path — `content` parts of type `reasoning_text`, opened with `response.content_part.added`, streamed through `response.reasoning_text.delta` / `.done`, and closed with `response.content_part.done` — not as `summary` events.
 
 Add `"include": ["reasoning.encrypted_content"]` to attach an `encrypted_content` envelope to each reasoning item. Echo the item back in the `input` of the next request to carry the model's reasoning state (including signatures and redacted content) across turns with no server-side storage — reasoning items from the official OpenAI API are accepted too, with their encrypted content safely ignored. Echoing a reasoning item back **without** its `encrypted_content` replays it unsigned: Anthropic Claude models only continue from a thinking passage they can recognise as their own, so that reasoning is left out of the turn — the request still succeeds, only the earlier chain of thought is no longer visible to the model. Every other model family receives the unsigned reasoning as-is.
 
@@ -650,7 +654,7 @@ This endpoint supports standard Bedrock headers for enhanced control over your r
 
 | Header                                     | Purpose                | Valid Values                  |
 |--------------------------------------------|------------------------|-------------------------------|
-| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `priority`, `default`, `flex` |
+| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `default`, `flex`, `priority`, `reserved` |
 | `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`       |
 
 **Example with all headers:**

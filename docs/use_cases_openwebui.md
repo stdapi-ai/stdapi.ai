@@ -73,6 +73,9 @@ Open WebUI is configured entirely through environment variables. The sections be
 !!! warning "These settings are read once, on first boot"
     Open WebUI reads its connection settings from the environment only the first time it starts against a given data directory, then stores them in its own database. Changing an environment variable afterwards has no effect until you either update the setting from the admin UI or start from a fresh `DATA_DIR`.
 
+!!! note "Model choice"
+    In every section below, pick any Bedrock-available model that matches the operation's modality — a chat model for the Core Connection, an embedding model for RAG Embeddings, and so on.
+
 ### :material-connection: Core Connection
 
 Enables: Chat completions and Open WebUI background tasks (titles, summarization).
@@ -84,7 +87,7 @@ Enables: Chat completions and Open WebUI background tasks (titles, summarization
     TASK_MODEL_EXTERNAL=amazon.nova-micro-v1:0
     ```
 
-Use a fast, low-cost chat model for `TASK_MODEL_EXTERNAL`. Open WebUI calls `POST /v1/chat/completions` for chat and background tasks (see [Chat Completions API](api_openai_chat_completions.md)), so the model must be a text/chat-capable model from the correct family for your Bedrock region.
+Use a fast, low-cost chat model for `TASK_MODEL_EXTERNAL`. Open WebUI calls `POST /v1/chat/completions` for chat and background tasks (see [Chat Completions API](api_openai_chat_completions.md)).
 
 ### :material-database: RAG Embeddings
 
@@ -98,7 +101,7 @@ Enables: Document ingestion and semantic search for RAG.
     RAG_EMBEDDING_MODEL=cohere.embed-v4:0
     ```
 
-Pick any embedding model you prefer. Open WebUI calls `POST /v1/embeddings` (see [Embeddings API](api_openai_embeddings.md)), so the model must be an embeddings-capable model from the correct family.
+Open WebUI calls `POST /v1/embeddings` (see [Embeddings API](api_openai_embeddings.md)).
 
 ### :material-sort-variant: RAG Reranking
 
@@ -136,7 +139,7 @@ Enables: Text-to-image creation inside chats.
     IMAGE_GENERATION_MODEL=stability.stable-image-core-v1:1
     ```
 
-Choose any image generation model you prefer. Open WebUI calls `POST /v1/images/generations` (see [Images Generations API](api_openai_images_generations.md)), so the model must be an image-generation model from the correct family.
+Open WebUI calls `POST /v1/images/generations` (see [Images Generations API](api_openai_images_generations.md)).
 
 ### :material-image-edit: Image Editing
 
@@ -153,7 +156,7 @@ Enables: Image edits and transformations in the editor.
     IMAGE_EDIT_MODEL=stability.stable-image-control-structure-v1:0
     ```
 
-Pick any image-editing model that supports edits without a mask. Open WebUI calls `POST /v1/images/edits` (see [Images Edits API](api_openai_images_edits.md)), so the model must be an image-editing model from the correct family.
+Pick any image-editing model that supports edits without a mask. Open WebUI calls `POST /v1/images/edits` (see [Images Edits API](api_openai_images_edits.md)).
 
 ### :material-microphone: Speech to Text (STT)
 
@@ -167,7 +170,7 @@ Enables: Voice input and audio transcription.
     AUDIO_STT_MODEL=amazon.transcribe
     ```
 
-Choose any STT model you prefer. Open WebUI calls `POST /v1/audio/transcriptions` (see [Audio Transcriptions API](api_openai_audio_transcriptions.md)), so the model must match the speech-to-text modality and family.
+Open WebUI calls `POST /v1/audio/transcriptions` (see [Audio Transcriptions API](api_openai_audio_transcriptions.md)).
 
 ### :material-volume-high: Text to Speech (TTS)
 
@@ -181,7 +184,7 @@ Enables: Spoken responses from chat outputs.
     AUDIO_TTS_MODEL=amazon.polly-neural
     ```
 
-Choose any TTS model you prefer. Open WebUI calls `POST /v1/audio/speech` (see [Audio Speech API](api_openai_audio_speech.md)), so the model must match the text-to-speech modality and family.
+Open WebUI calls `POST /v1/audio/speech` (see [Audio Speech API](api_openai_audio_speech.md)).
 
 !!! warning "TTS language detection"
     Open WebUI generates audio in small chunks, which makes language auto-detection inconsistent. Disable auto-detection by setting the stdapi.ai environment variable `DEFAULT_TTS_LANGUAGE` to a fixed language (for example, `en-US`).

@@ -93,6 +93,26 @@ Required only if you want to enable automatic subscription to new models in the 
 
 ---
 
+## :material-storefront: AWS Marketplace Metering (AWS Marketplace Image Only) { #aws-marketplace-metering }
+
+**Environment Variables**: none (always active on the AWS Marketplace image)
+
+Required only for the **AWS Marketplace image** — not the community image. At startup it registers hourly usage with AWS Marketplace Metering on ECS, EKS, and Fargate; an `AccessDenied` error aborts startup.
+
+??? example "AWS Marketplace Metering IAM Policy Statement"
+    ```json
+    {
+      "Sid": "MarketplaceRegisterUsage",
+      "Effect": "Allow",
+      "Action": [
+        "aws-marketplace:RegisterUsage"
+      ],
+      "Resource": "*"
+    }
+    ```
+
+---
+
 ## :material-directions-fork: Bedrock Inference Profiles and Prompt Routers (Optional) { #bedrock-inference-profiles-and-prompt-routers-optional }
 
 **Environment Variables**: [`AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN`](operations_configuration.md#bedrock-allow-cross-region-profile-arn), [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](operations_configuration.md#bedrock-allow-application-profile-arn), [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](operations_configuration.md#bedrock-allow-prompt-router-arn), [`AWS_BEDROCK_MODEL_ARN_MAPPING`](operations_configuration.md#bedrock-model-arn-mapping)
@@ -525,7 +545,7 @@ Required if you configure API authentication. See the [Authentication](operation
             "bedrock:CountTokens",
             "bedrock:GetAsyncInvoke",
             "bedrock:InvokeGuardrailChecks",
-        "bedrock:InvokeModel",
+            "bedrock:InvokeModel",
             "bedrock:InvokeModelWithResponseStream",
             "bedrock:InvokeTool",
             "bedrock:Rerank"
@@ -559,6 +579,14 @@ Required if you configure API authentication. See the [Authentication](operation
             "aws-marketplace:ViewSubscriptions"
           ],
           "Resource": "*"
+        },
+        {
+          "Sid": "MarketplaceRegisterUsage",
+          "Effect": "Allow",
+          "Action": [
+            "aws-marketplace:RegisterUsage"
+          ],
+          "Resource": "*"
         }
       ]
     }
@@ -566,6 +594,9 @@ Required if you configure API authentication. See the [Authentication](operation
 
     !!! note "Marketplace Auto-Subscribe (Default Enabled)"
         The marketplace permissions are included because `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE` defaults to `true`. If you set it to `false`, you can remove the `BedrockMarketplaceAutoSubscribe` statement.
+
+    !!! note "Marketplace RegisterUsage (AWS Marketplace Image Only)"
+        `MarketplaceRegisterUsage` is only needed on the **AWS Marketplace image**; remove it when deploying the community image.
 
 ??? example "Production Policy (Bedrock + S3 + Authentication)"
     ```json
@@ -579,7 +610,7 @@ Required if you configure API authentication. See the [Authentication](operation
             "bedrock:CountTokens",
             "bedrock:GetAsyncInvoke",
             "bedrock:InvokeGuardrailChecks",
-        "bedrock:InvokeModel",
+            "bedrock:InvokeModel",
             "bedrock:InvokeModelWithResponseStream",
             "bedrock:InvokeTool",
             "bedrock:Rerank"
@@ -611,6 +642,14 @@ Required if you configure API authentication. See the [Authentication](operation
           "Action": [
             "aws-marketplace:Subscribe",
             "aws-marketplace:ViewSubscriptions"
+          ],
+          "Resource": "*"
+        },
+        {
+          "Sid": "MarketplaceRegisterUsage",
+          "Effect": "Allow",
+          "Action": [
+            "aws-marketplace:RegisterUsage"
           ],
           "Resource": "*"
         },
@@ -651,6 +690,9 @@ Required if you configure API authentication. See the [Authentication](operation
     !!! note "Marketplace Auto-Subscribe (Default Enabled)"
         The marketplace permissions are included because `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE` defaults to `true`. If you set it to `false`, you can remove the `BedrockMarketplaceAutoSubscribe` statement to follow the principle of least privilege.
 
+    !!! note "Marketplace RegisterUsage (AWS Marketplace Image Only)"
+        `MarketplaceRegisterUsage` is only needed on the **AWS Marketplace image**; remove it when deploying the community image.
+
 ---
 
 ## :material-table: Feature-Specific Permission Requirements
@@ -660,6 +702,7 @@ Required if you configure API authentication. See the [Authentication](operation
 | **Bedrock Models (Invoke)**                     | `bedrock:CountTokens`<br>`bedrock:InvokeGuardrailChecks`<br>`bedrock:InvokeModel`<br>`bedrock:InvokeModelWithResponseStream`<br>`bedrock:InvokeTool`<br>`bedrock:Rerank`<br>`bedrock:GetAsyncInvoke` and `bedrock:TagResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) for async-invoke models (video, TwelveLabs Marengo embeddings) | Always required                                                              |
 | **Bedrock Models (Discovery)**                  | `bedrock:ListFoundationModels`<br>`bedrock:GetFoundationModelAvailability`<br>`bedrock:ListProvisionedModelThroughputs`<br>`bedrock:ListInferenceProfiles` | Always required                                                              |
 | **Bedrock Marketplace Auto-Subscribe**          | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions`                                                                                         | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default)                      |
+| **AWS Marketplace Metering**                    | `aws-marketplace:RegisterUsage`                                                                                                                             | AWS Marketplace image only (always active); not required for the community image |
 | **Bedrock Inference Profiles & Prompt Routers** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`                                                                                                 | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
 | **Bedrock Guardrails & Moderations**            | `bedrock:ApplyGuardrail`                                                                                                                                   | `AWS_BEDROCK_GUARDRAIL_IDENTIFIER`                                           |
 | **Stored Responses & Chat Completions**         | Bedrock session permissions (`bedrock:CreateSession`, `bedrock:*Invocation*`, `bedrock:ListSessions`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:TagResource`, `bedrock:ListTagsForResource` on sessions) | `store=true` requests and stored-completion listings                         |

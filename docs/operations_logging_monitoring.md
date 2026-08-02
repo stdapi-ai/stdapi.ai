@@ -258,6 +258,9 @@ Real-time cost computation (`COST_TRACKING`), the price catalog and its accuracy
 - The `x-request-id` response header exposes the same value so external systems can propagate correlation.
 - With OTel enabled, a root span named like `POST /v1/...` is created and carries attributes: `http.method`, `http.url`, `http.user_agent`, `request.id`, `server.id`, `http.status_code`, and `duration_ms`.
 
+!!! note "Anthropic-compatible routes use a different header name"
+    On `/anthropic/...` routes, the same correlation value is returned as `request-id` instead of `x-request-id`, following Anthropic's own convention.
+
 !!! tip "Do and Don't for correlation"
     - Do propagate `x-request-id` across client → service → downstreams when possible.
     - Do use `request_stream` durations to account for total user‑perceived latency.

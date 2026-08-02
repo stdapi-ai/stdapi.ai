@@ -50,7 +50,7 @@ Generate text completions with Amazon Bedrock foundation models—including Clau
 | Prompt from S3 (`s3://`)           | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | S3 URI reference                                                 |
 | Prompt from data URI (`data:`)     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Base64-encoded data URI                                          |
 | Prompt from Files API (`file-id:`) | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Reference uploaded files                                         |
-| Token array prompts                | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Not supported — use string prompts; rejected with `400` on Mantle-served models |
+| Token array prompts                | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Not supported — use string prompts; rejected with `400` |
 | **Generation Control**             |                                          |                                                                  |
 | `max_tokens`                       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Output length limits                                             |
 | `temperature`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Mapped to Bedrock inference params                               |

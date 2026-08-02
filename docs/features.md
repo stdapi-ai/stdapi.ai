@@ -53,7 +53,7 @@ flowchart LR
 <div class="grid cards" markdown>
 
 - :material-puzzle: **Complete API surface**
-  <br>Most gateways cover chat completions only. stdapi.ai delivers the full OpenAI, Anthropic, and Cohere surface on AWS: chat completions, the Responses API, embeddings, image generation and editing, video generation, text-to-speech, speech-to-text, translation, content moderation, reranking, and file storage — all through standard API calls, with no AWS-specific code in your application.
+  <br>Chat completions are where most gateways stop. stdapi.ai reaches further, bringing the complete OpenAI, Anthropic, and Cohere surface to AWS: chat completions, the Responses API, embeddings, image generation and editing, video generation, text-to-speech, speech-to-text, translation, content moderation, reranking, and file storage — all through standard API calls, with no AWS-specific code in your application.
 
 - :material-shield-lock: **Your data, your account**
   <br>stdapi.ai runs entirely within your own VPC — no traffic leaves your account. Amazon Bedrock never retains or trains on your prompts. The software supply chain is hardened end-to-end — distributed as a validated container image with no public package registry exposure.
@@ -535,13 +535,9 @@ export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
 
 ### Quality of Life
 
-- **Model aliases** — Map custom names to Bedrock IDs; Claude model names resolve automatically
-- **Model auto-detection** — Discovers available models across all configured regions at startup
 - **Model list caching** — Fast model listing without repeated AWS API calls
-- **Real usage tracking** — Token counts sourced directly from AWS billing data
 - **Safety identifier** — `safety_identifier` field in requests as an alias to `user` for abuse tracking and audit trails
 - **Zero-configuration startup** — Automatic region and model detection; warnings on missing config
-- **Deprecated model failover** — Requests to retired models silently redirect to their replacements
 
 ---
 

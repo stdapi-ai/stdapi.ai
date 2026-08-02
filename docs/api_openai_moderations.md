@@ -113,14 +113,14 @@ The moderation models appear in the [`/v1/models`](api_openai_models.md) and [`/
 
 | Model                        | OpenAI aliases                                      | Notes                                        |
 |------------------------------|-----------------------------------------------------|------------------------------------------------|
-| `amazon.comprehend-toxicity` | `text-moderation-latest`, `text-moderation-stable`  | Toxicity detection. Auto-detected language (12 supported, falls back to English), no images |
+| `amazon.comprehend-toxicity` | `text-moderation-latest`, `text-moderation-stable`  | Toxicity detection. English-optimized; non-English input is classified on a best-effort basis, no images |
 
 ### Comparison
 
 | Capability                | Amazon Bedrock Guardrails                                                  | Amazon Bedrock Guardrail Checks                        | Amazon Comprehend                                     |
 |---------------------------|-----------------------------------------------------------------------------|--------------------------------------------------------|--------------------------------------------------------|
 | Setup                     | Create and configure a guardrail in Amazon Bedrock                         | None — works out of the box in [supported regions](#selecting-the-model) | None — works out of the box                            |
-| Text inputs               | :material-check-circle:{ .success role="img" aria-label="Supported" } Any language supported by the guardrail | :material-check-circle:{ .success role="img" aria-label="Supported" } Languages supported by guardrail content filters | :material-check-circle:{ .success role="img" aria-label="Supported" } Auto-detected among 12 languages (falls back to English) |
+| Text inputs               | :material-check-circle:{ .success role="img" aria-label="Supported" } Any language supported by the guardrail | :material-check-circle:{ .success role="img" aria-label="Supported" } Languages supported by guardrail content filters | :material-check-circle:{ .success role="img" aria-label="Supported" } English-optimized; non-English input classified on a best-effort basis |
 | Image inputs              | :material-check-circle:{ .success role="img" aria-label="Supported" } PNG and JPEG                           | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } Not supported  | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } Not supported  |
 | Mapped categories         | `hate`, `harassment`, `sexual`, `violence`, `illicit`                       | `hate`, `harassment`, `sexual`, `violence`, `illicit`  | `hate`, `harassment`, `sexual`, `violence`, `violence/graphic` |
 | Category scores           | Quantized confidence levels (`0.0` / `0.25` / `0.5` / `0.75`)               | Severity scores in `0.2` increments (`0.0` – `1.0`)    | Continuous scores (`0.0` – `1.0`)                       |

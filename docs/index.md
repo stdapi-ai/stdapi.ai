@@ -91,7 +91,7 @@ Most gateways stop at chat completions. stdapi.ai delivers the full OpenAI, Anth
 <div class="panel-visual" markdown>
 <div class="api-groups" markdown>
 
-- :material-message-text: <span class="chip">/v1/chat/completions</span> <span class="chip">/v1/responses</span> <span class="chip">/v1/messages</span>
+- :material-message-text: <span class="chip">/v1/chat/completions</span> <span class="chip">/v1/responses</span> <span class="chip">/anthropic/v1/messages</span>
 - :material-vector-link: <span class="chip">/v1/embeddings</span> <span class="chip">/v2/rerank</span>
 - :material-image-outline: <span class="chip">/v1/images/*</span> <span class="chip">/v1/videos</span>
 - :material-waveform: <span class="chip">/v1/audio/speech</span> <span class="chip">/v1/audio/transcriptions</span>
@@ -103,7 +103,7 @@ Most gateways stop at chat completions. stdapi.ai delivers the full OpenAI, Anth
 <div class="panel-stats" markdown>
 
 - <code>3</code> API protocols — OpenAI, Anthropic, and Cohere — from one deployment
-- <code>40+</code> endpoints — text, images, video, audio, embeddings, moderation, files
+- <code>50+</code> endpoints — text, images, video, audio, embeddings, moderation, files
 - <code>0</code> plugins or client changes — standard SDKs and tools connect instantly
 
 [:octicons-arrow-right-24: API overview](api_overview.md)

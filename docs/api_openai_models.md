@@ -19,7 +19,7 @@ Discover and list available Amazon Bedrock models across all configured regions 
   <br>Dynamic model discovery automatically shows new models as they become available in Amazon Bedrock.
 
 - :material-map-marker-multiple: __Multi-Region Aggregation__
-  <br>Combines models from all configured AWS regions in one list. See which models are available in each region.
+  <br>Combines models from all configured AWS regions in one deduplicated list; use the [Search Models API](api_search_models.md) to see per-region availability.
 
 - :material-aws: __Comprehensive Coverage__
   <br>Includes Bedrock foundation models plus AWS AI services (Polly, Transcribe) in one unified API.

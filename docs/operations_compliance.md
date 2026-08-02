@@ -60,7 +60,7 @@ flowchart TD
 - **Amazon CloudWatch** — receives structured request metadata (method, path, status, model, latency); prompt and response content are **never logged by default** (requires `LOG_REQUEST_PARAMS=true` to enable)
 - **Amazon Polly / Transcribe / Comprehend / Translate** — used only when audio or translation features are invoked; see [AI service opt-out](#aws-ai-service-improvement-opt-out) for data retention controls
 
-stdapi.ai communicates exclusively with the six AWS services above, all within the regions you configure. No other outbound network calls are made — the application does not contact any third-party API, telemetry service, or external endpoint.
+stdapi.ai communicates exclusively with the seven AWS services above, all within the regions you configure, plus a handful of conditional AWS services enabled only by specific features: AWS SSM and Secrets Manager (API key storage, if configured), AWS STS (credential resolution fallback), the AWS Price List API (only when `COST_TRACKING=true`), AWS Marketplace Metering (AWS Marketplace image only), and Amazon Bedrock sessions via `bedrock-agent` (Responses API `store=true`). No other outbound network calls are made — the application does not contact any third-party API, telemetry service, or external endpoint.
 
 ### Data in Transit
 

@@ -125,7 +125,7 @@ curl -G "$BASE/model_pricing" \
 | Status | Cause |
 |--------|-------|
 | `200` | Success — a model with no published price, or no row matching the filters, still returns `200` with an empty `prices` list |
-| `400` | Unknown `tier`, `dimension`, `routing`, or `context` filter value |
+| `400` | Unknown `tier`, `dimension`, `routing`, `context`, or `currency` filter value |
 | `503` | Model pricing is not available on this server, or the price catalog is not loaded yet (retry later) |
 
 ## Using `model_pricing` as an MCP Tool

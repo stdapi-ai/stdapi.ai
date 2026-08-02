@@ -34,7 +34,7 @@ Run your favorite OpenAI, Anthropic, and Cohere-compatible applications on Amazo
 
 ## ⚡ Try It Locally with Docker
 
-Run stdapi.ai locally with the free community image. Requires [AWS credentials](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html) configured (run `aws sso login` first).
+Run stdapi.ai locally with the free community image. Requires [AWS credentials](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html) configured (e.g. via `aws sso login` or access keys).
 
 ```bash
 docker run --rm -p 8000:8000 \
@@ -116,7 +116,7 @@ Prefer a hands-off setup? A [managed deployment service](https://aws.amazon.com/
 
 - **🔌 Drop-in replacement** — Change only the base URL. Works with Open WebUI, n8n, OpenClaw, Claude Code, LangChain, OpenCode, and hundreds of other applications and tools.
 - **🔒 Data stays in your AWS account** — All inference runs in your account. Data never shared with model providers or used for training. Configure allowed regions for GDPR, HIPAA, FedRAMP.
-- **🌍 Multiply quota across regions** — Each AWS region has independent quota. 3 regions = 3× tokens per minute. Automatic routing and failover—no client changes.
+- **🌍 Multiply quota across regions** — Each AWS region has independent quota. 3 regions = up to 3× tokens per minute. Automatic routing and failover—no client changes.
 - **💰 Pay only what you use** — Amazon Bedrock rates, no markup, no subscriptions or monthly minimums.
 - **⚡ Advanced Bedrock features** — Reasoning modes (Claude, Nova), prompt caching, guardrails, service tiers, inference profiles, prompt routers, stored conversations—all through standard OpenAI and Anthropic API parameters.
 - **🧠 100+ models** — Claude, OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen, GLM, Nova, Llama, Stability AI, and more. Switch instantly—no vendor lock-in.
@@ -228,7 +228,7 @@ We welcome contributions! Whether it's bug reports, new features, documentation 
 - **Issues:** [GitHub Issue Tracker](https://github.com/stdapi-ai/stdapi.ai/issues)
 - **Documentation:** [stdapi.ai](https://stdapi.ai)
 - **Commercial support:** [Contact page](https://stdapi.ai/contact/) — Marketplace subscribers get a response within 1 business day
-- **Sponsor:** [GitHub Sponsors](https://github.com/sponsors/JGoutin) — Priority support, feature prioritization, and influence on the roadmap. [View tiers →](https://github.com/sponsors/JGoutin)
+- **Sponsor:** [GitHub Sponsors](https://github.com/sponsors/JGoutin) — Priority support, feature prioritization, and influence on the roadmap.
 
 ---
 
