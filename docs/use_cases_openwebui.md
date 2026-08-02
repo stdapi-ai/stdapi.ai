@@ -116,7 +116,7 @@ Enables: Hybrid search, with retrieved documents reordered by relevance before t
     RAG_RERANKING_MODEL=cohere.rerank-v3-5:0
     ```
 
-Open WebUI's external reranker speaks the Cohere dialect, so it targets the Cohere-compatible route instead of `/v1` (see [Cohere Rerank API](api_cohere_rerank.md)). Give the full endpoint path: Open WebUI sends the request to the URL as-is and appends nothing. The model must be a reranking model.
+Open WebUI's external reranker speaks the Cohere dialect, so it targets the Cohere-compatible route instead of `/v1` (see [Cohere Rerank API](api_cohere_rerank.md)). Give the full endpoint path: Open WebUI sends the request to the URL as-is and appends nothing.
 
 !!! tip "Regional availability"
     Amazon Bedrock serves reranking from a subset of regions only. Keep at least one of them in [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions); stdapi.ai fails over to it automatically.

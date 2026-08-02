@@ -13,7 +13,7 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
 ## :material-cloud-upload: Terraform / Deployment
 
 ??? failure "`terraform apply` fails with AccessDenied on IAM, KMS, or ECS actions"
-    Your AWS profile does not have sufficient permissions. The stdapi.ai Terraform module provisions IAM roles, KMS keys, ECS, ALB, WAF, Route53 records, and (for some samples) RDS and ElastiCache.
+    Your AWS profile does not have sufficient permissions. The stdapi.ai Terraform module provisions IAM roles, KMS keys, ECS, ALB, Route53 records, an optional WAF, and (for some samples) RDS and ElastiCache.
 
     - Use an **administrator-level** AWS profile for the evaluation deployment.
     - **Recommended**: deploy into a sandbox/non-production AWS account first, then replicate into your target account with scoped-down principals once validated.

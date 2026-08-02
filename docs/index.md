@@ -92,7 +92,7 @@ Most gateways stop at chat completions. stdapi.ai delivers the full OpenAI, Anth
 <div class="api-groups" markdown>
 
 - :material-message-text: <span class="chip">/v1/chat/completions</span> <span class="chip">/v1/responses</span> <span class="chip">/anthropic/v1/messages</span>
-- :material-vector-link: <span class="chip">/v1/embeddings</span> <span class="chip">/v2/rerank</span>
+- :material-vector-link: <span class="chip">/v1/embeddings</span> <span class="chip">/cohere/v2/rerank</span>
 - :material-image-outline: <span class="chip">/v1/images/*</span> <span class="chip">/v1/videos</span>
 - :material-waveform: <span class="chip">/v1/audio/speech</span> <span class="chip">/v1/audio/transcriptions</span>
 - :material-shield-check-outline: <span class="chip">/v1/moderations</span> <span class="chip">/v1/files</span>
@@ -138,7 +138,7 @@ Agents need no HTTP glue code. stdapi.ai publishes its whole API surface over th
 </div>
 <div class="panel-stats" markdown>
 
-- <code>50</code> endpoints exposed as named MCP tools, each with generated documentation
+- <code>53</code> endpoints exposed as named MCP tools, each with generated documentation
 - <code>2</code> transports — Streamable HTTP at /mcp, SSE for older clients
 - <code>0</code> HTTP client code — agents call every endpoint directly
 - <code>auto</code> discovery — agents find every tool through the server card and API catalog
@@ -270,19 +270,18 @@ No subscriptions, no minimums, no markup on model usage. Built-in cost tracking 
 <div class="carousel__panel" data-tab="Ready to deploy" markdown>
 <div class="carousel__kicker">FOR DEVOPS TEAMS</div>
 
-## Production on AWS in three Terraform commands.
+## Production on AWS in two Terraform commands.
 
-The validated Terraform module ships the whole stack — ECS Fargate, HTTPS, WAF, auto-scaling, monitoring. It works as-is with secure defaults, and exposes advanced options for power users: VPC integration, multi-region, cost-optimized setups.
+The validated Terraform module ships the whole stack — ECS Fargate, HTTPS, auto-scaling, and optional WAF and monitoring. It works as-is with secure defaults, and exposes advanced options for power users: VPC integration, multi-region, cost-optimized setups.
 
 <div class="panel-split" markdown>
 <div class="panel-visual panel-visual--mono">
 <div class="terminal">
 <div><span class="ok">$</span> <span class="cmd">terraform init</span></div>
-<div><span class="ok">$</span> <span class="cmd">terraform plan</span></div>
 <div><span class="ok">$</span> <span class="cmd">terraform apply</span></div>
 <div class="terminal__out">Apply complete! endpoint_url = <span class="str">https://ai.yourco.com</span></div>
 </div>
-<div class="panel-visual__caption panel-visual__caption--ruled">ECS Fargate · ALB TLS 1.3 · WAF · auto-scaling · CloudWatch alarms</div>
+<div class="panel-visual__caption panel-visual__caption--ruled">ECS Fargate · ALB TLS 1.3 · auto-scaling · CloudWatch alarms · optional WAF</div>
 </div>
 <div class="panel-stats" markdown>
 

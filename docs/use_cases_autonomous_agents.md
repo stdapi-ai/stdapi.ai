@@ -104,7 +104,7 @@ prompt_caching:
   cache_ttl: 1h  # or "5m" (the default)
 ```
 
-Only `5m` and `1h` are accepted—any other value is ignored. This pairs directly with stdapi.ai's own Anthropic Messages prompt-caching support: Hermes' breakpoints arrive as standard `cache_control` markers, which stdapi.ai forwards to Bedrock unchanged.
+Only `5m` and `1h` are accepted—any other value is ignored. This pairs directly with stdapi.ai's own Anthropic Messages prompt-caching support: Hermes' breakpoints arrive as standard `cache_control` markers, which stdapi.ai translates into Bedrock cache points, up to the four the Converse API allows per request.
 
 ---
 

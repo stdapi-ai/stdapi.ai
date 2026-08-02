@@ -113,13 +113,13 @@ Required only for the **AWS Marketplace image** — not the community image. At 
 
 ---
 
-## :material-directions-fork: Bedrock Inference Profiles and Prompt Routers (Optional) { #bedrock-inference-profiles-and-prompt-routers-optional }
+## :material-directions-fork: Bedrock Inference Profiles, Prompt Routers and Prompt Management (Optional) { #bedrock-inference-profiles-and-prompt-routers-optional }
 
-**Environment Variables**: [`AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN`](operations_configuration.md#bedrock-allow-cross-region-profile-arn), [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](operations_configuration.md#bedrock-allow-application-profile-arn), [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](operations_configuration.md#bedrock-allow-prompt-router-arn), [`AWS_BEDROCK_MODEL_ARN_MAPPING`](operations_configuration.md#bedrock-model-arn-mapping)
+**Environment Variables**: [`AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN`](operations_configuration.md#bedrock-allow-cross-region-profile-arn), [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](operations_configuration.md#bedrock-allow-application-profile-arn), [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](operations_configuration.md#bedrock-allow-prompt-router-arn), [`AWS_BEDROCK_ALLOW_PROMPT_ARN`](operations_configuration.md#bedrock-allow-prompt-arn), [`AWS_BEDROCK_MODEL_ARN_MAPPING`](operations_configuration.md#bedrock-model-arn-mapping)
 
-Required only if you enable ARN-based routing features that allow users to pass inference profile or prompt router ARNs directly as model IDs, or if you configure server-side ARN mappings.
+Required only if you enable ARN-based routing features that allow users to pass inference profile, prompt router or Prompt Management prompt ARNs directly, or if you configure server-side ARN mappings.
 
-??? example "Bedrock Inference Profiles and Prompt Routers IAM Policy Statement"
+??? example "Bedrock Inference Profiles, Prompt Routers and Prompt Management IAM Policy Statements"
     ```json
     {
       "Sid": "BedrockInferenceProfilesAndPromptRouters",
@@ -129,8 +129,19 @@ Required only if you enable ARN-based routing features that allow users to pass 
         "bedrock:GetPromptRouter"
       ],
       "Resource": "*"
+    },
+    {
+      "Sid": "BedrockPromptManagement",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:GetPrompt",
+        "bedrock:RenderPrompt"
+      ],
+      "Resource": "arn:aws:bedrock:*:*:prompt/*"
     }
     ```
+
+    `bedrock:GetPrompt` resolves the model bound to the prompt variant; `bedrock:RenderPrompt` is required because the prompt ARN is then sent to Bedrock as the invocation `modelId`.
 
     !!! note "When to Include"
         Add these permissions when:
@@ -138,6 +149,7 @@ Required only if you enable ARN-based routing features that allow users to pass 
         - `AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN=true`
         - `AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN=true`
         - `AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN=true`
+        - `AWS_BEDROCK_ALLOW_PROMPT_ARN=true` (`bedrock:GetPrompt` and `bedrock:RenderPrompt` only)
         - `AWS_BEDROCK_MODEL_ARN_MAPPING` is configured with any mappings
 
 ---
@@ -175,6 +187,7 @@ Required only if clients use `store=true` on the [Responses](api_openai_response
       "Effect": "Allow",
       "Action": [
         "bedrock:CreateSession",
+        "bedrock:GetSession",
         "bedrock:CreateInvocation",
         "bedrock:PutInvocationStep",
         "bedrock:ListInvocations",
@@ -195,7 +208,7 @@ Required only if clients use `store=true` on the [Responses](api_openai_response
     }
     ```
 
-    `bedrock:ListSessions` and `bedrock:ListTagsForResource` serve the stored chat completions listing endpoint (`GET /v1/chat/completions`); the account-level `ListSessions` action does not support resource scoping.
+    `bedrock:ListSessions` serves the stored chat completions listing endpoint (`GET /v1/chat/completions`); the account-level `ListSessions` action does not support resource scoping. `bedrock:GetSession` is used on deletion and `bedrock:ListTagsForResource` on both deletion and listing, to check that a stored object belongs to the API it is requested from.
 
     Add `kms:Decrypt` and `kms:GenerateDataKey` on the key when [`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`](operations_configuration.md#aws-bedrock-session-encryption-key-arn) is configured.
 
@@ -466,6 +479,26 @@ Required for text translation features.
 
 ---
 
+## :material-cash-multiple: Cost Tracking (Optional) { #cost-tracking-iam }
+
+**Environment Variables**: [`COST_TRACKING`](operations_configuration.md#cost-tracking)
+
+Required for [`COST_TRACKING`](operations_configuration.md#cost-tracking) (disabled by default), which prices requests from the AWS Price List API. Without this permission the catalog stays empty and request logs carry no cost data.
+
+??? example "Cost Tracking IAM Policy Statement"
+    ```json
+    {
+      "Sid": "PricingCatalog",
+      "Effect": "Allow",
+      "Action": [
+        "pricing:GetProducts"
+      ],
+      "Resource": "*"
+    }
+    ```
+
+---
+
 ## :material-key: API Key Authentication (Optional)
 
 Required if you configure API authentication. See the [Authentication](operations_configuration.md#authentication) configuration section.
@@ -682,6 +715,14 @@ Required if you configure API authentication. See the [Authentication](operation
             "ssm:GetParameter"
           ],
           "Resource": "arn:aws:ssm:us-east-1:123456789012:parameter/stdapi/prod/api-key"
+        },
+        {
+          "Sid": "PricingCatalog",
+          "Effect": "Allow",
+          "Action": [
+            "pricing:GetProducts"
+          ],
+          "Resource": "*"
         }
       ]
     }
@@ -693,6 +734,9 @@ Required if you configure API authentication. See the [Authentication](operation
     !!! note "Marketplace RegisterUsage (AWS Marketplace Image Only)"
         `MarketplaceRegisterUsage` is only needed on the **AWS Marketplace image**; remove it when deploying the community image.
 
+    !!! note "Cost Tracking (Opt-In)"
+        `PricingCatalog` is only needed when [`COST_TRACKING`](operations_configuration.md#cost-tracking) is set to `true`; remove it otherwise.
+
 ---
 
 ## :material-table: Feature-Specific Permission Requirements
@@ -703,9 +747,9 @@ Required if you configure API authentication. See the [Authentication](operation
 | **Bedrock Models (Discovery)**                  | `bedrock:ListFoundationModels`<br>`bedrock:GetFoundationModelAvailability`<br>`bedrock:ListProvisionedModelThroughputs`<br>`bedrock:ListInferenceProfiles` | Always required                                                              |
 | **Bedrock Marketplace Auto-Subscribe**          | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions`                                                                                         | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default)                      |
 | **AWS Marketplace Metering**                    | `aws-marketplace:RegisterUsage`                                                                                                                             | AWS Marketplace image only (always active); not required for the community image |
-| **Bedrock Inference Profiles & Prompt Routers** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`                                                                                                 | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
+| **Bedrock Inference Profiles & Prompt Routers** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`<br>`bedrock:GetPrompt` and `bedrock:RenderPrompt` (on `arn:aws:bedrock:*:*:prompt/*`) for Prompt Management prompts | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
 | **Bedrock Guardrails & Moderations**            | `bedrock:ApplyGuardrail`                                                                                                                                   | `AWS_BEDROCK_GUARDRAIL_IDENTIFIER`                                           |
-| **Stored Responses & Chat Completions**         | Bedrock session permissions (`bedrock:CreateSession`, `bedrock:*Invocation*`, `bedrock:ListSessions`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:TagResource`, `bedrock:ListTagsForResource` on sessions) | `store=true` requests and stored-completion listings                         |
+| **Stored Responses & Chat Completions**         | Bedrock session permissions (`bedrock:CreateSession`, `bedrock:GetSession`, `bedrock:*Invocation*`, `bedrock:ListSessions`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:TagResource`, `bedrock:ListTagsForResource` on sessions) | `store=true` requests and stored-completion listings                         |
 | **Bedrock Mantle**                              | `bedrock-mantle:CreateInference`<br>`bedrock-mantle:GetInference`<br>`bedrock-mantle:DeleteInference`<br>`bedrock-mantle:ListModels`<br>`bedrock-mantle:GetModel`<br>`bedrock-mantle:CancelInference` (on `arn:aws:bedrock-mantle:*:*:project/*`)<br>`bedrock-mantle:CallWithBearerToken` | `AWS_BEDROCK_MANTLE_ENABLED=true`                                            |
 | **File Storage**                                | `s3:PutObject`<br>`s3:PutObjectTagging`<br>`s3:GetObject`<br>`s3:DeleteObject`<br>`s3:AbortMultipartUpload`<br>`s3:ListMultipartUploadParts`<br>`s3:ListBucket`<br>`s3:ListBucketMultipartUploads`<br>on every bucket, including each `AWS_S3_REGIONAL_BUCKETS` entry | `AWS_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`                                 |
 | **Video Generation**                            | Core Bedrock invoke permissions (incl. `bedrock:GetAsyncInvoke`, `bedrock:TagResource`)<br>`bedrock:ListAsyncInvokes` and `bedrock:ListTagsForResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) for job listing<br>File Storage S3 permissions on each regional bucket | `AWS_S3_REGIONAL_BUCKETS`                                                    |

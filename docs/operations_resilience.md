@@ -299,8 +299,10 @@ Models whose EOL date falls within the current cache window are **proactively ex
 Set `AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK=false` to disable the fallback. Requests using a deprecated model ID will fail with a `404` that includes the recommended replacement, forcing clients to update their code explicitly:
 
 ```text
-Model 'amazon.titan-text-lite-v1' is deprecated or pending deprecation, please use 'amazon.nova-lite-v1:0' instead.
+The model `amazon.titan-text-lite-v1` does not exist or you do not have access to it. This model is deprecated or pending deprecation, please use 'amazon.nova-lite-v1:0' instead. Available models: ...
 ```
+
+The `Available models:` list enumerates the model IDs valid for that route, and is truncated above for readability.
 
 #### Extending the Registry
 

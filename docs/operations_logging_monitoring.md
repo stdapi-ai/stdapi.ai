@@ -162,6 +162,8 @@ Usage is reported as a nested `usage` list on `request` / `request_stream` event
 | `cache_write_tokens_by_ttl` | dict| Cache write tokens by TTL, from Converse `cacheDetails` (e.g., `{"1h": 700, "5m": 100}`)            |
 | `output_images`             | int | Real output image count from image generation models                                                   |
 | `output_images_by_spec`     | dict| Output image count keyed by `"<resolution>:<quality>"`, for models priced per resolution/quality       |
+| `output_seconds`            | int | Billed output media duration in seconds (video generation, recorded at job submission)                |
+| `output_seconds_by_spec`    | dict| Output seconds keyed by rate bucket (e.g., `{"hd": 5}`), for models priced per resolution              |
 | `input_seconds`             | int | Real input media duration in seconds (Transcribe with a 15s minimum; audio/video embedding inputs)     |
 | `input_seconds_by_spec`     | dict| Input seconds keyed by modality (e.g., `{"audio": 42}`), for models priced per media type              |
 | `input_images`              | int | Input image count (multimodal embeddings, billed per image)                                            |
@@ -170,6 +172,7 @@ Usage is reported as a nested `usage` list on `request` / `request_stream` event
 | `comprehend_units`          | int | Real Comprehend units (100-char units, 3-unit minimum per call)                                       |
 | `grounding_requests`        | int | Built-in grounding tool invocations (e.g., Amazon Nova Grounding `web_search`, billed per request)     |
 | `search_units`              | int | Rerank search units (one per rerank query)                                                             |
+| `text_units`                | int | Bedrock Guardrails text units (1,000 characters each), billed per guardrail policy evaluation          |
 
 !!! note "Usage field placement"
     - **Non-streaming requests**: Usage appears on the `request` event
@@ -299,7 +302,7 @@ export LOG_LEVEL=warning
 !!! tip "Reducing CloudWatch Costs"
     In high-traffic production environments, setting `LOG_LEVEL=warning` or `LOG_LEVEL=error` can significantly reduce CloudWatch Logs ingestion and storage costs by filtering out routine `info`-level events. This is especially effective when combined with appropriate retention policies.
 
-    Additionally, infrastructure routes are automatically excluded from logging to reduce noise: `/docs`, `/favicon.ico`, `/health`, `/openapi.json`, `/redoc`.
+    Additionally, infrastructure routes are automatically excluded from logging to reduce noise: `/`, `/docs`, `/favicon.ico`, `/health`, `/openapi.json`, `/ping`, `/redoc`, `/robots.txt`, `/.well-known/api-catalog`, and `/.well-known/mcp/server-card.json`.
 
 ---
 

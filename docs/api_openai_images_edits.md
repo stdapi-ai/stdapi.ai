@@ -44,7 +44,7 @@ Edit images using inpainting with Amazon Bedrock image models through an OpenAI-
 | Multipart form-data            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Binary file uploads via `image` / `image[]` / `mask` fields                                                                                    |
 | JSON body                      | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Structured `images` array with Files API IDs or URLs (the OpenAI edits API is multipart-only)                                                  |
 | **Parameters**                 |                                          |                                                                                                                                                |
-| `image` / `image[]`            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | PNG image(s) to edit; most models accept exactly one source image and reject requests providing more with an error                             |
+| `image` / `image[]`            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | PNG image(s) to edit; every available model accepts exactly one source image and rejects requests providing more with an error                 |
 | `images` (JSON)                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Array of `{file_id}` or `{image_url}` references (JSON body, 1-16 entries)                                                                     |
 | `prompt`                       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Text description of desired changes                                                                                                            |
 | `mask`                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Optional mask defining edit regions; models that do not use a mask reject requests that include one                                            |
@@ -127,6 +127,8 @@ Edit images using inpainting with Amazon Bedrock image models through an OpenAI-
 | Model                             | Prompt Usage           | Mask Usage           | Extra Parameters Required | Notes                             |
 |-----------------------------------|------------------------|----------------------|---------------------------|-----------------------------------|
 | stability.sd3-5-large-v1:0        | Guides transformation  | Rejected if provided | None                      | Transform images with prompt      |
+| stability.stable-image-core-v1:1  | Guides transformation  | Rejected if provided | None                      | Balanced quality and speed        |
+| stability.stable-image-ultra-v1:1 | Guides transformation  | Rejected if provided | None                      | Premium quality and detail        |
 
 #### Upscale Models
 
@@ -162,7 +164,7 @@ Edit images using inpainting with Amazon Bedrock image models through an OpenAI-
 | stability.stable-style-transfer-v1:0    | Guides style transfer | Required (repurposed as `style_image`) | None                      | Transfer style between images |
 
 !!! note "Output Formats"
-    All models support standard OpenAI output formats (`png`, `jpeg`, `webp`) via the `output_format` parameter. Format availability may vary by model - unsupported formats will automatically fall back to PNG.
+    All models support standard OpenAI output formats (`png`, `jpeg`, `webp`) via the `output_format` parameter. When a model cannot produce the requested format natively, the gateway re-encodes the result server-side, so the response always carries the format you asked for.
 
 !!! warning "Extra Parameters Required"
     Some models require parameters **beyond the standard OpenAI API**:
@@ -699,25 +701,19 @@ curl -X POST "$BASE/v1/images/edits" \
   -F model="amazon.nova-canvas-v1:0"
 ```
 
-### Multiple Input Images (Composition)
+### The `image[]` Array Parameter
 
-!!! info "OpenAI Compatible Syntax"
-    Use the `image[]` array parameter to provide multiple input images. The API will compose them according to your prompt.
+!!! warning "One Source Image Per Request"
+    The schema accepts the repeated `image[]` multipart parameter for OpenAI wire compatibility, but every model currently available through the gateway edits exactly one source image and rejects a request carrying more than one with an error. Send a single `image` field, or an `image[]` array with a single entry.
 
 ```bash
-# Compose multiple images into a single output (like creating a gift basket)
+# OpenAI-compatible array syntax, with the single source image every model expects
 curl -X POST "$BASE/v1/images/edits" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -F "image[]=@body-lotion.png" \
-  -F "image[]=@bath-bomb.png" \
-  -F "image[]=@incense-kit.png" \
-  -F "image[]=@soap.png" \
-  -F prompt="Create a lovely gift basket with these four items in it" \
+  -F "image[]=@gift-basket.png" \
+  -F prompt="Add a ribbon around the basket" \
   -F model="amazon.nova-canvas-v1:0"
 ```
-
-!!! warning "Model Support for Multiple Images"
-    Not all models support multiple input images. Models that accept only a single source image reject requests providing more than one with an error. Check model documentation for multi-image composition support.
 
 ### Generate from Sketch or Structure (Control Models)
 

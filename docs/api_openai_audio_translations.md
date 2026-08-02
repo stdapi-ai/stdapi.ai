@@ -80,7 +80,7 @@ Translate audio from any language to English text with Amazon Transcribe + Trans
 | amazon.transcribe | 100+                | Full-featured transcription with speaker diarization and subtitle generation at the cost of higher latency |
 
 !!! warning "Configuration Required"
-    You must configure the `AWS_S3_BUCKET` or `AWS_TRANSCRIBE_S3_BUCKET` environment variable with a bucket in the main AWS region to use this model. This bucket is used for temporary storage during transcription processing.
+    You must configure a bucket to use this model, through `AWS_S3_BUCKET`, `AWS_TRANSCRIBE_S3_BUCKET`, or an `AWS_S3_REGIONAL_BUCKETS` entry for a region where Amazon Transcribe is a candidate. This bucket is used for temporary storage during transcription processing.
 
 ### ![Mistral](styles/logo_mistralai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Mistral Models
 
@@ -100,7 +100,7 @@ Translate audio from any language to English text with Amazon Transcribe + Trans
 Any Amazon Bedrock model that accepts the `SPEECH` input modality through the Converse API can also translate audio out of the box: the gateway sends the audio together with a translation prompt and returns the model's English text output. Models whose speech input is only served by a bidirectional streaming API (e.g. `amazon.nova-2-sonic`) are not available on this route.
 
 !!! tip "Audio Input Formats on Bedrock Models"
-    Bedrock models natively accept `aac`, `flac`, `m4a`, `mka`, `mkv`, `mp3`, `mp4`, `ogg`, `opus`, `pcm`, `wav`, and `webm` uploads. Audio in any other format is automatically converted to FLAC before translation (requires FFmpeg on the server); non-audio uploads are rejected with the accepted format list.
+    Uploads in the formats the Bedrock Converse audio block accepts — `aac`, `flac`, `m4a`, `mka`, `mkv`, `mp3`, `mp4`, `mpeg`, `mpga`, `ogg`, `opus`, `pcm`, `wav`, `webm`, and `x-aac` — are sent through as-is. Any other audio or video upload is automatically converted to FLAC before translation (requires FFmpeg on the server), including the audio track of a video container. An upload that is neither audio nor video is rejected with the list of accepted formats; an audio or video file whose track cannot be decoded is rejected as carrying no decodable audio.
 
 ## Advanced Features
 

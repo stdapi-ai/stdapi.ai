@@ -39,7 +39,7 @@ stdapi.ai provides multiple resources for exploring and testing the API—choose
 |                   | `GET/POST/DELETE /v1/chat/completions/{id}` | Retrieve, update metadata, or delete a stored chat completion         | [Chat Completions →](api_openai_chat_completions.md)   |
 |                   | `GET /v1/chat/completions/{id}/messages` | List the messages of a stored chat completion                        | [Chat Completions →](api_openai_chat_completions.md)   |
 |                   | `POST /v1/completions`            | Simple prompt-to-text completion — recommended for MCP and text-only agents | [Completions →](api_openai_completions.md)             |
-|                   | `POST /v1/responses`              | Stateless conversational AI with tool calling and streaming                 | [Responses →](api_openai_responses.md)                 |
+|                   | `POST /v1/responses`              | Conversational AI with tool calling, streaming, and server-side storage     | [Responses →](api_openai_responses.md)                 |
 |                   | `POST /v1/responses/input_tokens` | Count input tokens without generating a response                            | [Responses →](api_openai_responses.md)                 |
 |                   | `POST /v1/responses/compact`      | Compact a conversation into a reusable summary item                         | [Responses →](api_openai_responses.md)                 |
 |                   | `GET/DELETE /v1/responses/{id}`   | Retrieve or delete stored responses                                         | [Responses →](api_openai_responses.md)                 |

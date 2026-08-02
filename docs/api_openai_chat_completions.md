@@ -99,7 +99,7 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 | **Usage tracking**                       |                                          |                                                                 |
 | Input text tokens                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Billing unit                                                    |
 | Output tokens                            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Billing unit                                                    |
-| Reasoning tokens                         |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Estimated                                                       |
+| Reasoning tokens                         |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Converse-served models do not split them out: `completion_tokens_details` is not populated and reasoning tokens are billed inside `completion_tokens`. Mantle-native models report whatever split their upstream API returns |
 | **Other**                                |                                          |                                                                 |
 | Service tiers                            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Mapped to Bedrock service tiers and latency options             |
 | `metadata`                               |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Echoed in the response, updatable on stored completions, and usable to filter the Bedrock invocation log. Also forwarded to Bedrock `requestMetadata`, whose limits apply: max 16 pairs, values ≤256 characters, restricted character set |
@@ -295,7 +295,7 @@ Instead of relying on the `prompt_cache_key` section heuristics, mark the exact 
 - `"mode": "explicit"` caches **only** the marked parts: the `prompt_cache_key` heuristics are disabled for that request.
 - `"mode": "implicit"` (default) keeps the `prompt_cache_key` heuristics **and** honors the marked parts.
 - At most 4 cache points are sent per request (Amazon Bedrock limit); the oldest ones are dropped when more are requested.
-- Breakpoints on models without prompt caching support are accepted and ignored, as are breakpoints on tool result messages.
+- Breakpoints on models without prompt caching support are accepted and ignored, as are breakpoints on tool result messages — those never become a cache point, whatever the model.
 
 **Usage Tracking:**
 
@@ -624,7 +624,7 @@ This API supports several approaches to control [Amazon Bedrock reasoning](https
     Not all reasoning-capable models support configurable reasoning control. Support varies by model:
 
     - **Anthropic Claude 3.7 - 4.5**: Both `reasoning_effort` and `thinking_budget` parameters supported (token budget-based reasoning)
-    - **Anthropic Claude Opus 4.6+**: `reasoning_effort` parameter only (adaptive reasoning)
+    - **Anthropic Claude Sonnet 4.6 / Opus 4.6 and later** (including Fable and Mythos): `reasoning_effort` parameter only (adaptive reasoning)
     - **Amazon Nova 2 models**: `reasoning_effort` parameter only
     - **DeepSeek V3 models**: `reasoning_effort` parameter only
 
@@ -640,7 +640,7 @@ Use the `reasoning_effort` parameter with predefined effort levels. This format 
 - `medium` - Balanced reasoning for most use cases
 - `high` - Deep reasoning for complex problems
 - `xhigh` - Maximum reasoning for complex problems
-- `max` - Same as `xhigh` on most models; forwarded as its own (higher) effort tier on Claude 4.6
+- `max` - Its own (higher) effort tier on the adaptive Claude models served by the Converse API (Sonnet/Opus 4.6 and later, plus Fable), which forward it unchanged; collapsed onto the model's top reasoning tier on the fixed-scale models (Claude 3.7 - 4.5, Amazon Nova 2, DeepSeek, Kimi). On Amazon Bedrock Mantle, Claude models — Mythos among them — are reached over the Anthropic Messages API, and that conversion maps `max` to `high`; every other Mantle-served model receives the level as sent. Claude 4.6 also maps `xhigh` down to `high`
 
 **What You Get:**
 
@@ -704,7 +704,6 @@ The `thinking` parameter provides a Moonshot API-compatible format for controlli
 
 - `thinking={"type": "enabled"}` — Enable thinking mode
 - `thinking={"type": "disabled"}` — Disable thinking mode
-- `thinking={"type": "adaptive"}` — Let the model decide when to think
 
 This format is accepted for all reasoning-capable models. Models that don't support this parameter will ignore it.
 

@@ -44,7 +44,7 @@ Create variations of existing images using Amazon Bedrock image models through a
 | `image`                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Source image file (required)                                                                                                                                    |
 | `model`                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Required parameter                                                                                                                                              |
 | `n` (number of images)         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Multiple variations per request; accepted range is 1-10 (default: 1), but the effective maximum is model-dependent (e.g. Amazon Titan and Nova Canvas cap at 5) |
-| `size` (WIDTHxHEIGHT)          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Output dimensions (default: 1024x1024, format validated)                                                                                                        |
+| `size` (WIDTHxHEIGHT)          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Output dimensions (default: 1024x1024, format validated; `auto` resolves to the default)                                                                        |
 | `response_format`              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `url` or `b64_json` (default: `url`)                                                                                                                            |
 | **Output**                     |                                          |                                                                                                                                                                 |
 | URL response format            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Temporary download URLs, valid for 60 minutes (requires AWS_S3_BUCKET)                                                                                         |
@@ -88,9 +88,11 @@ Create variations of existing images using Amazon Bedrock image models through a
 
 ### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Stability AI Models
 
-| Model                      | Notes                         |
-|----------------------------|-------------------------------|
-| stability.sd3-5-large-v1:0 | Image-to-image transformation |
+| Model                             | Notes                                                     |
+|-----------------------------------|-----------------------------------------------------------|
+| stability.sd3-5-large-v1:0        | Image-to-image transformation                             |
+| stability.stable-image-core-v1:1  | Image-to-image transformation, balanced quality and speed |
+| stability.stable-image-ultra-v1:1 | Image-to-image transformation, premium quality and detail |
 
 !!! info "No Built-In Aliases for OpenAI Image Model Names"
     OpenAI's default image model names (`dall-e-2`, `dall-e-3`, `gpt-image-1`) have **no built-in alias**, so requests using them fail with a model-not-found error — the most common first-call issue. Pass one of the model IDs above, or map the OpenAI names to your preferred models with [`MODEL_ALIASES`](operations_configuration.md#model-aliases).

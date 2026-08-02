@@ -50,7 +50,7 @@ Generate images with Amazon Bedrock image models like Stability AI and Amazon No
 | `style`                        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Model-specific style parameters; accepted and ignored by models with no style control |
 | `output_format`                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `png`, `jpeg`, or `webp` (model-specific)                           |
 | `output_compression`           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Compression level 1-100% (default: 100)                             |
-| `stream`                       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Generate images in streaming mode with partial results              |
+| `stream`                       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Generate images in streaming mode, sending each finished image as an `image_generation.completed` event |
 | `partial_images`               | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted (0-3) but ignored — no available model currently streams partial images; the final image is always sent as a single event |
 | `background`                   |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Accepts `auto` (default) and `opaque`; `transparent` is unsupported — responses report `opaque` |
 | `moderation`                   | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Only the default `auto` is accepted; other values are rejected with an error |
@@ -61,9 +61,7 @@ Generate images with Amazon Bedrock image models like Stability AI and Amazon No
 | PNG format                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Lossless image output                                               |
 | JPEG format                    |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Lossy compression (model-specific)                                  |
 | WebP format                    |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Modern format with compression (model-specific)                     |
-| **Streaming**                  |                                          |                                                                     |
-| SSE streaming                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Server-sent events with final images (no partial previews)          |
-| Partial images                 | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted but ignored — no available model streams partial images    |
+| Streaming response             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Server-sent events with final images (no partial previews)          |
 | **Usage tracking**             |                                          |                                                                     |
 | Input text tokens              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Sourced from AWS billing when available                             |
 | Output image tokens            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Sourced from AWS billing data when available; falls back to the image count (`n`) |

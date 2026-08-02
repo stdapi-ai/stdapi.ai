@@ -46,7 +46,7 @@ Each item in the returned list is a `ModelDetails` object:
 | `id` | Amazon Bedrock model ID — pass this to other endpoints |
 | `name` | Human-readable model name |
 | `provider` | Model provider (e.g. `Anthropic`, `Amazon`, `Meta`) |
-| `service` | AWS service serving the model (e.g. `AWS Bedrock Runtime`, `AWS Bedrock Mantle`, `Amazon Comprehend`) |
+| `service` | AWS service serving the model: `AWS Bedrock Runtime`, `AWS Bedrock Mantle`, `AWS Comprehend`, `AWS Polly`, or `AWS Transcribe` |
 | `input_modalities` | List of accepted input types |
 | `output_modalities` | List of produced output types |
 | `aliases` | Alternate model names accepted by the `model` parameter of the other endpoints (if any) |
@@ -122,10 +122,10 @@ curl -G "$BASE/search_models" \
 | Status | Cause |
 |--------|-------|
 | `200` | Success — valid filters that match zero models still return `200` with an empty list |
-| `400` | Unrecognized filter value: unknown modality name, route path, or MCP tool name |
+| `400` | Unrecognized filter value: unknown modality name, route path, MCP tool name, or a region where no model is available |
 
 !!! tip "Empty list vs. 400"
-    A `400` is returned only when a filter value is completely unrecognized (e.g. a typo in a modality name). A valid combination of filters that happens to match zero models still returns `200` with an empty list.
+    A `400` is returned when a filter value is completely unrecognized (e.g. a typo in a modality name) or when the requested `region` serves no model at all. Otherwise, a combination of filters that happens to match zero models still returns `200` with an empty list.
 
 ## Using `search_models` as an MCP Tool
 

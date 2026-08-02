@@ -44,7 +44,7 @@ flowchart LR
   stdapi --> s3["<img src='../styles/logo_amazon_s3.svg' style='height:48px;width:auto;vertical-align:middle;' /> Amazon S3"]
 ```
 !!! note "Latency overhead"
-    The gateway adds negligible per-request processing overhead — typically a few milliseconds. End-to-end latency is dominated by Bedrock model inference time. Streaming responses are passed through immediately with no intermediate buffering.
+    The gateway adds about a millisecond of processing to a typical chat request, and only a few milliseconds to the largest ones. End-to-end latency is dominated by Bedrock model inference time. Streaming responses are passed through immediately with no intermediate buffering.
 
 ---
 
@@ -80,7 +80,7 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 |------------------------------------------------|-------------------------------------------------------------------------|-------------------------------------------|
 | `/v1/chat/completions`                         | Conversational AI, tool calling, multi-modal                            | Amazon Bedrock Converse API · Bedrock Mantle |
 | `/v1/completions`                              | Simple prompt-to-text                                                   | Amazon Bedrock Converse API · Bedrock Mantle |
-| `/v1/responses`                                | Stateless conversational AI with tool calling and streaming             | Amazon Bedrock Converse API · Bedrock Mantle |
+| `/v1/responses`                                | Conversational AI with tool calling, streaming, and server-side storage | Amazon Bedrock Converse API · Bedrock Mantle |
 | `/v1/responses/input_tokens`                   | Count input tokens without generating a response                        | Amazon Bedrock CountTokens API               |
 | `/v1/responses/compact`                        | Compact a conversation into a reusable summary item                     | Amazon Bedrock Converse API                  |
 | `/v1/responses/{id}`                           | Retrieve, continue (`previous_response_id`), or delete stored responses | Amazon Bedrock Sessions · Bedrock Mantle     |
@@ -580,7 +580,7 @@ Typical requests are dominated by the fixed sub-millisecond serving floor; the o
   <br>The same tests run against the real OpenAI, Anthropic and Cohere APIs.
 
 - :material-robot-happy: __Driven by real client software__
-  <br>Claude Code, Codex, pi, Qwen Code, n8n, Haystack, Open WebUI, Home Assistant's voice pipeline, and LangChain and pydantic-ai, driven end to end against a live gateway.
+  <br>Twelve third-party clients — Claude Code, n8n, Open WebUI and more — driven end to end against a live gateway.
 
 </div>
 
@@ -592,7 +592,7 @@ That distinction is enforced when a test is written, before the feature exists: 
 
 ### Real applications, not just API calls
 
-Passing an HTTP test says nothing about whether a real coding agent, chatbot or automation platform actually works. So the suite runs them: **complete third-party client software, unmodified, against a live gateway** — coding agents (Claude Code, Codex, pi, Qwen Code), the n8n workflow runner, a Haystack RAG pipeline, the Open WebUI chat interface, Home Assistant's voice bridge, and the LangChain and pydantic-ai Python libraries — driving multi-turn tool-calling sessions, document retrieval and reranking, and speech pipelines across dozens of models and all three API dialects. A regression that only appears in a real client is caught here, not by you.
+Passing an HTTP test says nothing about whether a real coding agent, chatbot or automation platform actually works. So the suite runs them: **complete third-party client software, unmodified, against a live gateway** — coding agents (Claude Code, Codex, pi, OpenClaw, Hermes, Qwen Code), the n8n workflow runner, a Haystack RAG pipeline, the Open WebUI chat interface, Home Assistant's voice bridge, and the LangChain and pydantic-ai Python libraries — driving multi-turn tool-calling sessions, document retrieval and reranking, and speech pipelines across dozens of models and all three API dialects. A regression that only appears in a real client is caught here, not by you.
 
 ### Every model is measured, not assumed
 
@@ -604,7 +604,7 @@ Model documentation describes what a model is supposed to accept. What it actual
 |---|---|---|
 | **Fast checks** | Every change | Request/response contracts, validation, error mapping — no cloud calls |
 | **Full AWS suite** | Every change to affected areas | All endpoints against live AWS services and models |
-| **Vendor compatibility** | Regularly | The same tests against the real OpenAI, Anthropic and Cohere APIs |
+| **Vendor compatibility** | Regularly | Parity against the upstream vendor APIs, URL swapped only |
 | **Real client applications** | Regularly | Third-party AI clients driving the gateway end to end |
 | **Release validation** | **Every release** | The complete suite, twice: locally, then against a deployed release candidate |
 

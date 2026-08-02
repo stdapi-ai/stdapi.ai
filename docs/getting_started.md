@@ -19,7 +19,7 @@ Pick the path that fits where you are right now. Both use the same OpenAI, Anthr
 
     **Start here — recommended for production.**
 
-    - 3 Terraform commands → ECS Fargate with HTTPS, WAF, auto-scaling
+    - 2 Terraform commands → ECS Fargate with HTTPS, auto-scaling, optional WAF
     - Hardened container image from **AWS Marketplace** — free for 14 days, then $0.10/container-hour
     - IP-restricted by default — safe to test right away
     - Multi-region variants available (EU / US) for data residency
@@ -66,7 +66,7 @@ Both paths need:
 
 The AWS Terraform path additionally needs:
 
-- **Administrator-level AWS permissions** — the module provisions IAM roles, KMS keys, ECS, ALB, WAF, and networking. A restricted developer profile will fail.
+- **Administrator-level AWS permissions** — the module provisions IAM roles and policies, KMS keys, ECS/Fargate, ALB, and networking. A restricted developer profile will fail.
 - **A sandbox AWS account is strongly recommended** for evaluation. Replicate into your target account once you've validated the stack.
 - [Terraform](https://www.terraform.io/downloads) or [OpenTofu](https://opentofu.org/docs/intro/install/) >= 1.5.
 - An **[AWS Marketplace subscription](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)** (14-day free trial).

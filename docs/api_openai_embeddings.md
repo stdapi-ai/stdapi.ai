@@ -51,7 +51,7 @@ Generate vector embeddings for semantic search and RAG applications with Amazon 
 | `encoding_format`            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Choose `float` or `base64`                                      |
 | Extra model-specific params  | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra model-specific parameters not supported by the OpenAI API |
 | **Usage tracking**           |                                          |                                                                 |
-| Input text tokens            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Estimated on some models                                        |
+| Input text tokens            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Reported as billed by Amazon Bedrock; zero on models and inputs for which Bedrock returns no token count |
 
 </div>
 

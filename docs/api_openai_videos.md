@@ -48,8 +48,7 @@ from openai import OpenAI
 client = OpenAI(base_url="https://your-host/v1", api_key="your-api-key")
 
 video = client.videos.create(
-    model="amazon.nova-reel-v1:1",
-    prompt="Closeup of a seashell on a sandy beach, gentle waves",
+    model="luma.ray-v2:0", prompt="Closeup of a seashell on a sandy beach, gentle waves"
 )
 while video.status in ("queued", "in_progress"):
     time.sleep(10)
@@ -67,9 +66,9 @@ curl -X POST "https://your-host/v1/videos" \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "amazon.nova-reel-v1:1",
+    "model": "luma.ray-v2:0",
     "prompt": "Closeup of a seashell on a sandy beach, gentle waves",
-    "seconds": "6",
+    "seconds": "5",
     "size": "1280x720"
   }'
 ```
@@ -80,11 +79,11 @@ curl -X POST "https://your-host/v1/videos" \
 {
   "id": "video_eyJhcm4iOiJhcm46YXdzOmJlZHJvY2s6...",
   "object": "video",
-  "model": "amazon.nova-reel-v1:1",
+  "model": "luma.ray-v2:0",
   "status": "queued",
   "progress": 0,
   "created_at": 1783805314,
-  "seconds": "6",
+  "seconds": "5",
   "size": "1280x720",
   "prompt": "Closeup of a seashell on a sandy beach, gentle waves"
 }

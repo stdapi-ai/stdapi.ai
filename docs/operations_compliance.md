@@ -20,7 +20,7 @@ stdapi.ai is deployed entirely within your AWS account. All AI model inference, 
   <br>Every AWS service call (Bedrock, S3, Polly, Transcribe, Comprehend, Translate) is restricted to your configured regions
 
 - :material-shield-key: __No Third-Party Egress__
-  <br>The application communicates exclusively with AWS services — no external APIs, telemetry endpoints, or third-party services
+  <br>The application initiates no third-party calls of its own — only AWS services. The sole exceptions are under your control: remote URLs your own clients supply (SSRF-guarded) and OTLP trace export when you enable telemetry
 
 - :material-lock: __Data in Transit Encrypted__
   <br>All AWS service calls use TLS 1.2+. The Terraform module configures the ALB with TLS 1.3 and post-quantum hybrid key exchange.
@@ -60,7 +60,13 @@ flowchart TD
 - **Amazon CloudWatch** — receives structured request metadata (method, path, status, model, latency); prompt and response content are **never logged by default** (requires `LOG_REQUEST_PARAMS=true` to enable)
 - **Amazon Polly / Transcribe / Comprehend / Translate** — used only when audio or translation features are invoked; see [AI service opt-out](#aws-ai-service-improvement-opt-out) for data retention controls
 
-stdapi.ai communicates exclusively with the seven AWS services above, all within the regions you configure, plus a handful of conditional AWS services enabled only by specific features: AWS SSM and Secrets Manager (API key storage, if configured), AWS STS (credential resolution fallback), the AWS Price List API (only when `COST_TRACKING=true`), AWS Marketplace Metering (AWS Marketplace image only), and Amazon Bedrock sessions via `bedrock-agent` (Responses API `store=true`). No other outbound network calls are made — the application does not contact any third-party API, telemetry service, or external endpoint.
+stdapi.ai communicates with the seven AWS services above, all within the regions you configure, plus a handful of conditional AWS services enabled only by specific features: AWS SSM and Secrets Manager (API key storage, if configured), AWS STS (account ID lookup when the ECS task metadata endpoint is unavailable — credentials themselves come from the standard AWS credential chain), the AWS Price List API (only when `COST_TRACKING=true`), AWS Marketplace Metering (AWS Marketplace image only), `bedrock-agent-runtime` (Amazon Bedrock sessions backing `store=true` on the Responses and Chat Completions APIs, and the Rerank API), `bedrock-agent` (Bedrock Prompt Management, only when [`AWS_BEDROCK_ALLOW_PROMPT_ARN`](operations_configuration.md#bedrock-allow-prompt-arn) is enabled), and `bedrock-mantle` (the Amazon Bedrock Mantle endpoint serving OpenAI GPT, xAI Grok, Google Gemma and similar models, enabled by default via [`AWS_BEDROCK_MANTLE_ENABLED`](operations_configuration.md#bedrock-mantle-enabled)).
+
+The server initiates no third-party calls of its own: it contacts no external API, analytics service, or vendor endpoint on its own behalf. Only three outbound paths can leave AWS, all driven by your own configuration or your own clients:
+
+- **Remote URLs supplied by a client** — when a request references an input file by `http(s)` URL, the gateway downloads that URL as instructed. The destination is chosen by the caller, never by the server, and every connection (including redirect hops) is validated against [`SSRF_PROTECTION_BLOCK_PRIVATE_NETWORKS`](operations_configuration.md#ssrf-protection-block-private-networks), enabled by default. Clients that send inline data or S3 references never trigger any outbound fetch.
+- **OpenTelemetry trace export** — when [`OTEL_ENABLED`](operations_configuration.md#otel-enabled) is set to `true`, traces are exported in OTLP format to [`OTEL_EXPORTER_ENDPOINT`](operations_configuration.md#otel-exporter-endpoint), which defaults to a collector on localhost. Tracing is disabled by default, and the endpoint is yours to choose.
+- **An operator-overridden Mantle endpoint** — [`AWS_BEDROCK_MANTLE_ENDPOINT_URL`](operations_configuration.md#bedrock-mantle-endpoint-url) replaces the default `https://bedrock-mantle.{region}.api.aws` address. The override must use `https`, and a `{region}` placeholder is substituted when present, but its host is whatever you set; left unset, Mantle traffic stays on the AWS endpoint in your configured regions.
 
 ### Data in Transit
 
@@ -123,7 +129,7 @@ AWS operates automated abuse detection mechanisms on Amazon Bedrock to identify 
 Key points:
 
 - **Zero operator access (ZOA):** No AWS operator can access model inputs or outputs.
-- **Zero data retention (ZDR) by default:** AWS does not store model inputs or outputs unless a specific model requires it for abuse-prevention purposes (see [Data Privacy](#data-privacy)).
+- **No storage of inputs or outputs by default:** AWS does not store model inputs or outputs unless a specific model requires it for safety and abuse-prevention purposes (see [Data Privacy](#data-privacy)); full zero data retention is the `none` retention mode.
 - **Model-specific retention for abuse detection:** A small number of models require short-term retention of flagged or all traffic for automated offline abuse detection. For example, classifier-flagged traffic for certain OpenAI models may be retained for up to 30 days, and some Anthropic models require opting in to share retained traffic with the provider for abuse review. Eligible customers can request full ZDR for these models through their AWS account team.
 - **CSAM detection:** AWS uses automated mechanisms (hash matching, classifiers) to detect child sexual abuse material in image inputs. Detected content is blocked (`400 ValidationException`), may be stored for review, and may be reported to NCMEC or relevant authorities.
 - **Policy violations:** If abuse is detected, AWS may contact the email address on your AWS account and may suspend access to affected models. Keep your AWS account contact information current and monitored.
@@ -142,14 +148,16 @@ When cross-region inference is enabled, Bedrock may route a request to another r
 
 | Profile type                        | Example ID prefix           | Geography                                                                                 |
 |-------------------------------------|-----------------------------|-------------------------------------------------------------------------------------------|
-| **Geography-pinned** (US, EU, APAC) | `us.`, `eu.`, `ap.`         | Fixed destination list — **never changes**, guaranteed to stay within the named geography |
-| **Global**                          | No prefix (direct model ID) | May route to any AWS commercial region worldwide                                          |
+| **Geography-pinned** (US, EU, APAC) | `us.`, `eu.`, `apac.`       | Fixed destination list — **never changes**, guaranteed to stay within the named geography |
+| **Global**                          | `global.`                   | May route to any AWS commercial region worldwide                                          |
+
+A model ID carrying **no prefix** is not an inference profile at all: it is a plain in-region invocation, served entirely by the region the request is sent to.
 
 AWS explicitly states:
 
 > *"if an inference profile is tied to a geography (such as US, EU, or APAC), its destination Region list will never change."*
 
-Set `AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL=false` to prevent Bedrock from using global profiles. Geography-pinned profiles (`us.*`, `eu.*`, `ap.*`) remain available and provide resilience within their geography. See [Region-Specific Configuration](#region-specific-configuration) for examples.
+Set `AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL=false` to prevent Bedrock from using global profiles. Geography-pinned profiles (`us.*`, `eu.*`, `apac.*`) remain available and provide resilience within their geography. See [Region-Specific Configuration](#region-specific-configuration) for examples.
 
 ### Model Providers and Data Access
 
@@ -306,7 +314,7 @@ Security Hub Foundational Security Best Practices control mapping, GuardDuty Run
     export AWS_BEDROCK_REGIONS=ap-northeast-1,ap-southeast-1,ap-southeast-2
 
     # Prevent Bedrock from using global profiles that could route outside APAC.
-    # Geography-pinned ap.* profiles are still used for failover within APAC.
+    # Geography-pinned apac.* profiles are still used for failover within APAC.
     export AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL=false
 
     # S3 bucket in an APAC region
@@ -352,7 +360,7 @@ AWS also incorporates **Standard Contractual Clauses (SCCs)** into its Data Proc
 ## :material-lightbulb-outline: Best Practices for High-Compliance Deployments
 
 - :material-check: **Restrict all region settings to compliant regions** — `AWS_BEDROCK_REGIONS` is the primary control; all services default to it, and any optional per-service override must stay within your target geography.
-- :material-check: **Set `AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL=false`** — stdapi.ai will then automatically use geography-pinned inference profiles (`us.*`, `eu.*`, `ap.*`), ensuring cross-region failover never leaves the named geography.
+- :material-check: **Set `AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL=false`** — stdapi.ai will then automatically use geography-pinned inference profiles (`us.*`, `eu.*`, `apac.*`), ensuring cross-region failover never leaves the named geography.
 - :material-check: **Opt out of AWS AI service improvement** via an AWS Organizations policy — one-time console action covering Polly, Transcribe, Comprehend, and Translate.
 - :material-check: **Use a CMK with a restrictive key policy** — the Terraform module creates one by default; see [FISA Section 702](#fisa-section-702) for why this is the primary technical countermeasure against CLOUD Act and FISA 702 demands. For stricter control: bring your own key, limit decrypt to the ECS task role, enable automatic rotation, crypto-shredding for right-to-erasure, or a CloudHSM-backed store for FIPS 140-3 Level 3.
 - :material-check: **Confirm `LOG_REQUEST_PARAMS` is disabled** (the default) in production — prompt and response content will then never appear in application logs. If Bedrock invocation logging is enabled for audit purposes, configure a KMS CMK for the S3 or CloudWatch destination.
@@ -394,7 +402,7 @@ Restrict `AWS_BEDROCK_REGIONS` to US regions and set `AWS_BEDROCK_CROSS_REGION_I
 
 ### :material-briefcase: Legal & Professional Services
 
-Attorneys, consultants, accountants, and other professionals bound by confidentiality obligations cannot transmit client materials to third-party AI services. stdapi.ai processes all inference within your own AWS infrastructure — client data never leaves your account and never transits external endpoints. This makes it the appropriate choice for AI-assisted document review, contract analysis, and research where client confidentiality is non-negotiable.
+Attorneys, consultants, accountants, and other professionals bound by confidentiality obligations cannot transmit client materials to third-party AI services. stdapi.ai processes all inference within your own AWS infrastructure — the gateway never sends client data to an endpoint of its own choosing, and with the defaults it never leaves your account (the few outbound paths that can exist are yours to configure; see [Application Data Flow](#application-data-flow)). This makes it the appropriate choice for AI-assisted document review, contract analysis, and research where client confidentiality is non-negotiable.
 
 ---
 

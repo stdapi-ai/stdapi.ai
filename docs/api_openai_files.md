@@ -60,7 +60,7 @@ Upload and manage files via an OpenAI-compatible interface. Files are stored in 
 | `after` cursor             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Forward cursor pagination                                                                     |
 | `limit`                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 1 – 10 000; default 10 000                                                                    |
 | `purpose` filter           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Filter results by uploaded purpose                                                            |
-| **File size cap**          | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | No artificial limit; S3 object limit (~5 TB)                                                  |
+| **File size cap**          | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | No limit imposed by stdapi.ai; a direct upload streams in fixed 8 MiB parts, so S3's 10,000-part ceiling caps it at ~78 GiB |
 | **Expiry enforcement**     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Expired files return 404 at read time; S3 Lifecycle as backstop                               |
 | **Chat integration**       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Use `file_id` in `type: "file"` content parts                                                 |
 | `status` field             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Always `"processed"` — no async processing pipeline                                           |
@@ -221,6 +221,8 @@ An upload ID and the file it produces share the same identifier — only the pre
 
 ### Create an Upload Session
 
+The declared `bytes` must be between 1 byte and 8 GiB; a larger declared size is rejected when the session is created.
+
 Set the optional `expires_after` object to give the resulting file a TTL (same behavior as `expires_after` on `/v1/files`, 1 hour to 30 days). The pending upload's own `expires_at` always reflects the upload session's expiry (1 day); the requested file TTL appears on the resulting file object once the upload is completed.
 
 ```bash
@@ -280,7 +282,7 @@ curl -X POST "$BASE/v1/uploads/upload_0190c51c7de7455d9b8c2efe27dfbf67/parts" \
 
 ```json
 {
-  "id": "part_0190c51c7de700010001abcdef012345",
+  "id": "part_a3f5c81d2b6e49070001abcdef012345",
   "object": "upload.part",
   "upload_id": "upload_0190c51c7de7455d9b8c2efe27dfbf67",
   "created_at": 1745000001
@@ -295,8 +297,8 @@ curl -X POST "$BASE/v1/uploads/upload_0190c51c7de7455d9b8c2efe27dfbf67/complete"
   -H "Content-Type: application/json" \
   -d '{
     "part_ids": [
-      "part_0190c51c7de700010001abcdef012345",
-      "part_0190c51c7de700020002fedcba987654"
+      "part_a3f5c81d2b6e49070001abcdef012345",
+      "part_a3f5c81d2b6e49070002fedcba987654"
     ]
   }'
 ```
@@ -344,7 +346,7 @@ curl -X POST "$BASE/v1/uploads/upload_0190c51c7de7455d9b8c2efe27dfbf67/cancel" \
 
 | Feature                  |                  Status                  | Notes                                                        |
 |--------------------------|:----------------------------------------:|--------------------------------------------------------------|
-| `bytes` (declared size)  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Validated at completion against actual assembled size        |
+| `bytes` (declared size)  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 1 byte – 8 GiB; validated at completion against actual assembled size |
 | `filename`               |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Carried through to the final file object                     |
 | `mime_type`              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Set as the S3 `ContentType` for the assembled object         |
 | `purpose`                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Echoed to the final file object                              |
@@ -424,7 +426,7 @@ curl -X POST "$BASE/v1/chat/completions" \
 ```
 
 !!! info "Model Support"
-    Document and image file types are supported by models that accept those input modalities. Use a vision-capable model (e.g. Claude Haiku or Sonnet) when passing PDFs or images via `file_id`. Amazon Nova models do not currently support document inputs.
+    stdapi.ai picks the Amazon Bedrock content block from the file's media type — `document` for PDF, DOC/DOCX, XLS/XLSX, CSV, HTML, Markdown and plain text, `image` for images — and forwards it unchanged. No per-model gate is applied, so whether the file is accepted depends on the model's own input modalities: use a multimodal model (e.g. Claude or Amazon Nova) when passing PDFs or images via `file_id`, otherwise the model itself rejects the request.
 
 ## End-to-End Example
 
@@ -504,7 +506,8 @@ curl -X DELETE "$BASE/v1/files/${FILE_ID}" \
 | 400  | `part_ids` not listed in ascending upload order on `/v1/uploads/{upload_id}/complete` |
 | 400  | A non-last part under 5 MiB, or an upload past its 10,000-part limit |
 | 400  | `file-id:` URI passed to an ingest endpoint (`POST /v1/files`, `POST /v1/uploads/{upload_id}/parts`) |
-| 404  | File or upload not found, already deleted, expired, or not pending |
+| 400  | Upload session is no longer pending — it was already completed or cancelled |
+| 404  | File or upload not found, already deleted, or expired                |
 | 503  | `AWS_S3_BUCKET` is not configured                                  |
 
 ## Configuration

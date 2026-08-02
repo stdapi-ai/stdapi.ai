@@ -109,7 +109,7 @@ Most AI coding assistants follow a similar configuration pattern. The exact menu
 
     - **Amazon Nova 2 and Nova Premier, US regions** — mapped to Amazon Nova's grounding tool, which AWS bills per request on top of tokens (see [Cost Management](operations_cost_management.md)). Leave `web_search` enabled to use it.
     - **EU inference profiles** — the grounding tool is not offered there, so the request is rejected.
-    - **Any other model** — no hosted search exists behind it, and the request is rejected rather than silently answered without one.
+    - **Any other model** — no hosted search exists behind it, and the tool reaches the model as an ordinary function the gateway cannot execute, so answers come back ungrounded.
 
     Set `web_search = "disabled"` unless your model and region are in the first group. Codex's own shell, file and patch tools are unaffected either way.
 
@@ -473,8 +473,8 @@ By default, all tools are exposed. Restrict the tool set for better performance 
 
 - **`openai_completion`** (`/v1/completions`) — the smallest schema and smallest token footprint per tool call. **Recommended for text-first coding agents**: code generation, completion, refactoring, explanation, Q&A. Supports batch prompts, streaming, and a single-request multimodal collapse (`["instruction", <file>, …]`) for analysing screenshots or reference documents.
 - **`openai_chat_completion`** (`/v1/chat/completions`) — use when the agent needs multi-turn conversations with system prompts, built-in function calling, or structured multimodal messages.
-- **`openai_response`** (`/v1/responses`) — modern stateless API with tool calling and structured output.
-- **`anthropic_message`** (`/v1/messages`) — Anthropic SDK compatibility; same Bedrock models, different protocol.
+- **`openai_response`** (`/v1/responses`) — modern API with tool calling, structured output, and optional server-side storage.
+- **`anthropic_message`** (`/anthropic/v1/messages`) — Anthropic SDK compatibility; same Bedrock models, different protocol.
 
 Always include `search_models` — it lets the agent discover available model IDs dynamically rather than relying on hardcoded values. Use it instead of `openai_model_list` or `anthropic_model_list`: it returns richer metadata and supports capability-based filtering (by modality, route, region, and more).
 

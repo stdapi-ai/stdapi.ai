@@ -223,7 +223,7 @@ This section provides a quick reference of all available configuration options. 
 
 ### :material-lock: Authentication { #summary-authentication }
 
-Choose **one** method (mutually exclusive):
+Configure **one** source. If several are set, precedence is `API_KEY` → SSM Parameter Store → Secrets Manager — see [Authentication](#authentication):
 
 | Variable                                                          | Default   | Description                                                        |
 |-------------------------------------------------------------------|-----------|--------------------------------------------------------------------|
@@ -305,7 +305,7 @@ Choose **one** method (mutually exclusive):
 | [`DEFAULT_MODEL_PARAMS`](#default-model-params)                     | `{}`                    | JSON object with per-model default inference parameters (temperature, max_tokens, etc.)    |
 | [`DEFAULT_MODEL_SERVICE_TIERS`](#default-model-service-tiers)       | `{}`                    | JSON object with per-model default service tiers (default, flex, priority, reserved)        |
 | [`MODEL_CACHE_SECONDS`](#model-cache-seconds)                       | `900`                   | Model list cache lifetime in seconds before lazy refresh (default: 15 minutes)             |
-| [`AI_RESPONSE_TIMEOUT`](#ai-response-timeout)                       | `600`                   | Maximum seconds to wait for a model to complete a response (default: 10 minutes)           |
+| [`AI_RESPONSE_TIMEOUT`](#ai-response-timeout)                       | `600`                   | Maximum seconds without data from a model before the request times out (default: 10 min)   |
 | [`DROP_UNSUPPORTED_SYSTEM_PROMPT`](#drop-unsupported-system-prompt) | `true`                  | Drop system prompts for unsupported models; when `false`, return error instead             |
 | [`ANTHROPIC_BETA_FILTER`](#anthropic-beta-filter)                   | `true`                  | Enable filtering of unsupported `anthropic_beta` flags for Claude models                   |
 | [`ANTHROPIC_BETA_ALLOWLIST`](#anthropic-beta-allowlist)             | None                    | Additional `anthropic_beta` flags to allow beyond built-in Bedrock defaults                |
@@ -672,10 +672,10 @@ export AWS_S3_REGIONAL_BUCKETS='{"us-east-1": "my-bedrock-temp-us-east-1", "eu-w
 :   `{}` (empty — only the application's own buckets are recognized)
 
 :octicons-workflow-24: **Behavior**
-:   Buckets listed here are recognized for two purposes:
+:   Declaring a bucket here enables input access to objects the application does not own:
 
-    - **S3 HTTP URL to S3 URI conversion** — When a user passes an S3 HTTP URL (including presigned URLs) for one of these buckets, it is automatically converted to an `s3://` URI so Bedrock can access the object directly.
-    - **Region-aware routing** — The router knows the region of these buckets and can factor it into region selection to minimize cross-region data transfer.
+    - **S3 URI and S3 HTTP URL access** — `s3://` URIs and S3 HTTP URLs (including presigned URLs) pointing at these buckets are accepted as input sources; an HTTP URL is automatically converted to an `s3://` URI so Bedrock can access the object directly.
+    - **Declared region** — The region mapped to each bucket is used to reach that bucket in its own region when reading the input object. It does not influence model or inference region selection.
 
     Without this setting, only the application's own buckets (`AWS_S3_BUCKET` and `AWS_S3_REGIONAL_BUCKETS`) are recognized.
 
@@ -1003,7 +1003,7 @@ export AWS_BEDROCK_REGION_ROUTING_QUOTA_STALE_FACTOR=4
 :   Total number of retries per Bedrock invocation, cycling through available regions in order
 
 :octicons-database-24: **Type**
-:   Integer (must be > 0)
+:   Integer (must be 0 or greater; `0` disables retries)
 
 :octicons-gear-24: **Default**
 :   `9`
@@ -1767,16 +1767,40 @@ The full IAM reference — required Amazon Bedrock permissions, per-feature poli
 stdapi.ai supports three methods for API key authentication.
 
 !!! info "Authentication Methods"
-    **Choose only one method** - they are mutually exclusive, with the following precedence order:
+    **Configure exactly one method.** If several are set, the first match in this precedence order is used and the others are ignored:
 
-    1. :material-database-lock: **SSM Parameter Store** (highest precedence)
-    2. :material-key-variant: **Secrets Manager**
-    3. :material-key: **Direct API key** (lowest precedence)
+    1. :material-key: **Direct API key** — `API_KEY` (highest precedence)
+    2. :material-database-lock: **SSM Parameter Store** — `API_KEY_SSM_PARAMETER`
+    3. :material-key-variant: **Secrets Manager** — `API_KEY_SECRETSMANAGER_SECRET` (lowest precedence)
+
+    The methods below are listed in that precedence order. **SSM Parameter Store remains the recommended method for production.**
+
+!!! warning "Conflicting Configuration"
+    Only one combination is rejected at startup: `API_KEY` set together with a Secrets Manager source (`API_KEY_SECRETSMANAGER_SECRET`). Every other combination starts normally and is resolved silently by the precedence order above — the lower-precedence sources are never read.
 
 !!! danger "No Authentication Warning"
     If no authentication method is configured, the API accepts all requests without authentication and a security warning is logged at startup. This is suitable **only for internal/private deployments**.
 
-### Method 1: SSM Parameter Store (Recommended)
+### Method 1: Direct API Key
+
+Provide the API key directly via environment variable. Intended for local development and testing; it takes precedence over both AWS-backed sources.
+
+#### `API_KEY` { #api-key }
+
+:octicons-package-24: **Purpose**
+:   Static API key value
+
+:octicons-alert-24: **Security Warning**
+:   Avoid hardcoding in configuration files; use environment variables only
+
+:octicons-person-24: **Client Usage**
+:   Clients must include this key in the `Authorization: Bearer <key>` header or `X-API-Key` header
+
+```bash
+export API_KEY=sk-1234567890abcdef...
+```
+
+### Method 2: SSM Parameter Store (Recommended)
 
 **Recommended** - Use AWS Systems Manager Parameter Store for secure key storage with encryption, access control, and auditing. This method should be used only with **already existing** parameters.
 
@@ -1795,7 +1819,7 @@ stdapi.ai supports three methods for API key authentication.
 export API_KEY_SSM_PARAMETER=/stdapi/prod/api-key
 ```
 
-### Method 2: Secrets Manager
+### Method 3: Secrets Manager
 
 Use AWS Secrets Manager for secure key storage with automatic rotation support. This method should be used only with **already existing** secrets.
 
@@ -1837,25 +1861,6 @@ Example JSON secret structure:
   "api_key": "sk-1234567890abcdef...",
   "other_config": "value"
 }
-```
-
-### Method 3: Direct API Key
-
-Provide the API key directly via environment variable.
-
-#### `API_KEY` { #api-key }
-
-:octicons-package-24: **Purpose**
-:   Static API key value
-
-:octicons-alert-24: **Security Warning**
-:   Avoid hardcoding in configuration files; use environment variables only
-
-:octicons-person-24: **Client Usage**
-:   Clients must include this key in the `Authorization: Bearer <key>` header or `X-API-Key` header
-
-```bash
-export API_KEY=sk-1234567890abcdef...
 ```
 
 ---
@@ -2432,7 +2437,7 @@ export ENABLE_MCP_SSE=true
     export ENABLE_MCP_SSE=true
     ```
 
-    When both are enabled, the MCP server card (`/.well-known/mcp/server-card.json`) advertises the Streamable HTTP transport as the primary endpoint. Both `/mcp` and `/sse` remain fully functional.
+    The MCP server card (`/.well-known/mcp/server-card.json`) declares a single transport: Streamable HTTP (`/mcp`) whenever it is enabled, otherwise SSE (`/sse`). When both are enabled, `/sse` is therefore not listed in the card, but it remains fully functional for clients configured with it explicitly.
 
 #### `MCP_INCLUDE_TOOLS` { #mcp-include-tools }
 
@@ -2783,6 +2788,15 @@ stdapi.ai provides automatic API documentation routes, which are **disabled by d
 !!! warning "Security Consideration"
     Exposing API documentation routes in production can reveal internal API structure, available endpoints, and request/response schemas to potential attackers. Only enable these routes in development/testing environments or when absolutely necessary.
 
+!!! info "Agent Discovery"
+    The machine-readable API catalog at `/.well-known/api-catalog` (RFC 9727 Linkset) is always served, regardless of the settings below. Enabling a route adds its entry to the catalog:
+
+    - `ENABLE_OPENAPI_JSON` — adds the `service-desc` link to `/openapi.json`
+    - `ENABLE_DOCS` or `ENABLE_REDOC` — adds the `service-doc` link to `/docs` or `/redoc` (Swagger UI takes precedence when both are enabled)
+    - [`ENABLE_MCP_STREAMABLE_HTTP`](#enable-mcp-streamable-http) or [`ENABLE_MCP_SSE`](#enable-mcp-sse) — adds the `mcp-server-card` link
+
+    The same links are also advertised as RFC 8288 `Link` headers on the root endpoint (`/`). That header is only emitted when at least one of these routes is enabled; with all of them disabled, the catalog is still reachable but carries no links.
+
 #### `ENABLE_DOCS` { #enable-docs }
 
 :octicons-package-24: **Purpose**
@@ -2806,12 +2820,6 @@ export ENABLE_DOCS=true
     - Test API requests directly from the browser
     - View request/response schemas
     - Understand parameter requirements
-
-!!! info "Agent Discovery"
-    Enabling this setting also activates:
-
-    - **Link headers** — Root endpoint (`/`) includes RFC 8288 Link headers advertising available resources
-    - **API catalog** — Machine-readable catalog at `/.well-known/api-catalog` for AI agent discovery
 
 #### `ENABLE_REDOC` { #enable-redoc }
 
@@ -2840,12 +2848,6 @@ export ENABLE_REDOC=true
 !!! tip "Static Documentation Available"
     ReDoc API documentation is also available as static documentation at [API Reference](api_reference.md) without requiring this endpoint to be enabled.
 
-!!! info "Agent Discovery"
-    Enabling this setting also activates:
-
-    - **Link headers** — Root endpoint (`/`) includes RFC 8288 Link headers advertising available resources
-    - **API catalog** — Machine-readable catalog at `/.well-known/api-catalog` for AI agent discovery
-
 #### `ENABLE_OPENAPI_JSON` { #enable-openapi-json }
 
 :octicons-package-24: **Purpose**
@@ -2872,12 +2874,6 @@ export ENABLE_OPENAPI_JSON=true
 
 !!! note "Automatic Enablement"
     If either `ENABLE_DOCS` or `ENABLE_REDOC` is set to `true`, the `/openapi.json` endpoint will be automatically enabled since both documentation UIs require the OpenAPI schema to function. You only need to explicitly set `ENABLE_OPENAPI_JSON=true` if you want to expose the schema endpoint without enabling the documentation UIs.
-
-!!! info "Agent Discovery"
-    Enabling this setting also activates:
-
-    - **Link headers** — Root endpoint (`/`) includes RFC 8288 Link headers advertising available resources
-    - **API catalog** — Machine-readable catalog at `/.well-known/api-catalog` for AI agent discovery
 
 ### Development Configuration
 
@@ -3167,7 +3163,7 @@ export CLOUDWATCH_METRICS_NAMESPACE=my-app-metrics
 #### `COST_TRACKING` { #cost-tracking }
 
 :octicons-package-24: **Purpose**
-:   Enable real-time cost computation from live AWS pricing ([details and accuracy caveats](operations_cost_management.md#cost-tracking-real-time-aws-pricing)). Disabled by default: it requires the extra `pricing:GetProducts` IAM permission.
+:   Enable real-time cost computation from live AWS pricing ([details and accuracy caveats](operations_cost_management.md#cost-tracking-real-time-aws-pricing)). Disabled by default: it requires the extra `pricing:GetProducts` IAM permission — see [Cost Tracking IAM Permissions](operations_iam_permissions.md#cost-tracking-iam).
 
 :octicons-database-24: **Type**
 :   Boolean
@@ -3331,7 +3327,7 @@ The `amazon-bedrock-guardrailConfig` object in the request body is supported for
 Requests with `store=true` on the [Responses](api_openai_responses.md#stored-responses) and [Chat Completions](api_openai_chat_completions.md#stored-chat-completions) APIs persist generations in Amazon Bedrock sessions. No environment variable is needed to enable this — it requires the [Bedrock Session Storage IAM permissions](operations_iam_permissions.md#bedrock-session-storage-optional).
 
 !!! warning "Not available in every region"
-    Amazon Bedrock session storage covers fewer regions than model inference. When the primary Bedrock region — the first entry of [`AWS_BEDROCK_REGIONS`](#aws-bedrock-regions), which is where all sessions are created — does not provide it, `store=true` is **ignored**: the generation is still returned, and a warning naming the region as the cause is recorded in the request log. Retrieving a stored object then returns `404`.
+    Amazon Bedrock session storage covers fewer regions than model inference. When the primary Bedrock region — the first entry of [`AWS_BEDROCK_REGIONS`](#aws-bedrock-regions), which is where all sessions are created — does not provide it, `store=true` is **ignored**: the generation is still returned, and a warning is recorded in the request log stating that the session storage endpoint was unreachable or timed out and that session storage is offered in fewer regions than model inference. Retrieving a stored object then returns `404`. A missing `bedrock:CreateSession` permission produces a distinct `AccessDenied` warning pointing at the IAM permissions instead.
 
     Nothing fails and no request is lost, but stored responses and stored chat completions are simply unavailable. To rely on them, make the primary Bedrock region one that offers session storage — check the [Amazon Bedrock session management endpoints](https://docs.aws.amazon.com/general/latest/gr/bedrock.html) for current coverage.
 
@@ -3354,7 +3350,7 @@ export AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN=arn:aws:kms:us-east-1:123456789012
     Stored responses and chat completions are namespaced by AWS account and region, not by stdapi.ai deployment. Multiple deployments sharing the same account and region can list, retrieve, and delete each other's stored objects. Use a dedicated AWS account per deployment when isolation matters, or accept this shared visibility as a deliberate trade-off.
 
 !!! info "Orphaned Session Cleanup"
-    A session is created before its response or chat completion is generated; a crash between the two leaves an empty, orphaned session. Bedrock sessions have no TTL and persist until deleted, so periodically clean up stale sessions (`aws bedrock-agent-runtime list-sessions` plus `delete-session`, or an operator-managed lifecycle policy).
+    A session is created independently of the generation it will hold — before it for the Responses API, concurrently with it for Chat Completions — so a crash before the generation is written leaves an empty, orphaned session. Bedrock sessions have no TTL and persist until deleted, so periodically clean up stale sessions (`aws bedrock-agent-runtime list-sessions` plus `delete-session`, or an operator-managed lifecycle policy).
 
 ---
 
@@ -3573,7 +3569,7 @@ export MODEL_CACHE_SECONDS=3600
 #### `AI_RESPONSE_TIMEOUT` { #ai-response-timeout }
 
 :octicons-package-24: **Purpose**
-:   Maximum time in seconds to wait for an AI model to complete a response
+:   Maximum time in seconds to wait without receiving any data from an AI model
 
 :octicons-database-24: **Type**
 :   Integer (seconds, must be greater than 0)
@@ -3582,7 +3578,7 @@ export MODEL_CACHE_SECONDS=3600
 :   `600` (10 minutes)
 
 :octicons-workflow-24: **Behavior**
-:   Applies to both streaming and non-streaming requests. The timer starts from the moment the model begins generating and covers the full duration until the last token is received. If the model does not complete within this limit, the connection is closed and the request fails with a timeout error
+:   Inactivity (per-read) timeout on the upstream model connection, applied to both streaming and non-streaming requests. The timer resets every time data is received, so it fires only when the model stalls for longer than this value — it does **not** bound the total duration of a response: a stream that keeps producing chunks can run well past it. On a non-streaming request, where the whole response arrives at once, it effectively bounds the wait for that single response. When it fires, the connection is closed and the request fails with a timeout error
 
 ```bash
 # Default (10 minutes) - suitable for extended thinking models
@@ -3630,10 +3626,12 @@ Configure default inference parameters applied automatically to specific models.
 | Parameter | Type | Range | Description |
 |-----------|------|-------|-------------|
 | `temperature` | Float | ≥ 0 | Sampling temperature |
-| `top_p` | Float | 0.0-1.0 | Nucleus sampling |
+| `top_p` | Float | ≥ 0 | Nucleus sampling |
 | `max_tokens` | Integer | ≥ 1 | Maximum response tokens |
 | `stop_sequences` | String/Array | - | Stop generation tokens |
 | Provider-specific | Various | - | e.g., `anthropic_beta` |
+
+Only the outer JSON shape (an object of per-model objects) is validated at startup. The parameter values above are validated lazily, the first time a model with configured defaults is used: a wrong type, or a value below the lower bounds shown in the table, fails that request with HTTP `400`. The numeric ceilings (for example the usual `top_p` maximum of `1.0`) are enforced by Amazon Bedrock and the target model.
 
 ### Configuration Examples { #default-model-params-examples }
 
@@ -3703,7 +3701,7 @@ graph LR
 1. :material-numeric-1-circle: **Default parameters** are applied first (from `DEFAULT_MODEL_PARAMS`)
 2. :material-numeric-2-circle: **Request parameters** override defaults if both are specified
 3. :material-numeric-3-circle: **Provider-specific fields** are forwarded to Bedrock as additional model request fields
-4. :material-numeric-4-circle: **Unsupported fields** that would change output cause HTTP 400 error; otherwise ignored
+4. :material-numeric-4-circle: **Unsupported fields** reach Bedrock as-is, and a field the model rejects surfaces as a `ValidationException` returned to the client as HTTP `400`. Three cases are handled before that: `anthropic_beta` flags are filtered individually against an allowlist (see [`ANTHROPIC_BETA_FILTER`](#anthropic-beta-filter)); a system prompt sent to a model that does not support one is dropped when [`DROP_UNSUPPORTED_SYSTEM_PROMPT`](#drop-unsupported-system-prompt) is enabled (the default); and Amazon Nova 2 drops `max_tokens` when reasoning effort is `high`, logging a warning
 
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: Getting Started - Deploy stdapi.ai on AWS
-description: Deploy stdapi.ai on AWS using Terraform in 5 minutes. Production-grade ECS Fargate deployment with HTTPS, WAF, auto-scaling, and monitoring. 14-day free trial on AWS Marketplace.
+description: Deploy stdapi.ai on AWS using Terraform in 5 minutes. Production-grade ECS Fargate deployment with HTTPS, auto-scaling, and optional WAF and monitoring. 14-day free trial on AWS Marketplace.
 keywords: deploy OpenAI gateway AWS, AWS Bedrock deployment, Terraform AWS AI, enterprise AI deployment, AWS Bedrock setup, OpenAI API hosting, production AI gateway, AWS ECS Fargate AI
 ---
 
