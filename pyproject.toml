@@ -177,6 +177,8 @@ markers = [
     "agentic: agentic tests, skipped unless --agentic is passed",
     "slow: cheap but slow tests, skipped unless --slow is passed",
     "video: video generation tests, by far the costliest, skipped unless --video is passed",
+    "container: builds the container images and tests them, skipped unless --container is passed",
+    "image: strategic test re-run against the built container image by the container suite",
     "local: tests the local implementation in-process, skipped with --server-url or --use-official-api",
     "gateway(reason): needs a stdapi.ai gateway for a capability the upstream vendors do not expose, skipped with --use-official-api",
     "retry(reason, reruns=, delay=): re-run a test that a stated non-deterministic condition -- never a defect -- can fail; the reason is mandatory",

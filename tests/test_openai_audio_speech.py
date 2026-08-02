@@ -59,6 +59,7 @@ class TestAudioSpeech:
          stdapi/models/audio/amazon_polly.py:AudioModel.tts
     """
 
+    @pytest.mark.image
     def test_basic_speech_generation(
         self, openai_client: OpenAI, speech_standard_model: str
     ) -> None:
@@ -107,6 +108,7 @@ class TestAudioSpeech:
         assert response.response.headers.get("content-type") == "audio/mpeg"
         _assert_is_mp3(audio_data)
 
+    @pytest.mark.image
     @pytest.mark.gateway("Amazon Polly is not available on the official OpenAI API")
     @pytest.mark.retry(
         "the first ffmpeg encode in a long-lived process can miss its stdout EOF: "
@@ -142,6 +144,7 @@ class TestAudioSpeech:
         assert response.response.headers.get("content-type") == "audio/flac"
         assert _flac_sample_rate(audio_data) == int(sample_rate)
 
+    @pytest.mark.image
     @pytest.mark.gateway("Amazon Polly is not available on the official OpenAI API")
     def test_speech_pcm_default_resamples_to_24khz(
         self, openai_client: OpenAI, speech_standard_model: str
@@ -336,6 +339,7 @@ class TestAudioSpeech:
         assert response.response.headers.get("content-type") == "audio/mpeg"
         _assert_is_mp3(audio_data)
 
+    @pytest.mark.image
     @pytest.mark.parametrize(
         ("format_name", "content_type", "signature_check"),
         [

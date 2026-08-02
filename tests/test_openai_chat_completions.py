@@ -168,6 +168,7 @@ class TestChatCompletions:
          stdapi/models/chat/_adapters/_openai_chat_completion.py
     """
 
+    @pytest.mark.image
     def test_basic_chat_completion(
         self, openai_client: OpenAI, chat_model: str
     ) -> None:
@@ -1466,6 +1467,7 @@ class TestChatCompletions:
         assert response.usage is not None
         assert response.usage.prompt_tokens > 0
 
+    @pytest.mark.image
     def test_file_part_audio(
         self, openai_client: OpenAI, chat_audio_model: str, sample_audio_mp3_file: bytes
     ) -> None:

@@ -40,14 +40,11 @@ from openai import OpenAI
 from PIL import Image as PILImage
 from pybase64 import b64encode
 
-# Starlette's TestClient subclasses whichever HTTP library it can import, and
-# prefers httpx2. Every vendor SDK below type- and runtime-checks its
-# ``http_client`` against httpx, so a TestClient built on httpx2 is rejected
-# outright -- and httpx2 is in this environment only because pydantic-ai pulls
-# genai-prices in for the agentic lane. Aliasing the name while starlette binds
-# it takes the fallback branch starlette still documents, so the test client is
-# an httpx.Client again. The alias is dropped immediately: genai-prices imports
-# the real httpx2 later and must get it.
+# Starlette's TestClient subclasses whichever HTTP library it can import, and prefers
+# httpx2, which every vendor SDK below rejects as an ``http_client``. Aliasing the name
+# while starlette binds it takes starlette's httpx fallback branch; the alias is dropped
+# at once so genai-prices -- which is why httpx2 is installed at all, through the
+# agentic lane's pydantic-ai -- still gets the real one.
 assert "starlette.testclient" not in sys.modules, (
     "starlette.testclient was imported before this alias could be installed"
 )
@@ -57,10 +54,8 @@ try:
 finally:
     del sys.modules["httpx2"]
 
-# Many tests here drive live AWS through an in-process app, so a stall has no
-# traceback of its own and the suite simply stops. SIGUSR1 makes the interpreter
-# print every thread's stack, which is the only way to see where from outside:
-# this host restricts ptrace, so no debugger can attach.
+# A stall in an in-process live-AWS test just stops the suite; SIGUSR1 dumps every
+# thread's stack, the only way to locate it on a host that restricts ptrace.
 faulthandler.register(signal.SIGUSR1, all_threads=True)
 
 if TYPE_CHECKING:
@@ -133,17 +128,13 @@ def set_test_price(
 ) -> None:
     """Seed the price index with one test price.
 
-    Shared by pricing/usage/monitoring tests that need a real, resolvable
-    price rather than mocking ``resolve_price`` itself. *model* is used
-    as-is, not normalized -- pick a name with no "-"/"_" separators so
-    normalize_model_key() doesn't alter it. Defaults seed the standard tier,
-    undifferentiated bucket; pass ``tier``/``cache_ttl``/``routing``/``spec``/
-    ``context`` to seed a non-default ``PriceKey`` bucket (e.g. a routed,
-    cache-TTL, media-spec, or long-context price) without building
-    ``PriceKey``/``Price`` by hand.
+    For tests that need a real, resolvable price rather than a mocked
+    ``resolve_price``. The defaults seed the standard tier, undifferentiated
+    bucket; the keyword arguments seed a non-default ``PriceKey`` bucket.
 
     Args:
-        model: Model ID, used as-is (see above).
+        model: Model ID, used as-is (not normalized) -- pick a name with no
+            "-"/"_" separators so ``normalize_model_key`` cannot alter it.
         region: AWS region.
         dimension: The billed dimension.
         amount: The unit price, as a decimal string.
@@ -258,13 +249,9 @@ del _load_env_profile
 # ---------------------------------------------------------------------------
 # Early environment setup
 #
-# These vars must be set at module level — before pytest imports any test file
-# that may import stdapi modules at the top level (e.g. for unit tests).
-# stdapi.config.SETTINGS is a module-level singleton: the first import of
-# stdapi.config runs ``SETTINGS = _Settings()`` from whatever os.environ
-# values are present at that moment.  If we only set these inside the
-# test_client fixture, any test file that imports from stdapi at collection
-# time would see the defaults (api_key=None, allow_prompt_router=False).
+# Set at module level: ``stdapi.config.SETTINGS`` is a singleton built from
+# ``os.environ`` by the first import of ``stdapi.config``, which any test module
+# importing stdapi at collection time would trigger with the defaults instead.
 # ---------------------------------------------------------------------------
 
 #: Fixed API key shared by the test server and all test clients.
@@ -349,8 +336,7 @@ MODEL_MAPPINGS = {
         "input_tokens": "anthropic.claude-haiku-4-5-20251001-v1:0",
         "image_generation": "stability.stable-image-core-v1:1",
         # Nova Canvas is the only model mapping OpenAI ``quality``/``style`` to Bedrock
-        # params. Legacy on purpose: those parameters are reachable through legacy model
-        # support and nowhere else, which is the deliberate answer to #93.
+        # params, and legacy on purpose: they are reachable nowhere else (#93).
         "image_generation_hd": "amazon.nova-canvas-v1:0",
         "image_generation_stream": "stability.stable-image-core-v1:1",
         # Luma is the only non-legacy video model (Nova Reel is LEGACY on AWS).
@@ -374,10 +360,8 @@ MODEL_MAPPINGS = {
         "responses_web_search": "gpt-5-nano",
         "responses_code_interpreter": "gpt-5-nano",
         "input_tokens": "gpt-4o-mini",
-        # OpenAI retired the whole DALL-E family: a request naming dall-e-2 or
-        # dall-e-3 is refused with "The model ... does not exist" before any other
-        # parameter is read. gpt-image-1 is the remaining image model, and it has
-        # no ``style`` parameter, so that feature is no longer observable upstream.
+        # gpt-image-1 is the only image model OpenAI still serves (the DALL-E family
+        # is refused with "The model ... does not exist"), and it has no ``style``.
         "image_generation": "gpt-image-1",
         "image_generation_hd": "gpt-image-1",
         "image_generation_stream": "gpt-image-1",
@@ -412,10 +396,8 @@ PEGASUS_MODEL = "twelvelabs.pegasus-1-2-v1:0"
 #: Smallest image size each model accepts, within its cheapest billing tier.
 #:
 #: Bedrock image models bill per resolution tier -- Titan's low tier is anything up
-#: to 512px, Nova Canvas tiers at 1024/2048/4096 -- so asking for the smallest size
-#: a model supports is the cheapest way to exercise it. Keeping the size next to the
-#: model also means repointing ``MODEL_MAPPINGS`` at a different model does not
-#: require editing the size in every test that uses it.
+#: to 512px, Nova Canvas tiers at 1024/2048/4096 -- so the smallest size a model
+#: supports is the cheapest way to exercise it.
 #:
 #: Ref: stdapi/models/image/amazon_titan_image_generator.py:image_spec
 IMAGE_MODEL_SIZES: dict[str, str] = {
@@ -497,7 +479,7 @@ OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 _OPENAI_ORGANIZATION = "tests_stdapi.ai"
 #: Markers whose tests are collected only when the matching ``--<marker>`` flag is passed.
-_OPT_IN_MARKERS = ("expensive", "agentic", "slow", "video")
+_OPT_IN_MARKERS = ("expensive", "agentic", "slow", "video", "container")
 #: Fallback skip reason for a ``gateway`` marker that names none of its own.
 _GATEWAY_SKIP_REASON = "Exercises a gateway-only capability (official API selected)"
 #: Extra attempts a ``retry`` test gets when it names no count of its own.
@@ -561,6 +543,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--video", action="store_true", default=False, help="Run video generation tests"
     )
     parser.addoption(
+        "--container",
+        action="store_true",
+        default=False,
+        help="Build the container images and run the tests against them",
+    )
+    parser.addoption(
         "--offline",
         action="store_true",
         default=False,
@@ -588,8 +576,7 @@ def pytest_collection_modifyitems(
 
     ``gateway`` takes an optional reason -- ``@pytest.mark.gateway("Amazon Polly
     is not available on the official OpenAI API")`` -- so a whole module or class
-    can declare once what a per-test ``if use_official_api: pytest.skip(...)``
-    body used to spell out, without losing why it is skipped.
+    can declare once why it is skipped.
 
     ``--offline`` keeps only the tests that need neither AWS credentials nor a
     vendor API key, by skipping every test whose fixture closure contains one of
@@ -1483,13 +1470,10 @@ def pytest_runtest_makereport(
 ) -> Generator[None, _PluggyResult[pytest.TestReport]]:
     """Report failures caused by an unavailable model as xfail.
 
-    A model deprecated by its provider (marked Legacy, or not invoked by the
-    account within AWS's 30-day window), absent from the cross-region inference
-    catalog, or geo-restricted for the account's country is an environmental
-    limitation, not a defect.  Any live test whose
-    failure output carries one of these markers -- including cases where it only
-    surfaces in the server logs behind a bare status assertion -- is converted to
-    ``xfail`` so the run stays informative without blocking the release.
+    A model the backend will not serve is an environmental limitation, not a
+    defect, so any live test whose failure output carries one of
+    ``_UNAVAILABLE_MODEL_MARKERS`` -- including one surfacing only in the server
+    logs behind a bare status assertion -- is converted to ``xfail``.
     """
     outcome: _PluggyResult[pytest.TestReport] = yield
     if call.when != "call":

@@ -46,6 +46,7 @@ class TestModels:
         """
         return openai_client.models.list()
 
+    @pytest.mark.image
     def test_list_models_basic_functionality(
         self, model_catalog: SyncPage[Model]
     ) -> None:

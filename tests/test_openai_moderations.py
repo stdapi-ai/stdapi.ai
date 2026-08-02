@@ -1290,7 +1290,7 @@ class TestComprehendModerationsRoute:
     def test_mixed_text_and_image_input_rejected_as_a_whole(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Pinned current behavior: an image sibling fails the whole batch with 400.
+        """An image sibling fails the whole batch with 400.
 
         Comprehend has no partial-success mode: the image element's
         ``ApiError`` propagates out of the batch's ``gather``, so the
@@ -1697,7 +1697,7 @@ class TestComprehendModerationsRoute:
 
         Live testing showed ``DetectToxicContent``'s runtime enum accepts only
         ``en``, despite AWS docs listing 12 supported languages, so the gateway
-        no longer detects the input's language and forwards a constant instead.
+        forwards that constant instead of detecting the input's language.
 
         Ref: https://docs.aws.amazon.com/comprehend/latest/APIReference/API_DetectToxicContent.html
              stdapi/models/moderation/amazon_comprehend.py:_TOXICITY_LANGUAGE
@@ -2160,9 +2160,9 @@ class TestGuardrailChecksModerationsRoute:
     ) -> None:
         """Outside the supported regions, the default model stays on Comprehend.
 
-        A deployment whose Bedrock regions all lack InvokeGuardrailChecks must
-        keep its previous no-guardrail behavior: the omitted model resolves to
-        Comprehend and no bedrock-runtime call is attempted.
+        A deployment whose Bedrock regions all lack InvokeGuardrailChecks
+        resolves the omitted model to Comprehend, attempting no bedrock-runtime
+        call.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-invoke-guardrail-checks.html
              stdapi/routes/openai_moderations.py:create_moderation
@@ -2568,6 +2568,7 @@ class TestComprehendModerationsLive:
          stdapi/models/moderation/amazon_comprehend.py:ModerationModel
     """
 
+    @pytest.mark.image
     def test_comprehend_moderation(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
