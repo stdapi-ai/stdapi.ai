@@ -369,9 +369,6 @@ async def _map_tool_result_to_bedrock(
 async def _map_document_to_bedrock(block: DocumentBlockParam) -> ContentBlockTypeDef:
     """Convert an Anthropic document block to a Bedrock content block.
 
-    For PDF sources (base64 or URL), calls to_bedrock_content_block.
-    For plain-text sources, returns a fully built document block immediately.
-
     Args:
         block: Anthropic document block param.
 
@@ -807,9 +804,8 @@ def _build_tool_config(
 
     ``tool_choice`` of ``none`` returns no tool config at all, so the model
     behaves as if no tools were passed -- Converse has no ``none`` choice of its
-    own. When the history still requires a ``toolConfig`` because it carries
-    ``toolUse``/``toolResult`` blocks, the model layer synthesizes a permissive
-    one, exactly as it does for the Chat Completions route.
+    own.  When the history still requires a ``toolConfig`` because it carries
+    ``toolUse``/``toolResult`` blocks, the model layer synthesizes a permissive one.
 
     Args:
         tools: Anthropic tool params, or ``None``.
@@ -1544,6 +1540,8 @@ class _StreamState:
         current_index: Index assigned to the block currently in
             progress, or ``None`` when no block is open.
         current_suppressed: ``True`` when the current block is being dropped.
+        current_dropped: ``True`` when the open block was filtered out at its
+            start, so its deltas are discarded instead of synthesizing a block.
         current_tool_use: ``True`` when the open block is a ``tool_use`` /
             ``server_tool_use`` block whose input the SDK accumulates.
         current_tool_input_seen: ``True`` once an ``input_json_delta`` has been
@@ -1559,6 +1557,7 @@ class _StreamState:
     next_index: int = 0
     current_index: int | None = None
     current_suppressed: bool = False
+    current_dropped: bool = False
     current_tool_use: bool = False
     current_tool_input_seen: bool = False
     pending_results: dict[int, dict[str, Any]] = field(default_factory=dict)
@@ -1600,12 +1599,14 @@ def _process_content_block_start(
         start, forced_tool, resp_stream_map_tool_use
     ):
         state.current_suppressed = False
+        state.current_dropped = False
         state.current_index = state.next_index
         state.next_index += 1
         state.current_tool_use = content_block.type in {"tool_use", "server_tool_use"}
         state.current_tool_input_seen = False
         return [_make_block_start_event(state.current_index, content_block)]
     state.current_suppressed = True
+    state.current_dropped = True
     state.current_index = None
     state.current_tool_use = False
     return []
@@ -1623,15 +1624,55 @@ def _emit_synthesized_block(
     return events
 
 
+def _consume_silent_delta(
+    bedrock_index: int, delta: ContentBlockDeltaTypeDef, state: _StreamState
+) -> bool:
+    """Consume a delta that emits no SSE event of its own.
+
+    Three kinds never reach the client as a delta: the payload of a buffered
+    ``toolResult`` block, the deltas of a block whose start was filtered out,
+    and ``redactedContent``, which Anthropic has no delta for and which is
+    emitted whole at ``contentBlockStop``.
+
+    Args:
+        bedrock_index: Index of the Bedrock block the delta belongs to.
+        delta: The ``delta`` field of the Bedrock event.
+        state: Shared stream state; mutated in place.
+
+    Returns:
+        True when the delta was consumed here.
+    """
+    if bedrock_index in state.pending_results:
+        if "toolResult" in delta:
+            state.pending_results[bedrock_index]["content_items"].extend(
+                delta["toolResult"]
+            )
+        return True
+    if state.current_dropped:
+        # The block's start was filtered out, so its input deltas carry a tool
+        # the caller excluded: emitting them would resurface that tool's
+        # arguments under a synthesized, nameless block.
+        return True
+    if (
+        "reasoningContent" in delta
+        and (redacted := delta["reasoningContent"].get("redactedContent")) is not None
+    ):
+        # The payload may span several Bedrock deltas.
+        if state.redacted_buffer is None:
+            state.redacted_buffer = bytearray()
+        state.redacted_buffer.extend(redacted)
+        return True
+    return False
+
+
 def _process_content_block_delta(
     delta_block: ContentBlockDeltaEventTypeDef, state: _StreamState
 ) -> list[JSONServerSentEvent]:
     """Handle a ``contentBlockDelta`` event, updating *state* in place.
 
-    Accumulates payload into the pending buffer when the delta belongs to a
-    buffered ``toolResult`` or ``redactedContent`` block.  For regular blocks,
-    emits a delta SSE event, or synthesises a ``content_block_start`` when
-    there was no prior start event.
+    Deltas that carry no event of their own are consumed by
+    :func:`_consume_silent_delta`.  For regular blocks, emits a delta SSE event,
+    or synthesises a ``content_block_start`` when there was no prior start event.
 
     Args:
         delta_block: The ``contentBlockDelta`` value from the Bedrock stream event.
@@ -1640,23 +1681,8 @@ def _process_content_block_delta(
     Returns:
         SSE events to emit (zero, one, or two events).
     """
-    bedrock_index: int = delta_block["contentBlockIndex"]
     delta = delta_block["delta"]
-    if bedrock_index in state.pending_results:
-        if "toolResult" in delta:
-            state.pending_results[bedrock_index]["content_items"].extend(
-                delta["toolResult"]
-            )
-        return []
-    # Anthropic has no redacted_thinking delta: the payload may span several
-    # Bedrock deltas, so it is buffered and emitted whole at contentBlockStop.
-    if (
-        "reasoningContent" in delta
-        and (redacted := delta["reasoningContent"].get("redactedContent")) is not None
-    ):
-        if state.redacted_buffer is None:
-            state.redacted_buffer = bytearray()
-        state.redacted_buffer.extend(redacted)
+    if _consume_silent_delta(delta_block["contentBlockIndex"], delta, state):
         return []
     if state.current_index is not None:
         if delta_event := _map_delta(state.current_index, delta):
@@ -1738,6 +1764,7 @@ async def _process_content_block_stop(
         ]
     if state.current_suppressed:
         state.current_suppressed = False
+        state.current_dropped = False
         return []
     if state.current_index is not None:
         index = state.current_index
@@ -1781,25 +1808,22 @@ async def _process_stream_events(
 
     Two situations cause a Bedrock block to be dropped entirely:
 
-    1. *Empty text preamble* — some models (e.g. Nova) send an empty ``text``
-       delta for block 0 with no preceding ``contentBlockStart``, and the block
-       contains no further content.  A block whose first delta is ``{"text": ""}``
-       and that receives no subsequent non-empty delta before ``contentBlockStop``
-       is silently discarded.  Models like DeepSeek V3 and Gemma also send an
-       empty initial delta but follow it with real content in the same block; those
-       blocks are correctly surfaced once the first non-empty delta arrives.
+    1. *Empty text preamble* — a block whose first delta is ``{"text": ""}``
+       (Nova sends one for block 0, with no ``contentBlockStart``) is discarded
+       when no non-empty delta follows before ``contentBlockStop``.  DeepSeek V3
+       and Gemma send the same empty first delta but do follow it with real
+       content, so their block is surfaced on that first non-empty delta.
     2. *forced_tool filter* — when a single tool is forced, ``toolUse`` blocks
        for other tools are suppressed.
 
     **Why toolResult blocks are buffered**
 
     Bedrock sends model-internal tool results (e.g. ``nova_code_interpreter``)
-    as a ``toolResult`` block in the same turn as the ``toolUse`` block.  The
-    gateway must translate these to a ``CodeExecutionToolResultBlock`` (or
-    similar) and emit them inline.  The block is buffered until
-    ``contentBlockStop`` so the full JSON payload is available before
-    translation, and the Anthropic index is assigned only at emit time —
-    avoiding gaps if the callback returns ``None``.
+    as a ``toolResult`` block in the same turn as the ``toolUse`` block, and
+    they are emitted inline as a ``CodeExecutionToolResultBlock`` (or similar).
+    The block is buffered until ``contentBlockStop`` so the full JSON payload is
+    available before translation, and the Anthropic index is assigned only at
+    emit time — avoiding gaps if the callback returns ``None``.
 
     **Concrete example: Nova code_interpreter**
 
