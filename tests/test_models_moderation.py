@@ -23,7 +23,11 @@ from stdapi.models import (
     MODEL_ALIASES,
     update_unified_models_collections,
 )
-from stdapi.models.moderation import initialize_moderation_models
+from stdapi.models.moderation import (
+    GUARDRAIL_CHECKS_MODERATION_MODEL,
+    guardrail_checks_regions,
+    initialize_moderation_models,
+)
 from stdapi.routes import openai_moderations  # noqa: F401  (registers the route)
 
 if TYPE_CHECKING:
@@ -73,13 +77,14 @@ class TestInitializeModerationModels:
     """
 
     async def test_without_guardrail(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Only Comprehend is registered and every alias falls back to it.
+        """Without a guardrail, the omni aliases move to the guardrail checks model.
 
-        Comprehend toxicity detection is always available, so with no guardrail
-        configured it also absorbs the ``omni-moderation-*`` aliases, and the
-        model advertises TEXT input only (no image moderation on this backend).
+        The guardrail checks model is registered whenever a configured Bedrock
+        region offers InvokeGuardrailChecks (the case in the test environment),
+        absorbing the ``omni-moderation-*`` aliases before the Comprehend last
+        resort; both backends advertise TEXT input only.
 
-        Ref: https://docs.aws.amazon.com/comprehend/latest/APIReference/API_DetectToxicContent.html
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-invoke-guardrail-checks.html
              stdapi/models/moderation/amazon_bedrock_guardrail.py:ModerationModel.get_aliases
         """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", None)
@@ -87,19 +92,53 @@ class TestInitializeModerationModels:
         await initialize_moderation_models()
         assert COMPREHEND_MODERATION_MODEL in EXTRA_MODELS
         assert GUARDRAIL_MODERATION_MODEL not in EXTRA_MODELS
+        assert GUARDRAIL_CHECKS_MODERATION_MODEL in EXTRA_MODELS
         update_unified_models_collections()
-        for alias in _OMNI_ALIASES + _TEXT_ALIASES:
+        for alias in _OMNI_ALIASES:
+            assert MODEL_ALIASES[alias] == GUARDRAIL_CHECKS_MODERATION_MODEL
+        for alias in _TEXT_ALIASES:
             assert MODEL_ALIASES[alias] == COMPREHEND_MODERATION_MODEL
-        model = EXTRA_MODELS[COMPREHEND_MODERATION_MODEL]
+        model = EXTRA_MODELS[GUARDRAIL_CHECKS_MODERATION_MODEL]
         assert model.supported_routes == ["/v1/moderations"]
         assert model.supported_mcp_tools == ["openai_moderation"]
         assert model.input_modalities == ["TEXT"]  # No image moderation here.
         assert model.output_modalities == ["MODERATION"]
-        assert model.regions == service_regions(SETTINGS.aws_comprehend_region)
-        assert model.regions, "Comprehend must resolve to at least one region"
-        assert sorted(model.aliases or []) == sorted(_OMNI_ALIASES + _TEXT_ALIASES)
+        assert model.regions == guardrail_checks_regions()
+        assert model.regions, "at least one supported region in the test env"
+        assert sorted(model.aliases or []) == sorted(_OMNI_ALIASES)
         assert model.provider == "Amazon"
-        assert model.service == "AWS Comprehend"
+        assert model.service == "AWS Bedrock Runtime"
+        comprehend = EXTRA_MODELS[COMPREHEND_MODERATION_MODEL]
+        assert comprehend.input_modalities == ["TEXT"]
+        assert comprehend.regions == service_regions(SETTINGS.aws_comprehend_region)
+        assert sorted(comprehend.aliases or []) == sorted(_TEXT_ALIASES)
+        assert comprehend.provider == "Amazon"
+        assert comprehend.service == "AWS Comprehend"
+
+    async def test_without_guardrail_or_supported_region(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Outside the checks regions, only Comprehend absorbs every alias.
+
+        A deployment whose Bedrock regions all lack InvokeGuardrailChecks keeps
+        the pre-existing behavior: the checks model is not registered and the
+        ``omni-moderation-*`` aliases fall back to Comprehend.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-invoke-guardrail-checks.html
+             stdapi/models/moderation/__init__.py:guardrail_checks_regions
+        """
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", None)
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_version", None)
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["eu-west-3"])
+        await initialize_moderation_models()
+        assert COMPREHEND_MODERATION_MODEL in EXTRA_MODELS
+        assert GUARDRAIL_MODERATION_MODEL not in EXTRA_MODELS
+        assert GUARDRAIL_CHECKS_MODERATION_MODEL not in EXTRA_MODELS
+        update_unified_models_collections()
+        for alias in _OMNI_ALIASES + _TEXT_ALIASES:
+            assert MODEL_ALIASES[alias] == COMPREHEND_MODERATION_MODEL
+        model = EXTRA_MODELS[COMPREHEND_MODERATION_MODEL]
+        assert sorted(model.aliases or []) == sorted(_OMNI_ALIASES + _TEXT_ALIASES)
 
     async def test_comprehend_region_setting_propagates(
         self, monkeypatch: pytest.MonkeyPatch
@@ -123,10 +162,11 @@ class TestInitializeModerationModels:
     async def test_with_guardrail(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The guardrail model is registered and takes the omni aliases.
 
-        With a guardrail configured both backends coexist: the omni aliases move
-        to the guardrail (which alone accepts images) while the legacy text
-        aliases stay on Comprehend. A bare identifier has no region, so the model
-        is advertised in the primary Bedrock Region.
+        With a guardrail configured every backend coexists: the omni aliases
+        move to the guardrail (which alone accepts images, and outranks the
+        guardrail checks model) while the legacy text aliases stay on
+        Comprehend. A bare identifier has no region, so the model is advertised
+        in the primary Bedrock Region.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html
              stdapi/aws_bedrock.py:guardrail_region
@@ -153,6 +193,10 @@ class TestInitializeModerationModels:
         assert sorted(
             EXTRA_MODELS[COMPREHEND_MODERATION_MODEL].aliases or []
         ) == sorted(_TEXT_ALIASES)
+        # The guardrail checks model is still registered, without any alias.
+        checks = EXTRA_MODELS[GUARDRAIL_CHECKS_MODERATION_MODEL]
+        assert not checks.aliases
+        assert checks.regions == guardrail_checks_regions()
 
     async def test_guardrail_arn_sets_region(
         self, monkeypatch: pytest.MonkeyPatch

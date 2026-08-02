@@ -1,16 +1,14 @@
 """OpenAI-compatible Moderations API backed by AWS Bedrock Guardrails or Amazon Comprehend.
 
-This module implements the /v1/moderations endpoint following the OpenAI API
-specification, classifying content with the AWS Bedrock ApplyGuardrail API or
-with Amazon Comprehend toxicity detection.
-
 The ``model`` parameter selects the moderation model: an AWS Bedrock
 guardrail (``amazon.bedrock-runtime-guardrail`` for the server's default
-guardrail, or an explicit ``<id>``, ``<id>:<version>``, or ARN) or Amazon
-Comprehend toxicity detection (``amazon.comprehend-toxicity``). OpenAI
-moderation model names are aliases: ``omni-moderation-*`` for the default
-guardrail (falling back to Comprehend when none is configured) and
-``text-moderation-*`` for Comprehend.
+guardrail, or an explicit ``<id>``, ``<id>:<version>``, or ARN), inline
+guardrail content filter checks (``amazon.bedrock-runtime-guardrail-checks``,
+no guardrail resource needed) or Amazon Comprehend toxicity detection
+(``amazon.comprehend-toxicity``). OpenAI moderation model names are aliases:
+``omni-moderation-*`` for the default guardrail (falling back to guardrail
+checks, then Comprehend, when none is configured) and ``text-moderation-*``
+for Comprehend.
 """
 
 from asyncio import gather
@@ -21,12 +19,23 @@ from fastapi import APIRouter, Depends
 
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
-from stdapi.aws_bedrock import COMPREHEND_MODERATION_MODEL, resolve_moderation_model
+from stdapi.aws_bedrock import (
+    COMPREHEND_MODERATION_MODEL,
+    is_comprehend_moderation_model,
+    resolve_moderation_model,
+)
 from stdapi.config import SETTINGS
 from stdapi.models.capabilities import register_route_capability
-from stdapi.models.moderation import MODERATION_MODALITY
+from stdapi.models.moderation import (
+    GUARDRAIL_CHECKS_MODERATION_MODEL,
+    MODERATION_MODALITY,
+    guardrail_checks_regions,
+)
 from stdapi.models.moderation.amazon_bedrock_guardrail import (
     ModerationModel as GuardrailModerationModel,
+)
+from stdapi.models.moderation.amazon_bedrock_guardrail_checks import (
+    ModerationModel as GuardrailChecksModerationModel,
 )
 from stdapi.models.moderation.amazon_comprehend import (
     ModerationModel as ComprehendModerationModel,
@@ -75,6 +84,12 @@ _INPUT_BATCH_SIZE: int = 10
         "`VIOLENCE`→`violence`, `MISCONDUCT`→`illicit`); other guardrail "
         "policies (denied topics, word filters, sensitive information) "
         "surface through the overall `flagged` field.\n"
+        "- **`amazon.bedrock-runtime-guardrail-checks`** (AWS Bedrock inline "
+        "guardrail checks) — text inputs only, no guardrail resource needed. "
+        "Content filter checks map to the same OpenAI categories, with "
+        "severity scores (`0.0` to `1.0`) reported directly. Available only "
+        "when a configured Bedrock region offers the InvokeGuardrailChecks "
+        "operation.\n"
         "- **`amazon.comprehend-toxicity`** (Amazon Comprehend toxicity "
         "detection) — English text only, no images. `flagged` can be true "
         "even with every category `false` and every score `0.0`: it also "
@@ -82,8 +97,9 @@ _INPUT_BATCH_SIZE: int = 10
         "profanity.\n\n"
         "Omit `model` to use the server's default moderation model. OpenAI "
         "moderation model names are accepted as aliases: `omni-moderation-*` "
-        "for the default guardrail (falling back to Comprehend when none is "
-        "configured) and `text-moderation-*` for Comprehend.\n\n"
+        "for the default guardrail (falling back to guardrail checks, then "
+        "Comprehend, when none is configured) and `text-moderation-*` for "
+        "Comprehend.\n\n"
         "**MCP / AI agent usage:** image inputs accept a base64 string, data "
         "URI, HTTPS URL, or S3 URI in `image_url.url`."
     ),
@@ -141,13 +157,25 @@ async def create_moderation(
     """
     log_request_params(body)
     items = [body.input] if isinstance(body.input, str) else list(body.input)
-    if (resolved := resolve_moderation_model(body.model)) is None:
-        model = body.model or COMPREHEND_MODERATION_MODEL
-        moderation_model: ModerationModelBase = ComprehendModerationModel(model)
-    else:
+    if body.model == GUARDRAIL_CHECKS_MODERATION_MODEL:
+        model = body.model
+        moderation_model: ModerationModelBase = GuardrailChecksModerationModel(model)
+    elif (resolved := resolve_moderation_model(body.model)) is not None:
         identifier, version = resolved
         model = body.model or f"{identifier}:{version}"
         moderation_model = GuardrailModerationModel(model, identifier, version)
+    elif (
+        body.model is None or not is_comprehend_moderation_model(body.model)
+    ) and guardrail_checks_regions():
+        # No guardrail configured: an omitted model or an omni-moderation-*
+        # alias uses guardrail checks before Comprehend as a last resort.
+        model = body.model or GUARDRAIL_CHECKS_MODERATION_MODEL
+        moderation_model = GuardrailChecksModerationModel(
+            model, comprehend_fallback=True
+        )
+    else:
+        model = body.model or COMPREHEND_MODERATION_MODEL
+        moderation_model = ComprehendModerationModel(model)
     results: list[Moderation] = []
     for batch in batched(items, _INPUT_BATCH_SIZE, strict=False):
         results.extend(await gather(*map(moderation_model.moderate, batch)))

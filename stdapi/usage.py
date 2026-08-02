@@ -596,10 +596,10 @@ def record_comprehend_usage(
 def record_guardrail_usage(
     model: str, *, text_units: int = 0, images: int = 0, region: str = ""
 ) -> None:
-    """Record AWS Bedrock Guardrails (ApplyGuardrail) usage.
+    """Record AWS Bedrock Guardrails (ApplyGuardrail or InvokeGuardrailChecks) usage.
 
-    AWS bills guardrail policies per text unit (1,000 characters) for text
-    content and per image for image content.
+    AWS bills guardrail policies and guardrail checks per text unit (1,000
+    characters) for text content and per image for image content.
 
     Args:
         model: Guardrail model ID reported in the moderation response.

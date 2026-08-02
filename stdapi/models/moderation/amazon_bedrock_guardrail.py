@@ -13,6 +13,7 @@ from stdapi.aws_bedrock import (
     map_guardrail_filters,
 )
 from stdapi.models.moderation import (
+    GUARDRAIL_CHECKS_MODERATION_MODEL,
     ModerationModelBase,
     applied_input_types,
     unflagged_moderation,
@@ -92,8 +93,9 @@ class ModerationModel(ModerationModelBase):
         """Return the OpenAI omni moderation model aliases.
 
         The aliases target the default guardrail model when it is registered
-        (a guardrail is configured) and fall back to Amazon Comprehend
-        toxicity detection otherwise.
+        (a guardrail is configured), then the guardrail checks model when a
+        configured region offers it, and fall back to Amazon Comprehend
+        toxicity detection as a last resort.
 
         Args:
             all_models: All available models keyed by model ID.
@@ -101,11 +103,12 @@ class ModerationModel(ModerationModelBase):
         Returns:
             A dict mapping alias to model ID.
         """
-        target = (
-            GUARDRAIL_MODERATION_MODEL
-            if GUARDRAIL_MODERATION_MODEL in all_models
-            else COMPREHEND_MODERATION_MODEL
-        )
+        if GUARDRAIL_MODERATION_MODEL in all_models:
+            target = GUARDRAIL_MODERATION_MODEL
+        elif GUARDRAIL_CHECKS_MODERATION_MODEL in all_models:
+            target = GUARDRAIL_CHECKS_MODERATION_MODEL
+        else:
+            target = COMPREHEND_MODERATION_MODEL
         return {"omni-moderation-latest": target, "omni-moderation-2024-09-26": target}
 
     async def moderate(self, item: ModerationInput) -> Moderation:

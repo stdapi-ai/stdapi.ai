@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
+from botocore.exceptions import ClientError
 from pydantic import ValidationError
 from starlette.testclient import TestClient
 
@@ -19,6 +20,7 @@ from stdapi.models.moderation import (
     ALL_CATEGORIES,
     IMAGE_CATEGORIES,
     amazon_bedrock_guardrail,
+    amazon_bedrock_guardrail_checks,
     amazon_comprehend,
 )
 from stdapi.routes import openai_moderations
@@ -1162,9 +1164,14 @@ class TestComprehendModerationsRoute:
 
     @pytest.fixture(autouse=True)
     def _no_ambient_guardrail(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Ensure no guardrail from the environment leaks into these tests."""
+        """Ensure no guardrail or guardrail checks region leaks into these tests.
+
+        The Bedrock regions are pinned to one without InvokeGuardrailChecks so
+        the default resolution reaches its Comprehend last resort.
+        """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", None)
         monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_version", None)
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["eu-west-3"])
 
     def test_default_backend_without_guardrail(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -1319,8 +1326,9 @@ class TestComprehendModerationsRoute:
         """OpenAI moderation names use Comprehend when no guardrail is set.
 
         ``omni-moderation-*`` normally targets the guardrail, but with none
-        configured it degrades to the Comprehend backend instead of failing;
-        either way the requested alias is echoed back.
+        configured (and no InvokeGuardrailChecks region available) it degrades
+        to the Comprehend backend instead of failing; either way the requested
+        alias is echoed back.
 
         Ref: https://stdapi.ai/api_openai_moderations/
              stdapi/models/moderation/amazon_bedrock_guardrail.py:ModerationModel.get_aliases
@@ -1750,6 +1758,610 @@ class TestComprehendModerationsRoute:
         assert "guardrail" in message
         assert "aws_bedrock_guardrail_identifier" not in message.lower()
         assert batches == [], "no Comprehend call for an image input"
+
+
+#: The guardrail checks moderation model ID (explicit spelling).
+_CHECKS_MODEL = "amazon.bedrock-runtime-guardrail-checks"
+
+#: A ClientError for the missing bedrock:InvokeGuardrailChecks permission.
+_ACCESS_DENIED = ClientError(
+    {
+        "Error": {
+            "Code": "AccessDeniedException",
+            "Message": "not authorized to perform bedrock:InvokeGuardrailChecks",
+        },
+        "ResponseMetadata": {"HTTPStatusCode": 403},
+    },
+    "InvokeGuardrailChecks",
+)
+
+
+def _checks_response(
+    entries: list[dict[str, Any]], text_units: int = 1
+) -> dict[str, Any]:
+    """Build an InvokeGuardrailChecks response with content filter *entries*."""
+    return {
+        "results": {"contentFilter": {"results": entries}},
+        "usage": {"contentFilter": {"textUnits": text_units}},
+    }
+
+
+class _StubChecksClient:
+    """Stub bedrock-runtime client recording invoke_guardrail_checks calls."""
+
+    def __init__(
+        self, response: dict[str, Any], error: ClientError | None = None
+    ) -> None:
+        self.requests: list[dict[str, Any]] = []
+        self._response = response
+        self._error = error
+
+    async def invoke_guardrail_checks(self, **params: Any) -> dict[str, Any]:  # noqa: ANN401
+        """Record the request, then raise the canned error or return the response."""
+        self.requests.append(params)
+        if self._error is not None:
+            raise self._error
+        return self._response
+
+
+def _stub_checks(
+    monkeypatch: pytest.MonkeyPatch,
+    response: dict[str, Any],
+    error: ClientError | None = None,
+) -> tuple[_StubChecksClient, list[list[str]]]:
+    """Stub the guardrail checks failover call, recording the region pools."""
+    stub = _StubChecksClient(response, error)
+    pools: list[list[str]] = []
+
+    async def _call(
+        service: str,
+        regions: list[str],
+        call: Any,  # noqa: ANN401
+    ) -> tuple[dict[str, Any], str]:
+        assert service == "bedrock-runtime"
+        pools.append(list(regions))
+        return await call(stub, regions[0]), regions[0]
+
+    monkeypatch.setattr(
+        amazon_bedrock_guardrail_checks, "call_with_region_failover", _call
+    )
+    return stub, pools
+
+
+@pytest.mark.local
+class TestGuardrailChecksModerationsRoute:
+    """POST /v1/moderations: Bedrock InvokeGuardrailChecks backend.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-invoke-guardrail-checks.html
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeGuardrailChecks.html
+         stdapi/models/moderation/amazon_bedrock_guardrail_checks.py:ModerationModel
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_ambient_guardrail(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Ensure no guardrail from the environment leaks into these tests."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", None)
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_version", None)
+
+    def test_default_model_uses_guardrail_checks(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without a guardrail, an omitted model resolves to guardrail checks.
+
+        The request must ask for the ``contentFilter`` check only (checks are
+        billed per requested check), with all five mapped categories, and wrap
+        the input as a single user message.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeGuardrailChecks.html
+             stdapi/routes/openai_moderations.py:create_moderation
+        """
+        stub, _ = _stub_checks(monkeypatch, _checks_response([]))
+
+        response = app_client.post("/v1/moderations", json={"input": "some text"})
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["id"].startswith("modr-")
+        assert body["model"] == _CHECKS_MODEL
+        (result,) = body["results"]
+        assert result["flagged"] is False
+        (request,) = stub.requests
+        assert request["messages"] == [
+            {"role": "user", "content": [{"text": "some text"}]}
+        ]
+        assert request["checks"] == {
+            "contentFilter": {
+                "categories": [
+                    {"category": category}
+                    for category in (
+                        "HATE",
+                        "INSULTS",
+                        "SEXUAL",
+                        "VIOLENCE",
+                        "MISCONDUCT",
+                    )
+                ]
+            }
+        }
+
+    def test_category_and_score_mapping(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Content filter categories map to OpenAI categories with verbatim scores.
+
+        ``severityScore`` is a discrete 0.0/0.2/…/1.0 value reported directly in
+        ``category_scores`` (no confidence-level quantization), and each
+        category flags independently at the 0.5 threshold. All 13 OpenAI keys
+        are present even though only five categories have a counterpart.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-invoke-guardrail-checks.html
+             stdapi/models/moderation/amazon_bedrock_guardrail_checks.py:_CONTENT_FILTER_CATEGORIES
+        """
+        _stub_checks(
+            monkeypatch,
+            _checks_response(
+                [
+                    {"category": "HATE", "severityScore": 0.8},
+                    {"category": "INSULTS", "severityScore": 0.4},
+                    {"category": "SEXUAL", "severityScore": 0.0},
+                    {"category": "VIOLENCE", "severityScore": 0.2},
+                    {"category": "MISCONDUCT", "severityScore": 0.6},
+                ]
+            ),
+        )
+
+        response = app_client.post("/v1/moderations", json={"input": "some text"})
+
+        assert response.status_code == 200, response.text
+        (result,) = response.json()["results"]
+        assert result["flagged"] is True
+        assert len(result["categories"]) == len(ALL_CATEGORIES)
+        assert len(result["category_scores"]) == len(ALL_CATEGORIES)
+        assert result["categories"]["hate"] is True
+        assert result["categories"]["harassment"] is False
+        assert result["categories"]["sexual"] is False
+        assert result["categories"]["violence"] is False
+        assert result["categories"]["illicit"] is True
+        assert result["category_scores"]["hate"] == 0.8
+        assert result["category_scores"]["harassment"] == 0.4
+        assert result["category_scores"]["sexual"] == 0.0
+        assert result["category_scores"]["violence"] == 0.2
+        assert result["category_scores"]["illicit"] == 0.6
+        # Unmapped OpenAI categories stay clean.
+        assert result["categories"]["self-harm"] is False
+        assert result["category_scores"]["self-harm"] == 0.0
+        applied = result["category_applied_input_types"]
+        assert all(value == ["text"] for value in applied.values())
+
+    @pytest.mark.parametrize(
+        ("score", "flagged"), [(0.4, False), (0.5, True), (0.6, True)]
+    )
+    def test_flag_threshold_is_inclusive(
+        self,
+        app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        score: float,
+        flagged: bool,
+    ) -> None:
+        """A severity score flags its category at or above 0.5.
+
+        The API returns scores, not verdicts, so the gateway applies the same
+        inclusive ``>=`` 0.5 threshold as the Comprehend backend; the score is
+        reported verbatim either way.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-invoke-guardrail-checks.html
+             stdapi/models/moderation/amazon_bedrock_guardrail_checks.py:_SEVERITY_THRESHOLD
+        """
+        _stub_checks(
+            monkeypatch,
+            _checks_response([{"category": "VIOLENCE", "severityScore": score}]),
+        )
+
+        response = app_client.post("/v1/moderations", json={"input": "x"})
+
+        assert response.status_code == 200, response.text
+        (result,) = response.json()["results"]
+        assert result["flagged"] is flagged
+        assert result["categories"]["violence"] is flagged
+        assert result["category_scores"]["violence"] == score
+
+    def test_multiple_inputs_yield_one_call_and_result_each(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Each input element is classified by its own InvokeGuardrailChecks call.
+
+        Scores are returned per category for the whole request, not per content
+        block, so the gateway issues one call per input element, mirroring the
+        ApplyGuardrail backend.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeGuardrailChecks.html
+             stdapi/routes/openai_moderations.py:create_moderation
+        """
+        stub, _ = _stub_checks(monkeypatch, _checks_response([]))
+
+        response = app_client.post("/v1/moderations", json={"input": ["a", "b"]})
+
+        assert response.status_code == 200, response.text
+        results = response.json()["results"]
+        assert len(results) == 2
+        assert all(result["flagged"] is False for result in results)
+        assert sorted(
+            block["text"]
+            for request in stub.requests
+            for message in request["messages"]
+            for block in message["content"]
+        ) == ["a", "b"]
+
+    @pytest.mark.parametrize("model", ["omni-moderation-latest", _CHECKS_MODEL])
+    def test_omni_alias_and_explicit_model_use_checks(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch, model: str
+    ) -> None:
+        """omni-moderation-* and the explicit model ID select guardrail checks.
+
+        Without a configured guardrail the omni aliases resolve to guardrail
+        checks before the Comprehend last resort; either spelling is echoed
+        back verbatim in ``model``.
+
+        Ref: https://stdapi.ai/api_openai_moderations/
+             stdapi/routes/openai_moderations.py:create_moderation
+        """
+        stub, _ = _stub_checks(monkeypatch, _checks_response([]))
+
+        response = app_client.post(
+            "/v1/moderations", json={"input": "x", "model": model}
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["model"] == model
+        assert len(stub.requests) == 1
+
+    def test_configured_guardrail_takes_priority(
+        self,
+        app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        configured_guardrail: None,
+    ) -> None:
+        """A configured guardrail keeps owning the default moderation model.
+
+        Guardrail checks slot in *between* the configured guardrail and
+        Comprehend: when a guardrail is configured, an omitted model must still
+        reach ApplyGuardrail, not InvokeGuardrailChecks.
+
+        Ref: stdapi/routes/openai_moderations.py:create_moderation
+             stdapi/aws_bedrock.py:resolve_moderation_model
+        """
+        checks_stub, _ = _stub_checks(monkeypatch, _checks_response([]))
+        guardrail_stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
+
+        response = app_client.post("/v1/moderations", json={"input": "x"})
+
+        assert response.status_code == 200, response.text
+        assert response.json()["model"] == "gr123:1"
+        assert len(guardrail_stub.requests) == 1
+        assert not checks_stub.requests, "guardrail checks must not be called"
+
+    def test_explicit_checks_model_bypasses_configured_guardrail(
+        self,
+        app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        configured_guardrail: None,
+    ) -> None:
+        """amazon.bedrock-runtime-guardrail-checks is honored with a guardrail set.
+
+        The explicit model ID selects the inline checks backend even when the
+        server has a default guardrail, mirroring how
+        ``amazon.comprehend-toxicity`` bypasses it.
+
+        Ref: https://stdapi.ai/api_openai_moderations/
+             stdapi/routes/openai_moderations.py:create_moderation
+        """
+        checks_stub, _ = _stub_checks(monkeypatch, _checks_response([]))
+        guardrail_stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
+
+        response = app_client.post(
+            "/v1/moderations", json={"input": "x", "model": _CHECKS_MODEL}
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["model"] == _CHECKS_MODEL
+        assert len(checks_stub.requests) == 1
+        assert not guardrail_stub.requests, "the guardrail must not be called"
+
+    def test_region_pool_keeps_configured_order(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The failover pool is the configured regions offering the operation.
+
+        InvokeGuardrailChecks exists in a handful of regions only, so the pool
+        drops unsupported configured regions while preserving the configured
+        priority order.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-invoke-guardrail-checks.html
+             stdapi/models/moderation/__init__.py:guardrail_checks_regions
+        """
+        monkeypatch.setattr(
+            SETTINGS, "aws_bedrock_regions", ["eu-west-1", "us-west-2", "us-east-1"]
+        )
+        _, pools = _stub_checks(monkeypatch, _checks_response([]))
+
+        response = app_client.post("/v1/moderations", json={"input": "x"})
+
+        assert response.status_code == 200, response.text
+        assert pools == [["us-west-2", "us-east-1"]]
+
+    def test_unsupported_regions_fall_back_to_comprehend(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Outside the supported regions, the default model stays on Comprehend.
+
+        A deployment whose Bedrock regions all lack InvokeGuardrailChecks must
+        keep its previous no-guardrail behavior: the omitted model resolves to
+        Comprehend and no bedrock-runtime call is attempted.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-invoke-guardrail-checks.html
+             stdapi/routes/openai_moderations.py:create_moderation
+        """
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["eu-west-3"])
+        checks_stub, _ = _stub_checks(monkeypatch, _checks_response([]))
+        batches = _stub_toxicity(monkeypatch, [[_CLEAN_RESULT]])
+
+        response = app_client.post("/v1/moderations", json={"input": "x"})
+
+        assert response.status_code == 200, response.text
+        assert response.json()["model"] == "amazon.comprehend-toxicity"
+        assert batches == [["x"]]
+        assert not checks_stub.requests, "guardrail checks must not be called"
+
+    def test_explicit_model_rejected_outside_supported_regions(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The explicit checks model errors when no configured region offers it.
+
+        Unlike the omni aliases, the explicit model ID does not silently fall
+        back to Comprehend; the message points at the administrator without
+        disclosing the setting name.
+
+        Ref: stdapi/models/moderation/amazon_bedrock_guardrail_checks.py:ModerationModel.__init__
+        """
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["eu-west-3"])
+        checks_stub, _ = _stub_checks(monkeypatch, _checks_response([]))
+
+        response = app_client.post(
+            "/v1/moderations", json={"input": "x", "model": _CHECKS_MODEL}
+        )
+
+        assert response.status_code == 400
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "administrator" in error["message"]
+        assert "aws_bedrock_regions" not in error["message"].lower()
+        assert not checks_stub.requests
+
+    def test_access_denied_falls_back_to_comprehend_with_warning(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing bedrock:InvokeGuardrailChecks permission degrades to Comprehend.
+
+        Deployments predating the new IAM permission must not break: on
+        AccessDenied the default moderation request is served by Comprehend and
+        the request log carries a warning naming the missing permission.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-invoke-guardrail-checks.html
+             stdapi/models/moderation/amazon_bedrock_guardrail_checks.py:ModerationModel.moderate
+        """
+        from stdapi import monitoring  # noqa: PLC0415
+
+        checks_stub, _ = _stub_checks(
+            monkeypatch, _checks_response([]), error=_ACCESS_DENIED
+        )
+        batches = _stub_toxicity(monkeypatch, [[_CLEAN_RESULT]])
+        written: list[dict[str, Any]] = []
+        monkeypatch.setattr(monitoring, "write_log_event", written.append)
+
+        response = app_client.post("/v1/moderations", json={"input": "x"})
+
+        assert response.status_code == 200, response.text
+        assert response.json()["model"] == _CHECKS_MODEL
+        assert len(checks_stub.requests) == 1
+        assert batches == [["x"]], "Comprehend must have classified the input"
+        (request_log,) = [w for w in written if w.get("type") == "request"]
+        assert any(
+            "bedrock:InvokeGuardrailChecks" in str(detail)
+            for detail in request_log.get("error_detail", [])
+        ), request_log
+
+    def test_explicit_model_access_denied_is_not_masked(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An explicitly-selected checks model surfaces AccessDenied as 403.
+
+        The Comprehend degradation exists only for the default-model
+        resolution; a caller who asked for guardrail checks by ID gets the
+        real permission error instead of silently different results.
+
+        Ref: stdapi/aws_bedrock.py:AWS_ERROR_MAP
+             stdapi/models/moderation/amazon_bedrock_guardrail_checks.py:ModerationModel.moderate
+        """
+        _stub_checks(monkeypatch, _checks_response([]), error=_ACCESS_DENIED)
+        batches = _stub_toxicity(monkeypatch, [[_CLEAN_RESULT]])
+
+        response = app_client.post(
+            "/v1/moderations", json={"input": "x", "model": _CHECKS_MODEL}
+        )
+
+        assert response.status_code == 403
+        assert response.json()["error"]["type"] == "permission_error"
+        assert batches == [], "no Comprehend fallback on explicit selection"
+
+    def test_text_moderation_aliases_stay_on_comprehend(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """text-moderation-* stays pinned to Comprehend despite checks availability.
+
+        OpenAI's legacy text moderation models keep mapping to Comprehend
+        even when guardrail checks could serve the request.
+
+        Ref: https://stdapi.ai/api_openai_moderations/
+             stdapi/aws_bedrock.py:is_comprehend_moderation_model
+        """
+        checks_stub, _ = _stub_checks(monkeypatch, _checks_response([]))
+        batches = _stub_toxicity(monkeypatch, [[_CLEAN_RESULT]])
+
+        response = app_client.post(
+            "/v1/moderations", json={"input": "x", "model": "text-moderation-latest"}
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["model"] == "text-moderation-latest"
+        assert batches == [["x"]]
+        assert not checks_stub.requests, "guardrail checks must not be called"
+
+    def test_image_input_rejected(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Image moderation is rejected on the guardrail checks backend.
+
+        InvokeGuardrailChecks accepts only text content blocks today, so an
+        image input still requires a guardrail resource; the error must say so
+        without disclosing the server setting name.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeGuardrailChecks.html
+             stdapi/models/moderation/amazon_bedrock_guardrail_checks.py:ModerationModel.moderate
+        """
+        checks_stub, _ = _stub_checks(monkeypatch, _checks_response([]))
+
+        response = app_client.post(
+            "/v1/moderations",
+            json={
+                "input": [{"type": "image_url", "image_url": {"url": _PNG_DATA_URI}}]
+            },
+        )
+
+        assert response.status_code == 400
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "guardrail" in error["message"]
+        assert "aws_bedrock_guardrail_identifier" not in error["message"].lower()
+        assert not checks_stub.requests, "no AWS call for an image input"
+
+    def test_empty_string_input_is_clean_without_aws_call(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An exactly-empty string yields an unflagged result and no AWS call.
+
+        Same OpenAI-parity shortcut as the other backends. The stub is armed
+        with a flagged response: any AWS call would make the result flagged.
+
+        Ref: https://stdapi.ai/api_openai_moderations/
+             stdapi/models/moderation/amazon_bedrock_guardrail_checks.py:ModerationModel.moderate
+        """
+        checks_stub, _ = _stub_checks(
+            monkeypatch, _checks_response([{"category": "HATE", "severityScore": 1.0}])
+        )
+
+        response = app_client.post("/v1/moderations", json={"input": ""})
+
+        assert response.status_code == 200, response.text
+        (result,) = response.json()["results"]
+        assert result["flagged"] is False
+        assert not any(result["categories"].values())
+        assert not checks_stub.requests
+
+    def test_usage_records_reported_text_units(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Guardrail checks record the API-reported content filter text units.
+
+        The response's ``usage.contentFilter.textUnits`` is the billed
+        quantity, so it is recorded verbatim under the checks model ID with
+        the region that served the call.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeGuardrailChecks.html
+             stdapi/usage.py:record_guardrail_usage
+        """
+        from stdapi import monitoring  # noqa: PLC0415
+
+        _stub_checks(monkeypatch, _checks_response([], text_units=3))
+        written: list[dict[str, Any]] = []
+        monkeypatch.setattr(monitoring, "write_log_event", written.append)
+
+        response = app_client.post("/v1/moderations", json={"input": "some text"})
+
+        assert response.status_code == 200, response.text
+        (request_log,) = [w for w in written if w.get("type") == "request"]
+        (entry,) = request_log["usage"]
+        assert entry["service"] == "bedrock-runtime"
+        assert entry["model"] == _CHECKS_MODEL
+        assert (
+            entry["region"]
+            == amazon_bedrock_guardrail_checks.guardrail_checks_regions()[0]
+        )
+        assert entry["text_units"] == 3
+        assert "input_images" not in entry
+
+    def test_usage_defaults_to_character_count_without_usage_block(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without a contentFilter usage block, text units fall back to characters.
+
+        A defensive path: 1,500 characters bill ceil(1500 / 1000) = 2 text
+        units, matching the ApplyGuardrail metering rule.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeGuardrailChecks.html
+             stdapi/models/moderation/amazon_bedrock_guardrail_checks.py:ModerationModel._invoke_checks
+        """
+        from stdapi import monitoring  # noqa: PLC0415
+
+        _stub_checks(
+            monkeypatch, {"results": {"contentFilter": {"results": []}}, "usage": {}}
+        )
+        written: list[dict[str, Any]] = []
+        monkeypatch.setattr(monitoring, "write_log_event", written.append)
+
+        response = app_client.post("/v1/moderations", json={"input": "a" * 1_500})
+
+        assert response.status_code == 200, response.text
+        (request_log,) = [w for w in written if w.get("type") == "request"]
+        (entry,) = request_log["usage"]
+        assert entry["text_units"] == 2
+
+    def test_first_region_failure_fails_over_to_the_next(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A throttled first region fails over to the next supported region.
+
+        The backend goes through the shared multi-region failover helper, so a
+        region-level error (throttling) in the primary supported region is
+        retried in the next one instead of failing the request.
+
+        Ref: stdapi/aws.py:call_with_region_failover
+             stdapi/models/moderation/amazon_bedrock_guardrail_checks.py:ModerationModel._invoke_checks
+        """
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1", "us-west-2"])
+        throttled = _StubChecksClient(
+            _checks_response([]),
+            ClientError(
+                {
+                    "Error": {"Code": "ThrottlingException", "Message": "slow down"},
+                    "ResponseMetadata": {"HTTPStatusCode": 429},
+                },
+                "InvokeGuardrailChecks",
+            ),
+        )
+        healthy = _StubChecksClient(_checks_response([]))
+        clients = {"us-east-1": throttled, "us-west-2": healthy}
+
+        def _get_client(service: str, region: str) -> _StubChecksClient:
+            assert service == "bedrock-runtime"
+            return clients[region]
+
+        monkeypatch.setattr("stdapi.aws.get_client", _get_client)
+
+        response = app_client.post("/v1/moderations", json={"input": "x"})
+
+        assert response.status_code == 200, response.text
+        assert len(throttled.requests) == 1
+        assert len(healthy.requests) == 1
 
 
 @pytest.fixture(scope="module")

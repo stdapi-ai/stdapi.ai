@@ -36,8 +36,26 @@ from stdapi.types.openai_moderations import (
 if TYPE_CHECKING:
     from re import Pattern
 
+    from types_aiobotocore_bedrock.literals import RegionName
+
 #: Output modality advertised by moderation models (classification results).
 MODERATION_MODALITY: str = "MODERATION"
+
+#: Moderation model ID selecting the Bedrock InvokeGuardrailChecks backend.
+GUARDRAIL_CHECKS_MODERATION_MODEL: str = "amazon.bedrock-runtime-guardrail-checks"
+
+#: Regions offering the Bedrock InvokeGuardrailChecks operation.
+GUARDRAIL_CHECKS_REGIONS: frozenset[str] = frozenset(
+    {
+        "us-east-1",
+        "us-east-2",
+        "us-west-2",
+        "eu-west-2",
+        "eu-north-1",
+        "ap-northeast-1",
+        "ap-southeast-2",
+    }
+)
 
 #: A single Moderations API input element.
 type ModerationInput = str | ModerationTextInput | ModerationImageURLInput
@@ -59,6 +77,20 @@ IMAGE_CATEGORIES: frozenset[str] = frozenset(
         "violence/graphic",
     }
 )
+
+
+def guardrail_checks_regions() -> list[RegionName]:
+    """Return the configured Bedrock regions offering InvokeGuardrailChecks.
+
+    Returns:
+        The candidate regions in configured priority order; empty when the
+        operation is available in none of the configured Bedrock regions.
+    """
+    return [
+        region
+        for region in SETTINGS.aws_bedrock_regions
+        if region in GUARDRAIL_CHECKS_REGIONS
+    ]
 
 
 def applied_input_types(*, image: bool) -> ModerationCategoryAppliedInputTypes:
@@ -117,11 +149,26 @@ class ModerationModelBase(ModelBase[None, None]):
 _MODEL_REGISTRY: list[tuple[str | Pattern[str], type[ModerationModelBase]]] = []
 
 
+def _deregister_extra_model(model_id: str) -> None:
+    """Remove a conditionally-registered moderation model from the listings.
+
+    Args:
+        model_id: Extra model ID to remove.
+    """
+    for modality_map in (EXTRA_MODELS_INPUT_MODALITY, EXTRA_MODELS_OUTPUT_MODALITY):
+        for models in modality_map.values():
+            models.discard(model_id)
+    EXTRA_MODELS.pop(model_id, None)
+
+
 async def initialize_moderation_models() -> None:
     """Register the moderation models as extra models.
 
-    Amazon Comprehend toxicity detection is always available; the default
-    guardrail model is registered only when a guardrail is configured.
+    Amazon Comprehend toxicity detection is always available; the guardrail
+    checks model is registered only when a configured Bedrock region offers
+    InvokeGuardrailChecks, and the default guardrail model only when a
+    guardrail is configured. Models whose condition no longer holds are
+    deregistered so re-initialization reflects the current settings.
     """
     EXTRA_MODELS_INPUT_MODALITY.setdefault("TEXT", set()).add(
         COMPREHEND_MODERATION_MODEL
@@ -138,7 +185,26 @@ async def initialize_moderation_models() -> None:
         output_modalities=[MODERATION_MODALITY],
         regions=service_regions(SETTINGS.aws_comprehend_region),
     )
+    if checks_regions := guardrail_checks_regions():
+        EXTRA_MODELS_INPUT_MODALITY.setdefault("TEXT", set()).add(
+            GUARDRAIL_CHECKS_MODERATION_MODEL
+        )
+        EXTRA_MODELS_OUTPUT_MODALITY.setdefault(MODERATION_MODALITY, set()).add(
+            GUARDRAIL_CHECKS_MODERATION_MODEL
+        )
+        EXTRA_MODELS[GUARDRAIL_CHECKS_MODERATION_MODEL] = ModelDetails(
+            id=GUARDRAIL_CHECKS_MODERATION_MODEL,
+            name="Bedrock Guardrail Checks",
+            provider="Amazon",
+            service="AWS Bedrock Runtime",
+            input_modalities=["TEXT"],
+            output_modalities=[MODERATION_MODALITY],
+            regions=checks_regions,
+        )
+    else:
+        _deregister_extra_model(GUARDRAIL_CHECKS_MODERATION_MODEL)
     if not (identifier := SETTINGS.aws_bedrock_guardrail_identifier):
+        _deregister_extra_model(GUARDRAIL_MODERATION_MODEL)
         return
     for modality in ("TEXT", "IMAGE"):
         EXTRA_MODELS_INPUT_MODALITY.setdefault(modality, set()).add(
