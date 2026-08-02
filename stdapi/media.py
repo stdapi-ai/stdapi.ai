@@ -125,7 +125,6 @@ def _ffmpeg_args(
     """
     args = ["ffmpeg"]
 
-    # Input format specification (required for raw PCM, optional for encoded formats)
     if input_format:
         # -f: input format (e.g., s16le for raw PCM)
         args.extend(("-f", _FFMPEG_FORMAT_ALIASES.get(input_format, input_format)))
@@ -171,7 +170,6 @@ async def encode_audio_stream(
     """Encode audio stream using ffmpeg with highest quality settings.
 
     Supports both raw PCM and encoded formats (mp3, ogg, flac, etc.) as input.
-    Automatically handles format conversion and applies maximum quality encoding.
 
     Args:
         stream: Async generator yielding audio bytes from input source.
@@ -214,10 +212,9 @@ async def encode_audio_stream(
 
     stderr_head = bytearray()
     input_task = create_task(_process_input_stream(stream, process.stdin))
-    # ffmpeg writes progress and warnings to stderr for the whole encode. asyncio
-    # buffers that pipe only up to its stream limit; past it reading pauses, the
-    # OS pipe fills, and ffmpeg blocks writing to stderr -- so it stops consuming
-    # stdin and producing stdout, and the encode never completes.
+    # ffmpeg writes progress and warnings to stderr for the whole encode: past
+    # asyncio's stream limit the OS pipe fills, ffmpeg blocks writing to stderr,
+    # and it stops consuming stdin, so the encode never completes.
     stderr_task = create_task(_drain(process.stderr, stderr_head))
 
     try:
@@ -259,7 +256,9 @@ async def encode_audio_stream(
             process.kill()
         for task in (input_task, stderr_task):
             task.cancel()
-            with suppress(CancelledError, OSError, TimeoutError):
+            # A task that failed on its own must not replace the error being
+            # raised: the log above already reports it through _input_state().
+            with suppress(CancelledError, Exception):
                 await wait_for(task, _PROCESS_EXIT_TIMEOUT)
         # Reaping is bounded too: a process that ignores the kill must not strand
         # the request that spawned it.
