@@ -23,24 +23,28 @@ jobs:
         with:
           fetch-depth: 1
 
+      # Expansions reach the shell through `env:`: a tag name may hold `"`, `$`
+      # or `;`, which spliced into `run:` would run as code.
       - name: Validate version matches tag
         run: |
-          TAG_VERSION="${{ github.ref_name }}"
           SERVER_VERSION=$(grep -oP 'SERVER_VERSION = "\K[^"]+' stdapi/server.py)
           if [ "$TAG_VERSION" != "v$SERVER_VERSION" ]; then
             echo "Error: Tag version ($TAG_VERSION) does not match SERVER_VERSION (v$SERVER_VERSION)"
             echo "Deleting invalid tag..."
-            gh api -X DELETE /repos/${{ github.repository }}/git/refs/tags/$TAG_VERSION
+            gh api -X DELETE "/repos/$REPOSITORY/git/refs/tags/$TAG_VERSION"
             exit 1
           fi
           echo "Version validation passed: $TAG_VERSION matches v$SERVER_VERSION"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_VERSION: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
 
       - name: Check if prerelease
         id: check
+        env:
+          TAG_VERSION: ${{ github.ref_name }}
         run: |
-          TAG_VERSION="${{ github.ref_name }}"
           # Remove 'v' prefix for semver checking
           VERSION="${TAG_VERSION#v}"
           # Check if version contains prerelease identifiers (-, alpha, beta, rc, etc.)
@@ -182,18 +186,20 @@ jobs:
       - name: Create GitHub Release
         run: |
           PRERELEASE_FLAG=""
-          if [ "${{ needs.validate-version.outputs.is_prerelease }}" == "true" ]; then
+          if [ "$IS_PRERELEASE" == "true" ]; then
             PRERELEASE_FLAG="--prerelease"
-            echo "Creating prerelease for ${{ github.ref_name }}"
+            echo "Creating prerelease for $TAG_NAME"
           else
-            echo "Creating stable release for ${{ github.ref_name }}"
+            echo "Creating stable release for $TAG_NAME"
           fi
 
-          gh release create ${{ github.ref_name }} \
-            --title "Release ${{ github.ref_name }}" \
+          gh release create "$TAG_NAME" \
+            --title "Release $TAG_NAME" \
             --generate-notes \
             --notes-start-tag "" \
             --notes "See our [Roadmap & Changelog](https://stdapi.ai/roadmap/) for more details." \
             $PRERELEASE_FLAG
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+          IS_PRERELEASE: ${{ needs.validate-version.outputs.is_prerelease }}
