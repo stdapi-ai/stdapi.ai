@@ -8,6 +8,8 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}-community
+  # Local-only tag the image carries while it is tested, before it is pushed.
+  CANDIDATE_IMAGE: stdapi-community:candidate
 
 jobs:
   validate-version:
@@ -50,8 +52,39 @@ jobs:
             echo "This is a prerelease: $VERSION"
           fi
 
-  build-and-push:
+  offline-tests:
+    # The Test workflow ignores tags, so without this a tag could be applied to
+    # a commit whose suite never ran and be published from it.
     needs: validate-version
+    runs-on: ubuntu-latest
+    env:
+      FORCE_COLOR: "1"
+      # No credentials are configured, and blocking the IMDS endpoint turns a
+      # stray call into an immediate failure instead of a hang.
+      AWS_EC2_METADATA_DISABLED: "true"
+      AWS_CONFIG_FILE: /dev/null
+      AWS_SHARED_CREDENTIALS_FILE: /dev/null
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+          activate-environment: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --group test
+
+      - name: Run the offline tests
+        run: pytest --offline
+
+  build-and-push:
+    needs: [validate-version, offline-tests]
     environment: github-container-registry
     runs-on: ubuntu-latest
     permissions:
@@ -84,18 +117,60 @@ jobs:
             type=semver,pattern={{major}}
             type=raw,value=latest,enable=${{ needs.validate-version.outputs.is_prerelease == 'false' }}
 
-      - name: Build and push Docker image
+      # Loaded into the local engine instead of pushed: the image is tested
+      # before it reaches the registry, and the tags below are applied to the
+      # exact image that passed.
+      - name: Build the candidate image
         uses: docker/build-push-action@v7
         with:
           context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          load: true
+          tags: ${{ env.CANDIDATE_IMAGE }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+          activate-environment: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --group test
+
+      # Samples in formats the image must accept are produced with the host's
+      # ffmpeg; without it those tests skip instead of covering anything.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends ffmpeg
+
+      # The image's ffmpeg is minimal and its filesystem is rewritten, so a
+      # missing codec or a pruned file only shows up here. The boot test skips
+      # itself: this job holds no AWS credentials.
+      - name: Test the candidate image
+        env:
+          CONTAINER_ENGINE: docker
+          STDAPI_CONTAINER_IMAGE_COMMUNITY: ${{ env.CANDIDATE_IMAGE }}
+          AWS_EC2_METADATA_DISABLED: "true"
+          AWS_CONFIG_FILE: /dev/null
+          AWS_SHARED_CREDENTIALS_FILE: /dev/null
+          AWS_REGION: us-east-1
+          AWS_DEFAULT_REGION: us-east-1
+        run: pytest --container -m container
+
+      - name: Push the tested image
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          printf '%s\n' "$TAGS" | while read -r tag; do
+            [ -n "$tag" ] || continue
+            docker tag "$CANDIDATE_IMAGE" "$tag"
+            docker push "$tag"
+          done
+
   publish:
-    needs: validate-version
+    # Announced only once the image it refers to is built, tested and pushed.
+    needs: [validate-version, build-and-push]
     runs-on: ubuntu-latest
     environment: github-releases
     permissions:
