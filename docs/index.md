@@ -24,6 +24,7 @@ Change one line — the base URL. 100+ models — Claude, OpenAI GPT, DeepSeek, 
 <span><strong>AWS Qualified</strong> Software</span>
 <span><strong>$0.10</strong>/container-hour</span>
 <span><strong>0%</strong> markup on model usage</span>
+<span><strong>~1 ms</strong> added latency</span>
 <span>Open-source Community Edition</span>
 </div>
 

@@ -564,7 +564,7 @@ Measured on the production serving stack, single worker, over the complete reque
 Typical requests are dominated by the fixed sub-millisecond serving floor; the optimizations above pay off precisely where load does — large contexts and streaming.
 
 !!! note "Negligible next to the model call"
-    Even at its most expensive — a 1 MB request — the gateway's processing adds a few milliseconds to an invocation the model itself takes seconds to answer: well under 1% of end-to-end latency.
+    Even at its most expensive — a 1 MB request — the gateway's processing adds a few milliseconds to an invocation the model itself takes seconds to answer: well under 1% of end-to-end latency. Measured live, a typical chat completion spends about a millisecond in the gateway out of a several-hundred-millisecond round trip — a share that holds even with the server capped to 0.25 vCPU, the smallest Fargate task size.
 
 ---
 
