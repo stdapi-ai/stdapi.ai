@@ -10,6 +10,7 @@ Ref: stdapi/main.py
 from __future__ import annotations
 
 from asyncio import CancelledError, Event, wait_for
+from inspect import signature
 from io import BytesIO
 from json import loads
 from typing import TYPE_CHECKING, Any
@@ -18,13 +19,14 @@ import pytest
 from botocore.exceptions import ClientError
 from httpx import ASGITransport, AsyncClient
 from starlette.datastructures import UploadFile
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 
 from stdapi import main as stdapi_main
 from stdapi.cleanup import schedule_cleanup
 from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile
 from stdapi.main import handle_exception_group
-from stdapi.routes import openai_chat_completions
+from stdapi.routes import core_root, openai_chat_completions
 from stdapi.types.openai_chat_completions import ChatCompletion
 from tests._helpers import make_model_details
 
@@ -34,6 +36,27 @@ if TYPE_CHECKING:
 #: All tests in this module exercise the local implementation in-process, and log
 #: outside request scope, so they need the shared request-log context.
 pytestmark = [pytest.mark.local, pytest.mark.usefixtures("request_log")]
+
+
+#: Starlette's own GZipMiddleware compression threshold, used when gzip is disabled.
+_GZIP_DEFAULT_MINIMUM_SIZE: int = (
+    signature(GZipMiddleware.__init__).parameters["minimum_size"].default
+)
+
+
+def _gzip_minimum_size() -> int:
+    """Return the body size from which the app would compress a response.
+
+    Returns:
+        The ``minimum_size`` configured on the app's GZipMiddleware, or
+        Starlette's default (the stricter bound) when gzip is disabled.
+    """
+    for middleware in stdapi_main.app.user_middleware:
+        if middleware.cls is GZipMiddleware:
+            return int(
+                middleware.kwargs.get("minimum_size", _GZIP_DEFAULT_MINIMUM_SIZE)
+            )
+    return _GZIP_DEFAULT_MINIMUM_SIZE
 
 
 def _request() -> Request:
@@ -345,3 +368,36 @@ class TestMiddlewareCleanupDrain:
         with pytest.raises(CancelledError):
             await stdapi_main._middleware(_request(), call_next)  # noqa: SLF001
         await wait_for(ran.wait(), timeout=5)
+
+
+class TestSharedResponsesStayBelowTheGzipThreshold:
+    """Pre-rendered singleton responses must never reach the gzip minimum size.
+
+    Ref: https://www.starlette.io/middleware/#gzipmiddleware
+         stdapi/routes/core_root.py
+    """
+
+    def test_cached_response_bodies_stay_uncompressible(self) -> None:
+        """Each shared response body stays under the configured gzip threshold.
+
+        Starlette hands ``raw_headers`` to the ASGI message by reference and
+        GZipMiddleware mutates that list in place, so the first gzip-accepting
+        request against a shared response whose body reaches the threshold
+        stamps ``content-encoding: gzip`` and a compressed ``content-length``
+        onto the singleton for the process's lifetime, breaking every later
+        client that did not ask for gzip.
+        """
+        minimum_size = _gzip_minimum_size()
+
+        for path, response in (
+            ("/", core_root._ROOT_RESPONSE),  # noqa: SLF001
+            ("/health", core_root._HEALTH_RESPONSE),  # noqa: SLF001
+            ("/ping", core_root._PING_RESPONSE),  # noqa: SLF001
+            ("/.well-known/api-catalog", core_root._API_CATALOG_RESPONSE),  # noqa: SLF001
+        ):
+            assert len(response.body) < minimum_size, (
+                f"The cached {path} response body reached {minimum_size} bytes: "
+                "GZipMiddleware would rewrite the shared response headers in "
+                "place, permanently serving gzip to clients that did not ask "
+                "for it. Render this response per request instead of caching it."
+            )
