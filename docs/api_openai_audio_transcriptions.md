@@ -52,7 +52,7 @@ Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable 
 | Language specification     |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | ISO-639-1 language codes                                         |
 | Auto language detection    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Automatic identification                                         |
 | **Streaming**              |                                          |                                                                  |
-| `stream` (SSE streaming)   |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Set `stream: true` to receive incremental results as server-sent events. Carries text only, so `srt`, `vtt` and `diarized_json` are rejected rather than answered without their cues or speaker labels |
+| `stream` (SSE streaming)   |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Set `stream: true` to receive incremental results as server-sent events. Carries text only, so `srt`, `vtt` and `diarized_json` are rejected rather than answered without their cues or speaker labels; `verbose_json` is accepted but degrades to text-only events — timestamps and segments are dropped |
 | **Advanced**               |                                          |                                                                  |
 | `timestamp_granularities`  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Word or segment level; requires `response_format=verbose_json` (Amazon Transcribe only) |
 | Speaker diarization        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Automatic speaker separation; requires `response_format=diarized_json` (Amazon Transcribe only) |
@@ -334,6 +334,9 @@ curl -N -X POST "$BASE/v1/audio/transcriptions" \
   -F model=amazon.transcribe \
   -F stream=true
 ```
+
+!!! info "`verbose_json` streams as plain text"
+    `stream=true` combined with `response_format=verbose_json` is accepted rather than rejected, but the streamed events carry `transcript.text.delta` / `.done` only — segment timings, word timings and language details are not included. Request `verbose_json` without `stream` to get them.
 
 ---
 

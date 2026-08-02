@@ -3334,11 +3334,12 @@ export AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE=true
 
 Use HTTP headers to specify guardrail settings per request:
 
-| Header                               | Purpose           | Valid Values                          |
-|--------------------------------------|-------------------|---------------------------------------|
-| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID      | Your guardrail identifier             |
-| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version | Version number (e.g., `1`)            |
-| `X-Amzn-Bedrock-Trace`               | Trace level       | `disabled`, `enabled`, `enabled_full` |
+| Header                                         | Purpose                                                              | Valid Values                          |
+|-------------------------------------------------|-----------------------------------------------------------------------|----------------------------------------|
+| `X-Amzn-Bedrock-GuardrailIdentifier`           | Guardrail ID                                                          | Your guardrail identifier             |
+| `X-Amzn-Bedrock-GuardrailVersion`              | Guardrail version                                                     | Version number (e.g., `1`)            |
+| `X-Amzn-Bedrock-Trace`                         | Trace level                                                           | `disabled`, `enabled`, `enabled_full` |
+| `X-Amzn-Bedrock-GuardrailStreamProcessingMode` | Guardrail assessment timing for streaming requests (stripped from non-streaming requests) | `sync`, `async`                       |
 
 ```bash title="Example cURL Request"
 curl -X POST https://api.example.com/v1/chat/completions \

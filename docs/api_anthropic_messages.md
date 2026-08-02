@@ -60,7 +60,7 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 | **Tool Calling**                      |                                          |                                                                                              |
 | Tool use (`tools`)                    |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Full Anthropic-compatible schema                                                             |
 | Tool choice (`auto`, `any`, `tool`)   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Control tool selection behavior                                                              |
-| Tool choice `none`                    |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Remove tools from request instead                                                            |
+| Tool choice `none`                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Gateway drops the tool config entirely, so the model behaves as if no tools were provided     |
 | Parallel tool calls                   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Multiple tools in one turn                                                                   |
 | Web search tool (`web_search`)        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Available on models with system tool support (e.g., Amazon Nova 2)                           |
 | Claude server tools                   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bash, text editor, computer use (Claude 3.5+), memory (Claude 3.7+)                          |
@@ -273,8 +273,8 @@ Beyond the top-level `system` parameter, a message may use the `system` role to 
 
 **Handling:**
 
-- **Claude Opus 4.8+, Fable and Mythos** (`claude-opus-4-8`, `claude-opus-5`, `claude-fable-5`, `claude-mythos-*`): forwarded natively, so the directive applies from its position in the conversation.
-- **All other models** — including the Claude Sonnet and Haiku families, which Anthropic excludes from this feature: the content is appended to the `system` prompt instead, keeping the same request working across every model.
+- **Claude 4.8+, Claude 5+ and later (Opus, Sonnet and Haiku alike), Fable and Mythos** (`claude-opus-4-8`, `claude-sonnet-4-9`, `claude-opus-5`, `claude-sonnet-5`, `claude-haiku-5`, `claude-fable-5`, `claude-mythos-*`): forwarded natively, so the directive applies from its position in the conversation.
+- **Claude 4.5–4.7 (Opus, Sonnet and Haiku)** (`claude-opus-4-5`, `claude-sonnet-4-6`, `claude-haiku-4-7`): the content is appended to the `system` prompt instead, keeping the same request working across every model.
 
 !!! info "Placement"
     A directive is forwarded natively only where the model accepts it: between a `user` turn and an `assistant` turn, as in the example above. Anywhere else — before the first turn, or right before the final `user` turn — it is appended to the `system` prompt instead, where it applies to the whole conversation. Requests therefore never fail because of placement.

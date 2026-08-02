@@ -553,8 +553,8 @@ export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
 - :material-test-tube: __4,400+ automated tests__
   <br>Every endpoint, parameter and error path, run against real AWS services rather than mocks.
 
-- :material-shield-check: __~94% code coverage__
-  <br>Branch coverage, measured with every optional test tier enabled.
+- :material-shield-check: __Branch coverage, every test tier enabled__
+  <br>Tracked continuously, from fast contract checks to full release validation against a live deployment.
 
 - :material-account-check: __Validated against the vendors__
   <br>The same tests run against the real OpenAI, Anthropic and Cohere APIs.

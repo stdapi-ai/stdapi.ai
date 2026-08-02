@@ -285,7 +285,7 @@ curl -X POST "$BASE/v1/images/generations" \
 !!! info "Full Parameter Reference"
     For all parameters and task types, see [Amazon Titan Image Generator documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html)
 
-### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Stability AI Models
+### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Stability AI Extra Features
 
 **Basic Usage (Standard OpenAI Parameters):**
 

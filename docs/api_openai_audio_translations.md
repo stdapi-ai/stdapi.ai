@@ -139,10 +139,13 @@ Translate audio from any language to English text with Amazon Transcribe + Trans
 
 - `Settings.Formality` (`FORMAL` or `INFORMAL`): Register of the translated text, for languages that support formality
 - `Settings.Profanity` (`MASK`): Mask profane words and phrases in the translation
-- `Settings.Brevity` (`ON`): Reduce silence gaps in subtitle-style output (real-time/streaming use case; harmless here)
+- `Settings.Brevity` (`ON`): Per AWS Translate, reduces the length of the translation output for most translations; unsupported language pairs silently ignore it
 - `TerminologyNames` (list): Apply one or more custom terminologies (domain-specific glossaries) to the translation
 
 Both settings apply consistently to the primary translated text and, for `response_format=verbose_json`, to every per-segment translation.
+
+!!! warning "`verbose_json` translates the transcript twice"
+    For `response_format=verbose_json`, the full transcript is sent to AWS Translate once, and then every segment is sent again individually so segment-level translations are available. AWS Translate bills by character, so `verbose_json` costs roughly double the translation characters of `text` or `json` for the same audio.
 
 !!! warning "Terminologies must already exist"
     `TerminologyNames` references AWS Translate custom terminology resources created ahead of time via the AWS Translate console, CLI, or SDK (`ImportTerminology`) — stdapi.ai does not create or manage them. An unknown name is rejected by AWS Translate with a client error.

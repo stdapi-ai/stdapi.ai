@@ -176,7 +176,7 @@ Every other guardrail policy — denied topics, word filters, sensitive informat
 | `GRAPHIC`             | `violence/graphic` |
 | `PROFANITY`           | *(`flagged` only)* |
 
-An input is flagged when its overall toxicity or any label score reaches `0.5`. Long texts are split into 1 KB segments and the highest score per category is kept.
+An input is flagged when its overall toxicity or any label score reaches `0.5`. Long texts are split into 1 KB segments and the highest score per category is kept. Comprehend's `DetectToxicContent` API is always called with the English language code, regardless of the input's actual language.
 
 With either model, OpenAI sub-categories without a counterpart (e.g. `self-harm`, `sexual/minors`) are always `false`.
 

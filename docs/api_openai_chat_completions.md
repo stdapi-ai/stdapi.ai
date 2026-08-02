@@ -638,11 +638,11 @@ Use the `reasoning_effort` parameter with predefined effort levels. This format 
 - `medium` - Balanced reasoning for most use cases
 - `high` - Deep reasoning for complex problems
 - `xhigh` - Maximum reasoning for complex problems
-- `max` - Alias of `xhigh`
+- `max` - Same as `xhigh` on most models; forwarded as its own (higher) effort tier on Claude 4.6
 
 **What You Get:**
 
-- **`reasoning_content` field** (DeepSeek API-compatible): models include their thinking process in the response The field name is an operator setting ([`CHAT_COMPLETIONS_REASONING_FIELD`](operations_configuration.md#chat-completions-reasoning-field)): `reasoning_content` by default, `reasoning` for clients written against OpenRouter or vLLM, or `none` to keep responses strictly OpenAI-shaped.
+- **`reasoning_content` field** (DeepSeek API-compatible): models include their thinking process in the response. The field name is an operator setting ([`CHAT_COMPLETIONS_REASONING_FIELD`](operations_configuration.md#chat-completions-reasoning-field)): `reasoning_content` by default, `reasoning` for clients written against OpenRouter or vLLM, or `none` to keep responses strictly OpenAI-shaped.
 - **Streaming support**: `choices[].delta.reasoning_content` chunks in real time
 
 **Example:**
