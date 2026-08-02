@@ -20,6 +20,8 @@ _SYSTEM_MESSAGE_AS_MESSAGES_MATCHER = re_compile(
 class ChatModel(MantleChatModel):
     """Anthropic Claude chat model (e.g. ``anthropic.claude-haiku-4-5``)."""
 
+    __slots__ = ()
+
     #: Model ID matcher, regex pattern or string prefix
     MATCHER: ClassVar[str] = "anthropic."
 

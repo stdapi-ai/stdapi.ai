@@ -16,8 +16,8 @@ The base32hex alphabet (``0-9a-v``) is used rather than standard base32
 (``a-z2-7``) because only the former sorts in the same order as the bytes it
 encodes: standard base32 maps the six highest values to ``2-7``, which sort
 below ``a-z``, breaking the creation-time ordering the listing relies on.
-Payloads minted before this change use the standard alphabet and are still
-accepted; they are told apart by the bucket fingerprint they decode to.
+Standard-alphabet payloads remain accepted, told apart by the bucket
+fingerprint they decode to.
 
 S3 keys store the bare 32-char payload (no API-level prefix).  The ``file-``
 or ``file_`` prefix is added at the API response boundary only.
@@ -43,6 +43,7 @@ from stdapi.aws import get_client
 from stdapi.aws_s3 import (
     BUCKET_TO_REGION,
     S3_TAGGING,
+    multipart_copy_parts,
     require_s3_bucket_for_region,
     track_temporary_s3_objects,
 )
@@ -211,9 +212,8 @@ def _decode_or_none(decode: Callable[[str], bytes], payload: str) -> bytes | Non
 def decode_id_payload(payload: str) -> bytes:
     """Decode a bare 32-char payload to its 20 raw bytes, accepting both alphabets.
 
-    Payloads minted before the base32hex switch use the standard base32
-    alphabet.  A payload using ``w-z`` can only be a legacy one; otherwise the
-    alphabets overlap, and the one whose trailing CRC32 names a configured
+    A payload using ``w-z`` can only be a standard-alphabet one; otherwise the
+    alphabets overlap, and the decoding whose trailing CRC32 names a configured
     bucket wins.
 
     Args:
@@ -241,12 +241,9 @@ def decode_id_payload(payload: str) -> bytes:
 def resolve_file_bucket(payload: str) -> str:
     """Resolve the S3 bucket for a bare file payload by matching its embedded CRC32 fingerprint.
 
-    Decodes the last 4 bytes of the payload and looks up the matching bucket in
-    :data:`_BUCKET_CRC32`.  Falls back to the primary bucket when no bucket
-    matches the fingerprint (e.g. a decommissioned bucket).
-
-    The caller must supply a well-formed 32-char base32 payload; format
-    validation is enforced at the API boundary.
+    Falls back to the primary bucket when no bucket matches the fingerprint
+    (e.g. a decommissioned bucket).  The caller must supply a well-formed
+    32-char base32 payload; format validation is enforced at the API boundary.
 
     Args:
         payload: Bare 32-char base32 file payload.
@@ -336,22 +333,15 @@ async def _force_s3_metadata(
         )
     )["UploadId"]
     try:
-        parts: list[dict[str, int | str]] = []
-        for part_number, start in enumerate(
-            range(0, size, _METADATA_FIX_PART_SIZE), start=1
-        ):
-            end = min(start + _METADATA_FIX_PART_SIZE, size) - 1
-            etag = (
-                await s3.upload_part_copy(
-                    Bucket=bucket,
-                    Key=key,
-                    UploadId=upload_id,
-                    PartNumber=part_number,
-                    CopySource=copy_source,
-                    CopySourceRange=f"bytes={start}-{end}",
-                )
-            )["CopyPartResult"]["ETag"]
-            parts.append({"PartNumber": part_number, "ETag": etag})
+        parts = await multipart_copy_parts(
+            s3,
+            bucket=bucket,
+            key=key,
+            upload_id=upload_id,
+            copy_source=copy_source,
+            size=size,
+            part_size=_METADATA_FIX_PART_SIZE,
+        )
         await s3.complete_multipart_upload(
             Bucket=bucket,
             Key=key,
@@ -382,10 +372,7 @@ async def upload_file(
         purpose: OpenAI purpose string (stored as metadata; not validated).
             ``None``/falsy (e.g. from the Anthropic Files API) is stored as
             :data:`DEFAULT_PURPOSE`, so the stored value always matches what
-            is displayed and matched by the ``purpose`` list filter. This is
-            enforced for every source :class:`InputFile` supports, including
-            ``s3://``/``file-id:`` references whose server-side copy would
-            otherwise silently keep the *source* object's own metadata.
+            is displayed and matched by the ``purpose`` list filter.
         expires_after: Seconds from now until expiry, or ``None``.
         region: AWS region for bucket selection; ``None`` uses the default bucket.
 

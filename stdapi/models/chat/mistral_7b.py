@@ -15,5 +15,7 @@ class ChatModel(_BaseChatModel):
     These models don't support System prompt.
     """
 
+    __slots__ = ()
+
     MATCHER = re_compile(r"^mistral\.mi[xs]tral-(?:8x)?7b-")
     SYSTEM_PROMPT_SUPPORTED = False

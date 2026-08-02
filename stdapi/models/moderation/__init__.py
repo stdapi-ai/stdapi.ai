@@ -133,6 +133,8 @@ def unflagged_moderation(*, image: bool = False) -> Moderation:
 class ModerationModelBase(ModelBase[None, None]):
     """Base class for provider-specific moderation models."""
 
+    __slots__ = ()
+
     @abstractmethod
     async def moderate(self, item: ModerationInput) -> Moderation:
         """Classify one input element.

@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 class _EraseJob(StabilityImageGenerationJobBase):
     """Job for erase model."""
 
+    __slots__ = ()
+
     async def _edit_image(
         self, images: list[str], mask: str | None
     ) -> Iterable[Awaitable[ImageGenerationResponse]]:
@@ -47,6 +49,8 @@ class _EraseJob(StabilityImageGenerationJobBase):
 
 class ImageModel(StabilityImageModelBase):
     """Stability AI erase model."""
+
+    __slots__ = ()
 
     MATCHER = compile_regex(r"^stability\.stable-image-erase-object-v\d+:\d+$")
     IMAGE_GENERATION_JOB_CLASS = _EraseJob

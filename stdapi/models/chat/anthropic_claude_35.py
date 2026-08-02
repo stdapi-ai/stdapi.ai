@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 class ChatModel(AnthropicClaudeChatModel):
     """Anthropic Claude 3.5 chat model implementation."""
 
+    __slots__ = ()
+
     MATCHER = re_compile(r"^anthropic\.claude-3-5-(?:haiku|sonnet)-")
     TOOL_BETA_FLAGS = MappingProxyType(
         {

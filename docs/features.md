@@ -544,6 +544,29 @@ export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
 
 ---
 
+## :material-speedometer: Performance
+
+A gateway earns its place by adding as little as possible on top of the model call. Every hot path here follows two principles: run independent work at the same time, and touch each byte once, in native code.
+
+- **Parallel where it counts** — Independent work fans out concurrently; a request finishes with its slowest item, not the sum of them
+- **Native code end to end** — JSON encoding and decoding, the AWS wire format, and the HTTP serving stack all run compiled, on an optimized event loop
+- **Every byte touched once** — Requests are parsed and validated once, responses encoded once, payloads moved without redundant copies — no duplicate work between layers or toward AWS
+
+Measured on the production serving stack, single worker, over the complete request path:
+
+| Request shape | Gateway CPU per request |
+|---|---|
+| Typical chat request (2.5 KB) | **0.8 ms** |
+| Large context (1 MB body) | **4.6 ms** |
+| Large context, streamed (~100 events) | **8.6 ms** |
+
+Typical requests are dominated by the fixed sub-millisecond serving floor; the optimizations above pay off precisely where load does — large contexts and streaming.
+
+!!! note "Negligible next to the model call"
+    Even at its most expensive — a 1 MB request — the gateway's processing adds a few milliseconds to an invocation the model itself takes seconds to answer: well under 1% of end-to-end latency.
+
+---
+
 ## :material-clipboard-check: Quality Assurance
 
 "OpenAI-compatible" is easy to claim and hard to keep. The gateway sits between your application and a set of backends that change underneath it — new model generations, new parameters, silently altered behaviour — so its test suite is built to catch that drift before you do.

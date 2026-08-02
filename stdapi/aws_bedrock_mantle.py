@@ -19,7 +19,6 @@ from binascii import crc32
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from json import JSONDecodeError, dumps, loads
 from random import uniform
 from re import compile as compile_regex
 from time import monotonic
@@ -33,10 +32,12 @@ from botocore.auth import SigV4QueryAuth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 from pydantic import ValidationError
+from pydantic_core import from_json
 
 from stdapi import server
 from stdapi.api_errors import ApiError
 from stdapi.config import AWS_SESSION, SETTINGS
+from stdapi.utils import to_json_bytes, to_json_str
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
@@ -298,8 +299,8 @@ def _map_error(status: int, body: str, region: RegionName) -> MantleError:
         The mapped error, ready to raise.
     """
     try:
-        details: Any = loads(body).get("error") or {}
-    except JSONDecodeError, AttributeError:
+        details: Any = from_json(body).get("error") or {}
+    except ValueError, AttributeError:
         details = {}
     if not isinstance(details, Mapping):
         # Some upstream errors carry a bare string in the "error" field.
@@ -307,7 +308,7 @@ def _map_error(status: int, body: str, region: RegionName) -> MantleError:
     raw_message = details.get("message")
     if raw_message is not None and not isinstance(raw_message, str):
         # Some upstream errors nest structured content in the message field.
-        raw_message = dumps(raw_message)
+        raw_message = to_json_str(raw_message)
     message = raw_message or f"The request could not be completed (HTTP {status})."
     error: MantleError
     if _UNSUPPORTED_API_RE.search(message):
@@ -437,7 +438,7 @@ async def _request_with_retry(
     Raises:
         MantleError: When every attempt fails.
     """
-    body = dumps(payload).encode()
+    body = to_json_bytes(payload)
     retries = SETTINGS.aws_bedrock_max_retries if single_region else 0
     for attempt in range(retries):
         try:
@@ -518,8 +519,10 @@ async def _read_json(response: ClientResponse) -> dict[str, Any]:
     """
     async with response:
         try:
-            return await response.json(content_type=None)  # type: ignore[no-any-return]
-        except (AiohttpClientError, TimeoutError, JSONDecodeError) as error:
+            return await response.json(  # type: ignore[no-any-return]
+                content_type=None, loads=from_json
+            )
+        except (AiohttpClientError, TimeoutError, ValueError) as error:
             msg = "The Bedrock Mantle response could not be read."
             raise MantleError(msg, status=502) from error
 

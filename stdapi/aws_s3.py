@@ -1,7 +1,8 @@
 """AWS S3 utilities."""
 
 import contextlib
-from asyncio import gather
+from asyncio import Semaphore, Task, create_task, gather
+from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlencode
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
 
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_s3.client import S3Client
+    from types_aiobotocore_s3.type_defs import CopySourceTypeDef
 
 #: Default S3 ``Tagging`` query string
 S3_TAGGING: Final[str] = urlencode({"aws-apn-id": AWS_APN_ID})
@@ -34,6 +36,12 @@ _MULTIPART_COPY_PART_SIZE: Final[int] = 512 * 1024 * 1024
 
 #: Multipart upload chunk size (8 MiB).
 UPLOAD_CHUNK_SIZE: Final[int] = 8 * 1024 * 1024
+
+#: Maximum concurrent part copies during a multipart server-side copy.
+MULTIPART_COPY_CONCURRENCY: Final[int] = 8
+
+#: Maximum multipart-upload parts in flight (memory bound: this x chunk size).
+_UPLOAD_PARTS_IN_FLIGHT: Final[int] = 2
 
 
 def _bucket_to_region() -> dict[str, RegionName]:
@@ -224,6 +232,61 @@ async def get_text_from_s3(s3_bucket: str, s3_key: str) -> str:
     return (await get_bytes_from_s3(s3_bucket, s3_key)).decode()
 
 
+async def multipart_copy_parts(
+    s3: S3Client,
+    *,
+    bucket: str,
+    key: str,
+    upload_id: str,
+    copy_source: CopySourceTypeDef,
+    size: int,
+    part_size: int,
+) -> list[dict[str, int | str]]:
+    """Server-side copy all byte ranges of a multipart copy concurrently.
+
+    Runs the ranged ``upload_part_copy`` calls with bounded concurrency
+    (``MULTIPART_COPY_CONCURRENCY``); part numbers follow the byte ranges.
+
+    Args:
+        s3: S3 client.
+        bucket: Destination bucket.
+        key: Destination object key.
+        upload_id: Multipart upload ID.
+        copy_source: Source object reference.
+        size: Source object size in bytes.
+        part_size: Bytes per copied part.
+
+    Returns:
+        Completed parts, ordered by part number.
+    """
+    semaphore = Semaphore(MULTIPART_COPY_CONCURRENCY)
+
+    async def _copy_part(part_number: int, start: int) -> dict[str, int | str]:
+        """Copy one byte range under the part-copy concurrency bound."""
+        async with semaphore:
+            end = min(start + part_size, size) - 1
+            etag = (
+                await s3.upload_part_copy(
+                    Bucket=bucket,
+                    Key=key,
+                    UploadId=upload_id,
+                    PartNumber=part_number,
+                    CopySource=copy_source,
+                    CopySourceRange=f"bytes={start}-{end}",
+                )
+            )["CopyPartResult"]["ETag"]
+            return {"PartNumber": part_number, "ETag": etag}
+
+    return list(
+        await gather(
+            *(
+                _copy_part(part_number, start)
+                for part_number, start in enumerate(range(0, size, part_size), start=1)
+            )
+        )
+    )
+
+
 async def copy_s3_object(
     source_bucket: str,
     source_key: str,
@@ -266,7 +329,7 @@ async def copy_s3_object(
         require_s3_bucket_for_region(dest_region) if dest_region else source_bucket
     )
     dest_key = dest_key or await _get_tmp_key(content_type)
-    copy_source = {"Bucket": source_bucket, "Key": source_key}
+    copy_source: CopySourceTypeDef = {"Bucket": source_bucket, "Key": source_key}
     if size <= _COPY_OBJECT_MAX_BYTES:
         await s3.copy_object(
             Bucket=dest_bucket,
@@ -284,22 +347,15 @@ async def copy_s3_object(
                 )
             )["UploadId"]
 
-            parts: list[dict[str, int | str]] = []
-            for part_number, start in enumerate(
-                range(0, size, _MULTIPART_COPY_PART_SIZE), start=1
-            ):
-                end = min(start + _MULTIPART_COPY_PART_SIZE, size) - 1
-                etag = (
-                    await s3.upload_part_copy(
-                        Bucket=dest_bucket,
-                        Key=dest_key,
-                        UploadId=upload_id,
-                        PartNumber=part_number,
-                        CopySource=copy_source,
-                        CopySourceRange=f"bytes={start}-{end}",
-                    )
-                )["CopyPartResult"]["ETag"]
-                parts.append({"PartNumber": part_number, "ETag": etag})
+            parts = await multipart_copy_parts(
+                s3,
+                bucket=dest_bucket,
+                key=dest_key,
+                upload_id=upload_id,
+                copy_source=copy_source,
+                size=size,
+                part_size=_MULTIPART_COPY_PART_SIZE,
+            )
 
             await s3.complete_multipart_upload(
                 Bucket=dest_bucket,
@@ -408,6 +464,11 @@ async def _multipart_upload(
 ) -> None:
     """Perform a multipart upload from an async chunk iterator.
 
+    Reading and uploading are pipelined: the next chunk is read from the
+    source while up to ``_UPLOAD_PARTS_IN_FLIGHT`` parts upload, bounding
+    the extra memory to ``_UPLOAD_PARTS_IN_FLIGHT * UPLOAD_CHUNK_SIZE``
+    bytes per upload. The completion list stays part-number ordered.
+
     Args:
         s3: S3 client.
         bucket: Destination bucket.
@@ -418,24 +479,34 @@ async def _multipart_upload(
             (e.g. ``ContentType``).
     """
     upload_id: str | None = None
+    in_flight: deque[Task[dict[str, int | str]]] = deque()
     try:
-        upload_id = (
+        upload_id = multipart_id = (
             await s3.create_multipart_upload(Bucket=bucket, Key=key, **kwargs)  # type: ignore[arg-type]
         )["UploadId"]
-        parts: list[dict[str, int | str]] = []
-        part_number = 0
-        async for chunk in chunks:
-            part_number += 1
+
+        async def _upload_part(part_number: int, body: bytes) -> dict[str, int | str]:
+            """Upload one part and return its completion-list entry."""
             etag = (
                 await s3.upload_part(
                     Bucket=bucket,
                     Key=key,
-                    UploadId=upload_id,
+                    UploadId=multipart_id,
                     PartNumber=part_number,
-                    Body=chunk,
+                    Body=body,
                 )
             )["ETag"]
-            parts.append({"PartNumber": part_number, "ETag": etag})
+            return {"PartNumber": part_number, "ETag": etag}
+
+        parts: list[dict[str, int | str]] = []
+        part_number = 0
+        async for chunk in chunks:
+            part_number += 1
+            in_flight.append(create_task(_upload_part(part_number, chunk)))
+            if len(in_flight) >= _UPLOAD_PARTS_IN_FLIGHT:
+                parts.append(await in_flight.popleft())
+        while in_flight:
+            parts.append(await in_flight.popleft())
         await s3.complete_multipart_upload(
             Bucket=bucket,
             Key=key,
@@ -443,6 +514,10 @@ async def _multipart_upload(
             MultipartUpload={"Parts": parts},  # type: ignore[typeddict-item]
         )
     except Exception:
+        for task in in_flight:
+            task.cancel()
+        if in_flight:
+            await gather(*in_flight, return_exceptions=True)
         if upload_id is not None:
             with contextlib.suppress(ClientError):
                 await s3.abort_multipart_upload(

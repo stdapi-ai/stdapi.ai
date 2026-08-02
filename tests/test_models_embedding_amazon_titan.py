@@ -56,7 +56,7 @@ class TestTitanEmbeddingModelQuantizedTypes:
                 output_tokens=0,
             )
 
-        monkeypatch.setattr(model, "invoke", _invoke)
+        monkeypatch.setattr(type(model), "invoke", staticmethod(_invoke))
 
         response = await model.embed_text(
             ["hello", "world"],
@@ -93,7 +93,7 @@ class TestTitanEmbeddingModelQuantizedTypes:
                 output_tokens=0,
             )
 
-        monkeypatch.setattr(model, "invoke", _invoke)
+        monkeypatch.setattr(type(model), "invoke", staticmethod(_invoke))
 
         response = await model.embed_text(["hello"], dimensions=None, extra_params={})
 

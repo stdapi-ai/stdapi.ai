@@ -80,6 +80,8 @@ async def _single_chunk_stream(data: bytes) -> AsyncGenerator[bytes]:
 class AudioModel(AudioModelBase[Any, Any]):
     """Default speech-to-text model using AWS Bedrock Converse API."""
 
+    __slots__ = ()
+
     SUPPORTED_RESPONSES_FORMATS = frozenset({"json", "text"})
 
     async def stt(

@@ -260,6 +260,8 @@ class _Response(TypedDict):
 class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
     """Amazon Nova multimodal embedding model."""
 
+    __slots__ = ()
+
     MATCHER = "amazon.nova-2-multimodal-embeddings"
 
     async def embed_text(

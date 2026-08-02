@@ -160,6 +160,8 @@ class ChatModel(_BaseChatModel):
     modification; see documentation for details.
     """
 
+    __slots__ = ()
+
     MATCHER: ClassVar[str] = "twelvelabs.pegasus"
 
     #: System prompts are silently ignored; Pegasus has no system parameter.

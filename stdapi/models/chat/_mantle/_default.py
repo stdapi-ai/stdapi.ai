@@ -9,9 +9,9 @@ in memory, so only the first request pays the extra round trip. The OpenAI
 routing surface (``/openai/v1`` vs ``/v1``) is learned the same way.
 """
 
-from json import JSONDecodeError, dumps, loads
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from pydantic_core import from_json
 from sse_starlette import EventSourceResponse, ServerSentEvent
 
 from stdapi.api_errors import ApiError
@@ -45,7 +45,7 @@ from stdapi.types.anthropic_messages import Message
 from stdapi.types.openai_chat_completions import ChatCompletion
 from stdapi.types.openai_responses import Response
 from stdapi.usage import record_bedrock_usage
-from stdapi.utils import hide_security_details
+from stdapi.utils import hide_security_details, to_json_str
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Mapping
@@ -84,6 +84,8 @@ _REASONING_CONTENT_MARKER = '"reasoning_content"'
 
 class ChatModel(ChatModelBase[Any, Any]):
     """Default Mantle chat model (unknown models assume the Responses API)."""
+
+    __slots__ = ()
 
     #: Mantle transport marker (service-aware dispatch and capabilities).
     IS_MANTLE: ClassVar[bool] = True
@@ -206,10 +208,9 @@ class ChatModel(ChatModelBase[Any, Any]):
         """
         headers = mantle_request_headers(api)
         regions = self._mantle_regions(region)
-        # route_and_execute only retries across regions when the region
-        # router is enabled and there is more than one candidate; otherwise
-        # it calls the first candidate exactly once, so the in-region retry
-        # below must cover it instead.
+        # route_and_execute retries across regions only with the router on and
+        # more than one candidate; otherwise it calls the first candidate once
+        # and the invocation below has to carry the retries itself.
         single_region = len(regions) == 1 or REGION_ROUTER is None
         paths = self._api_paths(api)
         last_surface_error: MantleSurfaceUnsupportedError | None = None
@@ -279,9 +280,8 @@ class ChatModel(ChatModelBase[Any, Any]):
                 and "responses" in tried
                 and payload.pop("store", None)
             ):
-                # Native storage was lost with the API fallback; agent
-                # harnesses set store unconditionally, so it is dropped with
-                # a warning instead of failing the request.
+                # Agent harnesses set `store` unconditionally, so the fallback
+                # drops it with a warning instead of failing the request.
                 log_error_details(
                     "'store' cannot be honored: the model does not serve the "
                     "Responses API upstream; ignored.",
@@ -312,10 +312,8 @@ class ChatModel(ChatModelBase[Any, Any]):
     ) -> tuple[MantleApi, RegionName, dict[str, Any]]:
         """Serve a non-streaming request, billing it and converting the result.
 
-        Usage is recorded from the raw upstream-shaped response before any
-        wire conversion, so the api-keyed extractor reads the original keys.
-        Reasoning text is renamed while still in the Chat Completions shape,
-        so every converted shape sees it too.
+        Usage is recorded and the reasoning text renamed before any wire
+        conversion, while the keys are still the upstream ones.
 
         Args:
             inbound: API matching the inbound route.
@@ -432,12 +430,9 @@ class ChatModel(ChatModelBase[Any, Any]):
     ) -> AsyncGenerator[ServerSentEvent]:
         """Relay upstream SSE events to the client, recording billed usage.
 
-        When *api* differs from *inbound* the events are converted to the
-        inbound wire format first. Public/native ID rewrites are applied to
-        the raw event payloads (stored-response region tagging). Reasoning
-        text on Chat Completions frames is normalized before conversion and
-        emitted under the operator-configured field name on Chat Completions
-        output.
+        Reasoning text on Chat Completions frames is normalized before any
+        conversion, and emitted under the operator-configured field name on
+        Chat Completions output.
 
         Args:
             api: Upstream Mantle API serving the stream.
@@ -495,9 +490,9 @@ class ChatModel(ChatModelBase[Any, Any]):
     ) -> AsyncGenerator[SseEvent]:
         """Observe the raw upstream stream: tap stored IDs and record usage.
 
-        Runs before any wire conversion so IDs, usage and tier are read in
-        the upstream *api* shape; each event is parsed at most once. Malformed
-        frames are relayed unmodified, without observation.
+        Runs before any wire conversion so IDs, usage and tier are read in the
+        upstream *api* shape; malformed frames are relayed without observation.
+        Each event is parsed at most once, on a hot streaming path.
 
         Args:
             api: Upstream Mantle API serving the stream.
@@ -719,9 +714,8 @@ class ChatModel(ChatModelBase[Any, Any]):
                 strip_usage_chunk=False,
                 region=pinned_region,
                 id_rewrites=rewrites,
-                # Converted streams carry the server-assigned ID for the same
-                # reason as the non-streaming branch below: a minted ID is not
-                # retrievable, and its `resp_` form is parsed as Mantle-tagged.
+                # A minted ID is not retrievable, and its `resp_` form would be
+                # parsed as Mantle-tagged.
                 response_id=response_id,
             )
         api, region, raw = await self._serve_validated(
@@ -740,9 +734,8 @@ class ChatModel(ChatModelBase[Any, Any]):
             if surface := _LEARNED_SURFACE.get(self._model_id):
                 cache_response_surface(native_id, surface)
         else:
-            # Converted results carry the server-assigned ID so the local
-            # response store (used when native storage is unavailable) can
-            # serve GET/DELETE/previous_response_id on the returned ID.
+            # Converted results are served by the local response store, which
+            # only knows the server-assigned ID.
             raw["id"] = response_id
         response = validate_pruning_extras(Response, raw)
         if moderation_builder is not None:
@@ -753,10 +746,8 @@ class ChatModel(ChatModelBase[Any, Any]):
 def _failed_response_error(raw: dict[str, Any]) -> ApiError:
     """Build the error raised for a synchronous terminal ``failed`` Response.
 
-    A ``status="failed"`` Response carries the upstream failure in its ``error``
-    field and no usable output. The upstream message is scrubbed of security
-    details and surfaced as a 502 so a synchronous request reports the failure
-    instead of returning an empty 200 body.
+    The upstream ``error`` message is scrubbed of security details and
+    surfaced as a 502.
 
     Args:
         raw: Upstream Responses-shaped result with ``status == "failed"``.
@@ -774,9 +765,8 @@ def _failed_response_error(raw: dict[str, Any]) -> ApiError:
 def _scrub_error_event(data: str) -> str:
     """Scrub security details from a relayed upstream error payload.
 
-    Passthrough error events reach the client verbatim: the upstream message
-    is rewritten through :func:`hide_security_details` while the payload
-    shape is preserved.
+    Passthrough error events reach the client verbatim, so the upstream
+    message is rewritten while the payload shape is preserved.
 
     Args:
         data: Raw SSE error event data payload.
@@ -786,8 +776,8 @@ def _scrub_error_event(data: str) -> str:
         carries no top-level ``error``.
     """
     try:
-        payload = loads(data)
-    except JSONDecodeError:
+        payload = from_json(data)
+    except ValueError:
         return data
     if not isinstance(payload, dict):
         return data
@@ -804,11 +794,11 @@ def _scrub_error_event(data: str) -> str:
         message = error["message"]
         # Structured message content is serialized before scrubbing.
         error["message"] = hide_security_details(
-            502, message if isinstance(message, str) else dumps(message)
+            502, message if isinstance(message, str) else to_json_str(message)
         )
     else:
         return data
-    return dumps(payload)
+    return to_json_str(payload)
 
 
 def _include_usage(
@@ -864,7 +854,9 @@ async def _rename_stream_reasoning(
             continue
         yield (
             event,
-            dumps(convert.rename_reasoning_field(parsed, exclude=exclude, field=field)),
+            to_json_str(
+                convert.rename_reasoning_field(parsed, exclude=exclude, field=field)
+            ),
         )
 
 
@@ -912,8 +904,8 @@ def _try_loads(data: str) -> dict[str, Any] | None:
         is not a JSON object.
     """
     try:
-        parsed = loads(data)
-    except JSONDecodeError:
+        parsed = from_json(data)
+    except ValueError:
         return None
     return parsed if isinstance(parsed, dict) else None
 

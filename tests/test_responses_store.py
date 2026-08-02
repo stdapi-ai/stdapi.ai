@@ -4,6 +4,7 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html
      stdapi/responses_store.py
 """
 
+from asyncio import Event, wait_for
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -433,6 +434,96 @@ class TestStoredResponseSessions:
 
         loaded = await responses_store.load_stored_response("resp-sess-1", "response")
         assert loaded == document
+
+    async def test_save_puts_chunks_concurrently(
+        self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Chunk steps are written concurrently, bounded, with ordering by time.
+
+        Each stubbed put blocks until a second put is in flight, so this test
+        fails (times out) if the save path regresses to sequential writes. The
+        step times must still encode the chunk order, since the read path
+        reassembles by sorting on ``invocationStepTime``.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html
+             stdapi/responses_store.py:save_stored_response
+        """
+        monkeypatch.setattr(responses_store, "_CHUNK_SIZE", 10)
+        two_started = Event()
+        in_flight = 0
+        max_in_flight = 0
+        original_put = stub.put_invocation_step
+
+        async def _blocking_put(**params: Any) -> dict[str, Any]:  # noqa: ANN401
+            nonlocal in_flight, max_in_flight
+            in_flight += 1
+            max_in_flight = max(max_in_flight, in_flight)
+            if in_flight >= 2:
+                two_started.set()
+            await wait_for(two_started.wait(), timeout=5)
+            try:
+                return await original_put(**params)
+            finally:
+                in_flight -= 1
+
+        monkeypatch.setattr(stub, "put_invocation_step", _blocking_put)
+        document = {
+            "response": {"id": "resp-sess-1", "object": "response"},
+            "input": "x" * 60,
+        }
+
+        await wait_for(
+            responses_store.save_stored_response("resp-sess-1", document), timeout=5
+        )
+
+        assert max_in_flight >= 2, "chunk puts must overlap"
+        assert max_in_flight <= responses_store._STEP_PUT_CONCURRENCY  # noqa: SLF001
+        steps = [
+            params for name, params in stub.requests if name == "put_invocation_step"
+        ]
+        assert len(steps) > 2
+        assert (
+            "".join(
+                step["payload"]["contentBlocks"][0]["text"]
+                for step in sorted(steps, key=lambda step: step["invocationStepTime"])
+            )
+            == to_json(document).decode()
+        ), "step times must reassemble the document in chunk order"
+
+    async def test_save_failing_chunk_put_surfaces_client_error(
+        self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failing chunk put surfaces its ClientError to the caller.
+
+        ``ThrottlingException`` is not translated by
+        ``handle_bedrock_client_error``, so the concurrent write path must
+        propagate the original ``ClientError`` unchanged.
+
+        Ref: stdapi/responses_store.py:save_stored_response
+        """
+        monkeypatch.setattr(responses_store, "_CHUNK_SIZE", 10)
+        calls = 0
+
+        async def _failing_put(**_params: Any) -> dict[str, Any]:  # noqa: ANN401
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise ClientError(
+                    {"Error": {"Code": "ThrottlingException", "Message": "slow down"}},
+                    "PutInvocationStep",
+                )
+            return {"invocationStepId": f"step-{calls}"}
+
+        monkeypatch.setattr(stub, "put_invocation_step", _failing_put)
+        document = {
+            "response": {"id": "resp-sess-1", "object": "response"},
+            "input": "x" * 60,
+        }
+
+        with pytest.raises(ClientError) as exc_info:
+            await responses_store.save_stored_response("resp-sess-1", document)
+        assert exc_info.value.response["Error"]["Code"] == "ThrottlingException"
+        assert exc_info.value.operation_name == "PutInvocationStep"
 
     async def test_save_chunks_by_utf8_bytes_not_characters(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch

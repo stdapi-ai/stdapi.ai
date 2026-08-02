@@ -156,7 +156,7 @@ async def add_upload_part(
     log_request_params({"upload_id": upload_id})
     if "application/json" in http_request.headers.get("content-type", ""):
         with validation_error_handler():
-            body = AddUploadPartJsonBody.model_validate(await http_request.json())
+            body = AddUploadPartJsonBody.model_validate_json(await http_request.body())
         chunk = await body.data.to_bytes()
     elif data is None:
         missing_file_error()

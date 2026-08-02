@@ -33,6 +33,8 @@ _REASONING_BUDGET_MAXIMAL = 32768
 class ChatModel(AnthropicClaudeChatModel):
     """Anthropic Claude 3.7 to 4.5 chat model implementation."""
 
+    __slots__ = ()
+
     MATCHER = re_compile(
         r"^anthropic\.claude-(?:opus-(?:4-5|4-1|4)|sonnet-(?:4-5|4)|haiku-4-5|3-7-sonnet)-2"
     )

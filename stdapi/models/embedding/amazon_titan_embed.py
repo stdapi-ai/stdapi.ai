@@ -60,6 +60,8 @@ class _Response(TypedDict):
 class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
     """Amazon Titan embedding model."""
 
+    __slots__ = ()
+
     MATCHER = "amazon.titan-embed-"
 
     async def embed_text(

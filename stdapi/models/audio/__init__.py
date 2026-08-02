@@ -1,14 +1,8 @@
 """Audio models base classes and dynamic registry.
 
-This package exposes the base interfaces for audio models (TTS and transcription)
-and provides a minimal plugin/registry system that auto-loads model implementations
-located in this package directory and resolves them by matching the model identifier.
-
-Design:
-- Audio model modules expose a class named `AudioModel` with a class variable `MATCHER`
-  containing a string prefix or compiled regex matching model identifiers.
-- Models can support TTS, transcription, or both capabilities.
-- The package auto-loads and registers these classes once on import.
+Modules of this package define an ``AudioModel`` class with a ``MATCHER``
+(string prefix or compiled regex) and are auto-loaded once on import. A model
+may support TTS, transcription, or both.
 """
 
 from pathlib import Path
@@ -60,6 +54,8 @@ class TTSResponse(TypedDict):
 
 class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
     """Base class for provider-specific audio models supporting TTS and/or transcription."""
+
+    __slots__ = ()
 
     #: InvokeModel rejects native guardrail kwargs; ApplyGuardrail covers the route.
     NATIVE_GUARDRAIL_SUPPORTED: ClassVar[bool] = False
@@ -227,9 +223,6 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
     ) -> Response:
         """Format subtitle response with proper content type and disposition headers.
 
-        Creates a FastAPI Response object for subtitle format downloads (SRT/VTT)
-        with appropriate MIME type and filename in Content-Disposition header.
-
         Args:
             response_format: The subtitle response format (SRT or VTT)
             subtitle_content: The subtitle content as a string
@@ -339,29 +332,19 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         *,
         translate: bool = False,
     ) -> str:
-        """Builds a comprehensive prompt string based on various optional parameters.
-
-        This class method constructs a detailed prompt to be used for transcription
-        and/or translation tasks. It combines static prompts with additional context
-        such as the expected language(s), literal keywords, translation requirement,
-        and any user-provided customization to produce a well-rounded string.
+        """Build the transcription and/or translation prompt.
 
         Args:
-            prompt: A custom prompt string provided by the user. If None,
-                this section of the string will be omitted.
-            language: Specifies the language of the audio by providing its
-                language code. If None, no language information will be appended to the
-                prompt.
+            prompt: A custom prompt string provided by the user, appended last.
+            language: Language code of the audio, omitted when None.
             keywords: Literal terms that may appear in the audio (e.g. product
                 names or acronyms), appended as recognition hints.
             languages: Expected input language codes; a single entry behaves
                 like ``language``.
-            translate: If set to True, the method will include a translation
-                directive in the prompt. Defaults to False.
+            translate: When True, include a translation directive.
 
         Returns:
-            str: A concatenated string containing the full prompt with all the relevant
-                context.
+            The full prompt string.
         """
         if languages and len(languages) == 1:
             language, languages = languages[0], None
@@ -386,10 +369,12 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         return "\n".join(prompt_items)
 
 
-# Audio Model Registry
+#: Audio model registry: (matcher, class) pairs sorted by specificity.
 _AUDIO_MODEL_REGISTRY: list[
     tuple[str | Pattern[str], type[AudioModelBase[Any, Any]]]
 ] = []
+
+#: Audio model instance cache.
 _AUDIO_MODEL_CACHE: dict[str, AudioModelBase[Any, Any]] = {}
 
 
@@ -417,10 +402,6 @@ async def synthesize_speech(
     text: str, voice: str = "alloy", resp_format: AudioFileFormat = "mp3"
 ) -> AsyncGenerator[bytes]:
     """Asynchronously synthesizes speech from text using the default TTS model.
-
-    The function interacts with the default TTS model to convert the input text into audio
-    in the specified voice and format. The result is provided as an asynchronous
-    generator that yields chunks of audio data.
 
     Args:
         text: The text to be converted into speech.

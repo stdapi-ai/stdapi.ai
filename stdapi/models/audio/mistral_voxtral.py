@@ -10,4 +10,6 @@ from stdapi.models.audio._default import AudioModel as ConverseAudioModel
 class AudioModel(ConverseAudioModel):
     """Mistral Voxtral audio model implementation."""
 
+    __slots__ = ()
+
     MATCHER = "mistral.voxtral-"

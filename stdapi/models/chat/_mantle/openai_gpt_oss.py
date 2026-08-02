@@ -11,6 +11,8 @@ if TYPE_CHECKING:
 class ChatModel(MantleChatModel):
     """OpenAI gpt-oss chat model (e.g. ``openai.gpt-oss-120b``)."""
 
+    __slots__ = ()
+
     #: Model ID matcher, regex pattern or string prefix
     MATCHER: ClassVar[str] = "openai.gpt-oss"
 

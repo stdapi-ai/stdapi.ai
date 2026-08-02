@@ -24,6 +24,8 @@ class ChatModel(AnthropicClaudeChatModel):
     the per-model-ID gate.
     """
 
+    __slots__ = ()
+
     MATCHER = "anthropic.claude-"
     TOOL_BETA_FLAGS = MappingProxyType(
         {

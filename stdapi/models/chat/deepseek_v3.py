@@ -24,6 +24,8 @@ _REASONING_OVERRIDE: dict[Effort | None, DeepseekReasoning] = {
 class ChatModel(_BaseChatModel):
     """DeepSeek-specific chat model implementation."""
 
+    __slots__ = ()
+
     MATCHER = "deepseek.v3"
 
     def _req_configure_reasoning(
@@ -37,9 +39,9 @@ class ChatModel(_BaseChatModel):
     ) -> None:
         """Configure reasoning parameters for DeepSeek models.
 
-        DeepSeek uses string-based reasoning_config and only supports reasoning_effort.
-        The budget_tokens parameter is not supported.
-        When ``enabled`` is ``False``, reasoning is explicitly disabled.
+        DeepSeek uses a string-based ``reasoning_config`` carrying the effort
+        level alone.  When ``enabled`` is ``False`` no config is sent and the
+        model applies its own default.
 
         Args:
             additional_request_fields: Request fields to modify with reasoning config.

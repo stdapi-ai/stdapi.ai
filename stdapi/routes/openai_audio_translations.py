@@ -174,7 +174,9 @@ async def create_translation(
     request: TranslationCreateParams
     if "application/json" in http_request.headers.get("content-type", ""):
         with validation_error_handler():
-            request = AudioTranslationJsonBody.model_validate(await http_request.json())
+            request = AudioTranslationJsonBody.model_validate_json(
+                await http_request.body()
+            )
         audio_content = request.file
     elif file is None:
         missing_file_error()

@@ -72,6 +72,8 @@ async def _to_content_block(item: ModerationInput) -> GuardrailContentBlockTypeD
 class ModerationModel(ModerationModelBase):
     """AWS Bedrock guardrail moderation model."""
 
+    __slots__ = ("_client", "_identifier", "_region", "_version")
+
     MATCHER = GUARDRAIL_MODERATION_MODEL
 
     def __init__(self, model_id: str, identifier: str, version: str) -> None:

@@ -806,7 +806,7 @@ class TestMessagesToChatRequestEdges:
                 {
                     "id": "toolu_1",
                     "type": "function",
-                    "function": {"name": "f", "arguments": dumps({"a": 1})},
+                    "function": {"name": "f", "arguments": '{"a":1}'},
                 }
             ],
         }
@@ -1497,10 +1497,7 @@ class TestNonStreamResponseConversions:
             {
                 "id": "toolu_1",
                 "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "arguments": dumps({"city": "Paris"}),
-                },
+                "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
             }
         ]
         assert out["usage"] == {

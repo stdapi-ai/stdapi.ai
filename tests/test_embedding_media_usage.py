@@ -44,7 +44,10 @@ if TYPE_CHECKING:
 pytestmark = [pytest.mark.local, pytest.mark.usefixtures("usage_scope")]
 
 
+#: Nova multimodal embedding model under test.
 _NOVA_MODEL_ID = "amazon.nova-2-multimodal-embeddings-v1:0"
+
+#: Marengo embedding model under test.
 _MARENGO_MODEL_ID = "twelvelabs.marengo-embed-3-0-v1:0"
 
 
@@ -62,14 +65,22 @@ class TestNovaSingleEmbeddingImageUsage:
          stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel._record_media_usage
     """
 
-    async def test_standard_image_records_one_input_image_with_no_spec(self) -> None:
+    async def test_standard_image_records_one_input_image_with_no_spec(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A plain image (no detailLevel) bills as a flat input image.
 
         Ref: stdapi/usage.py:record_bedrock_usage
         """
         model = NovaEmbeddingModel(_NOVA_MODEL_ID)
-        model.invoke = AsyncMock(  # type: ignore[method-assign]
-            return_value=InvokeResult(response={"embeddings": [{"embedding": [0.1]}]})
+        monkeypatch.setattr(
+            type(model),
+            "invoke",
+            AsyncMock(
+                return_value=InvokeResult(
+                    response={"embeddings": [{"embedding": [0.1]}]}
+                )
+            ),
         )
         await model._embed_single(  # noqa: SLF001
             value="base64data",
@@ -85,7 +96,9 @@ class TestNovaSingleEmbeddingImageUsage:
         assert Dimension.INPUT_SECONDS not in record.quantities
         assert record.input_images_by_spec == {}
 
-    async def test_document_image_records_document_spec(self) -> None:
+    async def test_document_image_records_document_spec(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """``detailLevel=DOCUMENT_IMAGE`` bills under the "document" spec bucket.
 
         Document images are priced separately from ordinary images, so the extra
@@ -95,8 +108,14 @@ class TestNovaSingleEmbeddingImageUsage:
              stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel._add_extra_params
         """
         model = NovaEmbeddingModel(_NOVA_MODEL_ID)
-        model.invoke = AsyncMock(  # type: ignore[method-assign]
-            return_value=InvokeResult(response={"embeddings": [{"embedding": [0.1]}]})
+        monkeypatch.setattr(
+            type(model),
+            "invoke",
+            AsyncMock(
+                return_value=InvokeResult(
+                    response={"embeddings": [{"embedding": [0.1]}]}
+                )
+            ),
         )
         await model._embed_single(  # noqa: SLF001
             value="base64data",
@@ -110,7 +129,9 @@ class TestNovaSingleEmbeddingImageUsage:
         assert record.quantities[Dimension.INPUT_IMAGES] == 1
         assert record.input_images_by_spec == {"document": 1}
 
-    async def test_text_input_records_no_input_images(self) -> None:
+    async def test_text_input_records_no_input_images(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Non-image media types never record ``INPUT_IMAGES``.
 
         Text embedding is billed on tokens reported by Bedrock, so the media
@@ -119,8 +140,14 @@ class TestNovaSingleEmbeddingImageUsage:
         Ref: stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel._record_media_usage
         """
         model = NovaEmbeddingModel(_NOVA_MODEL_ID)
-        model.invoke = AsyncMock(  # type: ignore[method-assign]
-            return_value=InvokeResult(response={"embeddings": [{"embedding": [0.1]}]})
+        monkeypatch.setattr(
+            type(model),
+            "invoke",
+            AsyncMock(
+                return_value=InvokeResult(
+                    response={"embeddings": [{"embedding": [0.1]}]}
+                )
+            ),
         )
         await model._embed_single(  # noqa: SLF001
             value="hello",
@@ -265,7 +292,9 @@ class TestMarengoTextImageUsage:
          stdapi/models/embedding/twelvelabs_marengo_embed.py:EmbeddingModel._embed_text_image
     """
 
-    async def test_text_image_records_one_input_image(self) -> None:
+    async def test_text_image_records_one_input_image(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The image half of a text_image pair bills as a flat input image.
 
         The fused ``text_image`` call embeds one image and one caption, so it is
@@ -274,8 +303,12 @@ class TestMarengoTextImageUsage:
         Ref: stdapi/usage.py:record_bedrock_usage
         """
         model = MarengoEmbeddingModel(_MARENGO_MODEL_ID)
-        model.invoke = AsyncMock(  # type: ignore[method-assign]
-            return_value=InvokeResult(response={"data": [{"embedding": [0.1]}]})
+        monkeypatch.setattr(
+            type(model),
+            "invoke",
+            AsyncMock(
+                return_value=InvokeResult(response={"data": [{"embedding": [0.1]}]})
+            ),
         )
         await model._embed_text_image(  # noqa: SLF001
             value="base64image",  # type: ignore[arg-type]

@@ -1365,6 +1365,8 @@ class InputFile:
 class InputFileUrl(InputFile):
     """``InputFile`` variant that only accepts URL schemes (http(s), s3, data, file-id)."""
 
+    __slots__ = ()
+
     ALLOWED_ORIGINS: frozenset[_FileOrigin] = frozenset(
         {
             _FileOrigin.DATA_URI,
@@ -1381,6 +1383,8 @@ class FileIdInputFile(InputFile):
     Accepts a ``file-*`` identifier string at the Pydantic level and
     resolves it to the corresponding S3 object at runtime.
     """
+
+    __slots__ = ()
 
     def __new__(cls, value: str) -> Self:
         """Create a ``FileIdInputFile`` from a Files API identifier.
@@ -1459,6 +1463,8 @@ class IngestInputFile(InputFile):
     allowed origins.  Callers must pass the actual file body (base64, data
     URI, HTTPS URL, or S3 URI).
     """
+
+    __slots__ = ()
 
     ALLOWED_ORIGINS: frozenset[_FileOrigin] = frozenset(
         {

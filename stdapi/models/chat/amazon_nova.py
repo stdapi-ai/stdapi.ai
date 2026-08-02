@@ -10,5 +10,7 @@ class ChatModel(_BaseChatModel):
     - Prompt caching for system and messages (but not tools)
     """
 
+    __slots__ = ()
+
     MATCHER = "amazon.nova-"
     PROMPT_CACHING_SUPPORTED = True

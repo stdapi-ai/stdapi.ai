@@ -14,7 +14,7 @@ from botocore.exceptions import BotoCoreError, ClientError, HTTPClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException
 
@@ -68,7 +68,7 @@ from stdapi.pricing import (
 from stdapi.region_routing import measure_region_latencies, quota_retry_after
 from stdapi.routes import discover_routers
 from stdapi.server import SERVER_VERSION
-from stdapi.utils import hide_security_details
+from stdapi.utils import JSONResponse, hide_security_details
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable
@@ -246,6 +246,8 @@ app = FastAPI(
     docs_url="/docs" if SETTINGS.enable_docs else None,
     redoc_url="/redoc" if SETTINGS.enable_redoc else None,
     openapi_url="/openapi.json" if SETTINGS.enable_openapi_json else None,
+    # pydantic_core-rendered responses on every route (stdlib-identical wire format).
+    default_response_class=JSONResponse,
 )
 otel_manager.instrument(app)
 discover_routers(app)

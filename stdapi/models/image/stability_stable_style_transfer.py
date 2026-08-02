@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 class _StyleTransferJob(StabilityImageGenerationJobBase):
     """Job for style transfer model."""
 
+    __slots__ = ()
+
     async def _edit_image(
         self, images: list[str], mask: str | None
     ) -> Iterable[Awaitable[ImageGenerationResponse]]:
@@ -49,6 +51,8 @@ class _StyleTransferJob(StabilityImageGenerationJobBase):
 
 class ImageModel(StabilityImageModelBase):
     """Stability AI style transfer model."""
+
+    __slots__ = ()
 
     MATCHER = compile_regex(r"^stability\.stable-style-transfer-v\d+:\d+$")
     IMAGE_GENERATION_JOB_CLASS = _StyleTransferJob

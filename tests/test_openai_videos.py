@@ -346,8 +346,9 @@ class TestOpenAIVideoRoutes:
     ) -> None:
         """A malformed JSON body is rejected as a validation error, not a 500.
 
-        The body is parsed by the route itself, so the JSON decode error has to be
-        converted into the same request-validation envelope FastAPI would produce.
+        The body is parsed by the route itself (``model_validate_json``), so the
+        pydantic ``json_invalid`` error has to be converted into the same
+        request-validation envelope FastAPI would produce.
 
         Ref: stdapi/utils.py:validation_error_handler
              stdapi/main.py:handle_validation_exception
@@ -358,7 +359,7 @@ class TestOpenAIVideoRoutes:
         assert response.status_code == 400, response.text
         err = response.json()["error"]
         assert err["type"] == "invalid_request_error"
-        assert "JSON decode error" in err["message"]
+        assert "Invalid JSON" in err["message"]
         assert not video_backend.calls
 
     def test_create_then_retrieve_roundtrip(

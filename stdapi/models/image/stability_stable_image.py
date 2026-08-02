@@ -20,6 +20,8 @@ if TYPE_CHECKING:
 class StabilityCoreTextToImageJob(TextToImageJob):
     """Job for text-to-image models."""
 
+    __slots__ = ()
+
     _OUTPUT_FORMATS: ClassVar[set[str]] = {"png", "jpeg"}
 
     async def _generate_images_from_text(
@@ -36,6 +38,8 @@ class StabilityCoreTextToImageJob(TextToImageJob):
 
 class ImageModel(StabilityImageModelBase):
     """Stability AI image models."""
+
+    __slots__ = ()
 
     MATCHER = compile_regex(r"^stability\.stable-image-(?:core|ultra)-v\d+:\d+$")
     IMAGE_GENERATION_JOB_CLASS = StabilityCoreTextToImageJob

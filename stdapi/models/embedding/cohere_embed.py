@@ -93,6 +93,8 @@ class _Response(TypedDict):
 class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
     """Cohere embedding model."""
 
+    __slots__ = ()
+
     MATCHER = "cohere.embed-"
 
     async def embed_text(

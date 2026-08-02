@@ -6,6 +6,7 @@ Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
      stdapi/routes/openai_moderations.py:create_moderation
 """
 
+from asyncio import Event, wait_for
 from base64 import b64encode
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -1729,6 +1730,71 @@ class TestComprehendModerationsRoute:
 
         assert response.status_code == 200, response.text
         assert language_codes == ["en"]
+
+    def test_long_text_batches_run_concurrently(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """DetectToxicContent calls for a long input fan out concurrently.
+
+        A 15 KB input splits into 15 segments, i.e. two calls of at most 10
+        segments each. Each stubbed call blocks until both are in flight, so
+        this test fails (times out into a 500) if the batches regress to
+        sequential awaits. The flagged verdict comes from the second call
+        only, proving max-aggregation is preserved across concurrent calls.
+
+        Ref: https://docs.aws.amazon.com/comprehend/latest/APIReference/API_DetectToxicContent.html
+             stdapi/models/moderation/amazon_comprehend.py:ModerationModel.moderate
+        """
+        both_started = Event()
+        in_flight = 0
+        batches: list[list[str]] = []
+        text = "a" * 14_500 + "zz" * 250
+
+        class _StubComprehendClient:
+            async def detect_toxic_content(
+                self,
+                *,
+                TextSegments: list[dict[str, str]],  # noqa: N803
+                LanguageCode: str,  # noqa: N803
+            ) -> dict[str, Any]:
+                assert LanguageCode == "en"
+                nonlocal in_flight
+                in_flight += 1
+                if in_flight >= 2:
+                    both_started.set()
+                # Times out (instead of hanging) if the calls are sequential.
+                await wait_for(both_started.wait(), timeout=5)
+                segments = [segment["Text"] for segment in TextSegments]
+                batches.append(segments)
+                # Only the batch holding the tail of the input is toxic.
+                canned = _TOXIC_RESULT if "zz" in segments[-1] else _CLEAN_RESULT
+                padding: list[dict[str, Any]] = [{"Labels": [], "Toxicity": 0.0}] * (
+                    len(segments) - 1
+                )
+                return {"ResultList": [canned, *padding]}
+
+        async def _call(
+            service: str,
+            regions: list[str],
+            call: Any,  # noqa: ANN401
+        ) -> tuple[dict[str, Any], str]:
+            assert service == "comprehend"
+            return await call(_StubComprehendClient(), regions[0]), regions[0]
+
+        monkeypatch.setattr(amazon_comprehend, "call_with_region_failover", _call)
+
+        response = app_client.post("/v1/moderations", json={"input": text})
+
+        assert response.status_code == 200, response.text
+        assert sorted(len(batch) for batch in batches) == [5, 10], (
+            "15 segments must fan out as one full and one partial call"
+        )
+        (result,) = response.json()["results"]
+        assert result["flagged"] is True
+        assert result["categories"]["violence"] is True
+        assert result["category_scores"]["violence"] == 0.91, (
+            "the toxic batch's score must survive max-aggregation"
+        )
 
     def test_image_input_requires_guardrail(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch

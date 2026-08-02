@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 class TextToImageJob(StabilityImageGenerationJobBase):
     """Job for text-to-image and image-to-image generation."""
 
+    __slots__ = ("_prompt",)
+
     _DEFAULT_STRENGTH = 0.35  # Use the same default value as Stable Image Ultra
 
     async def _generate_images_from_text(
@@ -82,6 +84,8 @@ class TextToImageJob(StabilityImageGenerationJobBase):
 
 class ImageModel(StabilityImageModelBase):
     """Stability AI Stable diffusion model."""
+
+    __slots__ = ()
 
     MATCHER = "stability.sd"
     IMAGE_GENERATION_JOB_CLASS = TextToImageJob

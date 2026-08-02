@@ -956,6 +956,8 @@ def _validate_no_keywords(keywords: list[str] | None) -> None:
 class AudioModel(AudioModelBase[None, None]):
     """Amazon Transcribe audio model implementation (transcription only)."""
 
+    __slots__ = ()
+
     MATCHER = AWS_TRANSCRIBE_MODEL_ID
 
     SUPPORTED_RESPONSES_FORMATS = frozenset(

@@ -33,6 +33,8 @@ _IMAGE_MEDIA_TYPES = frozenset({"image/png", "image/jpeg"})
 class VideoModel(VideoModelBase):
     """Luma AI Ray video generation model."""
 
+    __slots__ = ()
+
     MATCHER = "luma."
     DEFAULT_SECONDS = 5
     DEFAULT_SIZE = "1280x720"

@@ -207,6 +207,8 @@ class _Response(TypedDict):
 class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
     """TwelveLabs Marengo embedding model."""
 
+    __slots__ = ()
+
     MATCHER = "twelvelabs.marengo-embed-"
 
     async def embed_text(

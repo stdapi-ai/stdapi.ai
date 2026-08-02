@@ -31,6 +31,8 @@ if TYPE_CHECKING:
 class _SimpleEditJob(StabilityImageGenerationJobBase):
     """Job for simple edit models (control, style-guide, outpaint, upscale)."""
 
+    __slots__ = ()
+
     async def _edit_image(
         self, images: list[str], mask: str | None
     ) -> Iterable[Awaitable[ImageGenerationResponse]]:
@@ -53,6 +55,8 @@ class _SimpleEditJob(StabilityImageGenerationJobBase):
 
 class ImageModel(StabilityImageModelBase):
     """Stability AI simple edit models (control, style-guide, outpaint, upscale)."""
+
+    __slots__ = ()
 
     MATCHER = compile_regex(
         r"^stability\.stable-(?:image-(?:control-(?:sketch|structure)|style-guide)|(?:creative|conservative)-upscale|outpaint)-v\d+:\d+$"

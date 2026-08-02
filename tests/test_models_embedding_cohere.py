@@ -51,7 +51,7 @@ class TestCohereEmbeddingModelImages:
                 output_tokens=0,
             )
 
-        monkeypatch.setattr(model, "invoke", _invoke)
+        monkeypatch.setattr(type(model), "invoke", staticmethod(_invoke))
 
         response = await model.embed_text(
             ["dummy-image"], dimensions=None, extra_params={}
@@ -94,7 +94,7 @@ class TestCohereEmbeddingModelImages:
                 output_tokens=0,
             )
 
-        monkeypatch.setattr(model, "invoke", _invoke)
+        monkeypatch.setattr(type(model), "invoke", staticmethod(_invoke))
 
         response = await model.embed_text(["hello"], dimensions=None, extra_params={})
 
@@ -140,7 +140,7 @@ class TestCohereEmbeddingModelQuantizedTypes:
                 output_tokens=0,
             )
 
-        monkeypatch.setattr(model, "invoke", _invoke)
+        monkeypatch.setattr(type(model), "invoke", staticmethod(_invoke))
 
         response = await model.embed_text(["hello"], dimensions=None, extra_params={})
 
@@ -176,7 +176,7 @@ class TestCohereEmbeddingModelQuantizedTypes:
                 output_tokens=0,
             )
 
-        monkeypatch.setattr(model, "invoke", _invoke)
+        monkeypatch.setattr(type(model), "invoke", staticmethod(_invoke))
 
         with pytest.raises(ApiError) as excinfo:
             await model.embed_text(["hello"], dimensions=None, extra_params={})
@@ -249,7 +249,7 @@ class TestCohereEmbeddingModelImageSources:
                 output_tokens=0,
             )
 
-        monkeypatch.setattr(model, "invoke", _invoke)
+        monkeypatch.setattr(type(model), "invoke", staticmethod(_invoke))
 
         response = await model.embed_text(
             [InputFileUrl("https://example.invalid/image.png")],

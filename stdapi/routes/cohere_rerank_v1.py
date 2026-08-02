@@ -5,7 +5,6 @@ specification shape, calling AWS Bedrock rerank models (e.g., Amazon Rerank,
 Cohere Rerank) through the Bedrock Rerank API.
 """
 
-import json
 from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends
@@ -30,6 +29,7 @@ from stdapi.types.cohere_rerank import (
     RerankV1Result,
     RerankV1ResultDocument,
 )
+from stdapi.utils import to_json_str
 
 if TYPE_CHECKING:
     from stdapi.types import JsonMapping
@@ -93,7 +93,7 @@ def _echo_document_text(document: str | JsonMapping) -> str:
     if document.keys() == {"text"} and isinstance(text, str):
         return text
     return "\n".join(
-        f"{key}: {value if isinstance(value, str) else json.dumps(value)}"
+        f"{key}: {value if isinstance(value, str) else to_json_str(value)}"
         for key, value in document.items()
     )
 

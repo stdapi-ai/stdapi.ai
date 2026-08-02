@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 class _InpaintJob(StabilityImageGenerationJobBase):
     """Job for inpaint model."""
 
+    __slots__ = ()
+
     async def _edit_image(
         self, images: list[str], mask: str | None
     ) -> Iterable[Awaitable[ImageGenerationResponse]]:
@@ -46,6 +48,8 @@ class _InpaintJob(StabilityImageGenerationJobBase):
 
 class ImageModel(StabilityImageModelBase):
     """Stability AI inpaint model."""
+
+    __slots__ = ()
 
     MATCHER = compile_regex(r"^stability\.stable-image-inpaint-v\d+:\d+$")
     IMAGE_GENERATION_JOB_CLASS = _InpaintJob

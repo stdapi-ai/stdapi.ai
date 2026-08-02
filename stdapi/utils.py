@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from io import BytesIO
 from json import JSONDecodeError
+from json import dumps as _std_dumps
 from re import ASCII
 from re import compile as compile_regex
 from typing import (
@@ -24,13 +25,14 @@ from urllib.parse import unquote
 from uuid import uuid7 as uuid
 
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse as _JSONResponseBase
 from langcodes import Language
 from PIL import Image, UnidentifiedImageError
 from pybase64 import b64decode as _b64decode
 from pybase64 import b64encode as _b64encode
 from pydantic import BaseModel, JsonValue, ValidationError
 from pydantic_core import from_json, to_json
-from sse_starlette import JSONServerSentEvent
+from sse_starlette import JSONServerSentEvent, ServerSentEvent
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Buffer, Generator
@@ -65,8 +67,61 @@ match_bedrock_prompt_arn = compile_regex(
 ).match
 
 
+def to_json_str(value: object) -> str:
+    """Encode a value as a compact JSON string via pydantic_core.
+
+    Falls back to the stdlib encoder (with its ASCII escaping) for input
+    pydantic_core rejects, such as strings carrying lone surrogates.
+
+    Args:
+        value: Value to encode.
+
+    Returns:
+        Compact JSON string (no spaces after separators).
+    """
+    try:
+        return to_json(value).decode()
+    except ValueError:
+        return _std_dumps(value, separators=(",", ":"))
+
+
+def to_json_bytes(value: object) -> bytes:
+    """Encode a value as compact UTF-8 JSON bytes via pydantic_core.
+
+    Falls back to the stdlib encoder (with its ASCII escaping) for input
+    pydantic_core rejects, such as strings carrying lone surrogates.
+
+    Args:
+        value: Value to encode.
+
+    Returns:
+        Compact JSON bytes (no spaces after separators).
+    """
+    try:
+        return to_json(value)
+    except ValueError:
+        return _std_dumps(value, separators=(",", ":")).encode()
+
+
+class _PreEncodedJSONServerSentEvent(JSONServerSentEvent):
+    """``JSONServerSentEvent`` fed pre-serialized JSON, skipping the re-encode."""
+
+    def __init__(self, data: str, *, event: str | None = None) -> None:
+        """Store the already-encoded JSON payload as the event data.
+
+        Args:
+            data: JSON-encoded event data.
+            event: SSE event name, or ``None`` for a data-only event.
+        """
+        ServerSentEvent.__init__(self, data, event=event)
+
+
 def json_sse(event: LiteralString | None, payload: BaseModel) -> JSONServerSentEvent:
     """Build a ``JSONServerSentEvent`` from a pydantic payload.
+
+    The payload is encoded in a single pydantic_core pass; the wire format is
+    identical to ``JSONServerSentEvent``'s stdlib encoding (compact separators,
+    raw UTF-8).
 
     Args:
         event: SSE event name (always a literal in callers), or ``None`` for a
@@ -76,12 +131,32 @@ def json_sse(event: LiteralString | None, payload: BaseModel) -> JSONServerSentE
     Returns:
         A ready-to-yield ``JSONServerSentEvent``.
     """
-    data = payload.model_dump(mode="json", exclude_none=True)
-    return (
-        JSONServerSentEvent(event=event, data=data)
-        if event
-        else JSONServerSentEvent(data=data)
+    return _PreEncodedJSONServerSentEvent(
+        payload.model_dump_json(exclude_none=True), event=event
     )
+
+
+class JSONResponse(_JSONResponseBase):
+    """``JSONResponse`` rendered with pydantic_core instead of the stdlib encoder.
+
+    Emits the same compact, raw-UTF-8 JSON as the FastAPI default; the stdlib
+    renderer remains as fallback for input pydantic_core rejects (such as
+    strings carrying lone surrogates).
+    """
+
+    def render(self, content: object) -> bytes:
+        """Render the response body as compact JSON bytes.
+
+        Args:
+            content: JSON-serializable response content.
+
+        Returns:
+            UTF-8 encoded JSON body.
+        """
+        try:
+            return to_json(content)
+        except ValueError:
+            return super().render(content)
 
 
 def now_utc_timestamp() -> int:

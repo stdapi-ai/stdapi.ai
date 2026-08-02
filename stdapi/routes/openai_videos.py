@@ -279,7 +279,7 @@ async def create_video(
     """
     if "application/json" in http_request.headers.get("content-type", ""):
         with validation_error_handler():
-            body = VideoCreateJsonBody.model_validate(await http_request.json())
+            body = VideoCreateJsonBody.model_validate_json(await http_request.body())
         reference = body.input_reference
         request: VideoCreateParams = body
     else:

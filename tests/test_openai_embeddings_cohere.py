@@ -203,7 +203,9 @@ class TestCohereEmbedFusedInputsGuard:
          stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
     """
 
-    async def test_mixed_input_on_v3_model_raises_clear_error(self) -> None:
+    async def test_mixed_input_on_v3_model_raises_clear_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A fused text+image request on a V3 model raises a 400 ApiError.
 
         Only Embed v4 has the ``inputs`` content-part shape, so the gateway refuses
@@ -213,7 +215,7 @@ class TestCohereEmbedFusedInputsGuard:
              stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
         """
         model = EmbeddingModel(COHERE_V3)
-        model.invoke = AsyncMock()  # type: ignore[method-assign]
+        monkeypatch.setattr(type(model), "invoke", AsyncMock())
         with pytest.raises(ApiError, match="Cohere Embed v4") as exc_info:
             await model.embed_text(
                 ["A sample text.", InputFileUrl(_SAMPLE_IMAGE_DATA_URI)],
@@ -223,7 +225,9 @@ class TestCohereEmbedFusedInputsGuard:
         assert exc_info.value.status == 400
         model.invoke.assert_not_called()
 
-    async def test_mixed_input_on_v4_model_builds_fused_body(self) -> None:
+    async def test_mixed_input_on_v4_model_builds_fused_body(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A fused text+image request on the V4 model builds the ``inputs`` body.
 
         Each input becomes its own ``content`` list entry, keeping request order, and
@@ -234,8 +238,10 @@ class TestCohereEmbedFusedInputsGuard:
              stdapi/models/embedding/cohere_embed.py:EmbeddingModel._to_input_content
         """
         model = EmbeddingModel(COHERE_V4)
-        model.invoke = AsyncMock(  # type: ignore[method-assign]
-            return_value=InvokeResult(response={"embeddings": [[0.1]]})
+        monkeypatch.setattr(
+            type(model),
+            "invoke",
+            AsyncMock(return_value=InvokeResult(response={"embeddings": [[0.1]]})),
         )
         response = await model.embed_text(
             ["A sample text.", InputFileUrl(_SAMPLE_IMAGE_DATA_URI)],

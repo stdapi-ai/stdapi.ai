@@ -1,8 +1,4 @@
-"""Default chat model implementation using AWS Bedrock Converse API.
-
-This module provides the default chat completion implementation that works with
-all AWS Bedrock models supporting the Converse and ConverseStream APIs.
-"""
+"""Default chat model implementation for every AWS Bedrock model supporting Converse."""
 
 from asyncio import gather
 from contextlib import suppress
@@ -102,6 +98,8 @@ def _native_tool_names(additional_request_fields: JsonMapping) -> frozenset[str]
 
 class ChatModel(ChatModelBase[Any, Any]):
     """Default chat model using AWS Bedrock Converse API."""
+
+    __slots__ = ()
 
     #: Prompt caching supported.
     PROMPT_CACHING_SUPPORTED: ClassVar[bool] = False
@@ -694,8 +692,7 @@ class ChatModel(ChatModelBase[Any, Any]):
     ) -> ConverseRequestBaseTypeDef:
         """Build a Bedrock Converse request payload.
 
-        Assembles all request fields from the translated inputs.  Region
-        selection and the actual AWS call are delegated to
+        Region selection and the AWS call are delegated to
         :meth:`~stdapi.models.ModelBase.converse` /
         :meth:`~stdapi.models.ModelBase.converse_stream`, which overwrite the
         ``modelId`` placeholder with the final region-specific value.
@@ -752,9 +749,6 @@ class ChatModel(ChatModelBase[Any, Any]):
     def _get_passthrough_header_fields(self) -> dict[str, Any]:
         """Extract additional request fields from passthrough HTTP headers.
 
-        Reads the current request headers and transforms matching entries
-        according to :attr:`PASSTHROUGH_HEADERS`.
-
         Returns:
             A dict of field names to transformed header values.
         """
@@ -772,13 +766,10 @@ class ChatModel(ChatModelBase[Any, Any]):
     ) -> dict[str, Any]:
         """Merge passthrough headers into additional request fields.
 
-        Combines header-derived fields with the existing
-        ``additional_request_fields``.  Header values have lower priority:
-        if a key already exists in *additional_request_fields* (from request
-        body or default model params), it is kept.
-
-        Subclasses may override this to apply model-specific transformations
-        (e.g. filtering unsupported ``anthropic_beta`` flags).
+        Header values have lower priority: a key already present in
+        *additional_request_fields* (from the request body or the default model
+        params) is kept.  Subclasses may override this to apply model-specific
+        transformations (e.g. filtering unsupported ``anthropic_beta`` flags).
 
         Args:
             additional_request_fields: Fields already collected from the
@@ -1157,11 +1148,10 @@ class ChatModel(ChatModelBase[Any, Any]):
         """Promote eligible ``toolSpec`` entries to ``systemTool`` entries.
 
         A ``toolSpec`` entry is promoted when its name appears in
-        ``SUPPORTED_SYSTEM_TOOLS``.  Both the Anthropic Messages adapter
-        (pre-translated via ``tool_name_map``) and the Responses adapter
-        (pre-translated via ``tool_name_map``) emit Bedrock names directly, so
-        a simple membership check suffices.  Promoted entries move to the end of
-        the list; ``toolChoice`` is dropped when no regular entries remain.
+        ``SUPPORTED_SYSTEM_TOOLS``: the Anthropic Messages and Responses adapters
+        both pre-translate via ``tool_name_map``, so a membership check on the
+        Bedrock name suffices.  Promoted entries move to the end of the list;
+        ``toolChoice`` is dropped when no regular entries remain.
 
         This is the only place that emits ``{"systemTool": {"name": ...}}``.
 

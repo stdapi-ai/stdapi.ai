@@ -42,20 +42,13 @@ AMZ_QUALITY_MAP: dict[ImageOutputQuality, AmzQuality] = {
 def get_amz_quality(quality: ImageOutputQuality | str | None) -> AmzQuality | None:
     """Converts input image quality to the corresponding Amazon quality format.
 
-    This function standardizes the given image output quality parameter to align
-    with pre-defined Amazon quality mappings. It checks the input value against
-    a mapping dictionary and returns the appropriate Amazon quality format. If
-    the provided input does not match any value in the mapping, the original
-    input is returned unaltered. The Bedrock API validates the final value.
-
     Args:
-        quality: A string or ImageOutputQuality specifying the desired image
-            quality. The value will be case-insensitively matched against the
-            pre-defined Amazon quality map.
+        quality: Desired image quality, matched case-insensitively against the
+            Amazon quality map.
 
     Returns:
-        The corresponding Amazon-specific quality format if found
-            in the mapping or the original quality input if no match exists.
+        The Amazon-specific quality format, or the input unaltered when it maps
+        to none (the Bedrock API validates the final value).
     """
     if quality is None:
         return None
@@ -247,6 +240,14 @@ class _Response(TypedDict):
 class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
     """Image generation job supporting both text-to-image and inpainting."""
 
+    __slots__ = (
+        "_input_tokens",
+        "_output_tokens",
+        "_response_height",
+        "_response_output_format",
+        "_response_width",
+    )
+
     @staticmethod
     async def _create_response(image: str, index: int) -> ImageGenerationResponse:
         """Create an ImageGenerationResponse from image data.
@@ -387,19 +388,13 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
     ) -> _Request:
         """Generates and returns a request object configured for text-to-image generation.
 
-        The method constructs a request object for generating images from text prompts,
-        including optional configurations for condition images and additional parameters.
-
         Args:
-            image_generation_config (_ImageGenerationConfig):
-                The configuration settings for image generation.
-            images (list[str] | None):
-                An optional list of image file paths or URLs to be used as conditional
-                inputs for the text-to-image generation process. Defaults to None.
+            image_generation_config: The configuration settings for image
+                generation.
+            images: Optional images used as conditional inputs.
 
         Returns:
-            _Request:
-                A fully configured request object for text-to-image generation.
+            A fully configured request object for text-to-image generation.
         """
         request = _Request(
             taskType="TEXT_IMAGE",
@@ -422,16 +417,10 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
     ) -> _Request:
         """Constructs and returns a request object for the color-guided generation task.
 
-        This method prepares an object encapsulating the parameters and configuration
-        necessary to perform a color-guided image generation task. It ensures that
-        the required color parameters are set and integrates additional optional
-        configurations, such as reference images, if provided.
-
         Args:
-            image_generation_config: Configuration object containing parameters for
-                image generation.
-            images: Optional list of image file paths or identifiers that may be used
-                as reference images for the color-guided generation task.
+            image_generation_config: Configuration object containing parameters
+                for image generation.
+            images: Optional reference images for the generation task.
 
         Returns:
             A request object configured for color-guided image generation task.
@@ -462,11 +451,6 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
     ) -> _Request:
         """Generates a request object for image variation tasks.
 
-        This method constructs a request object configured for the "IMAGE_VARIATION" task. It
-        uses the provided image generation configuration and a list of input images to populate
-        the required parameters. The method also applies any additional configurations to the
-        request object.
-
         Args:
             image_generation_config: Configuration for image generation parameters.
             images: List of image file paths or identifiers for generating variations.
@@ -490,16 +474,13 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
     ) -> _Request:
         """Creates and returns a request object for performing an inpainting task.
 
-        The request includes image generation configuration and optional mask data
-        to customize the inpainting process.
-
         Args:
             image_generation_config: Configuration settings for image generation.
             image: Base image for inpainting provided as a string.
             mask: Optional mask image to specify the painting area.
 
         Returns:
-            _Request: A fully configured request object for the inpainting task.
+            A fully configured request object for the inpainting task.
         """
         request = _Request(
             taskType="INPAINTING",
@@ -519,23 +500,14 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
     ) -> _Request:
         """Constructs and returns an outpainting request object.
 
-        This method prepares a request with necessary parameters to invoke an
-        outpainting task, including the image and optional mask configuration.
-        The request object includes task-specific parameters and configurations for
-        generating the desired output.
-
         Args:
-            image_generation_config: Configuration object for image generation
-                tasks that defines various parameters for generating output images.
-            image: String representing the input image required for the outpainting
-                task.
-            mask: Optional mask image represented as a string, specifying areas
-                of interest for the outpainting operation. If `None`, the mask
-                will be omitted from the request.
+            image_generation_config: Configuration settings for image generation.
+            image: Input image required for the outpainting task.
+            mask: Optional mask image specifying the areas of interest; omitted
+                from the request when None.
 
         Returns:
-            _Request: The constructed outpainting request object containing all
-            specified parameters and configurations.
+            The constructed outpainting request object.
         """
         request = _Request(
             taskType="OUTPAINTING",
@@ -557,28 +529,16 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
     ) -> _Request:
         """Constructs and returns a request for background removal processing.
 
-        This method is responsible for generating a `_Request` object configured
-        to perform background removal on the given image. It integrates
-        the provided image generation configuration and validates
-        whether optional parameters are supported.
-
         Args:
-            image_generation_config (_ImageGenerationConfig): The configuration
-                for image generation, which specifies the parameters
-                required by the background removal model.
-            image (str): The path to the input image from which the background
-                needs to be removed.
-            mask (str | None): An optional parameter, which when provided,
-                will raise an error indicating that masking is not supported
-                by the underlying model.
+            image_generation_config: Configuration settings for image generation.
+            image: Input image to remove the background from.
+            mask: Unsupported by this model; must be None.
 
         Raises:
-            ApiError: If the mask parameter is provided, as this model
-                does not support mask-based operations.
+            ApiError: If the mask parameter is provided.
 
         Returns:
-            _Request: A configured `_Request` object for initiating background
-                removal processing.
+            A configured request object for background removal processing.
         """
         self._validate_no_mask(mask, reason="with BACKGROUND_REMOVAL taskType")
         request = _Request(
@@ -612,6 +572,8 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
 
 class ImageModel(ImageModelBase[_Request, _Response, _ImageGenerationJob]):
     """Amazon Titan Image Generator model."""
+
+    __slots__ = ()
 
     MATCHER = "amazon.titan-image-generator"
     IMAGE_GENERATION_JOB_CLASS = _ImageGenerationJob

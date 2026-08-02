@@ -21,6 +21,8 @@ class ChatModel(AnthropicClaudeChatModel):
     matched here for the day it is also served by bedrock-runtime.
     """
 
+    __slots__ = ()
+
     MATCHER = re_compile(r"^anthropic\.claude-(?:fable|mythos)-")
     REASONING_DISABLE_SUPPORTED: ClassVar[bool] = False
     SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED: ClassVar[bool] = True

@@ -5,6 +5,7 @@ Bedrock Converse API-native types. Handles tool mapping, input mapping,
 response formatting (both streaming and non-streaming), and streaming events.
 """
 
+from asyncio import Semaphore, Task, create_task, gather
 from base64 import b64decode, b64encode, urlsafe_b64encode
 from dataclasses import dataclass, field
 from enum import Enum
@@ -490,6 +491,10 @@ async def _generate_image_b64(
     return images[0].image if images else None
 
 
+#: Maximum concurrent image generations for image_generation tool calls.
+_IMAGE_GENERATION_CONCURRENCY: int = 8
+
+
 async def _try_generate_image_b64(
     args: dict[str, str], tool: ImageGeneration, fallback_model: str | None
 ) -> str | None:
@@ -518,9 +523,10 @@ async def execute_image_generation_calls(
 ) -> list[ResponseOutputItem]:
     """Replace ``image_generation`` function-call items with ``ImageGenerationCall``.
 
-    All other items pass through unchanged. Executes synchronously; generation
-    errors are caught and produce a ``status="failed"`` item instead of aborting
-    the request.
+    All other items pass through unchanged. Generations run concurrently
+    (bounded by ``_IMAGE_GENERATION_CONCURRENCY``); generation errors are
+    caught and produce a ``status="failed"`` item instead of aborting the
+    request.
 
     Args:
         output_items: Output items from the Bedrock response.
@@ -531,6 +537,25 @@ async def execute_image_generation_calls(
     Returns:
         New output list with image-generation calls materialised.
     """
+    semaphore = Semaphore(_IMAGE_GENERATION_CONCURRENCY)
+
+    async def _generate(arguments: str) -> str | None:
+        """Run one image generation under the concurrency bound."""
+        async with semaphore:
+            return await _try_generate_image_b64(
+                _str_args(arguments), image_gen_tool, fallback_model
+            )
+
+    generated = iter(
+        await gather(
+            *(
+                _generate(item.arguments)
+                for item in output_items
+                if isinstance(item, ResponseFunctionToolCall)
+                and item.name == "image_generation"
+            )
+        )
+    )
     result: list[ResponseOutputItem] = []
     counter = 0
     for item in output_items:
@@ -541,9 +566,7 @@ async def execute_image_generation_calls(
             result.append(item)
             continue
         counter += 1
-        b64 = await _try_generate_image_b64(
-            _str_args(item.arguments), image_gen_tool, fallback_model
-        )
+        b64 = next(generated)
         result.append(
             ImageGenerationCall(
                 id=f"{response_id}-img-{counter}",
@@ -566,12 +589,17 @@ async def image_generation_stream_handler(
     Invoked after the main Bedrock stream completes. For each suppressed call,
     yields ``response.output_item.added`` +
     ``response.image_generation_call.in_progress`` +
-    ``response.image_generation_call.generating``, runs generation, appends the
-    resulting ``ImageGenerationCall`` to ``state.output_items``, and yields
+    ``response.image_generation_call.generating``, awaits generation, appends
+    the resulting ``ImageGenerationCall`` to ``state.output_items``, and yields
     ``response.image_generation_call.completed`` (successful generations only)
     + ``response.output_item.done``. Generation failures are logged and produce
     a ``status="failed"`` item so a single failed image does not abort the
     stream.
+
+    All generations start eagerly and run concurrently (bounded by
+    ``_IMAGE_GENERATION_CONCURRENCY``); events are still emitted strictly in
+    call order, so the per-item event sequence and output indices are
+    unchanged.
 
     Args:
         state: Mutable stream state from ``format_stream``.
@@ -582,73 +610,85 @@ async def image_generation_stream_handler(
     Yields:
         SSE events for each generated image.
     """
-    counter = 0
-    for _tool_id, tool_name, args_json in state.suppressed_tool_calls:
-        if tool_name != "image_generation":
-            continue
+    semaphore = Semaphore(_IMAGE_GENERATION_CONCURRENCY)
 
-        counter += 1
-        item_id = f"{response_id}-img-{counter}"
-        yield json_sse(
-            "response.output_item.added",
-            ResponseOutputItemAddedEvent(
-                item=ImageGenerationCall(
-                    id=item_id,
-                    status="in_progress",
-                    type="image_generation_call",
-                    result=None,
-                ),
-                output_index=state.output_index,
-                sequence_number=state.next_seq(),
-                type="response.output_item.added",
-            ),
-        )
-        yield json_sse(
-            "response.image_generation_call.in_progress",
-            ResponseImageGenCallInProgressEvent(
-                item_id=item_id,
-                output_index=state.output_index,
-                sequence_number=state.next_seq(),
-                type="response.image_generation_call.in_progress",
-            ),
-        )
-        yield json_sse(
-            "response.image_generation_call.generating",
-            ResponseImageGenCallGeneratingEvent(
-                item_id=item_id,
-                output_index=state.output_index,
-                sequence_number=state.next_seq(),
-                type="response.image_generation_call.generating",
-            ),
-        )
-        b64 = await _try_generate_image_b64(
-            _str_args(args_json), image_gen_tool, fallback_model
-        )
-        status: _ImageStatus = "completed" if b64 else "failed"
-        image_call = ImageGenerationCall(
-            id=item_id, status=status, type="image_generation_call", result=b64
-        )
-        state.output_items.append(image_call)
-        if status == "completed":
+    async def _generate(arguments: dict[str, str]) -> str | None:
+        """Run one image generation under the concurrency bound."""
+        async with semaphore:
+            return await _try_generate_image_b64(
+                arguments, image_gen_tool, fallback_model
+            )
+
+    tasks: list[Task[str | None]] = [
+        create_task(_generate(_str_args(args_json)))
+        for _tool_id, tool_name, args_json in state.suppressed_tool_calls
+        if tool_name == "image_generation"
+    ]
+    try:
+        for counter, task in enumerate(tasks, start=1):
+            item_id = f"{response_id}-img-{counter}"
             yield json_sse(
-                "response.image_generation_call.completed",
-                ResponseImageGenCallCompletedEvent(
+                "response.output_item.added",
+                ResponseOutputItemAddedEvent(
+                    item=ImageGenerationCall(
+                        id=item_id,
+                        status="in_progress",
+                        type="image_generation_call",
+                        result=None,
+                    ),
+                    output_index=state.output_index,
+                    sequence_number=state.next_seq(),
+                    type="response.output_item.added",
+                ),
+            )
+            yield json_sse(
+                "response.image_generation_call.in_progress",
+                ResponseImageGenCallInProgressEvent(
                     item_id=item_id,
                     output_index=state.output_index,
                     sequence_number=state.next_seq(),
-                    type="response.image_generation_call.completed",
+                    type="response.image_generation_call.in_progress",
                 ),
             )
-        yield json_sse(
-            "response.output_item.done",
-            ResponseOutputItemDoneEvent(
-                item=image_call,
-                output_index=state.output_index,
-                sequence_number=state.next_seq(),
-                type="response.output_item.done",
-            ),
-        )
-        state.output_index += 1
+            yield json_sse(
+                "response.image_generation_call.generating",
+                ResponseImageGenCallGeneratingEvent(
+                    item_id=item_id,
+                    output_index=state.output_index,
+                    sequence_number=state.next_seq(),
+                    type="response.image_generation_call.generating",
+                ),
+            )
+            b64 = await task
+            status: _ImageStatus = "completed" if b64 else "failed"
+            image_call = ImageGenerationCall(
+                id=item_id, status=status, type="image_generation_call", result=b64
+            )
+            state.output_items.append(image_call)
+            if status == "completed":
+                yield json_sse(
+                    "response.image_generation_call.completed",
+                    ResponseImageGenCallCompletedEvent(
+                        item_id=item_id,
+                        output_index=state.output_index,
+                        sequence_number=state.next_seq(),
+                        type="response.image_generation_call.completed",
+                    ),
+                )
+            yield json_sse(
+                "response.output_item.done",
+                ResponseOutputItemDoneEvent(
+                    item=image_call,
+                    output_index=state.output_index,
+                    sequence_number=state.next_seq(),
+                    type="response.output_item.done",
+                ),
+            )
+            state.output_index += 1
+    finally:
+        # Drop still-pending generations if the stream is abandoned early.
+        for task in tasks:
+            task.cancel()
 
 
 def _build_output_config(

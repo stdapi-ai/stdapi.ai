@@ -4098,7 +4098,9 @@ class TestReadJsonFailure:
         """A response whose ``.json()`` raises ``JSONDecodeError`` maps to 502."""
 
         class _FakeResponse:
-            async def json(self, content_type: str | None = None) -> NoReturn:
+            async def json(
+                self, content_type: str | None = None, loads: object = None
+            ) -> NoReturn:
                 msg = "bad"
                 raise JSONDecodeError(msg, "doc", 0)
 

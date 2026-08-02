@@ -53,6 +53,8 @@ class RerankResponse(BaseModel):
 class RerankModelBase(ModelBase[Any, Any]):
     """Base class for provider-specific rerank models."""
 
+    __slots__ = ()
+
     @classmethod
     def get_supported_operations(cls) -> Capability:
         """Return capability flags for route-based model matching.

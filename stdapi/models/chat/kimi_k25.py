@@ -29,6 +29,8 @@ class ChatModel(_BaseChatModel):
     ``additionalModelRequestFields.thinking`` and ``.reasoning_effort``.
     """
 
+    __slots__ = ()
+
     #: Matches both Bedrock provider prefixes for any Kimi K2.x model, open-ended on version.
     MATCHER = re_compile(r"^moonshot(?:ai)?\.kimi-k2")
 

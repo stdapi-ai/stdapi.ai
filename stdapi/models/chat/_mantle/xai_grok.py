@@ -11,6 +11,8 @@ if TYPE_CHECKING:
 class ChatModel(MantleChatModel):
     """xAI Grok chat model (e.g. ``xai.grok-4.3``)."""
 
+    __slots__ = ()
+
     #: Model ID matcher, regex pattern or string prefix
     MATCHER: ClassVar[str] = "xai."
 

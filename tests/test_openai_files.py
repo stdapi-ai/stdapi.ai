@@ -15,6 +15,7 @@ Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
 import base64
 import io
 import time
+from asyncio import Event, wait_for
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
@@ -832,6 +833,80 @@ class TestUploadFileS3SourceMetadataUnit:
         assert stub_s3.head_object_calls == 1
 
 
+class TestForceS3MetadataMultipart:
+    """The metadata-forcing self-copy above 5 GiB fans its parts out concurrently.
+
+    Ref: https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPartCopy.html
+         stdapi/files/_core.py:_force_s3_metadata
+         stdapi/aws_s3.py:multipart_copy_parts
+    """
+
+    async def test_multipart_metadata_fix_copies_parts_concurrently(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Ranged self-copies overlap and complete in part-number order.
+
+        Each stubbed part copy blocks until all three are in flight, so this
+        test fails (times out) if the metadata fix regresses to sequential
+        copies. The requested metadata must still reach the multipart create.
+        """
+        monkeypatch.setattr(_core, "_COPY_OBJECT_MAX_BYTES", 20)
+        monkeypatch.setattr(_core, "_METADATA_FIX_PART_SIZE", 10)
+        all_started = Event()
+        in_flight = 0
+        create_kwargs: dict[str, Any] = {}
+        copy_ranges: dict[int, str] = {}
+        completed: list[dict[str, Any]] = []
+
+        class _StubS3Client:
+            async def create_multipart_upload(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
+                create_kwargs.update(kwargs)
+                return {"UploadId": "mpu-1"}
+
+            async def upload_part_copy(
+                self,
+                *,
+                PartNumber: int,  # noqa: N803
+                CopySourceRange: str,  # noqa: N803
+                **_kwargs: object,
+            ) -> dict[str, Any]:
+                nonlocal in_flight
+                in_flight += 1
+                if in_flight >= 3:
+                    all_started.set()
+                # Times out (instead of hanging) if copies are sequential.
+                await wait_for(all_started.wait(), timeout=5)
+                copy_ranges[PartNumber] = CopySourceRange
+                return {"CopyPartResult": {"ETag": f'"etag-{PartNumber}"'}}
+
+            async def complete_multipart_upload(
+                self,
+                *,
+                MultipartUpload: dict[str, Any],  # noqa: N803
+                **_kwargs: object,
+            ) -> dict[str, Any]:
+                completed.extend(MultipartUpload["Parts"])
+                return {}
+
+        await wait_for(
+            _core._force_s3_metadata(  # noqa: SLF001
+                cast("Any", _StubS3Client()),
+                "bucket",
+                "key",
+                25,
+                "text/plain",
+                'attachment; filename="wanted.jsonl"',
+                {"purpose": "batch", "expires-at": ""},
+            ),
+            timeout=5,
+        )
+
+        assert create_kwargs["ContentType"] == "text/plain"
+        assert create_kwargs["Metadata"] == {"purpose": "batch", "expires-at": ""}
+        assert [part["PartNumber"] for part in completed] == [1, 2, 3]
+        assert copy_ranges == {1: "bytes=0-9", 2: "bytes=10-19", 3: "bytes=20-24"}
+
+
 class _StubCompleteS3Client:
     """Stub S3 client for ``complete_multipart_session`` part-order tests.
 
@@ -1153,9 +1228,9 @@ class TestOpenAIFilesMalformedJsonBody:
     def test_malformed_json_body_is_rejected(self, app_client: TestClient) -> None:
         """A malformed JSON body is rejected with 400 and a JSON decode error, not a 500.
 
-        The body is read with ``Request.json()``, so the ``JSONDecodeError`` has
-        to be converted into a request-validation error to keep the OpenAI
-        envelope instead of bubbling up as a 500.
+        The body is parsed with ``model_validate_json``, so the pydantic
+        ``json_invalid`` error has to be converted into a request-validation
+        error to keep the OpenAI envelope instead of bubbling up as a 500.
 
         Ref: stdapi/utils.py:validation_error_handler
         """

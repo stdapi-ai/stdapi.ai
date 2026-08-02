@@ -13,6 +13,8 @@ if TYPE_CHECKING:
 class ChatModel(MantleChatModel):
     """Google Gemma chat model (e.g. ``google.gemma-4-e2b``), Gemma 4 and later."""
 
+    __slots__ = ()
+
     #: Matches Gemma 4 and future versions; Gemma 3 is a legacy open-weight model.
     MATCHER: ClassVar[Pattern[str]] = re_compile(r"^google\.gemma-(?!3)\d")
 

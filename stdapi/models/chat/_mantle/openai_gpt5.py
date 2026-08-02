@@ -13,6 +13,8 @@ if TYPE_CHECKING:
 class ChatModel(MantleChatModel):
     """OpenAI numbered GPT chat model (e.g. ``openai.gpt-5.6-sol``), GPT-5 and later."""
 
+    __slots__ = ()
+
     #: Matches GPT-5 and future numbered versions, not the gpt-oss family.
     MATCHER: ClassVar[Pattern[str]] = re_compile(r"^openai\.gpt-\d")
 

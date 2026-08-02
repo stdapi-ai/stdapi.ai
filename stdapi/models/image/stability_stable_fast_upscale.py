@@ -22,6 +22,8 @@ if TYPE_CHECKING:
 class _FastUpscaleJob(StabilityImageGenerationJobBase):
     """Job for fast upscale model (no prompt)."""
 
+    __slots__ = ()
+
     async def _edit_image(
         self, images: list[str], mask: str | None
     ) -> Iterable[Awaitable[ImageGenerationResponse]]:
@@ -42,6 +44,8 @@ class _FastUpscaleJob(StabilityImageGenerationJobBase):
 
 class ImageModel(StabilityImageModelBase):
     """Stability AI fast upscale model."""
+
+    __slots__ = ()
 
     MATCHER = compile_regex(r"^stability\.stable-fast-upscale-v\d+:\d+$")
     IMAGE_GENERATION_JOB_CLASS = _FastUpscaleJob

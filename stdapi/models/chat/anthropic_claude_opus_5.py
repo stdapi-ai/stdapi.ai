@@ -20,6 +20,8 @@ class ChatModel(AnthropicClaudeChatModel):
     are assumed to keep that behavior until proven otherwise.
     """
 
+    __slots__ = ()
+
     MATCHER = re_compile(r"^anthropic\.claude-opus-(?:[5-9]|\d\d)")
     SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED: ClassVar[bool] = True
     TOOL_BETA_FLAGS = MappingProxyType(

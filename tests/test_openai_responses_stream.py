@@ -12,6 +12,7 @@ Ref: https://developers.openai.com/api/reference/resources/responses/streaming-e
 """
 
 import json
+from asyncio import Event, wait_for
 from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, cast, get_args
 
@@ -416,9 +417,9 @@ class TestTextBlockJoinMatchesStreaming:
 class TestOpenBlockFlushedAtStreamEnd:
     """A stream truncated before ``contentBlockStop`` still delivers its block.
 
-    Reasoning blocks were already flushed defensively at stream end; an open
-    text block must get the same treatment instead of being silently dropped
-    from the final response.
+    Reasoning blocks are flushed defensively at stream end; an open text block
+    gets the same treatment instead of being silently dropped from the final
+    response.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStream.html
          stdapi/models/chat/_adapters/_openai_responses.py:format_stream
@@ -1605,7 +1606,7 @@ class TestPolicySwitches:
     """
 
     def test_safety_identifier_accepted(self) -> None:
-        """safety_identifier no longer raises an unsupported-parameter error."""
+        """safety_identifier binds to its declared field and is not unsupported."""
         request = _request(safety_identifier="user-1")
         assert request.safety_identifier == "user-1"
         assert "safety_identifier" in request.model_fields_set, (
@@ -1614,7 +1615,7 @@ class TestPolicySwitches:
         assert "safety_identifier" not in ResponseCreateParams._UNSUPPORTED  # noqa: SLF001
 
     def test_stream_options_accepted(self) -> None:
-        """stream_options no longer raises an unsupported-parameter error."""
+        """stream_options binds to its declared field and is not unsupported."""
         request = _request(stream=True, stream_options={"include_obfuscation": False})
         assert request.stream_options is not None
         assert request.stream_options.include_obfuscation is False
@@ -1728,9 +1729,9 @@ class TestImageGenerationExecution:
     ) -> None:
         """Quality comes from the tool definition, never from the model's arguments.
 
-        Every Stability backend rejects a quality outright, so a value the model
-        volunteered would fail the whole tool call; the caller's own tool-level
-        quality is an explicit ask and still reaches the job.
+        Most image models have no quality control, so a value the model
+        invented would be a request the caller never made; the caller's own
+        tool-level quality is an explicit ask and still reaches the job.
 
         Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._validate_no_quality
         """
@@ -1886,3 +1887,158 @@ class TestImageGenerationStreamEvents:
         assert isinstance(item, ImageGenerationCall)
         assert item.status == "failed"
         assert item.result is None
+
+
+class _BarrierImageModel:
+    """Fake image model whose jobs all block until every expected job started."""
+
+    def __init__(
+        self, expected: int, fail_prompts: frozenset[str] = frozenset()
+    ) -> None:
+        self.expected = expected
+        self.fail_prompts = fail_prompts
+        self.started: list[str] = []
+        self.all_started = Event()
+
+    def get_image_generation_job(self, **kwargs: object) -> object:
+        """Return a job that only finishes once all expected jobs started."""
+        prompt = str(kwargs["prompt"])
+        model = self
+
+        class _Job:
+            async def generate_images(self) -> list[_StubImageResult]:
+                model.started.append(prompt)
+                if len(model.started) >= model.expected:
+                    model.all_started.set()
+                # Times out (instead of hanging) if generations are sequential.
+                await wait_for(model.all_started.wait(), timeout=5)
+                if prompt in model.fail_prompts:
+                    msg = f"boom-{prompt}"
+                    raise RuntimeError(msg)
+                return [_StubImageResult(f"b64-{prompt}")]
+
+        return _Job()
+
+
+class TestImageGenerationConcurrency:
+    """Multiple image_generation calls in one response run concurrently.
+
+    Each stubbed generation blocks until every expected generation has
+    started, so these tests fail (time out) if the adapter regresses to
+    one-at-a-time awaits. The ordering contracts must hold unchanged: result
+    items and stream events keep the original call order, and a single failed
+    generation degrades to its own ``failed`` item without touching siblings.
+
+    Ref: https://developers.openai.com/api/docs/guides/tools-image-generation
+         stdapi/models/chat/_adapters/_openai_responses.py:execute_image_generation_calls
+         stdapi/models/chat/_adapters/_openai_responses.py:image_generation_stream_handler
+    """
+
+    async def test_non_stream_generations_overlap_and_keep_item_order(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Concurrent generations land on their own items in item order.
+
+        A failing middle generation must not disturb its siblings' results or
+        the stable per-item IDs, and non-image items pass through in place.
+        """
+        stub_model = _BarrierImageModel(3, fail_prompts=frozenset({"two"}))
+        logged: list[str] = []
+        monkeypatch.setattr(responses_adapter, "validate_model", _stub_validate_model)
+        monkeypatch.setattr(responses_adapter, "get_image_model", lambda _: stub_model)
+        monkeypatch.setattr(
+            responses_adapter,
+            "log_error_details",
+            lambda message, **_: logged.append(message),
+        )
+        passthrough = ResponseFunctionToolCall(
+            type="function_call", call_id="call_x", name="other_tool", arguments="{}"
+        )
+        items = [
+            _image_tool_call({"prompt": "one"}),
+            passthrough,
+            _image_tool_call({"prompt": "two"}),
+            _image_tool_call({"prompt": "three"}),
+        ]
+
+        result = await wait_for(
+            execute_image_generation_calls(
+                items,
+                ImageGeneration(type="image_generation"),
+                "resp-1",
+                "fallback-model",
+            ),
+            timeout=5,
+        )
+
+        assert sorted(stub_model.started) == ["one", "three", "two"]
+        assert result[1] is passthrough, "non-image items must pass through in place"
+        first, _, second, third = result
+        assert isinstance(first, ImageGenerationCall)
+        assert isinstance(second, ImageGenerationCall)
+        assert isinstance(third, ImageGenerationCall)
+        assert [first.id, second.id, third.id] == [
+            "resp-1-img-1",
+            "resp-1-img-2",
+            "resp-1-img-3",
+        ]
+        assert (first.status, first.result) == ("completed", "b64-one")
+        assert (second.status, second.result) == ("failed", None)
+        assert (third.status, third.result) == ("completed", "b64-three")
+        assert [message for message in logged if "boom-two" in message], (
+            "the failed sibling must still be logged"
+        )
+
+    async def test_stream_generations_overlap_and_keep_event_order(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Eagerly started generations emit their events strictly in call order.
+
+        Concurrency must not show: the per-item event sequence, output indices
+        and sequence numbers are those of a strictly sequential emission.
+        """
+        stub_model = _BarrierImageModel(2)
+        monkeypatch.setattr(responses_adapter, "validate_model", _stub_validate_model)
+        monkeypatch.setattr(responses_adapter, "get_image_model", lambda _: stub_model)
+        state = responses_adapter._StreamState("resp-1")  # noqa: SLF001
+        state.suppressed_tool_calls.extend(
+            [
+                ("t1", "image_generation", '{"prompt": "one"}'),
+                ("t2", "other_tool", "{}"),
+                ("t3", "image_generation", '{"prompt": "two"}'),
+            ]
+        )
+
+        async def _collect() -> list[JSONServerSentEvent]:
+            return [
+                sse
+                async for sse in responses_adapter.image_generation_stream_handler(
+                    state,
+                    ImageGeneration(type="image_generation"),
+                    "resp-1",
+                    "fallback-model",
+                )
+            ]
+
+        events = await wait_for(_collect(), timeout=5)
+
+        item_lifecycle = [
+            "response.output_item.added",
+            "response.image_generation_call.in_progress",
+            "response.image_generation_call.generating",
+            "response.image_generation_call.completed",
+            "response.output_item.done",
+        ]
+        assert _event_names(events) == item_lifecycle * 2
+        payloads = [_payload(sse) for sse in events]
+        assert [payload["sequence_number"] for payload in payloads] == list(range(10))
+        assert [payload["output_index"] for payload in payloads] == [0] * 5 + [1] * 5
+        assert payloads[4]["item"]["id"] == "resp-1-img-1"
+        assert payloads[4]["item"]["result"] == "b64-one"
+        assert payloads[9]["item"]["id"] == "resp-1-img-2"
+        assert payloads[9]["item"]["result"] == "b64-two"
+        assert [item.id for item in state.output_items] == [
+            "resp-1-img-1",
+            "resp-1-img-2",
+        ], "materialised items must keep the call order"
+        assert state.output_index == 2

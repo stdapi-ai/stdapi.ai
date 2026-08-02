@@ -247,6 +247,8 @@ def _forward_tool_choice_to_additional_request_fields(
 class AnthropicClaudeChatModel(_BaseChatModel):
     """Shared functionality for all Anthropic Claude model generations."""
 
+    __slots__ = ()
+
     ALIAS_MATCHER = re_compile(r"^anthropic\.(.+?)(?:-v\d+(?::\d+)?)?$")
     PROMPT_CACHING_SUPPORTED = True
     PROMPT_CACHING_TOOL_SUPPORTED = True

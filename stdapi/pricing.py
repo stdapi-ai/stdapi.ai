@@ -27,7 +27,6 @@ code change here:
 """
 
 import asyncio
-import json
 import math
 import re
 from contextvars import Context
@@ -38,6 +37,7 @@ from time import perf_counter_ns
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from botocore.exceptions import BotoCoreError, ClientError
+from pydantic_core import from_json
 
 from stdapi.aws import get_client
 from stdapi.config import AWS_REGION, SETTINGS
@@ -1029,8 +1029,8 @@ def _ingest_price_list_item(
             omitted, e.g. for one-off calls that don't need it.
     """
     try:
-        item = json.loads(price_list_str)
-    except json.JSONDecodeError:
+        item = from_json(price_list_str)
+    except ValueError:
         return
 
     attrs = item.get("product", {}).get("attributes", {})

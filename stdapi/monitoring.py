@@ -11,7 +11,7 @@ from botocore.exceptions import ClientError, HTTPClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
 from fastapi import Request  # noqa: TC002
 from pydantic import AwareDatetime, BaseModel, JsonValue
-from sse_starlette import JSONServerSentEvent, ServerSentEvent
+from sse_starlette import ServerSentEvent
 
 from stdapi import server
 from stdapi.api_errors import ApiError
@@ -33,7 +33,7 @@ from stdapi.usage import (
     total_costs_by_currency,
     usage_log_entries,
 )
-from stdapi.utils import hide_security_details, stdout_write, webuuid
+from stdapi.utils import hide_security_details, stdout_write, to_json_str, webuuid
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator, Iterable, Mapping
@@ -792,14 +792,16 @@ async def log_request_sse_stream_event(
     except ApiError as exc:
         status = exc.status
         log_error_details(exc.args[0], status=status)
-        yield JSONServerSentEvent(
-            data=format_http_error(
-                REQUEST.get(),
-                status,
-                hide_security_details(status, exc.args[0]),
-                exc.param,
-                exc.code,
-            )[0],
+        yield ServerSentEvent(
+            data=to_json_str(
+                format_http_error(
+                    REQUEST.get(),
+                    status,
+                    hide_security_details(status, exc.args[0]),
+                    exc.param,
+                    exc.code,
+                )[0]
+            ),
             event="error",
         )
     except ClientError as exc:
@@ -811,25 +813,30 @@ async def log_request_sse_stream_event(
             if status >= 500
             else hide_security_details(status, error["Message"])
         )
-        yield JSONServerSentEvent(
-            data=format_http_error(REQUEST.get(), status, message)[0], event="error"
+        yield ServerSentEvent(
+            data=to_json_str(format_http_error(REQUEST.get(), status, message)[0]),
+            event="error",
         )
     except (HTTPClientError, BotocoreConnectionError) as exc:
         message = str(exc)
         status = AWS_ERROR_MAP.get(exc.__class__.__name__, (503, "server_error"))[0]
         log_error_details(message, status=status)
-        yield JSONServerSentEvent(
-            data=format_http_error(
-                REQUEST.get(),
-                status,
-                "The service is temporarily unavailable. Retry the request.",
-            )[0],
+        yield ServerSentEvent(
+            data=to_json_str(
+                format_http_error(
+                    REQUEST.get(),
+                    status,
+                    "The service is temporarily unavailable. Retry the request.",
+                )[0]
+            ),
             event="error",
         )
     except Exception as exc:  # noqa: BLE001
         log_error_details("\n".join(format_exception(exc)), level="critical")
-        yield JSONServerSentEvent(
-            data=format_http_error(REQUEST.get(), 500, "Internal Server Error")[0],
+        yield ServerSentEvent(
+            data=to_json_str(
+                format_http_error(REQUEST.get(), 500, "Internal Server Error")[0]
+            ),
             event="error",
         )
 

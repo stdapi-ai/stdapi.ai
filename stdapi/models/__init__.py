@@ -4,7 +4,7 @@ from asyncio import CancelledError, Lock, gather, sleep
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
-from functools import cached_property, partial
+from functools import partial
 from importlib import import_module
 from pkgutil import iter_modules
 from re import Pattern
@@ -544,9 +544,13 @@ class ModelBase[RequestT, ResponseT]:
             if (match := cls.ALIAS_MATCHER.match(model_id))
         }
 
-    @cached_property
+    @property
     def model(self) -> ModelDetails:
         """Model details for this instance.
+
+        A plain registry lookup: per-instance caching would require ``__dict__``
+        (the hierarchy is fully slotted) and could serve stale details after a
+        catalog refresh on long-lived cached instances.
 
         Returns:
             Model details including region, provider, and capabilities.

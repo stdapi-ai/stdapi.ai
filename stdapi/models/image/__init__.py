@@ -563,6 +563,8 @@ class ImageModelBase[
 ](ModelBase[RequestT, ResponseT]):
     """Base class for provider-specific image models."""
 
+    __slots__ = ()
+
     #: InvokeModel rejects native guardrail kwargs; ApplyGuardrail covers the route.
     NATIVE_GUARDRAIL_SUPPORTED: ClassVar[bool] = False
 

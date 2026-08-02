@@ -69,6 +69,9 @@ _LIST_PAGE_SIZE: int = 100
 #: Maximum concurrent tag lookups when resolving a page of sessions' kinds.
 _TAG_FETCH_CONCURRENCY: int = 16
 
+#: Maximum concurrent invocation-step puts when persisting a chunked document.
+_STEP_PUT_CONCURRENCY: int = 8
+
 #: AWS error code surfaced as a stored-object 404.
 _NOT_FOUND_CODE: str = "ResourceNotFoundException"
 
@@ -154,10 +157,6 @@ def _document_kind(document: Mapping[str, Any]) -> StoredObjectKind | None:
 
 def _kind_mismatches(document: Mapping[str, Any], kind: StoredObjectKind) -> bool:
     """Whether *document* lacks the minimal expected shape for *kind*.
-
-    A valid document is a dict with a dict ``"response"`` field whose
-    ``"object"`` sub-field declares exactly *kind*; anything else (a foreign
-    or corrupt document, or one missing the field) is rejected.
 
     Args:
         document: Loaded stored document.
@@ -370,8 +369,9 @@ async def save_stored_response(response_id: str, document: Mapping[str, Any]) ->
     """Write the stored response document into its session.
 
     Each call appends a new invocation; reads use the latest one, so saving
-    again replaces the visible document (e.g. on a metadata update). Steps
-    are timestamped sequentially so reads can reorder the chunks.
+    again replaces the visible document (e.g. on a metadata update). Chunks
+    are written concurrently (bounded by ``_STEP_PUT_CONCURRENCY``); each
+    step carries a sequential timestamp so reads can reorder the chunks.
 
     Args:
         response_id: Stored response ID (its session must already exist).
@@ -385,17 +385,28 @@ async def save_stored_response(response_id: str, document: Mapping[str, Any]) ->
     session_id = _session_id(response_id)
     data = to_json(document)
     start = datetime.now(tz=UTC)
-    with handle_bedrock_client_error():
-        invocation_id = (await client.create_invocation(sessionIdentifier=session_id))[
-            "invocationId"
-        ]
-        for index, chunk in enumerate(_iter_utf8_chunks(data, _CHUNK_SIZE)):
+    semaphore = Semaphore(_STEP_PUT_CONCURRENCY)
+
+    async def _put_step(index: int, chunk: str, invocation_id: str) -> None:
+        """Put one chunk step under the write concurrency bound."""
+        async with semaphore:
             await client.put_invocation_step(
                 sessionIdentifier=session_id,
                 invocationIdentifier=invocation_id,
                 invocationStepTime=start + timedelta(seconds=index),
                 payload={"contentBlocks": [{"text": chunk}]},
             )
+
+    with handle_bedrock_client_error():
+        invocation_id = (await client.create_invocation(sessionIdentifier=session_id))[
+            "invocationId"
+        ]
+        await gather(
+            *(
+                _put_step(index, chunk, invocation_id)
+                for index, chunk in enumerate(_iter_utf8_chunks(data, _CHUNK_SIZE))
+            )
+        )
 
 
 async def _load_invocation_document(
@@ -527,12 +538,10 @@ async def load_stored_response(
 async def delete_stored_response(response_id: str, kind: StoredObjectKind) -> None:
     """Delete a stored object and its backing session.
 
-    The mismatch check reads the session's kind tag (one cheap API call)
-    rather than the full document, avoiding extra latency and throttling
-    exposure. A session tagged with a different kind is rejected without
-    deleting anything; a session without a kind tag (an older session, from
-    before the kind was tracked, or an orphaned one from a failed generation)
-    is deleted unconditionally.
+    The mismatch check reads the session's kind tag (one cheap API call) rather
+    than the full document, avoiding extra latency and throttling exposure. An
+    untagged session, such as an orphan left by a failed generation, is deleted
+    unconditionally.
 
     Args:
         response_id: Stored object ID.

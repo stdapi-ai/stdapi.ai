@@ -30,7 +30,7 @@ from stdapi.types.openai_audio import (
     TranscriptionTextDeltaEvent,
     TranscriptionTextDoneEvent,
 )
-from stdapi.utils import missing_file_error, validation_error_handler
+from stdapi.utils import json_sse, missing_file_error, validation_error_handler
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -115,7 +115,7 @@ async def _transcript_audio_sse(
         JSONServerSentEvent: SSE events with transcript.text.delta and transcript.text.done events
     """
     async for event in event_stream:
-        yield JSONServerSentEvent(data=event.model_dump(mode="json", exclude_none=True))
+        yield json_sse(None, event)
 
 
 @router.post(
@@ -435,8 +435,8 @@ async def create_transcription(
     request: TranscriptionCreateParams
     if "application/json" in http_request.headers.get("content-type", ""):
         with validation_error_handler():
-            request = AudioTranscriptionJsonBody.model_validate(
-                await http_request.json()
+            request = AudioTranscriptionJsonBody.model_validate_json(
+                await http_request.body()
             )
         audio_content = request.file
     elif file is None:

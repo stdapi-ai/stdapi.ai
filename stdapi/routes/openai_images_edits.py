@@ -343,7 +343,7 @@ async def edit_images(
     if "application/json" in content_type:
         # JSON body: structured images array with file_id or image_url references
         with validation_error_handler():
-            body = ImageEditJsonBody.model_validate(await http_request.json())
+            body = ImageEditJsonBody.model_validate_json(await http_request.body())
         input_images: list[InputFile] = [ref.input_file for ref in body.images]
         input_mask: InputFile | None = ref.input_file if (ref := body.mask) else None
         request: _ImageEditCommonParams = body

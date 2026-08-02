@@ -1,8 +1,6 @@
 """Route capability registry for model-to-route matching.
 
-Each route registers itself here at module load time.
-``ROUTE_CAPABILITIES`` is a live reference to the registry dict, so iterating it
-inside functions always reflects all registrations made so far.
+Each route registers itself here at import time.
 """
 
 from dataclasses import dataclass
@@ -11,6 +9,8 @@ from enum import IntFlag, auto
 
 class Capability(IntFlag):
     """Bitfield of model operation capabilities."""
+
+    __slots__ = ()
 
     TTS = auto()
     STT = auto()

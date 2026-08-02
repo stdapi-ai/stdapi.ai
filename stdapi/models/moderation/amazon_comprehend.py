@@ -1,5 +1,6 @@
 """Amazon Comprehend toxicity detection moderation model."""
 
+from asyncio import gather
 from itertools import batched
 from typing import TYPE_CHECKING
 
@@ -45,6 +46,9 @@ _TOXICITY_SEGMENT_BYTES: int = 1_000
 
 #: Maximum text segments per Comprehend DetectToxicContent call.
 _TOXICITY_SEGMENTS_PER_CALL: int = 10
+
+#: Maximum concurrent DetectToxicContent calls per gathered wave.
+_TOXICITY_CALLS_PER_WAVE: int = 10
 
 #: The only language code DetectToxicContent's runtime enum accepts, despite docs listing 12.
 _TOXICITY_LANGUAGE: str = "en"
@@ -105,6 +109,8 @@ async def _detect_toxicity(
 class ModerationModel(ModerationModelBase):
     """Amazon Comprehend toxicity detection moderation model."""
 
+    __slots__ = ()
+
     MATCHER = COMPREHEND_MODERATION_MODEL
 
     @classmethod
@@ -128,8 +134,9 @@ class ModerationModel(ModerationModelBase):
     async def moderate(self, item: ModerationInput) -> Moderation:
         """Classify one input element with Amazon Comprehend toxicity detection.
 
-        Long inputs are split into API-sized segments and the highest score per
-        category is kept.
+        Long inputs are split into API-sized segments, detection calls run
+        concurrently in bounded waves, and the highest score per category is
+        kept (max-aggregation is order-independent).
 
         Args:
             item: Input element to classify.
@@ -161,19 +168,23 @@ class ModerationModel(ModerationModelBase):
         scores = dict.fromkeys(_TOXICITY_CATEGORIES.values(), 0.0)
         top_score = 0.0
         if text:
-            for batch in batched(
+            batches = batched(
                 _split_toxicity_segments(text),
                 _TOXICITY_SEGMENTS_PER_CALL,
                 strict=False,
-            ):
-                detection = await _detect_toxicity(batch)
-                for result in detection.get("ResultList", []):
-                    top_score = max(top_score, result.get("Toxicity", 0.0))
-                    for label in result.get("Labels", []):
-                        score = label.get("Score", 0.0)
-                        top_score = max(top_score, score)
-                        if category := _TOXICITY_CATEGORIES.get(label.get("Name", "")):
-                            scores[category] = max(scores[category], score)
+            )
+            for wave in batched(batches, _TOXICITY_CALLS_PER_WAVE, strict=False):
+                detections = await gather(*map(_detect_toxicity, wave))
+                for detection in detections:
+                    for result in detection.get("ResultList", []):
+                        top_score = max(top_score, result.get("Toxicity", 0.0))
+                        for label in result.get("Labels", []):
+                            score = label.get("Score", 0.0)
+                            top_score = max(top_score, score)
+                            if category := _TOXICITY_CATEGORIES.get(
+                                label.get("Name", "")
+                            ):
+                                scores[category] = max(scores[category], score)
         return Moderation(
             flagged=top_score >= _TOXICITY_THRESHOLD,
             categories=ModerationCategories(

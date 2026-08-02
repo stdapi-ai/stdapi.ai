@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 class ChatModel(MantleChatModel):
     """Open-weight Mantle chat model (e.g. ``qwen.qwen3-32b``)."""
 
+    __slots__ = ()
+
     #: Model ID matcher, regex pattern or string prefix
     MATCHER: ClassVar[Pattern[str]] = re_compile(
         r"^(?:qwen|zai|mistral|deepseek|minimax|moonshotai|nvidia|writer)\."

@@ -94,6 +94,8 @@ def _document_source(document: str | JsonMapping) -> RerankSourceTypeDef:
 class RerankModel(RerankModelBase):
     """Bedrock rerank model served via the Bedrock Rerank API."""
 
+    __slots__ = ()
+
     MATCHER = re_compile(r"(?:amazon|cohere)\.rerank")
 
     async def rerank(

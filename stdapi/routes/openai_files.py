@@ -237,7 +237,7 @@ async def upload(
     """
     if "application/json" in http_request.headers.get("content-type", ""):
         with validation_error_handler():
-            body = FileUploadJsonBody.model_validate(await http_request.json())
+            body = FileUploadJsonBody.model_validate_json(await http_request.body())
         log_request_params({"purpose": body.purpose})
         return log_response_params(
             _to_file_object(

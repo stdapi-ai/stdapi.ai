@@ -1,19 +1,12 @@
 """Video generation models base classes and dynamic registry.
 
-This package exposes the base interfaces for video generation models and
-provides a minimal plugin/registry system that auto-loads model
-implementations located in this package directory and resolves them by
-matching the Bedrock model identifier.
+Modules of this package define a ``VideoModel`` class with a ``MATCHER``
+(string prefix or compiled regex) matching the Bedrock model identifier, and
+are auto-loaded once on import.
 
 Video generation runs asynchronously on AWS Bedrock: a request starts an
 async invocation whose MP4 output lands in the regional S3 bucket. AWS keeps
 all job state, addressed by invocation ARN, so this server stays stateless.
-
-Design:
-- Model modules expose a class named `VideoModel` with a class variable
-  `MATCHER` containing a string prefix or compiled regex matching model
-  identifiers.
-- The package auto-loads and registers these classes once on import.
 """
 
 from abc import abstractmethod
@@ -138,6 +131,8 @@ class VideoJob(BaseModel):
 
 class VideoModelBase(ModelBase[Any, Any]):
     """Base class for provider-specific video generation models."""
+
+    __slots__ = ()
 
     #: Video duration in seconds used when the request does not specify one.
     DEFAULT_SECONDS: ClassVar[int]

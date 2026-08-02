@@ -194,7 +194,7 @@ async def create_image_variations(
     if "application/json" in content_type:
         # JSON body: image referenced by file_id or image_url
         with validation_error_handler():
-            body = ImageVariationJsonBody.model_validate(await http_request.json())
+            body = ImageVariationJsonBody.model_validate_json(await http_request.body())
         input_image: InputFile = body.image.input_file
         request: ImageVariationJsonBody | ImageVariationParams = body
     else:

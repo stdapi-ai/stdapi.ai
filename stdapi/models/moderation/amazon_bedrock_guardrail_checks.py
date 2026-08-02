@@ -55,6 +55,8 @@ _SEVERITY_THRESHOLD: float = 0.5
 class ModerationModel(ModerationModelBase):
     """AWS Bedrock guardrail checks (InvokeGuardrailChecks) moderation model."""
 
+    __slots__ = ("_degraded", "_fallback", "_regions")
+
     MATCHER = GUARDRAIL_CHECKS_MODERATION_MODEL
 
     def __init__(self, model_id: str, *, comprehend_fallback: bool = False) -> None:

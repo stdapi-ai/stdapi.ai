@@ -1,15 +1,8 @@
 """Embedding models base classes and dynamic registry.
 
-This package exposes the base interfaces for embedding models and provides a
-minimal plugin/registry system that auto-loads model implementations located in
-this package directory and resolves them by matching the OpenAI/Bedrock model
-identifier.
-
-Design:
-- Model modules expose a class named `EmbeddingModel` with a class variable
-  `MATCHER` containing a string prefix or compiled regex matching model
-  identifiers.
-- The package auto-loads and registers these classes once on import.
+Modules of this package define an ``EmbeddingModel`` class with a ``MATCHER``
+(string prefix or compiled regex) matching the OpenAI/Bedrock model identifier,
+and are auto-loaded once on import.
 """
 
 from abc import abstractmethod
@@ -64,6 +57,8 @@ class EmbeddingResponse(BaseModel):
 
 class EmbeddingModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
     """Base class for provider-specific embedding models."""
+
+    __slots__ = ()
 
     #: InvokeModel rejects native guardrail kwargs; ApplyGuardrail covers the route.
     NATIVE_GUARDRAIL_SUPPORTED: ClassVar[bool] = False

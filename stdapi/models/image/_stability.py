@@ -206,6 +206,8 @@ class StabilityImageGenerationJobBase(
 ):
     """Base class for Stability AI image generation jobs."""
 
+    __slots__ = ("_input_tokens", "_output_tokens", "_response_output_format")
+
     # Supported formats
     _OUTPUT_FORMATS: ClassVar[set[str]] = {"png", "jpeg", "webp"}
 
@@ -313,3 +315,5 @@ class StabilityImageModelBase(
     - MATCHER: string prefix or regex pattern for model ID matching
     - IMAGE_GENERATION_JOB_CLASS: specific job class for this model type
     """
+
+    __slots__ = ()

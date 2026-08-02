@@ -58,9 +58,13 @@ async def _converse(
     ) -> InvokeResult[Any]:
         return InvokeResult(response=response)
 
-    monkeypatch.setattr(model, "_prepare_converse_request_for_region", _noop_prepare)
-    monkeypatch.setattr(model, "_build_pegasus_body", _stub_build_body)
-    monkeypatch.setattr(model, "invoke", _stub_invoke)
+    monkeypatch.setattr(
+        type(model), "_prepare_converse_request_for_region", staticmethod(_noop_prepare)
+    )
+    monkeypatch.setattr(
+        type(model), "_build_pegasus_body", staticmethod(_stub_build_body)
+    )
+    monkeypatch.setattr(type(model), "invoke", staticmethod(_stub_invoke))
 
     return await model._converse(  # noqa: SLF001
         {"modelId": "", "messages": []}, "us-east-1", single_region=False

@@ -27,6 +27,8 @@ _IMAGE_FORMATS = {"image/png": "png", "image/jpeg": "jpeg"}
 class VideoModel(VideoModelBase):
     """Amazon Nova Reel video generation model."""
 
+    __slots__ = ()
+
     MATCHER = "amazon.nova-reel"
     DEFAULT_SECONDS = _SINGLE_SHOT_SECONDS
     DEFAULT_SIZE = _SIZE

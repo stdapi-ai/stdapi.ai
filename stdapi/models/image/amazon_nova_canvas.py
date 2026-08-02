@@ -214,6 +214,15 @@ class _Response(TypedDict):
 class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
     """Image generation job supporting both text-to-image and inpainting."""
 
+    __slots__ = (
+        "_input_tokens",
+        "_output_tokens",
+        "_response_height",
+        "_response_output_format",
+        "_response_quality",
+        "_response_width",
+    )
+
     @staticmethod
     async def _create_response(image: str, index: int) -> ImageGenerationResponse:
         """Create an ImageGenerationResponse from image data.
@@ -656,6 +665,8 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
 
 class ImageModel(ImageModelBase[_Request, _Response, _ImageGenerationJob]):
     """Amazon Nova Canvas image model."""
+
+    __slots__ = ()
 
     MATCHER = "amazon.nova-canvas"
     IMAGE_GENERATION_JOB_CLASS = _ImageGenerationJob

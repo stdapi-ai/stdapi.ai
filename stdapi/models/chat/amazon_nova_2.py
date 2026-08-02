@@ -38,11 +38,11 @@ if TYPE_CHECKING:
         isError: bool
 
 
-# Nova reasoning effort values
+#: Nova reasoning effort values
 NovaReasoning = Literal["low", "medium", "high"]
 
 
-#: OpenAI to Deepseek override
+#: OpenAI to Nova reasoning effort override
 _REASONING_OVERRIDE: dict[Effort | None, NovaReasoning] = {
     "minimal": "low",
     "low": "low",
@@ -55,6 +55,8 @@ _REASONING_OVERRIDE: dict[Effort | None, NovaReasoning] = {
 
 class ChatModel(_BaseChatModel):
     """Amazon Nova-specific chat model implementation."""
+
+    __slots__ = ()
 
     MATCHER = "amazon.nova-2-"
     PROMPT_CACHING_SUPPORTED = True

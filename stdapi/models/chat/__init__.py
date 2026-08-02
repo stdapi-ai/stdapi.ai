@@ -1,14 +1,9 @@
 """Chat models base classes and dynamic registry.
 
-This package exposes the base interfaces for chat models and provides a
-minimal plugin/registry system that auto-loads model implementations located in
-this package directory and resolves them by matching the model identifier.
-
-Design:
-- Model modules expose a class named `ChatModel` with a class variable
-  `MATCHER` containing a string prefix or compiled regex matching model
-  identifiers.
-- The package auto-loads and registers these classes once on import.
+Model modules of this package expose a class named ``ChatModel`` with a class
+variable ``MATCHER`` holding a string prefix or a compiled regex matching model
+identifiers.  The package auto-loads and registers these classes once on import,
+then resolves a model by matching its identifier.
 """
 
 from abc import abstractmethod
@@ -60,6 +55,8 @@ if TYPE_CHECKING:
 
 class ChatModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
     """Base class for provider-specific chat models."""
+
+    __slots__ = ()
 
     #: Replayed reasoning content must carry the signature the model issued with it.
     #: When True, a replayed reasoning block that has no signature is dropped.

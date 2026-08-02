@@ -20,11 +20,11 @@ it, since a ``thinking`` block requires a signature that cannot be produced.
 from asyncio import gather
 from dataclasses import dataclass, field
 from hashlib import sha256
-from json import JSONDecodeError, dumps, loads
 from time import time
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from pydantic_core import from_json
 from sse_starlette import ServerSentEvent
 
 from stdapi.api_errors import ApiError
@@ -46,6 +46,7 @@ from stdapi.types.openai_chat_completions import (
     File,
 )
 from stdapi.types.openai_completions import Completion
+from stdapi.utils import to_json_str
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Coroutine, Sequence
@@ -212,8 +213,8 @@ def _json_object(arguments: str | None) -> dict[str, Any]:
     if not arguments:
         return {}
     try:
-        parsed = loads(arguments)
-    except JSONDecodeError:
+        parsed = from_json(arguments)
+    except ValueError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
 
@@ -1759,7 +1760,7 @@ def _chat_messages_from_anthropic_turn(turn: dict[str, Any]) -> list[dict[str, A
                         "type": "function",
                         "function": {
                             "name": block.get("name") or "",
-                            "arguments": dumps(block.get("input") or {}),
+                            "arguments": to_json_str(block.get("input") or {}),
                         },
                     }
                 )
@@ -2077,7 +2078,7 @@ def _messages_to_chat_response(raw: dict[str, Any]) -> dict[str, Any]:
                         "type": "function",
                         "function": {
                             "name": block.get("name") or "",
-                            "arguments": dumps(block.get("input") or {}),
+                            "arguments": to_json_str(block.get("input") or {}),
                         },
                     }
                 )
@@ -2272,8 +2273,8 @@ def _stream_error_message(data: str) -> str | None:
         The upstream error message, or ``None`` when no error is carried.
     """
     try:
-        payload = loads(data)
-    except JSONDecodeError:
+        payload = from_json(data)
+    except ValueError:
         return None
     if not isinstance(payload, dict):
         return None
@@ -2298,8 +2299,8 @@ def _parsed_chunk(data: str) -> dict[str, Any] | None:
         path's tolerance).
     """
     try:
-        payload = loads(data)
-    except JSONDecodeError:
+        payload = from_json(data)
+    except ValueError:
         return None
     return payload if isinstance(payload, dict) else None
 
@@ -2353,7 +2354,7 @@ def _chat_chunk(
         ]
     if usage is not None:
         chunk["usage"] = usage
-    return None, dumps(chunk)
+    return None, to_json_str(chunk)
 
 
 async def _responses_stream_to_chat(
@@ -2596,7 +2597,9 @@ def _responses_event(
     Returns:
         Named SSE event.
     """
-    return name, dumps({"type": name, **payload, "sequence_number": state.next_seq()})
+    return name, to_json_str(
+        {"type": name, **payload, "sequence_number": state.next_seq()}
+    )
 
 
 async def _chat_stream_to_responses(
@@ -3059,7 +3062,7 @@ def _messages_event(name: str, payload: dict[str, Any]) -> SseEvent:
     Returns:
         Named SSE event.
     """
-    return name, dumps({"type": name, **payload})
+    return name, to_json_str({"type": name, **payload})
 
 
 async def _chat_stream_to_messages(
@@ -3450,7 +3453,7 @@ async def chat_stream_as_text_completion(
                 for key, value in usage.items()
                 if key in CompletionUsage.model_fields
             }
-        yield ServerSentEvent(data=dumps(converted), event=event.event)
+        yield ServerSentEvent(data=to_json_str(converted), event=event.event)
 
 
 def _text_completion_choices(chunk: dict[str, Any]) -> list[dict[str, Any]]:

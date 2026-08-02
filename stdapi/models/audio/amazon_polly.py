@@ -138,10 +138,9 @@ async def _get_voices_per_engine(
 ) -> set[VoiceIdType]:
     """Retrieve one region's voices for an engine from Polly.
 
-    Also merges the voices' metadata (description, gender, language, name)
-    into the region-independent lookup tables, but only once the full
-    listing (all pages) has succeeded, so a failure part-way through
-    pagination leaves no partial metadata behind.
+    The voices' metadata is merged into the region-independent lookup tables
+    only once every page succeeded, so a failure mid-pagination leaves no
+    partial metadata behind.
 
     Args:
         engine: The engine to filter voices for.
@@ -292,9 +291,8 @@ async def _select_voice(
 async def _detect_language(text: str) -> LanguageCodeType:
     """Detect language from a short sample of the full text.
 
-    If a default language is configured in settings, use it instead of auto-detection.
-    Otherwise, use AWS Comprehend to detect the language.
-    Fallback to English if no language is detected.
+    Uses the configured default language when set, else AWS Comprehend,
+    falling back to English.
 
     Args:
         text: Text to detect language from.
@@ -372,10 +370,6 @@ def _handle_polly_error(
 
     Raises:
         ApiError: With the appropriate error message and status code.
-
-    Usage:
-        with _handle_polly_error(model_id, voice_id, engine):
-            response = await polly.synthesize_speech(**request)
     """
     try:
         yield
@@ -410,6 +404,8 @@ def _handle_polly_error(
 class AudioModel(AudioModelBase[None, None]):
     """Amazon Polly audio model implementation (TTS only)."""
 
+    __slots__ = ()
+
     MATCHER = _PREFIX
 
     @classmethod
@@ -417,10 +413,7 @@ class AudioModel(AudioModelBase[None, None]):
         cls,
         all_models: dict[str, ModelDetails],  # noqa: ARG003
     ) -> dict[str, str]:
-        """Return dynamic aliases specific to this model class.
-
-        Override in subclasses to provide model-specific aliases.
-        Each alias maps an alternative name to a Bedrock model ID.
+        """Return the OpenAI TTS model names mapped to Polly engines.
 
         Args:
             all_models: All available models keyed by model ID.
@@ -458,9 +451,8 @@ class AudioModel(AudioModelBase[None, None]):
                 extra = _PollyExtraParams(
                     **extra_params  # type: ignore[arg-type]
                 )
-        # Speech marks are timing metadata, not audio: Polly requires
-        # "OutputFormat=json" and returns JSON lines instead of an audio
-        # stream, so "response_format" is ignored and nothing is re-encoded.
+        # Polly returns speech marks as JSON lines under "OutputFormat=json",
+        # so "response_format" is ignored and nothing is re-encoded.
         speech_marks = extra is not None and bool(extra.SpeechMarkTypes)
         # pcm without an explicit SampleRate extra param is also routed through
         # ffmpeg, so it can be resampled to OpenAI's documented 24 kHz contract.
