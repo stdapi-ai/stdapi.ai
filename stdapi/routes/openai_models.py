@@ -24,10 +24,7 @@ router = APIRouter(
 
 
 class ModelsResponse(BaseModel):
-    """Response for the /v1/models endpoint following OpenAI API specification.
-
-    Contains a list of available models and response metadata.
-    """
+    """Response for the /v1/models endpoint following OpenAI API specification."""
 
     object: str = "list"
     data: list[Model]
@@ -37,6 +34,7 @@ class ModelsResponse(BaseModel):
 _ALL_MODELS: list[Model] = []
 #: Cached ModelsResponse, rebuilt alongside `_ALL_MODELS`.
 _MODELS_RESPONSE = ModelsResponse(data=[])
+#: Guards concurrent rebuilds of the model caches above.
 _ALL_MODELS_LOCK = Lock()
 
 
@@ -86,13 +84,13 @@ def format_bedrock_model_to_openai(model: ModelDetails) -> Model:
                                         "id": "amazon.nova-micro-v1:0",
                                         "object": "model",
                                         "created": 1640995200,
-                                        "owned_by": "Amazon (AWS Bedrock us-east-1)",
+                                        "owned_by": "Amazon",
                                     },
                                     {
-                                        "id": "amazon.titan-embed-text-v2:0",
+                                        "id": "anthropic.claude-sonnet-4-5-20250929-v1:0",
                                         "object": "model",
                                         "created": 1640995200,
-                                        "owned_by": "Amazon (AWS Bedrock eu-west-3)",
+                                        "owned_by": "Anthropic",
                                     },
                                 ],
                             },
@@ -105,10 +103,6 @@ def format_bedrock_model_to_openai(model: ModelDetails) -> Model:
 )
 async def list_models(_: Annotated[None, Depends(authenticate)]) -> ModelsResponse:
     """Lists the currently available models.
-
-    Returns a list of currently available models, and provides basic information
-    about each one such as the owner and availability. The models are sourced
-    from AWS Bedrock across all configured regions and cached for performance.
 
     Returns:
         ModelsResponse containing list of all available models with metadata
@@ -152,7 +146,7 @@ async def list_models(_: Annotated[None, Depends(authenticate)]) -> ModelsRespon
                                 "id": "amazon.nova-micro-v1:0",
                                 "object": "model",
                                 "created": 1640995200,
-                                "owned_by": "Amazon (AWS Bedrock us-east-1)",
+                                "owned_by": "Amazon",
                             },
                         }
                     }
@@ -194,10 +188,6 @@ async def retrieve_model(
     _: Annotated[None, Depends(authenticate)] = None,
 ) -> Model:
     """Retrieve a specific model by its ID from AWS Bedrock.
-
-    Gets detailed information about a specific model from the cached model data.
-    If the model cache is empty, it will be populated by querying all configured
-    AWS Bedrock regions.
 
     Args:
         model: The ID of the model to retrieve
