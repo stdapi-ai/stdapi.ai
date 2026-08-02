@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from sse_starlette import JSONServerSentEvent, ServerSentEvent
 
+from stdapi.api_errors import ApiError
 from stdapi.aws import raise_first_exception
 from stdapi.aws_bedrock import set_inference_configuration
 from stdapi.input_file import InputFileUrl
@@ -54,6 +55,39 @@ _FINISH_REASONS: dict[str, CompletionFinishReasonLiteral] = {
     "guardrail_intervened": "content_filter",
     "malformed_model_output": "content_filter",
 }
+
+#: ``set_inference_configuration`` argument names a request extra cannot reuse
+_RESERVED_INFERENCE_PARAMS: frozenset[str] = frozenset(
+    {
+        "additional_request_fields",
+        "max_tokens",
+        "model_id",
+        "stop_sequences",
+        "temperature",
+        "top_p",
+    }
+)
+
+
+def _inference_extras(extras: dict[str, Any] | None) -> dict[str, Any]:
+    """Validate the request extras forwarded as provider-specific inference fields.
+
+    Args:
+        extras: Undeclared request keys, or ``None`` when the request has none.
+
+    Returns:
+        The extras, unchanged.
+
+    Raises:
+        ApiError: If an extra reuses a ``set_inference_configuration`` argument
+            name, which would bind twice and fail the call.
+    """
+    extras = extras or {}
+    if reserved := sorted(_RESERVED_INFERENCE_PARAMS.intersection(extras)):
+        names = ", ".join(f"'{name}'" for name in reserved)
+        msg = f"Unsupported parameter: {names} cannot be sent as a model extra."
+        raise ApiError(msg)
+    return extras
 
 
 def _map_finish_reason(
@@ -150,7 +184,7 @@ def translate_request(
             # unlike on Chat Completions: the text-completion models reject them
             # ("extraneous key [frequency_penalty] is not permitted"), so forwarding
             # them turns a working request into a 400.
-            **(request.model_extra or {}),
+            **_inference_extras(request.model_extra),
         ),
         additional_request_fields,
         bedrock_service_tier,

@@ -19,6 +19,7 @@ from openai import APIError, BadRequestError, NotFoundError, OpenAI
 from pybase64 import b64encode
 from pydantic import ConfigDict, ValidationError
 
+from stdapi.api_errors import ApiError
 from stdapi.config import SETTINGS
 from stdapi.models.chat._adapters import _openai_chat_completion as chat_adapter
 from stdapi.models.chat._adapters._openai_chat_completion import (
@@ -26,6 +27,7 @@ from stdapi.models.chat._adapters._openai_chat_completion import (
     extract_reasoning,
     format_response,
     format_stream,
+    translate_request,
 )
 from stdapi.models.chat._adapters._openai_common import (
     JSON_OBJECT_SYSTEM_INSTRUCTION,
@@ -33,13 +35,14 @@ from stdapi.models.chat._adapters._openai_common import (
 )
 from stdapi.models.chat._default import ChatModel
 from stdapi.models.deprecation import DEPRECATED_MODELS
+from stdapi.routes import openai_chat_completions
 from stdapi.types.openai_chat_completions import (
     ChatCompletionAssistantMessageParam,
     ChatCompletionAudio,
     ChatCompletionAudioParam,
     CompletionCreateParams,
 )
-from tests._helpers import strip_code_fence
+from tests._helpers import make_model_details, strip_code_fence
 from tests.conftest import logged_usage_entries
 
 if TYPE_CHECKING:
@@ -49,6 +52,7 @@ if TYPE_CHECKING:
     from starlette.testclient import TestClient as TestClientType
 
     from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
+    from stdapi.models import ModelDetails
 
 
 #: Tool declaration reused verbatim so a repeated request can hit the prompt cache.
@@ -3884,6 +3888,91 @@ class TestBedrockRequestFieldAliases:
         )
         assert request.stop == ["Y"]
         assert request.model_extra == {}
+
+
+class TestReservedModelExtras:
+    """A body key named like an internal inference argument is a caller error.
+
+    Undeclared keys are forwarded to ``set_inference_configuration`` as
+    provider-specific extras, so one spelled like that function's own arguments
+    would bind twice: without the guard the request dies on a ``TypeError``,
+    which no handler maps, and the caller gets a bare 500 for a body the schema
+    accepts.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:_inference_extras
+         stdapi/aws_bedrock.py:set_inference_configuration
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    def _request(**extra: object) -> CompletionCreateParams:
+        """Validate a minimal request carrying *extra* as undeclared keys."""
+        return CompletionCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+                **extra,
+            }
+        )
+
+    @pytest.mark.parametrize("key", ["model_id", "additional_request_fields"])
+    def test_reserved_extra_is_rejected(self, key: str) -> None:
+        """``translate_request`` raises a 400 ``ApiError`` naming the offending key.
+
+        Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:translate_request
+        """
+        request = self._request(**{key: "x"})
+        assert request.model_extra == {key: "x"}, "the key must reach the extras"
+        with pytest.raises(ApiError) as exc_info:
+            translate_request(request, "test-model")
+        assert exc_info.value.status == 400
+        assert key in str(exc_info.value)
+
+    def test_ordinary_extra_is_still_forwarded(self) -> None:
+        """An unreserved extra still reaches ``additionalModelRequestFields``.
+
+        Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:translate_request
+        """
+        _inference_cfg, additional_request_fields, *_ = translate_request(
+            self._request(anthropic_beta=["interleaved-thinking-2025-05-14"]),
+            "test-model",
+        )
+        assert additional_request_fields == {
+            "anthropic_beta": ["interleaved-thinking-2025-05-14"]
+        }
+
+    def test_reserved_extra_is_reported_as_a_clean_400(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The route answers an OpenAI-shaped 400 rather than a 500.
+
+        Model validation is stubbed so the request reaches the adapter without
+        an AWS call; the rejection happens before any Bedrock dispatch.
+
+        Ref: stdapi/routes/openai_chat_completions.py:create_chat_completion
+        """
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> ModelDetails:
+            return make_model_details(model_id)
+
+        monkeypatch.setattr(openai_chat_completions, "validate_model", _validate_model)
+        response = app_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "amazon.nova-micro-v1:0",
+                "messages": [{"role": "user", "content": "hi"}],
+                "model_id": "injected",
+            },
+        )
+        assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "model_id" in error["message"]
 
 
 class TestJsonObjectSystemInstruction:

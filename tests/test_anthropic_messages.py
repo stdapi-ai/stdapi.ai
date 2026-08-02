@@ -28,6 +28,7 @@ from anthropic import (
 )
 
 import stdapi.models as _models_mod
+from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, PERFORMANCE_CONFIG_VAR
 from stdapi.aws_bedrock_mantle import mantle_request_headers
 from stdapi.config import SETTINGS
@@ -3721,6 +3722,22 @@ class TestTranslateRequestParameters:
         config, extras, _tier = await self._translate(vendor_specific_knob=7)
         assert extras["vendor_specific_knob"] == 7
         assert "vendor_specific_knob" not in config
+
+    @pytest.mark.parametrize("key", ["model_id", "additional_request_fields"])
+    async def test_reserved_extra_is_rejected(self, key: str) -> None:
+        """A body key named like a ``set_inference_configuration`` argument is a 400.
+
+        Extras are splatted into that function, so one spelled like its own
+        arguments would bind twice and raise ``TypeError``, which no handler
+        maps: the caller would get a 500 for a body the schema accepts.
+
+        Ref: stdapi/models/chat/_adapters/_anthropic_message.py:_inference_extras
+             stdapi/aws_bedrock.py:set_inference_configuration
+        """
+        with pytest.raises(ApiError) as exc_info:
+            await self._translate(**{key: "x"})
+        assert exc_info.value.status == 400
+        assert key in str(exc_info.value)
 
     def test_camelcase_aliases_are_accepted(self) -> None:
         """``maxTokens`` / ``topP`` / ``stopSequences`` validate as their snake_case fields.

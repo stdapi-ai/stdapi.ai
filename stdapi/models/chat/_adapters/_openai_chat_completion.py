@@ -122,6 +122,45 @@ _LEGACY_FUNCTION: ContextVar[bool] = ContextVar("legacy_function")
 #: Default output modalities when none specified
 DEFAULT_OUTPUT_MODALITIES: list[str] = ["text"]
 
+#: ``set_inference_configuration`` argument names a request extra cannot reuse
+_RESERVED_INFERENCE_PARAMS: frozenset[str] = frozenset(
+    {
+        "additional_request_fields",
+        "frequency_penalty",
+        "logit_bias",
+        "max_tokens",
+        "model_id",
+        "presence_penalty",
+        "seed",
+        "stop_sequences",
+        "temperature",
+        "top_k",
+        "top_logprobs",
+        "top_p",
+    }
+)
+
+
+def _inference_extras(extras: dict[str, Any] | None) -> dict[str, Any]:
+    """Validate the request extras forwarded as provider-specific inference fields.
+
+    Args:
+        extras: Undeclared request keys, or ``None`` when the request has none.
+
+    Returns:
+        The extras, unchanged.
+
+    Raises:
+        ApiError: If an extra reuses a ``set_inference_configuration`` argument
+            name, which would bind twice and fail the call.
+    """
+    extras = extras or {}
+    if reserved := sorted(_RESERVED_INFERENCE_PARAMS.intersection(extras)):
+        names = ", ".join(f"'{name}'" for name in reserved)
+        msg = f"Unsupported parameter: {names} cannot be sent as a model extra."
+        raise ApiError(msg)
+    return extras
+
 
 def map_bedrock_stop_reason(
     stop_reason: StopReasonType | str | None, *, legacy_function: bool
@@ -375,7 +414,7 @@ def translate_request(
         seed=request.seed,
         top_logprobs=request.top_logprobs,
         top_k=request.top_k,
-        **request.model_extra,
+        **_inference_extras(request.model_extra),
     )
 
     bedrock_service_tier, openai_service_tier = _openai_common.map_service_tier(

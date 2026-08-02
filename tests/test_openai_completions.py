@@ -23,6 +23,7 @@ from openai import BadRequestError, NotFoundError, OpenAI
 from pybase64 import b64encode
 from starlette.requests import Request
 
+from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import PROMPT_CACHING_DEFAULT
 from stdapi.models.chat._adapters._openai_completion import (
     _FINISH_REASONS as _LEGACY_FINISH_REASONS,
@@ -691,6 +692,36 @@ class TestLegacyRequestTranslation:
         )[1]
         for knob in ("frequency_penalty", "presence_penalty", "logit_bias", "seed"):
             assert knob not in additional_request_fields
+
+    @pytest.mark.parametrize(
+        "key", ["model_id", "additional_request_fields", "stop_sequences"]
+    )
+    def test_reserved_extra_is_rejected(self, key: str) -> None:
+        """A body key named like a ``set_inference_configuration`` argument is a 400.
+
+        Undeclared keys are forwarded as provider-specific extras, so one
+        spelled like that function's own arguments would bind twice and raise
+        ``TypeError``, which no handler maps: the caller would get a 500 for a
+        body the schema accepts.
+
+        Ref: stdapi/models/chat/_adapters/_openai_completion.py:_inference_extras
+             stdapi/aws_bedrock.py:set_inference_configuration
+        """
+        request = CompletionCreateParams.model_validate(
+            {"model": "model", "prompt": "hi", key: "x"}
+        )
+        assert request.model_extra == {key: "x"}, "the key must reach the extras"
+        with pytest.raises(ApiError) as exc_info:
+            translate_request(request, self._MODEL_ID)
+        assert exc_info.value.status == 400
+        assert key in str(exc_info.value)
+
+    def test_ordinary_extra_is_still_forwarded(self) -> None:
+        """An unreserved extra still reaches ``additionalModelRequestFields``.
+
+        Ref: stdapi/models/chat/_adapters/_openai_completion.py:translate_request
+        """
+        assert self._translate(anthropic_beta=["x"])[1] == {"anthropic_beta": ["x"]}
 
 
 class TestLegacyPromptFanOut:
