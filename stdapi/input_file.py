@@ -82,12 +82,10 @@ _MAGIC_PREFIX_SIZE: int = 8192
 def _magic_detect(data: bytes) -> str:
     """Detect the MIME type of *data*.
 
-    Prefers ``magic_buffer`` for performance.  When it returns the generic
-    ``application/octet-stream``, ``libmagic`` may have silently failed to
-    identify the content via its in-memory code path; the result is verified
-    by writing *data* to a temporary file and calling ``magic_file`` instead,
-    which uses a different internal path and is more reliable.  Both code
-    paths return the same value for genuinely unrecognised content.
+    Prefers ``magic_buffer`` for performance.  A generic
+    ``application/octet-stream`` result may mean ``libmagic`` silently failed on
+    its in-memory path, so it is verified through the more reliable file path;
+    genuinely unrecognised content yields the same value either way.
 
     Args:
         data: Raw bytes to identify.
@@ -169,6 +167,9 @@ _ACCEPTED_BUCKETS: frozenset[str] = frozenset(
     )
     if bucket
 )
+
+#: Declared regions of the accepted, externally owned S3 buckets (read-only sources).
+_ACCEPTED_BUCKET_REGIONS: dict[str, RegionName] = dict(SETTINGS.aws_s3_accepted_buckets)
 
 #: Document formats accepted by Bedrock Converse.
 _BEDROCK_DOCUMENT_FORMATS: frozenset[str] = frozenset(
@@ -423,7 +424,12 @@ class _S3Source(_FileSource):
         """
         self._bucket = bucket
         self._key = key
-        self._region = BUCKET_TO_REGION[bucket]
+        # App-owned buckets win; accepted external buckets use the declared region.
+        self._region = (
+            BUCKET_TO_REGION.get(bucket)
+            or _ACCEPTED_BUCKET_REGIONS.get(bucket)
+            or SETTINGS.aws_bedrock_regions[0]
+        )
         self._uri = self._repr = uri
         self._file_id = file_id
 
@@ -1479,11 +1485,8 @@ class IngestInputFile(InputFile):
 def get_s3_input_regions() -> dict[RegionName, int]:
     """Return S3 region → total object size (bytes) for all S3-sourced InputFiles in the current request.
 
-    Aggregates sizes across all tracked ``InputFile`` instances that originate
-    from S3.  Only files whose size is already resolved (i.e.
-    ``_resolve_metadata`` has been called) contribute their size; unresolved
-    files contribute 0 bytes but still register their region so the region is
-    considered as a candidate.
+    Only files whose size is already resolved contribute it; unresolved files
+    contribute 0 bytes but still register their region, keeping it a candidate.
 
     Returns:
         Mapping of AWS region string to cumulative byte count.  Empty dict when

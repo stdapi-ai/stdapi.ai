@@ -14,6 +14,7 @@ from __future__ import annotations
 import pytest
 from pybase64 import b64encode
 
+from stdapi import input_file
 from stdapi.api_errors import ApiError
 from stdapi.aws_s3 import BUCKET_TO_REGION
 from stdapi.config import SETTINGS
@@ -132,6 +133,37 @@ def test_s3_uri_accepts_configured_bucket() -> None:
     input_file = InputFile(f"s3://{bucket}/key.png")
     assert input_file.is_s3 is True
     assert input_file.region == BUCKET_TO_REGION[bucket]
+
+
+def test_s3_uri_accepts_bucket_declared_only_as_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An accepted external bucket resolves to the region the operator declared for it.
+
+    ``AWS_S3_ACCEPTED_BUCKETS`` maps bucket names the gateway may read but does not
+    own to their region.  Those buckets are absent from the app-owned bucket→region
+    map, so the source must fall back to the declared region instead of failing the
+    lookup.
+
+    Ref: stdapi/config.py:_Settings.aws_s3_accepted_buckets
+         stdapi/input_file.py:_S3Source.__init__
+         stdapi/aws_s3.py:BUCKET_TO_REGION
+    """
+    bucket = "an-accepted-external-bucket-xyz"
+    assert bucket not in BUCKET_TO_REGION, "the bucket must not be app-owned"
+    monkeypatch.setattr(
+        input_file, "_ACCEPTED_BUCKETS", frozenset({bucket}), raising=True
+    )
+    monkeypatch.setattr(
+        input_file, "_ACCEPTED_BUCKET_REGIONS", {bucket: "eu-west-3"}, raising=True
+    )
+
+    file = InputFile(f"s3://{bucket}/key.png")
+
+    assert file.is_s3 is True
+    assert file.region == "eu-west-3", (
+        "the declared region must route the S3 calls, not the default region"
+    )
 
 
 async def test_create_multipart_session_rejects_unsafe_filename() -> None:
