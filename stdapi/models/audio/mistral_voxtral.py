@@ -154,6 +154,8 @@ class AudioModel(AudioModelBase[_Request, _Response]):
         prompt: str | None = None,
         temperature: float | None = None,
         extra_params: JsonMapping | None = None,  # noqa: ARG002
+        keywords: list[str] | None = None,
+        languages: list[str] | None = None,
         *,
         logprobs: bool,  # noqa: ARG002
     ) -> str | TranscriptionCreateResponse | TranscriptionDiarized | Response:
@@ -170,6 +172,9 @@ class AudioModel(AudioModelBase[_Request, _Response]):
             prompt: Optional prompt for transcription.
             temperature: Optional temperature for transcription.
             extra_params: Unused; not supported by this model.
+            keywords: Optional literal terms folded into the transcription context.
+            languages: Optional expected input language codes folded into the
+                transcription context.
             logprobs: Accepted but ignored; Bedrock reports no log probabilities
                 for this model.
 
@@ -183,7 +188,9 @@ class AudioModel(AudioModelBase[_Request, _Response]):
         self._validate_response_formats(response_format, timestamp_granularities)
 
         result = await self.invoke(
-            await self._build_request(audio_content, prompt, temperature, language)
+            await self._build_request(
+                audio_content, prompt, temperature, language, keywords, languages
+            )
         )
         response = result.response
         choice = response["choices"][0]
@@ -227,6 +234,8 @@ class AudioModel(AudioModelBase[_Request, _Response]):
         prompt: str | None = None,
         temperature: float | None = None,
         extra_params: JsonMapping | None = None,  # noqa: ARG002
+        keywords: list[str] | None = None,
+        languages: list[str] | None = None,
         *,
         logprobs: bool,  # noqa: ARG002
     ) -> AsyncGenerator[TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent]:
@@ -239,6 +248,9 @@ class AudioModel(AudioModelBase[_Request, _Response]):
             prompt: Optional prompt for transcription.
             temperature: Optional temperature for transcription.
             extra_params: Unused; not supported by this model.
+            keywords: Optional literal terms folded into the transcription context.
+            languages: Optional expected input language codes folded into the
+                transcription context.
             logprobs: Accepted but ignored; Bedrock reports no log probabilities
                 for this model.
 
@@ -253,7 +265,9 @@ class AudioModel(AudioModelBase[_Request, _Response]):
 
         chunk: _StreamChunk
         async for chunk in self.invoke_stream(  # type: ignore[assignment]
-            await self._build_request(audio_content, prompt, temperature, language)
+            await self._build_request(
+                audio_content, prompt, temperature, language, keywords, languages
+            )
         ):
             choice = chunk["choices"][0]
             if "delta" in choice:
@@ -339,6 +353,8 @@ class AudioModel(AudioModelBase[_Request, _Response]):
         prompt: str | None,
         temperature: float | None,
         language: str | None = None,
+        keywords: list[str] | None = None,
+        languages: list[str] | None = None,
         *,
         translate: bool = False,
     ) -> _Request:
@@ -356,6 +372,10 @@ class AudioModel(AudioModelBase[_Request, _Response]):
             prompt: Optional prompt for transcription.
             temperature: Optional temperature for transcription.
             language: Optional language code for the input audio (ISO-639-1 format)
+            keywords: Optional literal terms that may appear in the audio,
+                folded into the transcription context.
+            languages: Optional expected input language codes (ISO-639-1
+                format), folded into the transcription context.
             translate: Optional flag to enable translation to English.
 
         Returns:
@@ -384,7 +404,11 @@ class AudioModel(AudioModelBase[_Request, _Response]):
                         {
                             "type": "text",
                             "text": self._built_prompt(
-                                prompt, language, translate=translate
+                                prompt,
+                                language,
+                                keywords,
+                                languages,
+                                translate=translate,
                             ),
                         },
                     ],

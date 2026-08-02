@@ -44,6 +44,7 @@ from stdapi.types.openai_audio import (
     TranscriptionCreateResponse,
     TranscriptionDiarized,
     TranscriptionDiarizedSegment,
+    TranscriptionLanguage,
     TranscriptionSegment,
     TranscriptionTextDeltaEvent,
     TranscriptionTextDoneEvent,
@@ -239,6 +240,7 @@ async def _start_transcription_with_failover(
     language: str | None,
     response_format: str,
     extra: _TranscribeExtraParams | None = None,
+    languages: list[str] | None = None,
 ) -> tuple[RegionName, str]:
     """Start the transcription job, failing over across candidate regions.
 
@@ -254,6 +256,7 @@ async def _start_transcription_with_failover(
         language: Optional language code, for caller-error translation.
         response_format: Requested response format.
         extra: Optional extra StartTranscriptionJob parameters.
+        languages: Optional expected input language codes.
 
     Returns:
         The (region, bucket) pair that accepted the job.
@@ -280,10 +283,12 @@ async def _start_transcription_with_failover(
                 dest_region=region,
                 temporary=True,
             )
-        with _handle_transcription_error(language):
+        with _handle_transcription_error(
+            language or ", ".join(languages or ()) or None
+        ):
             await transcribe.start_transcription_job(
                 **_build_transcription_job_params(
-                    job_id, bucket, language, response_format, extra
+                    job_id, bucket, language, response_format, extra, languages
                 )
             )
         return bucket
@@ -365,6 +370,34 @@ def _dominant_language_code(transcript_data: TranscribeJobData) -> str:
     return _UNDETERMINED_LANGUAGE_CODE
 
 
+def _detected_languages(
+    transcript_data: TranscribeJobData,
+) -> list[TranscriptionLanguage] | None:
+    """Map the job's detected language code(s) to response entries.
+
+    Transcribe reports its locale codes (e.g. ``en-US``); entries carry the
+    bare ISO-639 language subtag OpenAI clients expect (e.g. ``en``),
+    de-duplicated while preserving the reported order.
+
+    Args:
+        transcript_data: Parsed transcription results from AWS Transcribe.
+
+    Returns:
+        One entry per distinct detected language, or None when the job
+        reports no language code.
+    """
+    if entries := transcript_data.get("language_codes"):
+        codes = [entry["language_code"] for entry in entries]
+    elif code := transcript_data.get("language_code"):
+        codes = [code]
+    else:
+        return None
+    return [
+        TranscriptionLanguage(code=subtag)
+        for subtag in dict.fromkeys(code.split("-", 1)[0].lower() for code in codes)
+    ]
+
+
 #: Default speaker cap for diarized_json output, overridable via extra_params.MaxSpeakerLabels
 _DEFAULT_MAX_SPEAKER_LABELS = 10
 
@@ -384,10 +417,14 @@ _SETTINGS_FIELDS: set[str] = {
 #: Parameter name reported when an explicit language conflicts with IdentifyMultipleLanguages
 _LANGUAGE_PARAM = "language"
 
+#: Parameter name reported when `languages` conflicts with the AWS language extras
+_LANGUAGES_PARAM = "languages"
+
 
 def _apply_language_params(
     job_params: StartTranscriptionJobRequestTypeDef,
     language: str | None,
+    languages: list[str] | None,
     extra: _TranscribeExtraParams | None,
 ) -> None:
     """Set the job's language-identification fields (mutually exclusive per AWS).
@@ -395,19 +432,37 @@ def _apply_language_params(
     Args:
         job_params: Job parameters to update in place.
         language: Optional explicit language code.
+        languages: Optional expected input language codes; a single entry
+            behaves like ``language``, more enable multi-language identification
+            restricted to those candidates.
         extra: Optional extra StartTranscriptionJob parameters.
 
     Raises:
         UnsupportedParameterError: If ``language`` is combined with
             ``extra.IdentifyMultipleLanguages`` (AWS treats them as mutually
-            exclusive; picking one would silently ignore the other).
+            exclusive; picking one would silently ignore the other), or if
+            ``languages`` is combined with ``extra.IdentifyMultipleLanguages``
+            or ``extra.LanguageOptions`` (both express the same intent under
+            the provider-specific names).
     """
+    if (
+        languages
+        and extra is not None
+        and (extra.IdentifyMultipleLanguages or extra.LanguageOptions)
+    ):
+        raise UnsupportedParameterError(_LANGUAGES_PARAM)
+    if languages and len(languages) == 1:
+        language, languages = languages[0], None
     if extra is not None and extra.IdentifyMultipleLanguages:
         if language:
             raise UnsupportedParameterError(_LANGUAGE_PARAM)
         job_params["IdentifyMultipleLanguages"] = True
         if extra.LanguageOptions:
             job_params["LanguageOptions"] = extra.LanguageOptions  # type: ignore[typeddict-item]
+    elif languages:
+        job_params["IdentifyMultipleLanguages"] = True
+        options = [format_language_code(code) for code in languages]
+        job_params["LanguageOptions"] = options  # type: ignore[typeddict-item]
     elif language:
         job_params["LanguageCode"] = format_language_code(language)  # type: ignore[typeddict-item]
     else:
@@ -472,6 +527,7 @@ def _build_transcription_job_params(
     language: str | None,
     response_format: str,
     extra: _TranscribeExtraParams | None = None,
+    languages: list[str] | None = None,
 ) -> StartTranscriptionJobRequestTypeDef:
     """Build transcription job parameters.
 
@@ -481,13 +537,14 @@ def _build_transcription_job_params(
         language: Optional language code
         response_format: Response format for transcription
         extra: Optional extra StartTranscriptionJob parameters
+        languages: Optional expected input language codes
 
     Returns:
         Job parameters for AWS Transcribe
 
     Raises:
-        UnsupportedParameterError: If ``language`` is combined with
-            ``extra.IdentifyMultipleLanguages``; if ``extra.ChannelIdentification``
+        UnsupportedParameterError: If ``language`` or ``languages`` is combined
+            with ``extra.IdentifyMultipleLanguages``; if ``extra.ChannelIdentification``
             is combined with ``diarized_json`` output (AWS rejects that
             combination; Transcribe already forces ``ShowSpeakerLabels`` for
             diarization); or if ``extra.ShowSpeakerLabels`` is explicitly
@@ -502,7 +559,7 @@ def _build_transcription_job_params(
         "Tags": [{"Key": k, "Value": v} for k, v in build_metadata(apn=True).items()],
     }
 
-    _apply_language_params(job_params, language, extra)
+    _apply_language_params(job_params, language, languages, extra)
 
     if response_format in SUBTITLE_FORMATS:
         # AWS Transcribe will create subtitle file at: {s3_prefix}{job_id}/output.{format}
@@ -867,6 +924,35 @@ def _pop_translate_extra_params(
     return (remaining or None, settings, terminology_names)  # type: ignore[return-value]
 
 
+class _KeywordsUnsupportedError(ApiError):
+    """``keywords`` rejection pointing at the custom-vocabulary alternative."""
+
+    code = "unsupported_parameter"
+    param = "keywords"
+
+    def __init__(self) -> None:
+        """Create the error with its actionable message."""
+        super().__init__(
+            "Unsupported parameter: 'keywords' is not supported with this model. "
+            "Amazon Transcribe has no inline keyword list: create a custom "
+            "vocabulary in AWS Transcribe and reference it through the "
+            "'VocabularyName' extra parameter instead."
+        )
+
+
+def _validate_no_keywords(keywords: list[str] | None) -> None:
+    """Validate that the keywords parameter is not provided.
+
+    Args:
+        keywords: The value to validate.
+
+    Raises:
+        _KeywordsUnsupportedError: If keywords are provided.
+    """
+    if keywords:
+        raise _KeywordsUnsupportedError
+
+
 class AudioModel(AudioModelBase[None, None]):
     """Amazon Transcribe audio model implementation (transcription only)."""
 
@@ -893,7 +979,15 @@ class AudioModel(AudioModelBase[None, None]):
         Returns:
             A dict mapping alias to model ID.
         """
-        return {"whisper-1": "amazon.transcribe"}
+        # Batch transcription model names only: the realtime-oriented
+        # "gpt-live-transcribe" belongs to a streaming API this route
+        # does not emulate.
+        return {
+            "whisper-1": AWS_TRANSCRIBE_MODEL_ID,
+            "gpt-transcribe": AWS_TRANSCRIBE_MODEL_ID,
+            "gpt-4o-transcribe": AWS_TRANSCRIBE_MODEL_ID,
+            "gpt-4o-mini-transcribe": AWS_TRANSCRIBE_MODEL_ID,
+        }
 
     async def _transcribe(
         self,
@@ -903,6 +997,7 @@ class AudioModel(AudioModelBase[None, None]):
         prompt: str | None = None,
         temperature: float | None = None,
         extra_params: JsonMapping | None = None,
+        languages: list[str] | None = None,
         *,
         logprobs: bool = False,
     ) -> TranscribeJobData:
@@ -919,6 +1014,7 @@ class AudioModel(AudioModelBase[None, None]):
             prompt: Optional prompt for transcription.
             temperature: Optional temperature for transcription.
             extra_params: Optional extra StartTranscriptionJob parameters.
+            languages: Optional expected input language codes (ISO-639-1 format).
             logprobs: If true, return log probabilities.
 
         Returns:
@@ -963,7 +1059,7 @@ class AudioModel(AudioModelBase[None, None]):
                 key=f"{s3_prefix}{request_id}/input",
             )
             region, s3_bucket = await _start_transcription_with_failover(
-                candidates, request_id, language, response_format, extra
+                candidates, request_id, language, response_format, extra, languages
             )
             _SERVED_REGION.set(region)
             transcribe: TranscribeServiceClient = get_client("transcribe", region)
@@ -1038,7 +1134,13 @@ class AudioModel(AudioModelBase[None, None]):
             return _format_diarized_json_response(
                 transcript_data, text, duration, usage_duration
             )
-        return log_response_params(Transcription(text=text, usage=usage_duration))
+        return log_response_params(
+            Transcription(
+                text=text,
+                usage=usage_duration,
+                languages=_detected_languages(transcript_data),
+            )
+        )
 
     @classmethod
     async def _format_translation_response(
@@ -1111,6 +1213,8 @@ class AudioModel(AudioModelBase[None, None]):
         prompt: str | None = None,
         temperature: float | None = None,
         extra_params: JsonMapping | None = None,
+        keywords: list[str] | None = None,
+        languages: list[str] | None = None,
         *,
         logprobs: bool,
     ) -> str | TranscriptionCreateResponse | TranscriptionDiarized | Response:
@@ -1128,6 +1232,9 @@ class AudioModel(AudioModelBase[None, None]):
             prompt: Optional prompt for transcription.
             temperature: Optional temperature for transcription.
             extra_params: Optional extra StartTranscriptionJob parameters.
+            keywords: Rejected; Transcribe supports pre-created custom
+                vocabularies only (``VocabularyName`` extra parameter).
+            languages: Optional expected input language codes (ISO-639-1 format).
             logprobs: If true, return log probabilities.
 
         Returns:
@@ -1138,6 +1245,7 @@ class AudioModel(AudioModelBase[None, None]):
                 unsupported file formats are provided
         """
         self._validate_response_formats(response_format, timestamp_granularities)
+        _validate_no_keywords(keywords)
         transcript_data = await self._transcribe(
             audio_content,
             response_format,
@@ -1145,6 +1253,7 @@ class AudioModel(AudioModelBase[None, None]):
             prompt,
             temperature,
             extra_params,
+            languages,
             logprobs=logprobs,
         )
         duration = _get_audio_duration(transcript_data)
@@ -1165,6 +1274,8 @@ class AudioModel(AudioModelBase[None, None]):
         prompt: str | None = None,
         temperature: float | None = None,
         extra_params: JsonMapping | None = None,
+        keywords: list[str] | None = None,
+        languages: list[str] | None = None,
         *,
         logprobs: bool,
     ) -> AsyncGenerator[TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent]:
@@ -1177,6 +1288,9 @@ class AudioModel(AudioModelBase[None, None]):
             prompt: Optional prompt for transcription.
             temperature: Optional temperature for transcription.
             extra_params: Optional extra StartTranscriptionJob parameters.
+            keywords: Rejected; Transcribe supports pre-created custom
+                vocabularies only (``VocabularyName`` extra parameter).
+            languages: Optional expected input language codes (ISO-639-1 format).
             logprobs: If true, return log probabilities.
 
         Yields:
@@ -1188,8 +1302,15 @@ class AudioModel(AudioModelBase[None, None]):
                 non-streaming path -- Transcribe returns no log probabilities.
         """
         self._validate_no_logprobs(logprobs)
+        _validate_no_keywords(keywords)
         transcript_data = await self._transcribe(
-            audio_content, response_format, language, prompt, temperature, extra_params
+            audio_content,
+            response_format,
+            language,
+            prompt,
+            temperature,
+            extra_params,
+            languages,
         )
         record_transcribe_usage(
             _get_audio_duration(transcript_data), region=_SERVED_REGION.get()

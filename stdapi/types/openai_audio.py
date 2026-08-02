@@ -151,6 +151,15 @@ class UsageDuration(BaseModelResponse):
 Usage = Annotated[UsageTokens | UsageDuration, Field(discriminator="type")]
 
 
+# Ref: openai.types.audio.transcription.TranscriptionLanguage
+class TranscriptionLanguage(BaseModelResponse):
+    """A language detected in the input audio."""
+
+    code: str = Field(
+        description="ISO language code of the detected language (e.g. `en`)."
+    )
+
+
 # Ref: openai.types.audio.transcription.Transcription
 class Transcription(BaseModelResponse):
     """Transcription response."""
@@ -159,6 +168,11 @@ class Transcription(BaseModelResponse):
     logprobs: list[Logprob] | None = Field(
         default=None,
         description="Log probabilities of tokens; returned only with specific models when requested.",
+    )
+    languages: list[TranscriptionLanguage] | None = Field(
+        default=None,
+        description="Languages detected in the input audio; returned only by "
+        "models that report language identification (e.g. `amazon.transcribe`).",
     )
     usage: Usage | None = Field(
         default=None, description="Token or duration usage statistics."
@@ -394,6 +408,10 @@ class SpeechCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=True):
         return self
 
 
+#: Characters a transcription keyword must not contain (single-line literals only)
+_KEYWORD_FORBIDDEN: tuple[str, ...] = ("<", ">", "\r", "\n")
+
+
 # Ref: openai.types.audio.transcription_create_params.TranscriptionCreateParams
 class TranscriptionCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=True):
     """Request model for audio transcription.
@@ -423,9 +441,21 @@ class TranscriptionCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=
         description="Audio samples (data URLs, 2-10s) for known-speaker diarization. "
         "Accepted but ignored: diarization degrades to generic speaker labels.",
     )
+    keywords: list[str] | None = Field(
+        default=None,
+        description="Literal terms that may appear in the audio (e.g. product "
+        "names or acronyms). Supported by Bedrock models (folded into the "
+        "transcription context); rejected by `amazon.transcribe` — use a "
+        "pre-created custom vocabulary via the `VocabularyName` extra parameter.",
+    )
     language: str | None = Field(
         default=None,
         description="Input audio language in ISO-639-1 (e.g. `en`). Improves accuracy and latency.",
+    )
+    languages: list[str] | None = Field(
+        default=None,
+        description="Expected input languages in ISO-639-1 (e.g. `en`) when the "
+        "audio may contain more than one language. Cannot be combined with `language`.",
     )
     prompt: str | None = Field(
         default=None,
@@ -461,9 +491,22 @@ class TranscriptionCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=
         - chunking_strategy other than 'auto' is unsupported.
         - known_speaker_names/known_speaker_references are accepted and ignored:
           diarization degrades to generic speaker labels instead of failing the request.
-        - prompt is unsupported.
-        - temperature values other than 0.0 are unsupported.
+        - language and languages are mutually exclusive.
+        - keywords entries must be non-empty single-line literals without '<' or '>'.
         """
+        if self.language and self.languages:
+            msg = (
+                "language and languages cannot be combined. Send the expected "
+                "language(s) through only one of them."
+            )
+            raise ValueError(msg)
+        for keyword in self.keywords or []:
+            if not keyword or any(char in keyword for char in _KEYWORD_FORBIDDEN):
+                msg = (
+                    "Each keyword must be a non-empty single-line literal "
+                    f"without '<', '>' or line breaks: {keyword!r}."
+                )
+                raise ValueError(msg)
         if self.timestamp_granularities and self.response_format != "verbose_json":
             msg = "timestamp_granularities requires response_format='verbose_json'."
             raise ValueError(msg)

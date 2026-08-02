@@ -224,6 +224,48 @@ async def create_transcription(
             )
         ),
     ] = None,
+    languages: Annotated[
+        list[str] | None,
+        Form(
+            description=(
+                "Expected input languages in ISO-639-1 format (e.g. `en`) when the "
+                "audio may contain more than one language.\n"
+                "Cannot be combined with `language`.\n"
+                "Repeated `languages[]` form fields (the official SDKs' wire format) "
+                "are also accepted and merged with this field."
+            )
+        ),
+    ] = None,
+    languages_bracket: Annotated[
+        list[str] | None,
+        Form(
+            alias="languages[]",
+            description="Same as `languages`, as repeated form fields "
+            "(official SDKs' wire format).",
+        ),
+    ] = None,
+    keywords: Annotated[
+        list[str] | None,
+        Form(
+            description=(
+                "Literal terms that may appear in the audio (e.g. product names or "
+                "acronyms).\n"
+                "Supported by Bedrock models (e.g. Mistral Voxtral); rejected by "
+                "`amazon.transcribe` — use a pre-created custom vocabulary via the "
+                "`VocabularyName` extra parameter instead.\n"
+                "Repeated `keywords[]` form fields (the official SDKs' wire format) "
+                "are also accepted and merged with this field."
+            )
+        ),
+    ] = None,
+    keywords_bracket: Annotated[
+        list[str] | None,
+        Form(
+            alias="keywords[]",
+            description="Same as `keywords`, as repeated form fields "
+            "(official SDKs' wire format).",
+        ),
+    ] = None,
     prompt: Annotated[
         str | None,
         Form(
@@ -362,6 +404,12 @@ async def create_transcription(
         model: The transcription model to use: ``amazon.transcribe`` or a
             speech-to-text model (e.g. Mistral Voxtral).
         language: The language of the input audio (ISO-639-1 code, e.g. `en`). Improves accuracy and latency when provided.
+        languages: Expected input languages when the audio may contain more than one language. Cannot be combined with `language`.
+        languages_bracket: Same values as `languages`, as repeated `languages[]` form fields.
+        keywords: Literal terms that may appear in the audio. Supported by Bedrock
+            models (e.g. Mistral Voxtral); rejected by ``amazon.transcribe`` in
+            favour of pre-created custom vocabularies (`VocabularyName`).
+        keywords_bracket: Same values as `keywords`, as repeated `keywords[]` form fields.
         prompt: Optional style guidance for the model. Supported by Bedrock
             models (e.g. Mistral Voxtral); rejected by ``amazon.transcribe``.
         chunking_strategy: Controls how the audio is cut into chunks. `auto` only is supported on this implementation.
@@ -403,6 +451,8 @@ async def create_transcription(
             request = TranscriptionCreateParams(
                 model=model,
                 language=language,
+                languages=_merge_form_list(languages, languages_bracket),
+                keywords=_merge_form_list(keywords, keywords_bracket),
                 prompt=prompt,
                 chunking_strategy=chunking_strategy,
                 response_format=response_format,
@@ -438,6 +488,8 @@ async def create_transcription(
             temperature=request.temperature,
             prompt=request.prompt,
             extra_params=extra_params,
+            keywords=request.keywords,
+            languages=request.languages,
             logprobs="logprobs" in (request.include or []),
         )
         if GUARDRAIL_CONFIG_VAR.get(None) is not None:
@@ -454,5 +506,7 @@ async def create_transcription(
         temperature=request.temperature,
         prompt=request.prompt,
         extra_params=extra_params,
+        keywords=request.keywords,
+        languages=request.languages,
         logprobs="logprobs" in (request.include or []),
     )

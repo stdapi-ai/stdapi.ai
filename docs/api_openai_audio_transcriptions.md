@@ -50,7 +50,9 @@ Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable 
 | `vtt`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | WebVTT subtitle format (Amazon Transcribe; not Bedrock models); rejected with `stream=true` |
 | **Language**               |                                          |                                                                  |
 | Language specification     |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | ISO-639-1 language codes                                         |
+| `languages` (expected languages) | :material-check-circle:{ .success role="img" aria-label="Supported" } | Expected-language list (ISO-639-1) for multi-language audio; cannot be combined with `language`. Drives Amazon Transcribe multi-language identification; folded into the transcription context on Bedrock models |
 | Auto language detection    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Automatic identification                                         |
+| Detected `languages` in response |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | The `json` response reports the detected language(s) as a `languages` array (Amazon Transcribe only) |
 | **Streaming**              |                                          |                                                                  |
 | `stream` (SSE streaming)   |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Set `stream: true` to receive incremental results as server-sent events. Carries text only, so `srt`, `vtt` and `diarized_json` are rejected rather than answered without their cues or speaker labels; `verbose_json` is accepted but degrades to text-only events — timestamps and segments are dropped |
 | **Advanced**               |                                          |                                                                  |
@@ -61,6 +63,7 @@ Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable 
 | `chunking_strategy`        |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Only `auto` is accepted; other values are rejected               |
 | `temperature`              |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bedrock models only; rejected by Amazon Transcribe               |
 | `prompt`                   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bedrock models only; rejected by Amazon Transcribe               |
+| `keywords`                 |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bedrock models only (folded into the transcription context); rejected by Amazon Transcribe — use a pre-created custom vocabulary via the `VocabularyName` extra parameter |
 | `include` (`logprobs`)     |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Accepted on Bedrock models but never populated (`logprobs` is always `null`); rejected by Amazon Transcribe |
 | Extra model-specific params | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Amazon Transcribe optional settings via JSON body (see below)  |
 | **Usage tracking**         |                                          |                                                                  |
@@ -112,20 +115,23 @@ Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable 
 **Model & Features:**
 
 - Use `amazon.transcribe` with the same interface as OpenAI's Whisper API
-- **Or use OpenAI model name directly**: `whisper-1` works out of the box (maps to `amazon.transcribe`)
-- Auto-detect language or specify it for faster processing
+- **Or use OpenAI model names directly**: `whisper-1`, `gpt-transcribe`, `gpt-4o-transcribe`, and `gpt-4o-mini-transcribe` work out of the box (they map to `amazon.transcribe`)
+- Auto-detect language or specify it for faster processing, or list the expected languages with `languages` for multi-language audio
 - Word-level or segment-level timestamps with `verbose_json`
 - **Speaker Diarization** :material-account-multiple:{ .highlight }: Automatically identify and label different speakers with `diarized_json`
 - **Native Subtitles** :material-file-video:{ .highlight }: SRT/VTT files generated directly by Amazon Transcribe with precise timing
 
 !!! tip "OpenAI Model Compatibility"
-    stdapi.ai includes a built-in model alias that maps the OpenAI model name to Amazon Transcribe:
+    stdapi.ai includes built-in model aliases that map the OpenAI model names to Amazon Transcribe:
 
     - `whisper-1` → `amazon.transcribe`
+    - `gpt-transcribe` → `amazon.transcribe`
+    - `gpt-4o-transcribe` → `amazon.transcribe`
+    - `gpt-4o-mini-transcribe` → `amazon.transcribe`
 
-    This alias enables seamless compatibility with OpenAI-based tools and applications without any configuration changes. You can also [customize or override this alias](operations_configuration.md#model-aliases) to suit your needs.
+    These aliases enable seamless compatibility with OpenAI-based tools and applications without any configuration changes (the realtime-oriented `gpt-live-transcribe` is not aliased: it belongs to a streaming API this route does not emulate). You can also [customize or override these aliases](operations_configuration.md#model-aliases) to suit your needs.
 
-**Note:** With `amazon.transcribe`, the `prompt`, `temperature`, and `include` parameters are rejected with an error to ensure consistent transcription accuracy. The `known_speaker_names` and `known_speaker_references` parameters are accepted but ignored for every model: Amazon Transcribe's automatic speaker diarization runs without known speaker references, falling back to generic speaker labels.
+**Note:** With `amazon.transcribe`, the `prompt`, `temperature`, `keywords`, and `include` parameters are rejected with an error to ensure consistent transcription accuracy (for `keywords`, the error points at the pre-created custom vocabulary alternative via the `VocabularyName` extra parameter). The `known_speaker_names` and `known_speaker_references` parameters are accepted but ignored for every model: Amazon Transcribe's automatic speaker diarization runs without known speaker references, falling back to generic speaker labels.
 
 !!! tip "Performance Tips: Optimize Speed & Cost"
     - **Specify the language** if you know it—skips auto-detection for faster processing and lower AWS costs
@@ -208,6 +214,9 @@ Detect and transcribe multiple languages spoken in the same audio, optionally re
 }
 ```
 
+!!! tip "Standard `languages` parameter"
+    The standard OpenAI `languages` parameter drives the same multi-language identification with plain ISO-639-1 codes (e.g. `["en", "es", "fr"]`), works on the multipart path too, and the detected language(s) come back in the `json` response's `languages` array. A single-entry list behaves like `language`. Do not combine it with `language` or with the provider-specific parameters above.
+
 **Configuration Options:**
 
 **Option 1: Per-Request**
@@ -245,7 +254,7 @@ The following parameters from Amazon Transcribe's [StartTranscriptionJob API](ht
 - `MaxSpeakerLabels` (integer `2`-`30`): Maximum speakers to identify with `response_format=diarized_json` (default `10`)
 - `ShowSpeakerLabels` (bool): Always on with `response_format=diarized_json`; setting it directly with another format runs AWS speaker labeling without exposing speaker data in the response
 - `ToxicityDetection` (list): Toxic-content flagging — `[{"ToxicityCategories": ["ALL"]}]`
-- `IdentifyMultipleLanguages` / `LanguageOptions` (bool / list): Multi-language identification, optionally restricted to a candidate list (supersedes `language`)
+- `IdentifyMultipleLanguages` / `LanguageOptions` (bool / list): Multi-language identification, optionally restricted to a candidate list (supersedes `language`; cannot be combined with the standard `languages` parameter)
 - `ModelSettings` (object): `LanguageModelName` — custom language model selection
 
 `VocabularyName`, `VocabularyFilterName`, and custom language models must already exist in your AWS account (created via the AWS Transcribe console, CLI, or SDK) before being referenced here.

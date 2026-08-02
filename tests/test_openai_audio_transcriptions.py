@@ -14,9 +14,13 @@ from pydantic import ValidationError
 from starlette.responses import Response
 
 from stdapi import usage
-from stdapi.api_errors import UnsupportedModelError, UnsupportedParameterError
+from stdapi.api_errors import ApiError, UnsupportedModelError, UnsupportedParameterError
 from stdapi.input_file import InputFile
-from stdapi.models.audio.amazon_transcribe import AudioModel
+from stdapi.models.audio.amazon_transcribe import (
+    AudioModel,
+    _build_transcription_job_params,
+    _TranscribeExtraParams,
+)
 from stdapi.routes import openai_audio_transcriptions
 from stdapi.types.openai_audio import (
     TranscriptionCreateParams,
@@ -26,6 +30,8 @@ from stdapi.types.openai_audio import (
 from tests.conftest import logged_usage_entries
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from starlette.testclient import TestClient as TestClientType
 
 #: Stubbed AWS Transcribe job result used by response-format regression tests.
@@ -1181,6 +1187,81 @@ class TestTranscriptionMultipartFormParsing:
         assert request.known_speaker_names == ["agent", "customer"]
         assert request.known_speaker_references == ["data:audio/wav;base64,AAA"]
 
+    def test_languages_and_keywords_bracket_fields_reach_the_request_model(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Repeated ``languages[]``/``keywords[]`` fields bind like the other lists.
+
+        ``log_request_params`` is patched to capture the constructed request
+        model before model resolution, proving the values reached it instead of
+        being silently dropped.
+
+        Ref: https://developers.openai.com/api/docs/guides/transcription
+             stdapi/routes/openai_audio_transcriptions.py:create_transcription
+        """
+        captured: dict[str, TranscriptionCreateParams] = {}
+
+        def _capture_log_request_params(
+            request: TranscriptionCreateParams, *_args: object, **_kwargs: object
+        ) -> TranscriptionCreateParams:
+            captured["request"] = request
+            return request
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> None:
+            raise UnsupportedModelError(model_id, status=400)
+
+        monkeypatch.setattr(
+            openai_audio_transcriptions,
+            "log_request_params",
+            _capture_log_request_params,
+        )
+        monkeypatch.setattr(
+            openai_audio_transcriptions, "validate_model", _validate_model
+        )
+
+        response = app_client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("test.wav", io.BytesIO(b"fake"), "audio/wav")},
+            data={
+                "model": "probe-model-id",
+                "response_format": "json",
+                "languages[]": ["en", "fr"],
+                "keywords[]": ["Amoxicillin", "EBITDA"],
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "model_not_found"
+
+        request = captured["request"]
+        assert request.languages == ["en", "fr"]
+        assert request.keywords == ["Amoxicillin", "EBITDA"]
+
+    def test_language_with_languages_is_rejected_by_the_route(
+        self, app_client: TestClientType
+    ) -> None:
+        """Both language fields together return 400 before model resolution.
+
+        Ref: https://developers.openai.com/api/docs/guides/transcription
+             stdapi/types/openai_audio.py:TranscriptionCreateParams._unsupported
+        """
+        response = app_client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("test.wav", io.BytesIO(b"fake"), "audio/wav")},
+            data={
+                "model": "amazon.transcribe",
+                "language": "en",
+                "languages[]": ["en", "fr"],
+            },
+        )
+
+        assert response.status_code == 400
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "cannot be combined" in error["message"]
+
     def test_bare_include_still_binds_as_a_list(
         self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1230,9 +1311,9 @@ class TestTranscriptionMultipartFormParsing:
 class TestTranscribeUnsupportedParameters:
     """Amazon Transcribe rejects the OpenAI parameters it has no equivalent for.
 
-    ``prompt``, ``temperature`` and ``logprobs`` are accepted by the request
-    model (they are valid OpenAI fields) and refused by the backend, so the
-    caller gets a 400 instead of a transcript produced while ignoring them.
+    ``prompt``, ``temperature``, ``keywords`` and ``logprobs`` are accepted by
+    the request model (they are valid OpenAI fields) and refused by the backend,
+    so the caller gets a 400 instead of a transcript produced while ignoring them.
     Each rejection is an ``unsupported_parameter`` error naming the offending
     field, which is what lets a client tell it apart from a malformed request.
 
@@ -1289,6 +1370,43 @@ class TestTranscribeUnsupportedParameters:
         assert exc_info.value.code == "unsupported_parameter"
         assert exc_info.value.param == "include.logprobs"
         assert "logprobs" in str(exc_info.value)
+
+    async def test_keywords_is_rejected_with_vocabulary_pointer(self) -> None:
+        """``keywords`` fails with 400 pointing at pre-created custom vocabularies.
+
+        Transcribe has no inline keyword-list equivalent, so the rejection names
+        the ``VocabularyName`` extra parameter as the working alternative instead
+        of silently dropping the caller's recognition hints.
+
+        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/custom-vocabulary.html
+             stdapi/models/audio/amazon_transcribe.py:_validate_no_keywords
+        """
+        with pytest.raises(ApiError) as exc_info:
+            await AudioModel("amazon.transcribe").stt(
+                self._audio(), "json", keywords=["Amoxicillin"], logprobs=False
+            )
+
+        assert exc_info.value.status == 400
+        assert exc_info.value.code == "unsupported_parameter"
+        assert exc_info.value.param == "keywords"
+        assert "VocabularyName" in str(exc_info.value)
+
+    async def test_keywords_is_rejected_when_streaming(self) -> None:
+        """The streaming path refuses ``keywords`` with the same 400.
+
+        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/custom-vocabulary.html
+             stdapi/models/audio/amazon_transcribe.py:AudioModel.stt_stream
+        """
+        stream = AudioModel("amazon.transcribe").stt_stream(
+            self._audio(), "json", keywords=["Amoxicillin"], logprobs=False
+        )
+
+        with pytest.raises(ApiError) as exc_info:
+            await anext(stream)
+
+        assert exc_info.value.status == 400
+        assert exc_info.value.code == "unsupported_parameter"
+        assert exc_info.value.param == "keywords"
 
     @pytest.mark.usefixtures("request_log")
     async def test_zero_temperature_is_accepted(
@@ -1354,3 +1472,199 @@ class TestTranscribeStreamTermination:
         assert isinstance(done, TranscriptionTextDoneEvent)
         assert done.type == "transcript.text.done"
         assert done.text == "hello world"
+
+
+@pytest.fixture
+def _request_id() -> Iterator[None]:
+    """Bind a request id for code calling ``build_metadata`` outside a request."""
+    from stdapi.monitoring import REQUEST_ID  # noqa: PLC0415
+
+    token = REQUEST_ID.set("test-request-id")
+    yield
+    REQUEST_ID.reset(token)
+
+
+@pytest.mark.local
+@pytest.mark.usefixtures("_request_id", "request_log")
+class TestTranscribeLanguagesMapping:
+    """OpenAI ``languages`` maps onto Transcribe's multi-language identification.
+
+    The request-level list is translated into the same
+    ``IdentifyMultipleLanguages``/``LanguageOptions`` job fields the
+    provider-specific extras already drive, so the standard OpenAI name
+    reaches existing AWS plumbing instead of duplicating it.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_StartTranscriptionJob.html
+         https://developers.openai.com/api/docs/guides/transcription
+         stdapi/models/audio/amazon_transcribe.py:_apply_language_params
+    """
+
+    def test_multiple_languages_enable_multi_language_identification(self) -> None:
+        """Two expected languages become ``LanguageOptions`` locale candidates.
+
+        Ref: stdapi/models/audio/amazon_transcribe.py:_apply_language_params
+        """
+        job_params = _build_transcription_job_params(
+            "job", "bucket", None, "json", languages=["en", "fr"]
+        )
+
+        assert job_params["IdentifyMultipleLanguages"] is True
+        assert job_params["LanguageOptions"] == ["en-US", "fr-FR"]
+        assert "LanguageCode" not in job_params
+        assert "IdentifyLanguage" not in job_params
+
+    def test_single_entry_languages_behaves_like_language(self) -> None:
+        """A one-entry list produces the same language fields as ``language``.
+
+        Ref: stdapi/models/audio/amazon_transcribe.py:_apply_language_params
+        """
+        plural = _build_transcription_job_params(
+            "job", "bucket", None, "json", languages=["en"]
+        )
+        singular = _build_transcription_job_params("job", "bucket", "en", "json")
+
+        assert plural["LanguageCode"] == singular["LanguageCode"] == "en-US"
+        assert "IdentifyMultipleLanguages" not in plural
+        assert "LanguageOptions" not in plural
+
+    def test_no_language_hint_keeps_auto_detection(self) -> None:
+        """Without any hint the job still auto-detects a single language.
+
+        Ref: stdapi/models/audio/amazon_transcribe.py:_apply_language_params
+        """
+        job_params = _build_transcription_job_params("job", "bucket", None, "json")
+
+        assert job_params["IdentifyLanguage"] is True
+        assert "IdentifyMultipleLanguages" not in job_params
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            _TranscribeExtraParams(IdentifyMultipleLanguages=True),
+            _TranscribeExtraParams(LanguageOptions=["en-US"]),
+        ],
+        ids=["IdentifyMultipleLanguages", "LanguageOptions"],
+    )
+    def test_languages_with_aws_language_extras_is_rejected(
+        self, extra: _TranscribeExtraParams
+    ) -> None:
+        """``languages`` with the equivalent AWS extras is refused, not merged.
+
+        Both spellings express the same intent; picking one would silently
+        ignore the other, so the request fails naming the OpenAI parameter.
+
+        Ref: stdapi/models/audio/amazon_transcribe.py:_apply_language_params
+        """
+        with pytest.raises(UnsupportedParameterError) as exc_info:
+            _build_transcription_job_params(
+                "job", "bucket", None, "json", extra=extra, languages=["en", "fr"]
+            )
+
+        assert exc_info.value.status == 400
+        assert exc_info.value.param == "languages"
+
+
+@pytest.mark.local
+class TestTranscribeKeywordsRouteRejection:
+    """The route surfaces the ``keywords`` rejection in the OpenAI error envelope.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/dg/custom-vocabulary.html
+         stdapi/models/audio/amazon_transcribe.py:_validate_no_keywords
+    """
+
+    def test_keywords_returns_unsupported_parameter_envelope(
+        self, test_client: TestClientType, api_key: str
+    ) -> None:
+        """``keywords[]`` with ``amazon.transcribe`` answers a 400 naming the fix.
+
+        The rejection runs before any AWS call, and the envelope carries the
+        ``unsupported_parameter`` code, the ``keywords`` param and the
+        ``VocabularyName`` pointer a migrating client needs.
+
+        Ref: stdapi/main.py:handle_api_error
+        """
+        response = test_client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("test.wav", io.BytesIO(b"fake"), "audio/wav")},
+            data={"model": "amazon.transcribe", "keywords[]": ["Amoxicillin"]},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+
+        assert response.status_code == 400
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert error["code"] == "unsupported_parameter"
+        assert error["param"] == "keywords"
+        assert "VocabularyName" in error["message"]
+
+
+@pytest.mark.local
+class TestTranscriptionDetectedLanguages:
+    """The ``json`` response reports the detected language(s) as ``languages``.
+
+    ``AudioModel._transcribe`` is stubbed, so the mapping from Transcribe's
+    locale codes to the OpenAI response entries is fully deterministic and no
+    AWS call is made.
+
+    Ref: https://platform.openai.com/docs/api-reference/audio/createTranscription
+         stdapi/models/audio/amazon_transcribe.py:_detected_languages
+    """
+
+    def test_single_detected_language_is_reported(
+        self, test_client: TestClientType, api_key: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The job's ``language_code`` locale surfaces as one bare ISO entry.
+
+        Ref: stdapi/models/audio/amazon_transcribe.py:_detected_languages
+        """
+        _stub_transcribe(monkeypatch)
+
+        response = test_client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("test.wav", io.BytesIO(b"fake"), "audio/wav")},
+            data={"model": "amazon.transcribe", "response_format": "json"},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["text"] == "hello world"
+        assert body["languages"] == [{"code": "en"}]
+
+    def test_multi_language_result_lists_each_language_once(
+        self, test_client: TestClientType, api_key: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``language_codes`` entries map to de-duplicated bare codes in order.
+
+        Two English locales collapse into a single ``en`` entry while the
+        reported order is preserved.
+
+        Ref: stdapi/models/audio/amazon_transcribe.py:_detected_languages
+        """
+        multi_language_data = {
+            key: value
+            for key, value in _STUB_TRANSCRIPT_DATA.items()
+            if key != "language_code"
+        }
+        multi_language_data["language_codes"] = [
+            {"language_code": "en-US", "duration_in_seconds": 5.0},
+            {"language_code": "fr-FR", "duration_in_seconds": 2.0},
+            {"language_code": "en-GB", "duration_in_seconds": 1.0},
+        ]
+
+        async def _fake_transcribe(
+            _self: AudioModel, *_args: object, **_kwargs: object
+        ) -> dict[str, Any]:
+            return multi_language_data
+
+        monkeypatch.setattr(AudioModel, "_transcribe", _fake_transcribe)
+
+        response = test_client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("test.wav", io.BytesIO(b"fake"), "audio/wav")},
+            data={"model": "amazon.transcribe", "response_format": "json"},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["languages"] == [{"code": "en"}, {"code": "fr"}]

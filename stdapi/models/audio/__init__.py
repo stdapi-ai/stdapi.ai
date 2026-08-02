@@ -113,6 +113,8 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         prompt: str | None = None,  # noqa: ARG002
         temperature: float | None = None,  # noqa: ARG002
         extra_params: JsonMapping | None = None,  # noqa: ARG002
+        keywords: list[str] | None = None,  # noqa: ARG002
+        languages: list[str] | None = None,  # noqa: ARG002
         *,
         logprobs: bool,  # noqa: ARG002
     ) -> str | TranscriptionCreateResponse | TranscriptionDiarized | Response:
@@ -126,6 +128,8 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             prompt: Optional prompt for transcription.
             temperature: Optional temperature for transcription.
             extra_params: Extra model parameters.
+            keywords: Optional literal terms that may appear in the audio.
+            languages: Optional expected input languages (ISO-639-1 codes).
             logprobs: If true, return log probabilities.
 
         Returns:
@@ -145,6 +149,8 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         prompt: str | None = None,  # noqa: ARG002
         temperature: float | None = None,  # noqa: ARG002
         extra_params: JsonMapping | None = None,  # noqa: ARG002
+        keywords: list[str] | None = None,  # noqa: ARG002
+        languages: list[str] | None = None,  # noqa: ARG002
         *,
         logprobs: bool,  # noqa: ARG002
     ) -> AsyncGenerator[TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent]:
@@ -157,6 +163,8 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             prompt: Optional prompt for transcription.
             temperature: Optional temperature for transcription.
             extra_params: Extra model parameters.
+            keywords: Optional literal terms that may appear in the audio.
+            languages: Optional expected input languages (ISO-639-1 codes).
             logprobs: If true, return log probabilities.
 
         Yields:
@@ -323,14 +331,20 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
 
     @classmethod
     def _built_prompt(
-        cls, prompt: str | None, language: str | None, *, translate: bool = False
+        cls,
+        prompt: str | None,
+        language: str | None,
+        keywords: list[str] | None = None,
+        languages: list[str] | None = None,
+        *,
+        translate: bool = False,
     ) -> str:
         """Builds a comprehensive prompt string based on various optional parameters.
 
         This class method constructs a detailed prompt to be used for transcription
         and/or translation tasks. It combines static prompts with additional context
-        such as the expected language, translation requirement, and any user-provided
-        customization to produce a well-rounded string.
+        such as the expected language(s), literal keywords, translation requirement,
+        and any user-provided customization to produce a well-rounded string.
 
         Args:
             prompt: A custom prompt string provided by the user. If None,
@@ -338,6 +352,10 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             language: Specifies the language of the audio by providing its
                 language code. If None, no language information will be appended to the
                 prompt.
+            keywords: Literal terms that may appear in the audio (e.g. product
+                names or acronyms), appended as recognition hints.
+            languages: Expected input language codes; a single entry behaves
+                like ``language``.
             translate: If set to True, the method will include a translation
                 directive in the prompt. Defaults to False.
 
@@ -345,10 +363,21 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             str: A concatenated string containing the full prompt with all the relevant
                 context.
         """
+        if languages and len(languages) == 1:
+            language, languages = languages[0], None
         prompt_items = [cls.TRANSCRIPTION_PROMPT]
         if language:
             prompt_items.append(
                 f"The audio is excepted to be {language_code_to_name(language)} language."
+            )
+        elif languages:
+            names = ", ".join(language_code_to_name(code) for code in languages)
+            prompt_items.append(
+                f"The audio may contain the following languages: {names}."
+            )
+        if keywords:
+            prompt_items.append(
+                f"The following terms may appear in the audio: {', '.join(keywords)}."
             )
         if translate:
             prompt_items.append(cls.TRANSLATION_PROMPT)
