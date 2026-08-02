@@ -194,7 +194,7 @@ def _generic_usagetype_dimension(usagetype: str) -> Dimension | None:
 
     "token" rows are excluded from the image/unit branch (multimodal token
     counts are already billed within plain tokens), and "searchunit"
-    (rerank) is matched before the generic "unit".
+    (rerank) and the Guardrails rows are matched before the generic "unit".
 
     Args:
         usagetype: The usagetype attribute.
@@ -205,6 +205,16 @@ def _generic_usagetype_dimension(usagetype: str) -> Dimension | None:
     normalized = _normalize_usagetype(usagetype)
     if "searchunit" in normalized:
         return Dimension.SEARCH_UNITS
+    if "guardrail" in normalized:
+        # Every policy's usagetype is "...UnitsConsumed", which the generic
+        # branch below would read as generated images. Guardrails bill per
+        # 1,000-character text unit, or per image for the image content
+        # policy -- the dimensions record_guardrail_usage records.
+        return (
+            Dimension.INPUT_IMAGES
+            if "imageunit" in normalized
+            else Dimension.TEXT_UNITS
+        )
     if "token" not in normalized and (
         "unit" in normalized or ("image" in normalized and "input" not in normalized)
     ):
@@ -360,9 +370,8 @@ def normalize_usagetype_model(usagetype: str) -> str:
         model_token = model_token[3:]
         # Strip a duplicated region-code segment after MP:, e.g.
         # "USE1_created_image_stable_image_core" -> "created_image_stable_image_core".
-        # Must split on "_" (MP:'s own separator), not re-scan the "-"-split
-        # `parts` from above -- those still have "MP:" attached and are
-        # never a bare 4-char region code, so that pattern can never match.
+        # Split on "_", MP:'s own separator: the "-"-split `parts` above still
+        # carry "MP:" and can never match a bare 4-char region code.
         segments = model_token.split("_")
         if len(segments) > 1 and len(segments[0]) == 4 and segments[0].isupper():
             model_token = "_".join(segments[1:])
@@ -564,11 +573,10 @@ def resolve_price(
 
     # Candidate order, most exact first. Context relaxes outermost: the
     # long-context premium is a real published rate, so a scaled/relaxed
-    # long-context price beats an exact-tier standard-context one. Tier is
-    # next (a scaled standard price only when the exact tier isn't indexed;
-    # the ratio only applies to token rates -- per-request fees are flat),
-    # then routing. cache_ttl and spec never coexist, so they relax
-    # together as one axis pair.
+    # long-context price beats an exact-tier standard-context one. Then tier
+    # (a scaled standard price only when the exact tier isn't indexed, and the
+    # ratio only applies to token rates), then routing. cache_ttl and spec
+    # never coexist, so they relax together as one axis pair.
     fallback_ratio = (
         _TIER_PRICE_RATIO.get(tier_normalized, _ONE)
         if dimension in _TIER_SCALED_DIMENSIONS
@@ -792,6 +800,41 @@ def _extract_price(
     return _parse_price(price_per_unit.get(currency, "0"), scale, currency)
 
 
+def _is_guardrail_usagetype(usagetype: str) -> bool:
+    """Whether *usagetype* names a Bedrock Guardrails policy or guardrail check."""
+    return "guardrail" in _normalize_usagetype(usagetype)
+
+
+def _guardrail_model(usagetype: str) -> str:
+    """Build the synthetic guardrail model string for a Bedrock Guardrails row.
+
+    Guardrails rows carry no `model` attribute, and their usagetype names the
+    evaluated policy rather than a model, so the billed API is read from the
+    usagetype instead.
+
+    Args:
+        usagetype: The usagetype attribute.
+
+    Returns:
+        The synthetic model string usage.record_guardrail_usage() records
+        against, or "" when the usagetype names no guardrail, or a check the
+        gateway never requests.
+    """
+    if not _is_guardrail_usagetype(usagetype):
+        return ""
+    normalized = _normalize_usagetype(usagetype)
+    if "check" in normalized:
+        # InvokeGuardrailChecks is only ever called with the content filter,
+        # so the other checks' rates would fold a rate this app never pays
+        # onto the same key.
+        return (
+            "amazon.bedrock-runtime-guardrail-checks"
+            if "contentfiltercheck" in normalized
+            else ""
+        )
+    return "amazon.bedrock-runtime-guardrail"
+
+
 def _synthesize_service_model_key(
     our_service: Service, attrs: Mapping[str, Any]
 ) -> str:
@@ -799,7 +842,8 @@ def _synthesize_service_model_key(
 
     Polly/Translate/Transcribe/Comprehend have no `model` attribute; matching
     them requires reconstructing the exact synthetic model string from
-    `engine` (Polly) or `operation` (Translate/Transcribe/Comprehend).
+    `engine` (Polly) or `operation` (Translate/Transcribe/Comprehend). Bedrock
+    Guardrails rows have none either -- see :func:`_guardrail_model`.
 
     Args:
         our_service: The Service this price-list entry belongs to.
@@ -810,6 +854,8 @@ def _synthesize_service_model_key(
         when this row doesn't correspond to an operation this app bills for.
     """
     match our_service:
+        case Service.BEDROCK:
+            return _guardrail_model(attrs.get("usagetype", ""))
         case Service.POLLY:
             engine = attrs.get("engine", "")
             return f"amazon.polly-{engine.lower()}" if engine else ""
@@ -908,6 +954,8 @@ def _store_price(
     price: Price,
     usagetype: str,
     diagnostics: list[str],
+    *,
+    keep_highest: bool = False,
 ) -> None:
     """Merge resolved price into results, recording cross-row PriceKey collisions.
 
@@ -925,8 +973,16 @@ def _store_price(
         usagetype: The usagetype attribute of the row producing this price.
         diagnostics: Collision descriptions for this batch, appended to in
             place; surfaced as one summary warning rather than per collision.
+        keep_highest: Keep the dearest claim on *key* instead of the last one,
+            and report no collision -- for keys several usagetypes share by
+            design.
     """
     existing_price = results.get(key)
+    if keep_highest and existing_price is not None:
+        if price.amount > existing_price.amount:
+            results[key] = price
+            claims[key] = usagetype
+        return
     existing_usagetype = claims.get(key)
     if (
         existing_price is not None
@@ -1287,6 +1343,13 @@ def _ingest_native_item(
         return
 
     usagetype = attrs.get("usagetype", "")
+    guardrail = our_service == Service.BEDROCK and _is_guardrail_usagetype(usagetype)
+    if guardrail and not _guardrail_model(usagetype):
+        # A guardrail check this app never invokes. Guardrails rows are keyed
+        # by policy rather than model, so this one would otherwise mint a
+        # model key of its own that nothing ever prices against.
+        return
+
     if (
         dimension := _resolve_dimension(
             our_service,
@@ -1326,7 +1389,19 @@ def _ingest_native_item(
             # Same-item price bands (tiered beginRange/endRange rows) share
             # one usagetype: last band wins, silently by design.
             if price := _extract_price(price_dim, default_currency=default_currency):
-                _store_price(results, claims, key, price, usagetype, diagnostics)
+                # A guardrail applies every policy the operator configured to
+                # the same units, each at its own rate, and that set isn't
+                # knowable here: keeping the dearest is what stops a
+                # multi-policy guardrail being priced by price-list ordering.
+                _store_price(
+                    results,
+                    claims,
+                    key,
+                    price,
+                    usagetype,
+                    diagnostics,
+                    keep_highest=guardrail,
+                )
 
 
 def _catalog_regions() -> set[str]:
@@ -1345,6 +1420,9 @@ def _catalog_regions() -> set[str]:
     )
     return (
         set(SETTINGS.aws_bedrock_regions)
+        # Mantle can be served from regions the Converse endpoint isn't
+        # configured for; its usage is recorded under the serving region.
+        | set(SETTINGS.aws_bedrock_mantle_regions)
         | set(_FALLBACK_ANCHOR_REGIONS)
         | {r for r in service_regions if r}
         | ({AWS_REGION} if AWS_REGION else set())
@@ -1382,13 +1460,11 @@ def _apply_price_overrides(
     """Merge operator-supplied ``COST_PRICE_OVERRIDES`` into *index*, in place.
 
     Applies each override to every configured region, using that region's own
-    partition to resolve the override's currency (regions can span multiple
-    AWS partitions -- aws, aws-eusc, aws-us-gov, aws-cn -- each with its own
-    currency). Always applied at the standard tier -- there's no override
-    mechanism for flex/priority/batch pricing. Registered under both
-    ``Service.BEDROCK`` and ``Service.BEDROCK_MANTLE`` (mirroring
-    :func:`register_default_prices`) so overrides also win for Mantle-routed
-    requests.
+    partition to resolve the currency (configured regions can span partitions,
+    each with its own). Always applied at the standard tier -- there's no
+    override mechanism for flex/priority/batch pricing -- and under both
+    ``Service.BEDROCK`` and ``Service.BEDROCK_MANTLE``, so overrides also win
+    for Mantle-routed requests.
 
     Args:
         index: Price index to update.
@@ -1746,7 +1822,8 @@ def model_prices(
     are registered under both) are collapsed to the *preferred_service* row.
 
     Args:
-        model_id: The model ID or alias, resolved via :func:`resolve_model_key`.
+        model_id: The canonical model ID, resolved via
+            :func:`resolve_model_key` (aliases are not resolved here).
         region: Only rows for this AWS region.
         tier: Only rows for this service tier.
         dimensions: Only rows for these billed dimensions.
@@ -1836,6 +1913,30 @@ def _select_axis(
     ]
 
 
+def _scale_tier_fallback(
+    rows: list[tuple[PriceKey, Price]], tier: str
+) -> list[tuple[PriceKey, Price]]:
+    """Scale standard-tier rows kept as *tier*'s fallback by the AWS tier ratio.
+
+    Args:
+        rows: (key, price) pairs already reduced on the tier axis.
+        tier: The effective service tier the rows were selected for.
+
+    Returns:
+        The (key, price) pairs, with every fallback row repriced at what
+        :func:`resolve_price` bills for *tier*.
+    """
+    ratio = _TIER_PRICE_RATIO.get(tier.lower(), _ONE)
+    if ratio == _ONE:
+        return rows
+    return [
+        (key, Price(price.amount * ratio, price.currency))
+        if key.tier == "standard" and key.dimension in _TIER_SCALED_DIMENSIONS
+        else (key, price)
+        for key, price in rows
+    ]
+
+
 def select_effective_rows(
     rows: list[tuple[PriceKey, Price]],
     *,
@@ -1847,7 +1948,8 @@ def select_effective_rows(
 
     Mirrors the :func:`resolve_price` fallbacks: when no distinct rate is
     published for *tier* or *routing*, the standard-tier or plain row is kept
-    instead, exactly like cost tracking bills.
+    instead, exactly like cost tracking bills -- a standard-tier token row
+    kept for a discounted or premium tier is repriced at that tier's rate.
 
     Args:
         rows: (key, price) pairs from :func:`model_prices`.
@@ -1861,7 +1963,7 @@ def select_effective_rows(
     if regions is not None:
         rows = [row for row in rows if row[0].region in regions]
     if tier is not None:
-        rows = _select_axis(rows, "tier", tier, "standard")
+        rows = _scale_tier_fallback(_select_axis(rows, "tier", tier, "standard"), tier)
     if routing is not None:
         rows = _select_axis(rows, "routing", routing, "")
     return sorted(rows, key=_row_sort_key)
@@ -1893,9 +1995,8 @@ async def refresh_price_catalog_for_new_models(model_ids: Iterable[str]) -> None
     catalog self-heals for newly released models without a polling loop.
     Diagnostics from the reload are discarded. A model a completed reload
     still couldn't price is exempted from retriggering one for
-    :data:`_UNPRICED_MODEL_COOLDOWN_NS`, so a permanently-unpriced model
-    doesn't force a reload on every request; a genuinely new model is never
-    on cooldown and always triggers one.
+    :data:`_UNPRICED_MODEL_COOLDOWN_NS`, so it doesn't force a reload on
+    every request.
 
     Args:
         model_ids: Bedrock model IDs to check. No-op when cost tracking is
@@ -1934,10 +2035,8 @@ def start_price_catalog() -> None:
     retried with backoff) is written as a ``background`` log event named
     ``price_catalog_load``. Stop the task via :func:`stop_price_catalog`.
 
-    There is no periodic background refresh afterward: the catalog is kept
-    current on demand by :func:`refresh_price_catalog_for_new_models`,
-    triggered by ``initialize_bedrock_models()`` whenever its own lazy
-    refresh discovers a model with no price-catalog entry.
+    There is no periodic refresh afterward: the catalog is kept current on
+    demand by :func:`refresh_price_catalog_for_new_models`.
 
     Idempotent: a call while a load task already exists is a no-op, so a
     duplicate startup never orphans a running task.
@@ -1953,10 +2052,8 @@ def start_price_catalog() -> None:
 async def stop_price_catalog() -> None:
     """Cancel and await the background catalog load, if still running.
 
-    Never raises: any exception other than cancellation left in the task
-    (e.g. an unexpected load error already logged where it occurred) is
-    logged again here and swallowed -- without an ``execution_time_ms``,
-    as no load duration applies -- so shutdown always completes cleanly.
+    Never raises: any exception other than cancellation left in the task is
+    logged and swallowed, so shutdown always completes cleanly.
     """
     if (task := _state.load_task) is None:
         return
@@ -1982,15 +2079,12 @@ async def stop_price_catalog() -> None:
 async def _load_price_catalog_with_retry() -> None:
     """Load the catalog, retrying any failure with capped exponential backoff.
 
-    An unexpected (non-AWS) exception is logged at error level and retried
-    on the same backoff schedule as AWS errors, so a transient anomaly can
-    self-heal and a deterministic bug produces a periodic error-log signal
-    instead of permanently disabling cost tracking for the process lifetime.
-    A load that only partially failed keeps retrying too -- with each
-    ``_load_price_catalog`` call resuming from ``_state.pending_fetch_specs``
-    -- until every fetch has succeeded. If a concurrent on-demand refresh
-    already completed the catalog during a backoff, the loop exits without
-    another load.
+    An unexpected (non-AWS) exception is logged at error level and retried on
+    the same schedule, so a transient anomaly self-heals instead of disabling
+    cost tracking for the process lifetime. A partially failed load keeps
+    retrying too, each ``_load_price_catalog`` call resuming from
+    ``_state.pending_fetch_specs``. The loop exits without another load when a
+    concurrent on-demand refresh already completed the catalog.
     """
     delay = _LOAD_RETRY_INITIAL_SECONDS
     while True:

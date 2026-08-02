@@ -78,6 +78,11 @@ _DIMENSION_INFO: Final[dict[Dimension, _DimensionInfo]] = {
 #: Per-call prompt-token threshold (input + cache read/write) for long-context billing.
 _LONG_CONTEXT_THRESHOLD: Final[int] = 200_000
 
+#: Dimensions AWS has no guaranteed Price List coverage for: a miss is a catalog gap.
+_BEST_EFFORT_PRICED_DIMENSIONS: Final[frozenset[Dimension]] = frozenset(
+    {Dimension.TEXT_UNITS}
+)
+
 
 @dataclass(frozen=True, slots=True)
 class UsageKey:
@@ -166,17 +171,13 @@ OPERATION: ContextVar[str] = ContextVar("operation", default="")
 class ModelInvocationState:
     """Shared, best-effort default region/tier/routing for a model within the current request.
 
-    Mutated in place by models/__init__.py before each call, so it holds
-    the *last-written* value across every call to the same model within the
-    request -- not an isolated per-call value. Every current caller that
-    can invoke the same model concurrently with differing region/tier/
-    routing (Converse, InvokeModel) always passes those values explicitly
-    to :func:`record_bedrock_usage`, bypassing this shared state and
-    staying race-free; only callers without differentiated per-call values
-    (rerank, embeddings, video) rely on the fallback below. A future call
-    site that invokes a model concurrently with differing values without
-    passing them explicitly would risk misattributing usage to the wrong
-    region/tier/routing.
+    Mutated in place by models/__init__.py before each call, so it holds the
+    *last-written* value across every call to the same model, not a per-call
+    one. Any call site that can invoke one model concurrently with differing
+    region/tier/routing (Converse, InvokeModel) must therefore pass those
+    values explicitly to :func:`record_bedrock_usage`, or usage is attributed
+    to the wrong region/tier/routing; only callers without differentiated
+    per-call values (rerank, embeddings, video) rely on this fallback.
     """
 
     region: str | None = None
@@ -296,16 +297,14 @@ def _record_usage(
         and total_tokens <= 0
     ):
         return
-    # MODEL_STATE region is Bedrock-only; using it for other services would
-    # leak Bedrock's region into nested Polly/Transcribe/Translate calls.
-    # Race-free only because concurrent same-model callers pass `region`
-    # explicitly (see ModelInvocationState).
+    # MODEL_STATE region is Bedrock-only: using it for other services would leak
+    # Bedrock's region into nested Polly/Transcribe/Translate calls. Race-free
+    # only because concurrent same-model callers pass `region` explicitly.
     effective_region = region or (
         (get_model_state(model).region or "") if service == Service.BEDROCK else ""
     )
     operation = OPERATION.get("")
-    # Include tier/routing/context in the key so calls that differ on any
-    # of them don't merge (they're priced differently).
+    # tier/routing/context are part of the key: they are priced differently.
     key = UsageKey(service, model, operation, effective_region, tier, routing, context)
     record = records.get(key)
     if record is None:
@@ -384,14 +383,13 @@ def compute_costs() -> list[str]:
 
     Looks up unit prices for each non-zero dimension. Cache-write tokens are
     priced per TTL bucket using the breakdown when available (AWS charges
-    differently per TTL). Falls back to flat total when no breakdown recorded.
+    differently per TTL), else from the flat total.
 
     Omits costs when pricing is unavailable or a record has no resolved
     region. Multi-currency records populate ``costs`` (per-currency
     breakdown); single-currency records populate ``cost``/``currency``.
-    While the background price catalog hasn't finished its initial load,
-    costs are skipped entirely and no pricing-miss warning is emitted --
-    every record served during that startup window would otherwise miss.
+    Until the price catalog finishes its initial load, costs are skipped
+    without a pricing-miss warning -- every record would otherwise miss.
 
     Returns:
         Warning messages for records with an unpriced dimension or that
@@ -475,7 +473,8 @@ def _compute_record_totals(
 
     Returns:
         Per-currency running totals (see :func:`_add_dimension_cost`), and the
-        dimensions for which at least one bucket had no resolvable price.
+        dimensions for which at least one bucket had no resolvable price,
+        excluding :data:`_BEST_EFFORT_PRICED_DIMENSIONS`.
     """
     totals: dict[str, Decimal] = {}
     unpriced: set[Dimension] = set()
@@ -496,7 +495,7 @@ def _compute_record_totals(
                 spec,
                 record.context,
             )
-            if price is None:
+            if price is None and dimension not in _BEST_EFFORT_PRICED_DIMENSIONS:
                 unpriced.add(dimension)
             _add_dimension_cost(bucket_quantity, price, totals)
     return totals, unpriced
@@ -706,15 +705,12 @@ def record_bedrock_usage(
     Args:
         model: Bedrock model ID.
         service: Serving endpoint (bedrock-runtime or bedrock-mantle).
-        tier: Service tier (standard, flex, priority, batch). Defaults to
-            this model's shared invocation state (see
-            :func:`get_model_state`) -- pass it explicitly for any call that
-            may run concurrently with a sibling call to the same model
-            using a different tier, or the shared state may be overwritten
-            first by the sibling.
-        region: Region that served the call. Defaults like *tier*: pass it
-            explicitly for concurrent same-model calls, whose shared state
-            may be overwritten by a sibling call.
+        tier: Service tier (standard, flex, priority, batch). Defaults to this
+            model's shared invocation state (see :func:`get_model_state`) --
+            pass it explicitly for any call that may run concurrently with a
+            sibling call to the same model using a different tier, whose write
+            would otherwise win.
+        region: Region that served the call. Defaults like *tier*.
         routing: Serving profile of this call. Defaults like *tier*.
         input_tokens: Number of input tokens.
         output_tokens: Number of output tokens.
@@ -736,7 +732,7 @@ def record_bedrock_usage(
     """
     state = get_model_state(model)
     image_spec = IMAGE_SPEC.get("") if output_images else ""
-    # "default" means no differentiated tier; normalize it (and unset) to "standard".
+    # "default" means no differentiated tier; normalized to "standard" below.
     # Race-free only because concurrent same-model callers pass tier/routing
     # explicitly (see ModelInvocationState).
     effective_tier = tier or state.service_tier
@@ -946,9 +942,9 @@ def emit_usage_metrics() -> None:
             payload["Cost"] = float(amount)
             payload["Currency"] = currency
             # Separate directives per dimension set: EMF publishes every metric
-            # in a directive under every one of its dimension sets, so a single
-            # directive spanning both ["Model"] and ["Model", "Currency"] would
-            # also publish Cost bare-by-Model -- silently summing currencies.
+            # under every dimension set of its directive, so a single one
+            # spanning ["Model"] and ["Model", "Currency"] would also publish
+            # Cost bare-by-Model -- silently summing currencies.
             directives: list[JsonValue] = [
                 {
                     "Namespace": SETTINGS.cloudwatch_metrics_namespace,

@@ -3,9 +3,9 @@
 These exercise the pure parsing/normalization logic directly (no network),
 using recorded AWS Price List API samples in tests/fixtures/pricing/.
 
-Regression content: fixtures catch bugs in pricePerUnit/unit JSON level handling,
-model-key normalization against live Bedrock IDs, and unvalidated operator
-price overrides (the 3 confirmed mispricing incidents that prompted this module).
+The fixtures guard the three mispricing classes confirmed in production:
+pricePerUnit/unit JSON level handling, model-key normalization against live
+Bedrock IDs, and unvalidated operator price overrides.
 
 Ref: stdapi/pricing.py:_ingest_price_list_item
      stdapi/pricing.py:resolve_price
@@ -195,8 +195,8 @@ class TestIngestPriceListItem:
     def test_native_cross_region_global_usagetype_becomes_routing_global(self) -> None:
         """Regression: "-cross-region-global" usagetype must map to routing="global".
 
-        These rows incorrectly modeled routing via a fabricated service_tier
-        attribute before the fix. The actual signal is the usagetype suffix.
+        The usagetype suffix is the only signal: these rows carry no
+        service_tier attribute of their own.
 
         Ref: stdapi/pricing.py:_native_routing
         """
@@ -255,8 +255,8 @@ class TestIngestPriceListItem:
     def test_marketplace_global_usagetype_becomes_routing_global(self) -> None:
         """Regression: bare "_Global" usagetype must map to routing="global".
 
-        Before the fix these rows were skipped entirely (routing wasn't modeled),
-        so models priced only via Global routing had no price at all.
+        Skipping them leaves a model priced only via Global routing with no
+        price at all.
 
         Ref: stdapi/pricing.py:_marketplace_routing
         """
@@ -277,8 +277,8 @@ class TestIngestPriceListItem:
     def test_model_customization_rows_are_not_ingested(self) -> None:
         """Regression: "Model Customization" rows must be skipped (not billed as inference).
 
-        This app only bills inference usage. Before the fix these rows weren't
-        excluded, so they silently collided with the model's on-demand PriceKey.
+        This app only bills inference usage, and an ingested customization row
+        silently collides with the model's on-demand PriceKey.
 
         Ref: stdapi/pricing.py:_ingest_native_item
         """
@@ -408,8 +408,8 @@ class TestResolveTier:
         """Regression: batch suffix in usagetype must be detected when no other signal exists.
 
         Confirmed live on Nova 2.0 Lite/Pro global-batch rows -- no service_tier,
-        no inferenceType suffix, no distinct feature. Before the fix, these rows
-        collided with global-standard on the same PriceKey.
+        no inferenceType suffix, no distinct feature -- so an undetected batch
+        suffix collides with global-standard on the same PriceKey.
         """
         attrs = {
             "inferenceType": "Output tokens",
@@ -938,11 +938,10 @@ class TestTitanImageGeneratorIngestion:
 class TestNovaCanvasIngestion:
     """Nova Canvas T2I/I2I pricing with image_spec resolution/quality keys.
 
-    Regression: Nova Canvas carries a `model` attribute (unlike Titan Image
-    Generator), so it took the wrong branch in _resolve_native_model and its
-    inferenceType wasn't recognized -- real on-demand rows were silently dropped.
-    Meanwhile Provisioned Throughput rows matched the usagetype fallback and
-    silently overwrote the real image prices. Confirmed live on Nova 2.0 Omni/Pro.
+    Nova Canvas carries a `model` attribute (unlike Titan Image Generator), so
+    the wrong _resolve_native_model branch drops its real on-demand rows while
+    Provisioned Throughput rows match the usagetype fallback and overwrite the
+    image prices. Confirmed live on Nova 2.0 Omni/Pro.
 
     Ref: stdapi/pricing.py:_resolve_native_model
          stdapi/pricing.py:_native_price_spec
@@ -1536,10 +1535,9 @@ class TestMarketplaceLegacyContextWindowListingsSkipped:
 class TestMarketplaceClaimIncludesListingName:
     """Marketplace collision claims are tagged with the listing name, not just the usagetype.
 
-    Distinct products can share an identical usagetype string; two listings
-    that normalize to the SAME model key but carry different prices must now
-    be caught as a collision (previously silent, since the claim was keyed
-    on usagetype text alone).
+    Distinct products can share an identical usagetype string, so a claim keyed
+    on that text alone misses two listings that normalize to the SAME model key
+    while carrying different prices.
 
     Ref: stdapi/pricing.py:_ingest_marketplace_item
          stdapi/pricing.py:_store_price
@@ -2192,6 +2190,164 @@ class TestTranslateAndComprehendIngestion:
         assert price.amount == Decimal("0.0004")
 
 
+class TestGuardrailsIngestion:
+    """Bedrock Guardrails rows and their synthetic model keys.
+
+    Guardrails rows carry no `model`, `inferenceType` or `featuretype`
+    attribute, so both the key and the dimension are reconstructed from the
+    usagetype -- otherwise guardrail spend can never be priced. The
+    usagetypes below are the ones the Price List API publishes verbatim.
+
+    Ref: https://aws.amazon.com/bedrock/pricing/
+         stdapi/pricing.py:_guardrail_model
+         stdapi/usage.py:record_guardrail_usage
+    """
+
+    @staticmethod
+    def _item(usagetype: str, price: str, unit: str = "TextUnit") -> str:
+        return json.dumps(
+            _price_item(
+                {"regionCode": "us-east-1", "usagetype": usagetype},
+                unit=unit,
+                price=price,
+            )
+        )
+
+    def _ingest(self, *items: str) -> tuple[dict[PriceKey, Price], list[str]]:
+        """Ingest *items* into one shared batch, returning its results and diagnostics."""
+        results: dict[PriceKey, Price] = {}
+        claims: dict[PriceKey, str] = {}
+        diagnostics: list[str] = []
+        for item in items:
+            _ingest_price_list_item(
+                item, Service.BEDROCK, "us-east-1", "USD", results, claims, diagnostics
+            )
+        return results, diagnostics
+
+    def test_guardrail_policy_row_prices_the_apply_guardrail_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A policy row must key under "amazon.bedrock-runtime-guardrail" text units.
+
+        The usagetype ends in "UnitsConsumed", which the generic Bedrock
+        fallback reads as generated images -- a dimension nothing records
+        against a guardrail, so the rate would never be found.
+        """
+        results, _ = self._ingest(
+            self._item("USE1-Guardrail-ContentPolicyUnitsConsumed", "0.00015")
+        )
+        key = PriceKey(
+            Service.BEDROCK,
+            normalize_model_key("amazon.bedrock-runtime-guardrail"),
+            "us-east-1",
+            Dimension.TEXT_UNITS,
+            "standard",
+        )
+        assert key in results
+
+        monkeypatch.setattr(pricing._state, "price_index", results)  # noqa: SLF001
+        price = resolve_price(
+            Service.BEDROCK,
+            "amazon.bedrock-runtime-guardrail",
+            "us-east-1",
+            Dimension.TEXT_UNITS,
+        )
+        assert price is not None
+        assert price.amount == Decimal("0.00015")
+
+    def test_image_content_policy_row_prices_input_images(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The image content policy bills per image, the dimension image moderation records."""
+        results, _ = self._ingest(
+            self._item(
+                "USE1-Guardrail-ContentPolicyImageUnitsConsumed",
+                "0.00075",
+                unit="Images Processed",
+            )
+        )
+        monkeypatch.setattr(pricing._state, "price_index", results)  # noqa: SLF001
+        price = resolve_price(
+            Service.BEDROCK,
+            "amazon.bedrock-runtime-guardrail",
+            "us-east-1",
+            Dimension.INPUT_IMAGES,
+        )
+        assert price is not None
+        assert price.amount == Decimal("0.00075")
+
+    def test_the_dearest_policy_rate_is_kept_without_a_collision(self) -> None:
+        """Every configured policy bills the same units, so the dearest is kept, quietly.
+
+        The policies share one PriceKey by design: reporting that as a
+        catalog collision would warn on every startup, and letting the last
+        row win would price a guardrail by price-list ordering.
+        """
+        results, diagnostics = self._ingest(
+            self._item(
+                "USE1-Guardrail-ContextualGroundingPolicyUnitsConsumed", "0.0001"
+            ),
+            self._item(
+                "USE1-Guardrail-AutomatedReasoningPolicyUnitsConsumed", "0.00017"
+            ),
+            self._item("USE1-Guardrail-TopicPolicyUnitsConsumed", "0.00015"),
+        )
+        assert diagnostics == []
+        assert [price.amount for price in results.values()] == [Decimal("0.00017")]
+
+    def test_guardrail_checks_row_prices_the_checks_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A guardrail-checks row must key under the distinct checks model.
+
+        The two APIs are billed separately, so their rows must never fold
+        onto one key.
+        """
+        results, _ = self._ingest(
+            self._item(
+                "USE1-GuardrailChecks-ContentFilterCheckUnitsConsumed", "0.00007"
+            )
+        )
+        assert [key.model for key in results] == [
+            normalize_model_key("amazon.bedrock-runtime-guardrail-checks")
+        ]
+
+        monkeypatch.setattr(pricing._state, "price_index", results)  # noqa: SLF001
+        price = resolve_price(
+            Service.BEDROCK,
+            "amazon.bedrock-runtime-guardrail-checks",
+            "us-east-1",
+            Dimension.TEXT_UNITS,
+        )
+        assert price is not None
+        assert price.amount == Decimal("0.00007")
+
+    def test_an_uninvoked_check_is_not_ingested_at_all(self) -> None:
+        """Only the content filter is ever requested, so the other checks' rates are dropped.
+
+        Keeping them would either overwrite the content-filter rate or mint a
+        model key per check that nothing prices against.
+        """
+        results, diagnostics = self._ingest(
+            self._item(
+                "USE1-GuardrailChecks-ContentFilterCheckUnitsConsumed", "0.00007"
+            ),
+            self._item(
+                "USE1-GuardrailChecks-PromptAttackCheckUnitsConsumed", "0.00008"
+            ),
+            self._item(
+                "USE1-GuardrailChecks-SensitiveInformationCheckUnitsConsumed", "0.0001"
+            ),
+        )
+        assert diagnostics == []
+        assert [(key.model, price.amount) for key, price in results.items()] == [
+            (
+                normalize_model_key("amazon.bedrock-runtime-guardrail-checks"),
+                Decimal("0.00007"),
+            )
+        ]
+
+
 class TestUsagetypeTokenFallbackTierSuffixes:
     """Native rows with no inferenceType/featuretype at all (xai.grok's "mantle" usagetype schema).
 
@@ -2694,8 +2850,7 @@ class TestParseUnitScale:
             ("1K tokens", 1000),
             ("1M Characters", 1_000_000),
             ("Tokens", 1),
-            # Regression: the digit run was captured but never used, silently
-            # assuming any K/M-prefixed unit meant exactly 1000x/1_000_000x.
+            # The digit run scales the multiplier: a K/M prefix is not always 1000x/1e6x.
             ("10K tokens", 10_000),
             ("5M characters", 5_000_000),
         ],
@@ -2848,6 +3003,26 @@ class TestApplyPriceOverrides:
             assert price.amount == Decimal("0.5")
         finally:
             pricing._MODEL_KEY_OVERRIDES.pop(model_id, None)  # noqa: SLF001
+
+
+class TestCatalogRegions:
+    """The region set the catalog is fetched, backfilled and overridden for.
+
+    Mantle usage is recorded under the region that served the call, so a
+    Mantle region missing from this set leaves that traffic unpriced with no
+    regional fallback and no override reachable.
+
+    Ref: stdapi/pricing.py:_catalog_regions
+         stdapi/config.py:aws_bedrock_mantle_regions
+    """
+
+    def test_mantle_only_region_is_part_of_the_catalog(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A Mantle region absent from aws_bedrock_regions must still be fetched."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1"])
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_regions", ["ap-south-1"])
+        assert "ap-south-1" in pricing._catalog_regions()  # noqa: SLF001
 
 
 class TestApplyRegionalFallback:
@@ -4307,6 +4482,74 @@ _KNOWN_PRICING_GAPS: Final[frozenset[str]] = frozenset(
         "zai.glm-4.6",
     }
 )
+
+
+#: Keys this app bills that no Price List row names: (service, model, dimension).
+_SYNTHETIC_MODEL_PROBES: Final[tuple[tuple[Service, str, Dimension], ...]] = (
+    (Service.BEDROCK, "amazon.bedrock-runtime-guardrail", Dimension.TEXT_UNITS),
+    (Service.BEDROCK, "amazon.bedrock-runtime-guardrail", Dimension.INPUT_IMAGES),
+    (Service.BEDROCK, "amazon.bedrock-runtime-guardrail-checks", Dimension.TEXT_UNITS),
+    (Service.POLLY, "amazon.polly-standard", Dimension.INPUT_CHARACTERS),
+    (Service.POLLY, "amazon.polly-neural", Dimension.INPUT_CHARACTERS),
+    (Service.POLLY, "amazon.polly-long-form", Dimension.INPUT_CHARACTERS),
+    (Service.POLLY, "amazon.polly-generative", Dimension.INPUT_CHARACTERS),
+    (Service.TRANSLATE, "amazon.translate", Dimension.INPUT_CHARACTERS),
+    (Service.TRANSCRIBE, "amazon.transcribe", Dimension.INPUT_SECONDS),
+    (
+        Service.COMPREHEND,
+        "amazon.comprehend-language-detection",
+        Dimension.COMPREHEND_UNITS,
+    ),
+    (Service.COMPREHEND, "amazon.comprehend-toxicity", Dimension.COMPREHEND_UNITS),
+)
+
+
+@pytest.mark.slow
+async def test_live_price_catalog_ingests_cleanly() -> None:
+    """The live catalog must load without diagnostics and price every synthetic key.
+
+    Both halves cover what fixtures structurally cannot: a hand-written item
+    can only assert on a usagetype someone thought to write down, and AWS
+    names them nothing like one would guess. Diagnostics catch an unmodeled
+    pricing axis folding distinct rates onto one PriceKey -- at runtime only
+    a startup warning, but it prices a model by whichever row AWS returned
+    last. The probes catch the reverse: a key ``usage.record_*_usage()``
+    bills against that no live row lands on, which costs that usage at
+    nothing, silently.
+
+    Ref: stdapi/pricing.py:_store_price
+         stdapi/pricing.py:_synthesize_service_model_key
+         stdapi/usage.py:_BEST_EFFORT_PRICED_DIMENSIONS
+    """
+    try:
+        async with AWSConnectionManager(("sts", None)):
+            pass
+    except (BotoCoreError, ClientError) as exc:
+        pytest.skip(f"AWS is not reachable: {exc}")
+
+    diagnostics: list[str] = []
+    async with AWSConnectionManager(
+        # type-ignore: the RegionName stub Literal lags EUSC/China (works live).
+        ("pricing", pricing.pricing_endpoint_region())  # type: ignore[arg-type]
+    ):
+        await pricing._load_price_catalog(diagnostics)  # noqa: SLF001
+
+    index = pricing._state.price_index  # noqa: SLF001
+    assert index, "the price catalog loaded no rows at all"
+    assert diagnostics == []
+
+    # Any region the key is published in proves the reconstruction: which
+    # regions carry a service's rows depends on where that service is
+    # configured, not on whether its key is built correctly.
+    regions = {key.region for key in index}
+    unpriced = [
+        f"{model} {dimension}"
+        for service, model, dimension in _SYNTHETIC_MODEL_PROBES
+        if not any(
+            resolve_price(service, model, region, dimension) for region in regions
+        )
+    ]
+    assert not unpriced, f"synthetic keys with no live price: {unpriced}"
 
 
 async def _unclaimed_bedrock_price_list_models(

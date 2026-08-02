@@ -217,6 +217,6 @@ curl -X POST "$BASE/v1/moderations" \
 
 ## Billing
 
-- **Guardrails** — AWS bills per text unit and per image processed by the ApplyGuardrail API; see [Amazon Bedrock pricing](https://aws.amazon.com/bedrock/pricing/). No Bedrock model invocation is involved.
+- **Guardrails** — AWS bills per text unit and per image processed by the ApplyGuardrail API, once for every policy the guardrail applies; see [Amazon Bedrock pricing](https://aws.amazon.com/bedrock/pricing/). No Bedrock model invocation is involved. Billed units appear in [usage logs and cost tracking](operations_logging_monitoring.md) as `text_units` and `input_images` under the `amazon.bedrock-runtime-guardrail` model, costed at the dearest published policy rate: a guardrail applying several policies costs more than tracked.
 - **Guardrail checks** — AWS bills per text unit and per requested check; the gateway requests the `contentFilter` check only. Billed text units appear in [usage logs and cost tracking](operations_logging_monitoring.md) as `text_units` under the `amazon.bedrock-runtime-guardrail-checks` model.
 - **Comprehend** — AWS bills toxicity detection per 100-character unit with a 3-unit minimum per call; see [Amazon Comprehend pricing](https://aws.amazon.com/comprehend/pricing/). Billed units appear in [usage logs and cost tracking](operations_logging_monitoring.md) as `comprehend_units` under the `amazon.comprehend-toxicity` model.

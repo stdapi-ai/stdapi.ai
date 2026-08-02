@@ -33,6 +33,7 @@ from stdapi.usage import (
     get_model_state,
     record_bedrock_usage,
     record_comprehend_usage,
+    record_guardrail_usage,
     record_polly_usage,
     record_transcribe_usage,
     record_translate_usage,
@@ -224,9 +225,8 @@ class TestImageSpecPricing:
     def test_partial_spec_breakdown_prices_the_remainder_at_the_flat_rate(self) -> None:
         """A spec-bearing and a flat-only call in one record bill 2 * 0.01 + 3 * 0.0036.
 
-        Regression: _dimension_price_buckets returned ONLY breakdown buckets
-        when output_images_by_spec was non-empty, silently pricing the
-        flat-only portion as $0.
+        A non-empty ``output_images_by_spec`` must not narrow the record to its
+        breakdown buckets, which would price the flat-only portion at $0.
 
         Ref: stdapi/usage.py:_reconcile_buckets
         """
@@ -276,9 +276,9 @@ class TestImageSpecPricing:
     ) -> None:
         """A cleared IMAGE_SPEC keeps a later model's images on its flat rate.
 
-        Only Titan Image Generator sets IMAGE_SPEC; before it was cleared after
-        each call the stale spec leaked into the next model's record, sending
-        its images into a spec bucket that model has no price for.
+        Only Titan Image Generator sets IMAGE_SPEC, so it is cleared after each
+        call: a stale spec would send the next model's images into a spec
+        bucket that model has no price for.
 
         Ref: stdapi/models/image/__init__.py:ImageModelBase._record_invoke_usage
         """
@@ -543,8 +543,8 @@ class TestRecordBedrockUsageTierResolution:
 class TestInitUsageTokenReset:
     """init_usage() returns a token that restores the previous USAGE dict.
 
-    Regression: nested in-process calls permanently replaced the outer
-    request's dict because init_usage() didn't capture a reset token.
+    Without the token, a nested in-process call permanently replaces the outer
+    request's dict.
 
     Ref: stdapi/usage.py:init_usage
     """
@@ -1190,9 +1190,9 @@ class TestNonBedrockRecordUsageHelpers:
     def test_non_bedrock_usage_does_not_inherit_a_prior_bedrock_region(self) -> None:
         """A prior Bedrock call's Region does not leak into a Polly record.
 
-        The MODEL_STATE region fallback is Bedrock-only: a shared fallback let
-        Polly/Transcribe/Translate/Comprehend inherit the Bedrock Region of an
-        earlier call in the same request and be priced against it.
+        The MODEL_STATE region fallback is Bedrock-only: a shared one would let
+        Polly/Transcribe/Translate/Comprehend be priced against the Bedrock
+        Region of an earlier call in the same request.
 
         Ref: stdapi/usage.py:_record_usage
         """
@@ -1202,6 +1202,49 @@ class TestNonBedrockRecordUsageHelpers:
         record_polly_usage(42, "neural")
         record = next(iter(usage.USAGE.get().values()))
         assert record.region == ""
+
+
+class TestGuardrailTextUnitsPricing:
+    """Guardrail text units: priced when published, silent when not.
+
+    A configured guardrail applies to every route, so an unpriced text-unit
+    miss would raise the level of every request log to ``warning``; a
+    published Guardrails rate must still be billed.
+
+    Ref: https://aws.amazon.com/bedrock/pricing/
+         stdapi/usage.py:record_guardrail_usage
+         stdapi/monitoring.py:_add_warnings
+    """
+
+    def test_unpriced_text_units_emit_no_pricing_miss_warning(self) -> None:
+        """With no Guardrails rate in the catalog, the record is silent, not warned about."""
+        # Seed an unrelated price so the catalog counts as ready.
+        set_test_price(
+            "othermodel", "us-east-1", Dimension.INPUT_TOKENS, "0.000003", "USD"
+        )
+        record_guardrail_usage(
+            "amazon.bedrock-runtime-guardrail", text_units=3, region="us-east-1"
+        )
+        assert compute_costs() == []
+        record = next(iter(usage.USAGE.get().values()))
+        assert record.cost == Decimal(0)
+
+    def test_published_text_unit_rate_is_billed(self) -> None:
+        """A published Guardrails rate prices the recorded text units."""
+        set_test_price(
+            "bedrockruntimeguardrail",
+            "us-east-1",
+            Dimension.TEXT_UNITS,
+            "0.00015",
+            "USD",
+        )
+        record_guardrail_usage(
+            "amazon.bedrock-runtime-guardrail", text_units=3, region="us-east-1"
+        )
+        assert compute_costs() == []
+        record = next(iter(usage.USAGE.get().values()))
+        assert record.cost == Decimal("0.000450")
+        assert record.currency == "USD"
 
 
 class TestFormatCost:

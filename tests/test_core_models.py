@@ -26,7 +26,7 @@ from starlette.testclient import TestClient
 from stdapi import auth, pricing
 from stdapi.config import SETTINGS
 from stdapi.main import app
-from stdapi.models import MANTLE_SERVICE, ModelDetails
+from stdapi.models import MANTLE_SERVICE, MODEL_ALIASES, ModelDetails
 from stdapi.pricing import Dimension, Price, PriceKey, Service
 from stdapi.routes import core_models
 from tests._helpers import make_model_details
@@ -1037,6 +1037,86 @@ class TestModelPricingEndpoint:
         assert rows_by_dimension["input_tokens"]["tier"] == "flex"
         assert rows_by_dimension["input_tokens"]["unit_price"] == "0.0000015"
         assert rows_by_dimension["output_tokens"]["tier"] == "standard"
+
+    def test_alias_card_carries_the_canonical_models_rows(
+        self,
+        client: TestClient,
+        priced_catalog: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A card requested by alias must price the model the alias resolves to.
+
+        Aliases are the names OpenAI clients send, and an empty ``prices``
+        list means "AWS publishes no rows" — so a card keyed on the raw alias
+        would contradict the request log for exactly those names.
+
+        Ref: stdapi/models/__init__.py:resolve_model_alias
+        """
+        monkeypatch.setitem(MODEL_ALIASES, "priced-alias", "amazon.pricedmodel-v1:0")
+        response = client.get(
+            "/model_pricing", params={"model": "priced-alias"}, headers=priced_catalog
+        )
+        assert response.status_code == 200
+        (card,) = response.json()
+        assert card["id"] == "priced-alias"
+        assert len(card["prices"]) == 3
+
+    def test_alias_card_reports_the_aliased_models_service(
+        self,
+        client: TestClient,
+        priced_catalog: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An alias of a non-Bedrock model must report that model's own service.
+
+        The card reads its service from the resolved rows, so an alias that
+        prices nothing also mislabels Polly/Transcribe/Comprehend models as
+        ``bedrock-runtime``.
+        """
+        monkeypatch.setitem(MODEL_ALIASES, "tts-1", "amazon.polly-standard")
+        set_test_price(
+            "pollystandard",
+            "us-east-1",
+            Dimension.INPUT_CHARACTERS,
+            "0.000004",
+            "USD",
+            service=Service.POLLY,
+        )
+        response = client.get(
+            "/model_pricing", params={"model": "tts-1"}, headers=priced_catalog
+        )
+        assert response.status_code == 200
+        (card,) = response.json()
+        assert card["service"] == "polly"
+        assert [row["dimension"] for row in card["prices"]] == ["input_characters"]
+
+    def test_default_tier_card_advertises_the_billed_fallback_rate(
+        self,
+        client: TestClient,
+        priced_catalog: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A standard row kept for the flex default is advertised at the flex rate.
+
+        Cost tracking bills an unpublished flex token rate at half the standard
+        one, so advertising the unscaled 0.000015 would overstate what the
+        request log records by 2x.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html
+             stdapi/pricing.py:_TIER_PRICE_RATIO
+        """
+        monkeypatch.setattr(
+            SETTINGS, "default_model_service_tiers", {"amazon.pricedmodel-v1:0": "flex"}
+        )
+        response = client.get(
+            "/model_pricing",
+            params={"model": "amazon.pricedmodel-v1:0"},
+            headers=priced_catalog,
+        )
+        (card,) = response.json()
+        rows_by_dimension = {row["dimension"]: row for row in card["prices"]}
+        assert rows_by_dimension["output_tokens"]["unit_price"] == "0.0000075"
+        assert rows_by_dimension["input_tokens"]["unit_price"] == "0.0000015"
 
     def test_default_card_excludes_unconfigured_regions(
         self,

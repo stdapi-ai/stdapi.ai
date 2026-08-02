@@ -597,7 +597,7 @@ async def model_pricing(
             else Service.BEDROCK
         )
         rows = model_prices(
-            model_id,
+            resolved_model_id,
             region=region,
             tier=tier,
             dimensions=dimensions,
