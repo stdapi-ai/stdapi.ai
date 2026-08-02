@@ -1,5 +1,5 @@
 {
- "schema_version": 4,
+ "schema_version": 5,
  "model_id": "openai.gpt-oss-20b",
  "invoked_id": "openai.gpt-oss-20b",
  "transport": "mantle",

@@ -1,5 +1,5 @@
 {
- "schema_version": 4,
+ "schema_version": 5,
  "model_id": "openai.gpt-5.6-terra",
  "invoked_id": "openai.gpt-5.6-terra",
  "transport": "mantle",

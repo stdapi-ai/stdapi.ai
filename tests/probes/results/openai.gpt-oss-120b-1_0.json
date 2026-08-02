@@ -1,5 +1,5 @@
 {
- "schema_version": 4,
+ "schema_version": 5,
  "model_id": "openai.gpt-oss-120b-1:0",
  "invoked_id": "openai.gpt-oss-120b-1:0",
  "transport": "converse",
@@ -399,7 +399,7 @@
    }
   },
   {
-   "name": "service_tier_flex",
+   "name": "latency_optimized",
    "feature": "performanceConfig latency=optimized",
    "outcome": "rejected",
    "detail": "An error occurred (ValidationException) when calling the Converse operation: Latency performance configuration is not supported for openai.gpt-oss-120b-1:0 in us-east-1",
@@ -421,7 +421,7 @@
    }
   },
   {
-   "name": "service_tier_flex_structured",
+   "name": "service_tier_flex",
    "feature": "serviceTier flex",
    "outcome": "accepted",
    "detail": "no observable effect",

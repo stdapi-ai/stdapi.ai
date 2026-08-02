@@ -1,5 +1,5 @@
 {
- "schema_version": 4,
+ "schema_version": 5,
  "model_id": "qwen.qwen3-next-80b-a3b-instruct",
  "invoked_id": "qwen.qwen3-next-80b-a3b-instruct",
  "transport": "mantle",

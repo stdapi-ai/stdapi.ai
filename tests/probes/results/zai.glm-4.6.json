@@ -1,5 +1,5 @@
 {
- "schema_version": 4,
+ "schema_version": 5,
  "model_id": "zai.glm-4.6",
  "invoked_id": "zai.glm-4.6",
  "transport": "mantle",

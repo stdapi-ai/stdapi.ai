@@ -1,5 +1,5 @@
 {
- "schema_version": 4,
+ "schema_version": 5,
  "model_id": "twelvelabs.pegasus-1-2-v1:0",
  "invoked_id": "twelvelabs.pegasus-1-2-v1:0",
  "transport": "converse",

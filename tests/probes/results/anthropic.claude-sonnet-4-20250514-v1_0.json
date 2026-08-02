@@ -1,5 +1,5 @@
 {
- "schema_version": 4,
+ "schema_version": 5,
  "model_id": "anthropic.claude-sonnet-4-20250514-v1:0",
  "invoked_id": "us.anthropic.claude-sonnet-4-20250514-v1:0",
  "transport": "converse",

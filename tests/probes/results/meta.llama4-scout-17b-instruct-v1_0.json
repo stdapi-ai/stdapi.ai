@@ -1,5 +1,5 @@
 {
- "schema_version": 4,
+ "schema_version": 5,
  "model_id": "meta.llama4-scout-17b-instruct-v1:0",
  "invoked_id": "meta.llama4-scout-17b-instruct-v1:0",
  "transport": "converse",

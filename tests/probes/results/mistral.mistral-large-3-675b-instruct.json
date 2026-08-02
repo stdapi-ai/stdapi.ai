@@ -1,5 +1,5 @@
 {
- "schema_version": 4,
+ "schema_version": 5,
  "model_id": "mistral.mistral-large-3-675b-instruct",
  "invoked_id": "mistral.mistral-large-3-675b-instruct",
  "transport": "converse",
@@ -399,7 +399,7 @@
    }
   },
   {
-   "name": "service_tier_flex",
+   "name": "latency_optimized",
    "feature": "performanceConfig latency=optimized",
    "outcome": "rejected",
    "detail": "An error occurred (ValidationException) when calling the Converse operation: Latency performance configuration is not supported for mistral.mistral-large-3-675b-instruct in us-east-1",
@@ -421,7 +421,7 @@
    }
   },
   {
-   "name": "service_tier_flex_structured",
+   "name": "service_tier_flex",
    "feature": "serviceTier flex",
    "outcome": "accepted",
    "detail": "no observable effect",

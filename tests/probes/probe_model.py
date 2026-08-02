@@ -25,7 +25,7 @@ one way, then classifies the outcome:
 Usage::
 
     uv run python -m tests.probes.probe_model amazon.nova-2-lite-v1:0
-    uv run python -m tests.probes.probe_model --all-new
+    uv run python -m tests.probes.probe_model --all --skip-recorded
     uv run python -m tests.probes.probe_model deepseek.v3.2 --region us-west-2
 
 Results land in ``tests/probes/results/<model-id>.json``. Commit them: they are
@@ -60,7 +60,7 @@ if TYPE_CHECKING:
 RESULTS_DIR = Path(__file__).parent / "results"
 
 #: Bumped when the probe set changes in a way that invalidates older records.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 #: Outcome of a single probe.
 Outcome = Literal["supported", "accepted", "rejected", "error", "skipped"]
@@ -452,7 +452,7 @@ PROBES: tuple[Probe, ...] = (
         observe=_is_json_object,
     ),
     Probe(
-        name="service_tier_flex",
+        name="latency_optimized",
         feature="performanceConfig latency=optimized",
         overrides={"performanceConfig": {"latency": "optimized"}},
     ),
@@ -462,7 +462,7 @@ PROBES: tuple[Probe, ...] = (
         overrides={"serviceTier": {"type": "priority"}},
     ),
     Probe(
-        name="service_tier_flex_structured",
+        name="service_tier_flex",
         feature="serviceTier flex",
         overrides={"serviceTier": {"type": "flex"}},
     ),
@@ -914,6 +914,30 @@ def _classify(exc: Exception) -> Outcome:
     return "error"
 
 
+def _classify_mantle(exc: Exception) -> Outcome:
+    """Tell a Mantle backend refusal apart from a transport or server fault.
+
+    The Mantle client maps every upstream failure onto an ``ApiError`` carrying
+    an HTTP status. A 4xx is the endpoint refusing the probed shape, which is
+    the answer being looked for; throttling (429), credential problems (mapped
+    to 500) and an unreachable endpoint (503) say nothing about the model and
+    must not be recorded as its refusal.
+
+    Args:
+        exc: The exception the call raised.
+
+    Returns:
+        The outcome to record.
+    """
+    status = getattr(exc, "status", None)
+    if isinstance(status, int):
+        rejected = 400 <= status < 500 and status != 429
+        return "rejected" if rejected else "error"
+    if any(marker in str(exc) for marker in _REFUSAL_MARKERS):
+        return "rejected"
+    return "error"
+
+
 def _client_config() -> AioConfig:
     """Build the bedrock-runtime config the probes call through.
 
@@ -1119,7 +1143,11 @@ async def probe_mantle_model(model_id: str, region: str) -> dict[str, Any]:
             except Exception as exc:  # noqa: BLE001 - every failure mode is a result
                 results.append(
                     ProbeResult(
-                        probe.name, probe.feature, "rejected", str(exc), probe.overrides
+                        probe.name,
+                        probe.feature,
+                        _classify_mantle(exc),
+                        str(exc),
+                        probe.overrides,
                     )
                 )
             else:
@@ -1134,7 +1162,10 @@ async def probe_mantle_model(model_id: str, region: str) -> dict[str, Any]:
                     )
                 )
             print(f"  {results[-1].outcome:<10} {probe.name}", file=sys.stderr)  # noqa: T201
-            if probe.name == "baseline" and results[-1].outcome == "rejected":
+            if probe.name == "baseline" and results[-1].outcome not in {
+                "supported",
+                "accepted",
+            }:
                 break
     return _record(model_id, model_id, region, results, transport="mantle")
 
@@ -1228,6 +1259,26 @@ def _jsonable(value: object) -> str:
 _EXCLUDED_OUTPUT_MODALITIES = frozenset({"VIDEO", "IMAGE", "EMBEDDING", "SPEECH"})
 
 
+def _suite_test_client() -> type[Any]:
+    """Import the suite's conftest, then starlette's test client, in that order.
+
+    The order is a contract: the conftest installs an ``httpx2`` alias before
+    ``starlette.testclient`` is first imported and asserts nobody beat it to
+    that import, so importing the client first aborts every ``--all`` sweep.
+
+    Returns:
+        The ``TestClient`` class, safe to instantiate against the app.
+    """
+    # The split keeps the conftest import first: isort would otherwise sort the
+    # third-party client above it, which is precisely the order that aborts.
+    import tests.conftest  # noqa: F401, PLC0415 - applies the suite's own settings
+
+    # isort: split
+    from starlette.testclient import TestClient  # noqa: PLC0415 - heavy import
+
+    return TestClient
+
+
 def discover_chat_models() -> list[tuple[str, str, str]]:
     """List every text-generating model the gateway serves, with how to reach it.
 
@@ -1239,13 +1290,11 @@ def discover_chat_models() -> list[tuple[str, str, str]]:
         Tuples of (model id, transport, region), skipping only the output
         modalities too costly to probe.
     """
-    from starlette.testclient import TestClient  # noqa: PLC0415 - heavy import
-
-    import tests.conftest  # noqa: F401, PLC0415 - applies the suite's own settings
+    test_client = _suite_test_client()
     from stdapi.main import app  # noqa: PLC0415 - heavy import
     from stdapi.models import get_all_models_details, is_mantle_served  # noqa: PLC0415
 
-    with TestClient(app):
+    with test_client(app):
         details = asyncio.run(get_all_models_details())
     models: list[tuple[str, str, str]] = []
     for model_id, detail in sorted(details.items()):

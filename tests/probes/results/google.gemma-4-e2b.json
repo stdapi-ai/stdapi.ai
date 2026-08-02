@@ -1,5 +1,5 @@
 {
- "schema_version": 4,
+ "schema_version": 5,
  "model_id": "google.gemma-4-e2b",
  "invoked_id": "google.gemma-4-e2b",
  "transport": "mantle",

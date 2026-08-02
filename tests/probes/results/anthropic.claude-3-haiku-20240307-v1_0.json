@@ -1,5 +1,5 @@
 {
- "schema_version": 4,
+ "schema_version": 5,
  "model_id": "anthropic.claude-3-haiku-20240307-v1:0",
  "invoked_id": "anthropic.claude-3-haiku-20240307-v1:0",
  "transport": "converse",
