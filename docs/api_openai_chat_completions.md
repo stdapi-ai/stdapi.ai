@@ -127,7 +127,7 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 
 Set `store: true` to persist a chat completion in [Amazon Bedrock session storage](https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html) — same mechanism, region, and [KMS setting](operations_configuration.md#aws-bedrock-session-encryption-key-arn) as [stored responses](api_openai_responses.md#stored-responses). The returned `id` then works with the full stored-completion surface:
 
-- `GET /v1/chat/completions` — list stored completions, sorted by creation time (`order`, `after`, `limit`), filterable by `model` and by metadata pairs (`metadata[key]=value`).
+- `GET /v1/chat/completions` — list stored completions, sorted by creation time (`order`, `after`, `limit`), filterable by `model` and by metadata pairs. Metadata filters accept either one `metadata[key]=value` parameter per key (what the OpenAI SDKs send) or a single `metadata={"key": "value"}` JSON object of string values, for clients that can only send a whole object in one query parameter. A bare `metadata` in any other shape is rejected with `400` naming both accepted forms.
 - `GET /v1/chat/completions/{completion_id}` — retrieve the stored completion.
 - `POST /v1/chat/completions/{completion_id}` — replace its `metadata` (`null` clears it).
 - `GET /v1/chat/completions/{completion_id}/messages` — list its input messages.
@@ -586,6 +586,7 @@ export DEFAULT_MODEL_PARAMS='{
 
 - :material-check-circle:{ .success role="img" aria-label="Supported" } **Compatible parameters**: Forwarded to the model and applied
 - :material-alert-circle:{ .warning } **Unsupported parameters**: Return HTTP 400 with an error message
+- :material-alert-circle:{ .warning } **Reserved names**: `model_id` and `additional_request_fields` collide with the gateway's own request-building parameters and are rejected with a `400 invalid_request_error` naming the key, instead of being forwarded
 
 #### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic Claude Features
 

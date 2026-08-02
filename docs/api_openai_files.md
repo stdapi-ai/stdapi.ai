@@ -61,7 +61,7 @@ Upload and manage files via an OpenAI-compatible interface. Files are stored in 
 | `limit`                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 1 – 10 000; default 10 000                                                                    |
 | `purpose` filter           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Filter results by uploaded purpose                                                            |
 | **File size cap**          | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | No limit imposed by stdapi.ai; a direct upload streams in fixed 8 MiB parts, so S3's 10,000-part ceiling caps it at ~78 GiB |
-| **Expiry enforcement**     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Expired files return 404 at read time; S3 Lifecycle as backstop                               |
+| **Expiry enforcement**     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Expired files return 404 at read time and are omitted from listings; S3 Lifecycle as backstop  |
 | **Chat integration**       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Use `file_id` in `type: "file"` content parts                                                 |
 | `status` field             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Always `"processed"` — no async processing pipeline                                           |
 
@@ -157,7 +157,7 @@ curl -X POST "$BASE/v1/files" \
 ```
 
 !!! info "Expiry Semantics"
-    Expiry is enforced lazily at read time: calls to retrieve metadata, download content, or reference the file in inference return HTTP 404 once the expiry time has passed. S3 Lifecycle rules clean up expired objects as a background backstop.
+    Expiry is enforced lazily on every access: calls to retrieve metadata, download content, or reference the file in inference return HTTP 404 once the expiry time has passed, and listings skip the file rather than returning an entry that can no longer be retrieved. Each expired object encountered is scheduled for deletion; S3 Lifecycle rules clean up the rest as a background backstop.
 
 ### Retrieve Metadata
 

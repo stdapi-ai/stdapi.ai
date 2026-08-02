@@ -158,6 +158,7 @@ To protect against Host header injection and web cache poisoning, stdapi.ai can 
 
 -   **Recommended Approach**: Use **AWS ALB host-based routing rules** to reject invalid Host headers before they reach the application. This is more performant and centrally managed.
 -   **Application Validation**: Use `TRUSTED_HOSTS` to define a list of approved hostnames (supports wildcards like `*.example.com`). Requests with non-matching headers are rejected with an HTTP 400 error.
+-   **Probe Impact**: Validation covers `/health` too. The container image's health probe derives its `Host` header from `TRUSTED_HOSTS` and stays green on its own, but a load balancer health check sends the target's IP address as the `Host` and is rejected — see [`TRUSTED_HOSTS`](operations_configuration.md#trusted-hosts) before enabling it behind an ALB or NLB.
 
 ### :material-web: Browser Security (CORS)
 

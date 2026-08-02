@@ -73,6 +73,7 @@ Generate text completions with Amazon Bedrock foundation models—including Clau
 | **Other**                          |                                          |                                                                  |
 | Service tiers                      |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Mapped to Bedrock service tiers; `service_tier` and `prompt_cache_*` are not forwarded when a Mantle request is converted |
 | `user` / `safety_identifier`       |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Forwarded to Amazon Bedrock as `requestMetadata`; on Mantle, `user` is forwarded as the OpenAI `user` field (as `metadata.user_id` when served via the Anthropic API) and `safety_identifier` is not forwarded |
+| Extra model-specific params        | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Unrecognized top-level keys are forwarded to the model as provider-specific fields; `model_id`, `additional_request_fields` and `stop_sequences` are reserved by the gateway and rejected with a `400 invalid_request_error` naming the key (use `stop` for stop sequences) |
 
 </div>
 

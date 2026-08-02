@@ -72,6 +72,13 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     - Check the ALB target group health in the AWS console.
     - If it persists longer than 5 minutes, inspect CloudWatch logs for the ECS task.
 
+??? failure "Targets never become healthy after setting `TRUSTED_HOSTS`"
+    Host header validation applies to `/health` as well. A load balancer health check addresses the target directly, so its `Host` header carries the target's IP address — which a list of domain names does not match, and every probe is answered with `400`. The target group stays unhealthy and the ALB keeps returning `503`.
+
+    - Prefer host validation at the load balancer: an ALB listener rule on the `Host` header, with `TRUSTED_HOSTS` left unset.
+    - If the application-level allow-list is required, include the address the health check actually sends.
+    - The container's own `HEALTHCHECK` is unaffected: it derives its `Host` header from `TRUSTED_HOSTS`. See [`TRUSTED_HOSTS`](operations_configuration.md#trusted-hosts).
+
 ??? failure "Browser TLS warning on the /docs page"
     The ALB uses the default `*.elb.amazonaws.com` domain, which has no trusted certificate. This is expected and safe to bypass for testing.
 

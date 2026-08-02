@@ -2084,6 +2084,16 @@ export TRUSTED_HOSTS='["api.example.com", "www.example.com"]'
     - Not configured (default): Host header validation is **not enabled**
     - Configured: requests with a non-matching Host header are rejected with **HTTP 400 Bad Request**
 
+!!! info "Container health probe"
+    Validation applies to `/health` like any other path, so the container image's `HEALTHCHECK` derives its `Host` header from this setting: it runs `python3 /usr/local/bin/healthcheck.py`, which requests `/health` on `127.0.0.1:$GRANIAN_PORT` announcing the **first** entry of `TRUSTED_HOSTS`. `*` or an unset value becomes `localhost`, and a leading `*.` becomes `healthcheck.` (so `*.example.com` is probed as `healthcheck.example.com`).
+
+    A correct list therefore keeps the container healthy with no extra entry to add. If you override the probe — a Compose `healthcheck:` block or an ECS task definition `healthCheck` — run that same command rather than a hand-written `curl` or `urllib` call, which would send an untrusted `Host` and get a `400`.
+
+!!! warning "Load balancer health checks are rejected by default"
+    An ALB or NLB target-group health check does **not** send your domain name: it addresses the target directly, so the `Host` header carries the target's IP address. With `TRUSTED_HOSTS` set to domain names, every one of those probes gets **HTTP 400**, the target never turns healthy, and the load balancer serves `503` — a failure that looks like a broken deployment rather than a configuration choice.
+
+    Target-group health-check settings offer no `Host` header override, so either keep the Host allow-list at the load balancer (the recommended option above, leaving `TRUSTED_HOSTS` unset) or make sure the address the health check actually sends is in the list.
+
 !!! success "AWS ALB Host-Based Routing Example"
     **Via AWS Console:** EC2 → Load Balancers → Your ALB → Listeners → add a rule on the HTTPS (443) listener with condition "Host header" is `api.example.com`, forwarding to the target group only on match.
 

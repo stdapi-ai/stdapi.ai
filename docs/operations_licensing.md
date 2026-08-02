@@ -247,6 +247,14 @@ Your commercial license activates automatically upon deployment.
 
     For questions about volume deployments or enterprise licensing, contact [sales@stdapi.ai](mailto:sales@stdapi.ai).
 
+??? question "Where are the third-party licences inside the container image?"
+
+    The image carries the licence and notice files of everything it redistributes, so a legal or compliance review can be done against the artifact itself:
+
+    - **Python dependencies** — each package keeps its `LICENSE`/`NOTICE`/`COPYING`/`AUTHORS` files (and its `METADATA` and SBOM) inside its own `.dist-info` directory under `/opt/app`.
+    - **FFmpeg** — `/usr/share/licenses/ffmpeg/`, alongside a package entry in the APK inventory so image scanners inventory it like any other installed package.
+    - **stdapi.ai** — `/usr/share/licenses/stdapi.ai/`, holding `LICENSE-AGPL` on the community image.
+
 ??? question "How do I update stdapi.ai?"
 
     Updates are container image redeployments — no data migration or downtime window required.

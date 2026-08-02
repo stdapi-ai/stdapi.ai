@@ -539,6 +539,7 @@ export DEFAULT_MODEL_PARAMS='{
 
 - :material-check-circle:{ .success role="img" aria-label="Supported" } **Compatible parameters**: Forwarded to the model and applied
 - :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } **Unsupported parameters**: Return HTTP 400 with an error message
+- :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } **Reserved names**: `model_id` and `additional_request_fields` collide with the gateway's own request-building parameters and are rejected with a `400 invalid_request_error` naming the key, instead of being forwarded
 
 #### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic Claude Features
 

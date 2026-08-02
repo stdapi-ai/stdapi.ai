@@ -561,8 +561,7 @@ The example below uses ARM64 architecture, which requires the `-arm64` image tag
         "command": [
           "CMD",
           "python3",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"
+          "/usr/local/bin/healthcheck.py"
         ],
         "interval": 30,
         "timeout": 5,
@@ -591,6 +590,9 @@ The example below uses ARM64 architecture, which requires the `-arm64` image tag
   ]
 }
 ```
+
+!!! tip "Keep the image's own health probe"
+    The `healthCheck` above simply re-declares the command the image already ships as its `HEALTHCHECK`: `python3 /usr/local/bin/healthcheck.py`. That script probes `/health` on the container's own port with a `Host` header derived from [`TRUSTED_HOSTS`](operations_configuration.md#trusted-hosts), so it keeps working when Host validation is enabled. A hand-written `curl`/`urllib` probe sends the wrong `Host` and is rejected with `400`. Omit the block entirely to inherit the image default.
 
 **Note:** This is a minimal example. For production, configure:
 
