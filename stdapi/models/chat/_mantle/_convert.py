@@ -308,13 +308,15 @@ def _ensure_single_choice(payload: dict[str, Any]) -> None:
 
 
 def rename_reasoning_field(
-    payload: dict[str, Any], *, exclude: bool = False
+    payload: dict[str, Any],
+    *,
+    exclude: bool = False,
+    field: str = _REASONING_CONTENT_KEY,
 ) -> dict[str, Any]:
-    """Rename ``reasoning`` to ``reasoning_content`` on a Chat Completions payload.
+    """Move the reasoning text under *field* on a Chat Completions payload.
 
     Covers the non-streaming ``choices[].message`` and the streaming
-    ``choices[].delta``. A payload already carrying ``reasoning_content`` is
-    left untouched.
+    ``choices[].delta``. A payload already carrying *field* is left untouched.
 
     Only a string value is renamed. Anything else stays under its original name
     and is pruned as an unknown field, as it was before this rename existed:
@@ -326,6 +328,8 @@ def rename_reasoning_field(
         payload: Chat Completions response or chunk dict, modified in place.
         exclude: Drop the reasoning text instead of renaming it; usage is left
             untouched, the text is generated either way.
+        field: Target field name (the internal ``reasoning_content`` normal
+            form by default).
 
     Returns:
         The same payload.
@@ -340,11 +344,14 @@ def rename_reasoning_field(
             if exclude:
                 target.pop(_REASONING_KEY, None)
                 target.pop(_REASONING_CONTENT_KEY, None)
-            elif (
-                isinstance(target.get(_REASONING_KEY), str)
-                and _REASONING_CONTENT_KEY not in target
-            ):
-                target[_REASONING_CONTENT_KEY] = target.pop(_REASONING_KEY)
+                continue
+            for source in (_REASONING_KEY, _REASONING_CONTENT_KEY):
+                if (
+                    source != field
+                    and isinstance(target.get(source), str)
+                    and field not in target
+                ):
+                    target[field] = target.pop(source)
     return payload
 
 
@@ -3269,9 +3276,9 @@ def convert_stream(
     """Convert an upstream SSE stream between Mantle wire formats.
 
     Conversion composes through the Chat Completions chunk shape. Chat
-    Completions reasoning deltas become Responses reasoning summary events;
-    Anthropic thinking deltas and Responses reasoning events are dropped in
-    the other direction. Chat Completions output always ends with a usage
+    Completions reasoning deltas become Responses ``reasoning_text`` content
+    events on a reasoning output item; Anthropic thinking deltas and Responses
+    reasoning events are dropped in the other direction. Chat Completions output always ends with a usage
     chunk (the caller strips it when the client did not opt in) and never
     includes a ``[DONE]`` sentinel.
 

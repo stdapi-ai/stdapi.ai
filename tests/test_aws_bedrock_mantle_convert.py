@@ -2981,11 +2981,12 @@ class TestResponsesPayloadBuilder:
     async def test_reasoning_mode_forwarded_verbatim(self) -> None:
         """``reasoning.mode`` reaches the upstream payload unchanged.
 
-        The type documents ``mode`` as "accepted for compatibility and ignored", but
-        ``responses_payload`` dumps the request with ``exclude_unset=True`` and only
-        strips ``_RESPONSES_EXTENSION_FIELDS`` (``moderation``), so ``mode`` is not
-        actually dropped on the Mantle passthrough path: it reaches the upstream
-        ``reasoning`` object like every other unrecognized field.
+        ``mode`` is honored only by models that support it, and ignored
+        otherwise -- but on the Mantle passthrough path it is always forwarded:
+        ``responses_payload`` dumps the request with ``exclude_unset=True`` and
+        only strips ``_RESPONSES_EXTENSION_FIELDS`` (``moderation``), so ``mode``
+        reaches the upstream ``reasoning`` object like every other unrecognized
+        field, leaving the model to honor or ignore it.
 
         Ref: stdapi/models/chat/_mantle/_convert.py:responses_payload
              stdapi/types/openai_responses.py:Reasoning.mode
@@ -3688,6 +3689,27 @@ class TestRenameReasoningField:
         assert payload["choices"][0]["message"]["reasoning"] == "other", (
             "the unknown key is pruned by validation, never merged"
         )
+
+    def test_target_field_renames_toward_the_upstream_name(self) -> None:
+        """``field="reasoning"`` moves ``reasoning_content`` the other way.
+
+        The streaming relay passes the operator-configured field name, so the
+        rename must work toward either spelling.
+
+        Ref: stdapi/config.py:_Settings.chat_completions_reasoning_field
+             stdapi/models/chat/_mantle/_default.py:_rename_stream_reasoning
+        """
+        payload: dict[str, Any] = {
+            "choices": [
+                {"delta": {"reasoning_content": "step"}},
+                {"delta": {"reasoning": "kept"}},
+            ]
+        }
+
+        mantle_convert.rename_reasoning_field(payload, field="reasoning")
+
+        assert payload["choices"][0]["delta"] == {"reasoning": "step"}
+        assert payload["choices"][1]["delta"] == {"reasoning": "kept"}
 
     def test_excluding_drops_the_text_under_either_name(self) -> None:
         """``exclude`` removes the chain of thought instead of renaming it.

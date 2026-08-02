@@ -75,10 +75,10 @@ _LEARNED_APIS: dict[str, frozenset[MantleApi]] = {}
 #: Learned per-model OpenAI routing surface.
 _LEARNED_SURFACE: dict[str, Surface] = {}
 
-#: Serialized key marking a stream frame that carries reasoning text.
+#: Serialized key marking a stream frame carrying a ``reasoning`` field.
 _REASONING_MARKER = '"reasoning"'
 
-#: Serialized key marking a stream frame already using this surface's name for it.
+#: Serialized key marking a stream frame carrying a ``reasoning_content`` field.
 _REASONING_CONTENT_MARKER = '"reasoning_content"'
 
 
@@ -435,7 +435,9 @@ class ChatModel(ChatModelBase[Any, Any]):
         When *api* differs from *inbound* the events are converted to the
         inbound wire format first. Public/native ID rewrites are applied to
         the raw event payloads (stored-response region tagging). Reasoning
-        text is renamed on the Chat Completions frames before conversion.
+        text on Chat Completions frames is normalized before conversion and
+        emitted under the operator-configured field name on Chat Completions
+        output.
 
         Args:
             api: Upstream Mantle API serving the stream.
@@ -456,10 +458,16 @@ class ChatModel(ChatModelBase[Any, Any]):
         """
         rewrites = id_rewrites if id_rewrites is not None else {}
         observed = self._observe_stream(api, events, region, rewrites)
-        if api == "chat_completions":
+        if api == "chat_completions" and inbound != "chat_completions":
             observed = _rename_stream_reasoning(observed, exclude=exclude_reasoning)
         if api != inbound:
             observed = convert.convert_stream(api, inbound, observed, response_id)
+        if inbound == "chat_completions":
+            observed = _rename_stream_reasoning(
+                observed,
+                exclude=exclude_reasoning,
+                field=SETTINGS.chat_completions_reasoning_field,
+            )
         async for event, data in observed:
             if (
                 strip_usage_chunk
@@ -821,25 +829,32 @@ def _include_usage(
 
 
 async def _rename_stream_reasoning(
-    events: AsyncGenerator[SseEvent], *, exclude: bool = False
+    events: AsyncGenerator[SseEvent],
+    *,
+    exclude: bool = False,
+    field: str = "reasoning_content",
 ) -> AsyncGenerator[SseEvent]:
-    """Rename ``reasoning`` to ``reasoning_content`` on Chat Completions frames.
+    """Move the reasoning text under *field* on Chat Completions frames.
 
-    Only frames whose raw payload mentions the key are parsed and
-    re-serialized; every other frame is relayed byte-identical.
+    Only frames whose raw payload mentions a key needing a rewrite are parsed
+    and re-serialized; every other frame is relayed byte-identical.
 
     Args:
         events: Chat Completions SSE events.
         exclude: Drop the reasoning text instead of renaming it.
+        field: Target field name; ``"none"`` drops the text like *exclude*.
 
     Yields:
         The same events, with the reasoning delta key renamed where present.
     """
-    markers = (
-        (_REASONING_MARKER, _REASONING_CONTENT_MARKER)
-        if exclude
-        else (_REASONING_MARKER,)
-    )
+    exclude = exclude or field == "none"
+    markers: tuple[str, ...]
+    if exclude:
+        markers = (_REASONING_MARKER, _REASONING_CONTENT_MARKER)
+    elif field == "reasoning":
+        markers = (_REASONING_CONTENT_MARKER,)
+    else:
+        markers = (_REASONING_MARKER,)
     async for event, data in events:
         if (
             not any(marker in data for marker in markers)
@@ -847,7 +862,10 @@ async def _rename_stream_reasoning(
         ):
             yield event, data
             continue
-        yield event, dumps(convert.rename_reasoning_field(parsed, exclude=exclude))
+        yield (
+            event,
+            dumps(convert.rename_reasoning_field(parsed, exclude=exclude, field=field)),
+        )
 
 
 def _may_carry_usage(data: str) -> bool:

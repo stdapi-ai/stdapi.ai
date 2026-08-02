@@ -27,6 +27,7 @@ from urllib.parse import unquote
 
 import pytest
 from aiohttp import ClientError as AiohttpClientError
+from aiohttp import ConnectionTimeoutError, SocketTimeoutError
 from aiohttp.http_exceptions import LineTooLong
 from pydantic import BaseModel, ConfigDict, ValidationError
 from sse_starlette import EventSourceResponse, ServerSentEvent
@@ -459,6 +460,68 @@ class TestMapError:
         assert error.failover is True
         assert error.status == 500
         assert "backend exploded" in str(error)
+
+
+class TestRequestTimeoutFailover:
+    """Connect-phase failures fail over; post-send read timeouts never do.
+
+    A ``sock_read`` timeout fires after the request reached Mantle, so the
+    invocation is already billed: retrying it in another region would
+    double-bill it (the Converse-side ``route_and_execute`` applies the same
+    rule to botocore's ``ReadTimeoutError``).
+
+    Ref: https://docs.aiohttp.org/en/stable/client_reference.html#hierarchy-of-exceptions
+         stdapi/aws_bedrock_mantle.py:_request
+         stdapi/models/__init__.py:_region_failover_label
+    """
+
+    @staticmethod
+    def _stub_transport(monkeypatch: pytest.MonkeyPatch, error: Exception) -> None:
+        """Stub the pooled session and bearer token so the send raises *error*."""
+
+        class FakeSession:
+            """Session whose request coroutine always raises."""
+
+            async def request(self, *args: object, **kwargs: object) -> NoReturn:
+                raise error
+
+        async def fake_token(region: RegionName) -> str:  # noqa: ARG001
+            return "token"
+
+        monkeypatch.setattr(aws_bedrock_mantle, "_SESSION", FakeSession())
+        monkeypatch.setattr(aws_bedrock_mantle, "bearer_token", fake_token)
+
+    async def test_read_timeout_is_not_failover(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A post-send read timeout raises a 503 that blocks region failover."""
+        self._stub_transport(monkeypatch, SocketTimeoutError("read timed out"))
+        with pytest.raises(MantleError) as exc_info:
+            await aws_bedrock_mantle._request(  # noqa: SLF001
+                "us-east-1", "/v1/chat/completions", b"{}", None
+            )
+        assert exc_info.value.failover is False
+        assert exc_info.value.status == 503
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            ConnectionTimeoutError("connect timed out"),
+            AiohttpClientError("connection refused"),
+            TimeoutError("timed out"),
+        ],
+    )
+    async def test_other_transport_failures_keep_failing_over(
+        self, monkeypatch: pytest.MonkeyPatch, error: Exception
+    ) -> None:
+        """Errors that do not prove a billed invocation stay failover-eligible."""
+        self._stub_transport(monkeypatch, error)
+        with pytest.raises(MantleError) as exc_info:
+            await aws_bedrock_mantle._request(  # noqa: SLF001
+                "us-east-1", "/v1/chat/completions", b"{}", None
+            )
+        assert exc_info.value.failover is True
+        assert exc_info.value.status == 503
 
 
 class TestIterSseLineTooLong:
@@ -3508,6 +3571,112 @@ class TestReasoningFieldSurfacing:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Renaming before conversion feeds the Responses reasoning events."""
+        _capture_usage_records(monkeypatch)
+        model = mantle_default.ChatModel("test.reasoning-convert-model")
+        chunks: list[SseEvent] = [
+            (
+                None,
+                dumps(
+                    {
+                        "id": "chatcmpl-1",
+                        "model": "test.model",
+                        "choices": [{"index": 0, "delta": {"reasoning": "step"}}],
+                    }
+                ),
+            ),
+            (
+                None,
+                dumps(
+                    {
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 2},
+                    }
+                ),
+            ),
+        ]
+        events = [
+            event
+            async for event in model._relay_stream(  # noqa: SLF001
+                "chat_completions",
+                "responses",
+                _fake_stream(chunks),
+                "us-east-1",
+                strip_usage_chunk=False,
+                response_id="resp_route1",
+            )
+        ]
+        deltas = [
+            loads(_event_data(event))["delta"]
+            for event in events
+            if event.event == "response.reasoning_text.delta"
+        ]
+        assert deltas == ["step"]
+
+    @pytest.mark.parametrize(
+        ("setting", "expected_delta"),
+        [
+            ("reasoning_content", {"reasoning_content": "step"}),
+            ("reasoning", {"reasoning": "step"}),
+            ("none", {}),
+        ],
+    )
+    async def test_stream_honors_the_configured_reasoning_field(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        setting: str,
+        expected_delta: dict[str, Any],
+    ) -> None:
+        """Passthrough deltas carry the field the operator setting promises.
+
+        The non-streaming path applies the setting when the validated response
+        is serialized, and the configuration doc promises the stream and the
+        final message never disagree, so the relayed raw frames must honor it
+        too — whichever of the two names upstream used.
+
+        Ref: stdapi/config.py:_Settings.chat_completions_reasoning_field
+             stdapi/types/openai_chat_completions.py:_rename_emitted_reasoning
+             stdapi/models/chat/_mantle/_default.py:_rename_stream_reasoning
+        """
+        monkeypatch.setattr(SETTINGS, "chat_completions_reasoning_field", setting)
+        _capture_usage_records(monkeypatch)
+        model = mantle_default.ChatModel("test.reasoning-stream-model")
+        chunks: list[SseEvent] = [
+            (None, dumps({"choices": [{"index": 0, "delta": {"reasoning": "step"}}]})),
+            (
+                None,
+                dumps(
+                    {"choices": [{"index": 0, "delta": {"reasoning_content": "step"}}]}
+                ),
+            ),
+        ]
+        events = [
+            event
+            async for event in model._relay_stream(  # noqa: SLF001
+                "chat_completions",
+                "chat_completions",
+                _fake_stream(chunks),
+                "us-east-1",
+                strip_usage_chunk=False,
+            )
+        ]
+        deltas = [
+            loads(_event_data(event))["choices"][0]["delta"] for event in events[:-1]
+        ]
+        assert deltas == [expected_delta, expected_delta]
+
+    @pytest.mark.parametrize("setting", ["reasoning", "none"])
+    async def test_setting_does_not_leak_into_converted_streams(
+        self, monkeypatch: pytest.MonkeyPatch, setting: str
+    ) -> None:
+        """The setting governs only the Chat Completions surface.
+
+        A Chat Completions upstream converted to the Responses shape must keep
+        its reasoning events: the normalization pass feeding the converter is
+        independent from the operator's Chat Completions field choice.
+
+        Ref: stdapi/models/chat/_mantle/_default.py:ChatModel._relay_stream
+        """
+        monkeypatch.setattr(SETTINGS, "chat_completions_reasoning_field", setting)
         _capture_usage_records(monkeypatch)
         model = mantle_default.ChatModel("test.reasoning-convert-model")
         chunks: list[SseEvent] = [
