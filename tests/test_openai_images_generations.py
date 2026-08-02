@@ -865,33 +865,34 @@ class TestImageGeneration:
         image_generation_size: str,
         use_official_api: bool,
     ) -> None:
-        """A ``quality`` the model cannot honor is rejected as a 400 naming ``quality``.
+        """A ``quality`` a model has no control for is ignored, not refused.
 
-        ``quality`` is a free-form string on the gateway because the accepted
-        values are model-dependent, so the rejection comes from the backend job
-        rather than from schema validation. OpenAI produces the same envelope
-        (``invalid_request_error`` on ``quality``) on a live image model.
+        Quality steers the backend; it never decides whether an image can be
+        produced. Refusing over it would break every client that sends OpenAI's
+        default on a model that has no such control, so the gateway drops it
+        with a warning and reports the quality actually produced.
 
-        Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._validate_no_quality
-             stdapi/api_providers/openai.py:_format_error
+        Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._drop_unsupported_quality
         """
         _skip_retired_official_image_model(
             use_official_api, image_generation_model, "quality"
         )
 
-        with pytest.raises(BadRequestError) as exc_info:
-            openai_client.images.generate(  # type: ignore[call-overload]
-                prompt="A test image",
-                model=image_generation_model,
-                n=1,
-                size=image_generation_size,
-                quality="invalid-quality",
-            )
+        response = openai_client.images.generate(  # type: ignore[call-overload]
+            prompt="A test image",
+            model=image_generation_model,
+            n=1,
+            size=image_generation_size,
+            quality="invalid-quality",
+        )
 
-        validate_error_response(
-            exc_info.value,
-            expected_type="invalid_request_error",
-            expected_param="quality",
+        assert response.data
+        assert len(response.data) == 1
+        assert response.data[0].b64_json or response.data[0].url, (
+            "the image is produced even though the requested quality was dropped"
+        )
+        assert getattr(response, "quality", None) != "invalid-quality", (
+            "the response reports the quality produced, never the one refused"
         )
 
     def test_invalid_style_error(
@@ -900,30 +901,25 @@ class TestImageGeneration:
         image_generation_model: str,
         image_generation_size: str,
     ) -> None:
-        """A ``style`` the model cannot honor is rejected as a 400 naming ``style``.
+        """A ``style`` a model has no control for is ignored, not refused.
 
-        Like ``quality``, ``style`` is model-dependent and free-form on the
-        gateway, so the rejection comes from the backend job. Both lanes are
-        asserted: OpenAI reaches the same envelope by another route, since
-        ``gpt-image-1`` has no ``style`` parameter at all and answers
-        ``unknown_parameter`` on ``style``.
+        Same rationale as ``quality``: a style the backend cannot honour changes
+        the look of the result, never whether there is one.
 
-        Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._validate_no_style
-             stdapi/api_providers/openai.py:_format_error
+        Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._drop_unsupported_style
         """
-        with pytest.raises(BadRequestError) as exc_info:
-            openai_client.images.generate(  # type: ignore[call-overload]
-                prompt="A test image",
-                model=image_generation_model,
-                n=1,
-                size=image_generation_size,
-                style="invalid-style",
-            )
+        response = openai_client.images.generate(  # type: ignore[call-overload]
+            prompt="A test image",
+            model=image_generation_model,
+            n=1,
+            size=image_generation_size,
+            style="invalid-style",
+        )
 
-        validate_error_response(
-            exc_info.value,
-            expected_type="invalid_request_error",
-            expected_param="style",
+        assert response.data
+        assert len(response.data) == 1
+        assert response.data[0].b64_json or response.data[0].url, (
+            "the image is produced even though the requested style was dropped"
         )
 
     def test_stream_parameter_error_with_unsupported_models(
