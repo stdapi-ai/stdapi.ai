@@ -139,9 +139,9 @@ def json_sse(event: LiteralString | None, payload: BaseModel) -> JSONServerSentE
 class JSONResponse(_JSONResponseBase):
     """``JSONResponse`` rendered with pydantic_core instead of the stdlib encoder.
 
-    Emits the same compact, raw-UTF-8 JSON as the FastAPI default; the stdlib
-    renderer remains as fallback for input pydantic_core rejects (such as
-    strings carrying lone surrogates).
+    Emits the same compact, raw-UTF-8 JSON as the FastAPI default, falling back
+    to an escaping encoder for input pydantic_core rejects (such as strings
+    carrying lone surrogates).
     """
 
     def render(self, content: object) -> bytes:
@@ -156,7 +156,12 @@ class JSONResponse(_JSONResponseBase):
         try:
             return to_json(content)
         except ValueError:
-            return super().render(content)
+            # A lone surrogate has no UTF-8 encoding, so the fallback has to
+            # escape it: FastAPI's own renderer would fail on the very input
+            # this branch exists for.
+            return _std_dumps(content, ensure_ascii=True, separators=(",", ":")).encode(
+                "ascii"
+            )
 
 
 def now_utc_timestamp() -> int:
@@ -482,12 +487,8 @@ async def b64decode(
 async def b64encode(value: Buffer, altchars: str | Buffer | None = None) -> str:
     """Encodes a given binary data into a base64 encoded string.
 
-    This function operates asynchronously, allowing the calling code to run
-    other tasks while the encoding is handled in a separate thread. Small
-    inputs are encoded inline: the executor round-trip costs more than the
-    encode itself below ``_B64_INLINE_MAX_BYTES``. The function takes an
-    optional `altchars` argument to replace the default `+` and `/`
-    characters used in the base64 alphabet with user-specified characters.
+    Small inputs are encoded inline: the executor round-trip costs more than
+    the encode itself below ``_B64_INLINE_MAX_BYTES``.
 
     Args:
         value: A buffer containing binary data that will be base64 encoded.
@@ -593,9 +594,6 @@ def _convert_base64_image(
 ) -> tuple[str, int, int]:
     """Converts a base64-encoded image into a specified format.
 
-    This function decodes the base64-encoded content, converts the image to the desired
-    format, applies the specified compression level, and re-encodes it back into a base64 string.
-
     Args:
         content: Base64-encoded string or Buffer containing the image data to be converted.
         output_format: Desired format for the output image (e.g., JPEG, PNG).
@@ -646,8 +644,7 @@ def _alpha_mask_to_bw(content: bytes, threshold: int, *, invert: bool) -> bytes:
     masks use a transparent (low-alpha) pixel to mark the region to edit,
     whether stored as RGBA/LA/PA or as a palette ("P") image with a ``tRNS``
     transparency chunk (e.g. pngquant/"PNG-8" exports). Masks with no alpha
-    information at all are returned unchanged, since they already use, or
-    are assumed to use, the target task's black/white format.
+    information are assumed to already use the target task's black/white format.
 
     Args:
         content: Decoded mask image bytes.
@@ -658,7 +655,7 @@ def _alpha_mask_to_bw(content: bytes, threshold: int, *, invert: bool) -> bytes:
     Returns:
         PNG-encoded black/white RGB mask bytes, or *content* unchanged if the
         mask has no alpha channel or is not a decodable image (downstream
-        validation then rejects it as before).
+        validation then rejects it).
     """
     try:
         image = Image.open(BytesIO(content))
@@ -702,9 +699,6 @@ async def alpha_mask_to_bw(
 
 async def get_base64_image_size(content: str | Buffer) -> tuple[int, int]:
     """Calculates the dimensions of an image from its Base64-encoded content.
-
-    The function takes a Base64-encoded string or a Buffer containing an image,
-    decodes it, and opens it as an image to retrieve its width and height.
 
     Args:
         content: The Base64-encoded image content as a string or Buffer.
@@ -805,9 +799,8 @@ def strip_url_query(url: str) -> str:
     """Return *url* with its query string replaced by a redaction marker.
 
     Used before logging or tracing user-supplied URLs so presigned URL
-    signatures (``X-Amz-Signature`` and friends) are not persisted. When a
-    query string is present it is replaced by ``?<redacted>`` so the censoring
-    is explicit to log readers; a URL without a query is returned unchanged.
+    signatures (``X-Amz-Signature`` and friends) are not persisted; the marker
+    keeps the censoring explicit to log readers.
 
     Args:
         url: The URL to sanitise.
@@ -851,10 +844,6 @@ async def buffered_chunks(
     chunks: AsyncIterator[bytes], chunk_size: int
 ) -> AsyncIterator[bytes]:
     """Buffer an async byte stream into chunks of at least *chunk_size*.
-
-    Accumulates incoming bytes in a ``bytearray`` and yields a ``bytes``
-    object each time the buffer reaches *chunk_size*.  Any leftover bytes
-    are yielded at the end.
 
     Args:
         chunks: Async iterator of arbitrarily-sized byte fragments.
@@ -903,9 +892,6 @@ async def async_iter[T](*values: T) -> AsyncIterator[T]:
 
 async def read_chunks(reader: _AsyncReader, chunk_size: int) -> AsyncIterator[bytes]:
     """Yield byte chunks from an async reader.
-
-    Reads from *reader* by calling its ``.read(chunk_size)`` method
-    until an empty ``bytes`` result is returned.
 
     Args:
         reader: Any object with an async ``read(size)`` method
