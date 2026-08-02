@@ -236,7 +236,14 @@ curl -X POST "$BASE/v1/images/edits" \
 | `file_id`   | string | Files API file identifier (`file-*` or `file_*` prefix)  |
 | `image_url` | string | HTTP/HTTPS URL, data URI (`data:image/png;base64,...`), S3 URI (`s3://bucket/key`), or Files API reference (`file-id:file-<id>` — see [Files API](api_openai_files.md#referencing-uploaded-files-via-the-file-id-uri-scheme)) |
 
-Exactly one of `file_id` or `image_url` must be provided per `ImageRef`.
+Exactly one of `file_id` or `image_url` must be provided per `ImageRef`. Each
+array element may also be a plain reference string (equivalent to `image_url`),
+and the array is additionally accepted under the `image` key — the shapes MCP
+clients derive from the tool schema:
+
+```json
+{"model": "amazon.nova-canvas-v1:0", "prompt": "Add a dramatic sky", "image": ["data:image/png;base64,..."]}
+```
 
 !!! tip "Workflow Integration"
     The JSON body format works seamlessly with the [Files API](api_openai_files.md): upload images once, reuse them across multiple edit requests by file ID without re-uploading.

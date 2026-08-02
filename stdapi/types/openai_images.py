@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING, Literal, Self
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 
 from stdapi.config import SETTINGS
 from stdapi.input_file import FileIdInputFile, InputFileUrl
@@ -71,6 +71,23 @@ class ImageInputReferenceParam(BaseModelRequest):
     image_url: InputFileUrl | None = Field(
         default=None, description="A fully qualified URL or base64-encoded data URL."
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_string_reference(cls, value: object) -> object:
+        """Accept a bare reference string (URL, data URI, S3 URI, or file ID).
+
+        MCP tool schemas advertise the image inputs as plain strings, so a bare
+        string is coerced into the ``image_url`` field, which accepts every
+        reference form including Files API identifiers.
+
+        Args:
+            value: Raw input value.
+
+        Returns:
+            The value, with bare strings wrapped into the structured form.
+        """
+        return {"image_url": value} if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def _validate_source(self) -> Self:
@@ -463,8 +480,10 @@ class ImageEditJsonBody(_ImageEditCommonParams):
     images: list[ImageInputReferenceParam] = Field(
         min_length=1,
         max_length=16,
+        validation_alias=AliasChoices("images", "image"),
         description="One or more input images to edit, each referenced by a "
-        "Files API identifier (``file_*`` / ``file-*``) or an HTTP/data URL.",
+        "Files API identifier (``file_*`` / ``file-*``) or an HTTP/data URL. "
+        "Also accepted under the ``image`` key (the MCP tool schema name).",
     )
     mask: ImageInputReferenceParam | None = Field(
         default=None,
