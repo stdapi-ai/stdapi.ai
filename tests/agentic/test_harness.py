@@ -24,7 +24,13 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import pytest
 
-from ._podman import image_tag, start_service_container, stop_service_container
+from ._podman import (
+    _env_flags,
+    _redacted,
+    image_tag,
+    start_service_container,
+    stop_service_container,
+)
 from ._server import find_free_port
 from ._tools import (
     AGENTIC_TOOLS,
@@ -178,6 +184,66 @@ class TestImageGroups:
         assert image_tag(("a@1", "b@1"), containerfile) == image_tag(
             ("b@1", "a@1"), containerfile
         )
+
+
+class TestSecretHygiene:
+    """The gateway's live API key never reaches a report or another host user.
+
+    Pure filesystem and string checks: nothing here starts a container.
+
+    Ref: tests/agentic/_podman.py:_redacted
+         tests/agentic/_podman.py:_env_flags
+    """
+
+    def test_redacted_blanks_every_long_env_value(self) -> None:
+        """Each env value long enough to be a secret is replaced everywhere.
+
+        Every failure path that embeds container or CLI output routes through
+        this helper, so a value it misses would land verbatim in CI output.
+
+        Ref: tests/agentic/_runner.py:run_agent
+        """
+        env = {"API_KEY": "k" * 32, "OPENAI_API_KEY": "sk-agentic-000111222333"}
+        text = f"auth={env['API_KEY']} again={env['API_KEY']} {env['OPENAI_API_KEY']}"
+        redacted = _redacted(text, env)
+        assert env["API_KEY"] not in redacted
+        assert env["OPENAI_API_KEY"] not in redacted
+        assert redacted == "auth=*** again=*** ***"
+
+    def test_redacted_leaves_short_values_alone(self) -> None:
+        """A short value ("1", "true") matching by coincidence is not blanked.
+
+        Ref: tests/agentic/_podman.py:_MIN_SECRET_LENGTH
+        """
+        env = {"DEBUG": "true", "PORT": "8080"}
+        assert _redacted("true output on 8080", env) == "true output on 8080"
+
+    def test_env_flags_serves_a_private_file_and_removes_it(self) -> None:
+        """Secrets travel via a 0600 file in a 0700 directory, never the argv.
+
+        The argv is world-readable through ``/proc``, so the flags may name the
+        file but must not carry a value; the file itself must be closed to
+        other users and gone once podman has read it.
+
+        Ref: tests/agentic/_podman.py:_env_flags
+        """
+        env = {"API_KEY": "k" * 32}
+        with _env_flags(env) as flags:
+            assert flags[0] == "--env-file"
+            assert all(env["API_KEY"] not in flag for flag in flags)
+            path = Path(flags[1])
+            assert path.parent.stat().st_mode & 0o777 == 0o700
+            assert path.stat().st_mode & 0o777 == 0o600
+            assert path.read_text(encoding="utf-8") == f"API_KEY={env['API_KEY']}\n"
+        assert not path.parent.exists(), "the env file must not outlive the run"
+
+    def test_env_flags_yields_nothing_for_an_empty_environment(self) -> None:
+        """No environment means no flags and no file to clean up.
+
+        Ref: tests/agentic/_podman.py:_env_flags
+        """
+        with _env_flags({}) as flags:
+            assert flags == []
 
 
 class TestServiceContainer:

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from ._podman import run_in_container
+from ._podman import _redacted, run_in_container
 from ._server import REPO_ROOT
 from ._tools import SRC_MOUNT, AgenticResult, Invocation
 
@@ -161,15 +161,19 @@ def run_agent(
 
     if process.returncode != 0:
         xfail_if_flaky(config, f"CLI exit code {process.returncode}")
+        # Redacted before truncation: CLI output can echo the environment, and
+        # truncating first could leave a recognisable fragment of the API key.
         pytest.fail(
             f"{tool.id} exited with code {process.returncode}\n"
-            f"stdout: {process.stdout[:1500]}\nstderr: {process.stderr[:500]}"
+            f"stdout: {_redacted(process.stdout, command.env)[:1500]}\n"
+            f"stderr: {_redacted(process.stderr, command.env)[:500]}"
         )
     try:
         result = tool.parse(process.stdout)
     except ValueError as exc:
         xfail_if_flaky(config, "unparsable output")
-        pytest.fail(str(exc))
+        # Parse errors embed output excerpts, so they get the same redaction.
+        pytest.fail(_redacted(str(exc), command.env))
     _completed_runs.append(invocation.session_id)
     _record_sample(tool, config, prompt, process.stdout, result)
     return result
@@ -182,12 +186,7 @@ def run_agent(
 #: that is deleted when the run ends.
 SAMPLE_DIR_VAR = "AGENTIC_SAMPLE_DIR"
 
-#: Characters of raw CLI output kept at each end of a transcript.
-#:
-#: A client that streams token by token prints megabytes for one run -- pi's
-#: reach 14 MB -- and a file that size is no longer an example of anything. The
-#: two ends are what a reader wants: how the client opens the conversation, and
-#: how it closes it.
+#: Characters of raw CLI output kept at each end of a clipped transcript.
 _SAMPLE_EDGE_CHARS = 40_000
 
 

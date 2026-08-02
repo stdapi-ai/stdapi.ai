@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from ._podman import build_image, installed_versions, podman_argv
+from ._podman import _redacted, build_image, installed_versions, podman_argv
 from ._runner import (
     ModelConfig,
     any_run_completed,
@@ -143,7 +143,8 @@ def _no_gateway_traceback(request: pytest.FixtureRequest) -> Generator[None]:
     yield
     produced = server.stderr_lines[start:]
     if any(_TRACEBACK_MARKER in line for line in produced):
-        report = "\n".join(produced)
+        # A traceback can interpolate request headers, so the key is blanked.
+        report = _redacted("\n".join(produced), {"api_key": server.api_key})
         pytest.fail(f"the gateway raised while serving this test:\n{report}")
 
 
@@ -155,15 +156,15 @@ def _model_identity_check(request: pytest.FixtureRequest) -> Generator[None]:
     back to its own default model would still pass, and the test would prove
     nothing about the gateway routing the model it names.
 
-    The podman check comes first, and the server is resolved lazily, so a machine
-    without podman skips the lane without paying for a server startup.
+    The podman check comes first, and the server is resolved only for a test
+    that drives a registered CLI, so a machine without podman skips the lane --
+    and a harness unit test runs -- without paying for a server startup.
     """
     if podman_argv() is None:
         pytest.skip(
             "podman is required for agentic tests: they run the CLIs in a "
             "container so no third-party binary executes on the host"
         )
-    agentic_server: AgenticServer = request.getfixturevalue("agentic_server")
     tool = tool_under_test(request)
     config = (
         request.getfixturevalue("model_config")
@@ -173,6 +174,7 @@ def _model_identity_check(request: pytest.FixtureRequest) -> Generator[None]:
     if tool is None or not isinstance(config, ModelConfig):
         yield
         return
+    agentic_server: AgenticServer = request.getfixturevalue("agentic_server")
     log_start = len(agentic_server.logs)
     reset_run_tracking()
     yield

@@ -28,7 +28,7 @@ import socket
 import subprocess
 import time
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache
 from hashlib import sha256
 from pathlib import Path
@@ -455,12 +455,15 @@ class ServiceContainer:
         port: Port the service listens on inside the container, published on the
             same port of the host's loopback.
         workdir: Host directory bind-mounted read-write at ``/work``.
+        env: Environment the container was started with, holding the secrets
+            :meth:`logs` redacts; kept out of the repr for the same reason.
     """
 
     name: str
     image: str
     port: int
     workdir: Path
+    env: Mapping[str, str] = field(default_factory=dict, repr=False)
 
     @property
     def base_url(self) -> str:
@@ -470,8 +473,13 @@ class ServiceContainer:
     def logs(self) -> str:
         """Return everything the container has written to stdout and stderr.
 
+        A misconfigured service often prints its own configuration -- API key
+        included -- so the output is redacted here, before any caller can embed
+        it in a failure report.
+
         Returns:
-            The combined output, or an empty string when podman cannot report it.
+            The combined redacted output, or an empty string when podman cannot
+            report it.
         """
         argv = podman_argv()
         if argv is None:
@@ -483,7 +491,7 @@ class ServiceContainer:
             timeout=60,
             check=False,
         )
-        return f"{result.stdout}{result.stderr}"
+        return _redacted(f"{result.stdout}{result.stderr}", self.env)
 
 
 def pull_image(image: str, *, refresh: bool = False) -> None:
@@ -650,6 +658,7 @@ def start_service_container(
         image=image,
         port=port,
         workdir=workdir,
+        env=dict(env),
     )
     pasta = [f"-t,127.0.0.1/{port}"]
     if forward_port:
@@ -690,7 +699,7 @@ def start_service_container(
     if started.returncode != 0:
         msg = (
             f"podman run failed ({started.returncode}) for {image}\n"
-            f"{started.stderr[-2000:]}"
+            f"{_redacted(started.stderr, env)[-2000:]}"
         )
         raise RuntimeError(msg)
     _running_services.add(container.name)
@@ -704,7 +713,7 @@ def start_service_container(
             break
         time.sleep(_HEALTH_POLL_INTERVAL)
 
-    logs = _redacted(container.logs()[-3000:], env)
+    logs = container.logs()[-3000:]
     stop_service_container(container)
     msg = (
         f"service container {image} did not answer on port {port} within "

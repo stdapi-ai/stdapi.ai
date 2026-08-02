@@ -28,6 +28,8 @@ from typing import TYPE_CHECKING
 
 import httpx
 
+from ._podman import _redacted
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
@@ -166,7 +168,10 @@ def start_server() -> AgenticServer:
         time.sleep(0.5)
 
     process.kill()
-    startup_log = "\n".join(server.stderr_lines[-30:] + server.logs[-10:])
+    # A failing startup often dumps the settings, so the key is blanked out.
+    startup_log = _redacted(
+        "\n".join(server.stderr_lines[-30:] + server.logs[-10:]), {"api_key": api_key}
+    )
     msg = f"stdapi server failed to start on port {port}.\nLast output:\n{startup_log}"
     raise RuntimeError(msg)
 
