@@ -151,7 +151,7 @@ Any video generation model available in your configured Amazon Bedrock regions c
 
 When `seconds` or `size` is omitted, the model's shortest duration and default resolution are used. For Luma Ray, the requested size selects the model's resolution (smaller dimension: 540 or 720) and aspect ratio (reduced width:height).
 
-**Find compatible models:** Call [`/search_models`](api_search_models.md) with `mcp_tool=openai_video_generation` to discover model IDs that support video generation in your deployment.
+**Find compatible models:** Call [`/search_models`](api_search_models.md) with `route=openai_video_generation` to discover model IDs that support video generation in your deployment.
 
 ## Reference Images (Image-to-Video)
 

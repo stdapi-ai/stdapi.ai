@@ -1,9 +1,4 @@
-"""Cohere-compatible Rerank API implementation using AWS Bedrock.
-
-This module implements the /v2/rerank endpoint following the Cohere API
-specification shape, calling AWS Bedrock rerank models (e.g., Amazon Rerank,
-Cohere Rerank) through the Bedrock Rerank API.
-"""
+"""Cohere-compatible ``/v2/rerank`` endpoint using the AWS Bedrock Rerank API."""
 
 from asyncio import gather
 from typing import TYPE_CHECKING, Annotated
@@ -52,7 +47,7 @@ router = APIRouter(
         "ordered by decreasing `relevance_score`. Ideal as the second stage of "
         "a retrieval pipeline, after a vector or keyword search.\n\n"
         "**Find compatible models:** Call `search_models` with "
-        "`mcp_tool=cohere_rerank` to discover model IDs that support reranking."
+        "`route=cohere_rerank` to discover model IDs that support reranking."
     ),
     response_description="Rerank response.",
     responses={

@@ -1,8 +1,4 @@
-"""OpenAI-compatible Images API implementation using AWS Bedrock.
-
-This module implements the /v1/images/variations endpoint following the OpenAI API
-specification, calling AWS Bedrock image generation models (e.g., Amazon Titan Image Generator)
-to create variations of existing images.
+"""OpenAI-compatible ``/v1/images/variations`` endpoint using AWS Bedrock.
 
 Two request formats are supported:
 - ``multipart/form-data``: binary file upload via the ``image`` field.
@@ -60,7 +56,7 @@ _KNOWN_PARAMS = set(ImageVariationParams.model_fields.keys()) | {"image"}
         "Returns image URLs or base64-encoded data. Multiple variations can be requested with `n`. "
         "**Note:** Streaming is not supported for this endpoint — "
         "use `openai_image_generation` or `openai_image_edit` if you need streaming with partial previews.\n\n"
-        "**Find compatible models:** Call `search_models` with `mcp_tool=openai_image_variation` "
+        "**Find compatible models:** Call `search_models` with `route=openai_image_variation` "
         "to discover model IDs that support image variation."
     ),
     response_description="The response from the image generation endpoint.",

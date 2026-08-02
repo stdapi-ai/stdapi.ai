@@ -1,8 +1,4 @@
-"""OpenAI-compatible Images API implementation using AWS Bedrock.
-
-This module implements the /v1/images/edits endpoint following the OpenAI API
-specification, calling AWS Bedrock image generation models (e.g., Amazon Nova Canvas)
-to edit images using inpainting techniques.
+"""OpenAI-compatible ``/v1/images/edits`` endpoint using AWS Bedrock.
 
 Two request formats are supported:
 - ``multipart/form-data``: binary file uploads via ``image`` / ``mask`` fields.
@@ -64,11 +60,9 @@ def _merge_image_parameters(
 ) -> list[UploadFile]:
     """Merge image files from both ``image`` and ``image[]`` form parameters.
 
-    FastAPI does not support ``validation_alias`` for ``File`` parameters in
-    multipart/form-data requests — alias resolution happens before Pydantic
-    validation.  This function provides the workaround by manually extracting
-    ``image[]``-keyed files from the raw form data and merging them with any
-    files already captured by the ``image`` FastAPI parameter.
+    FastAPI resolves multipart aliases before Pydantic validation, so
+    ``validation_alias`` does not work on ``File`` parameters: ``image[]``-keyed
+    files are extracted from the raw form data here instead.
 
     Args:
         form_data: Parsed multipart form data from the request.
@@ -130,7 +124,7 @@ def _merge_image_parameters(
         "**Providing images:** Use `multipart/form-data` for direct binary uploads, or "
         "`application/json` to reference images by Files API ID (obtained from `openai_file`) "
         "or by URL/data URL.\n\n"
-        "**Find compatible models:** Call `search_models` with `mcp_tool=openai_image_edit` "
+        "**Find compatible models:** Call `search_models` with `route=openai_image_edit` "
         "to discover model IDs that support image editing."
     ),
     response_description="The response from the image generation endpoint.",

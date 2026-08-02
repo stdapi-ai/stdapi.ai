@@ -72,7 +72,7 @@ curl -X POST "$BASE/v2/embed" \
 }
 ```
 
-**Find compatible models:** Call [`/search_models`](api_search_models.md) with `mcp_tool=cohere_embed` to discover model IDs that support embeddings — every Bedrock embedding model works, not just Cohere ones.
+**Find compatible models:** Call [`/search_models`](api_search_models.md) with `route=cohere_embed` to discover model IDs that support embeddings — every Bedrock embedding model works, not just Cohere ones.
 
 ## Feature Compatibility
 

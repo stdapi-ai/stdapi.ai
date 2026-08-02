@@ -1,12 +1,4 @@
-"""Anthropic Messages API endpoint implementation.
-
-This module implements an Anthropic-compatible endpoint for the Messages API,
-providing AWS Bedrock integration while maintaining API compatibility. It handles
-both streaming and non-streaming message creation, tool calling, and extended thinking.
-
-Functions:
-    create_message: Main FastAPI endpoint for Anthropic message creation.
-"""
+"""Anthropic-compatible Messages API endpoints using AWS Bedrock."""
 
 from typing import TYPE_CHECKING, Annotated
 
@@ -125,7 +117,7 @@ async def _count_tokens_via_mantle(
         "**When to use:** Use this endpoint for Anthropic SDK compatibility or when you need "
         "extended thinking, citations, or Anthropic-specific features. "
         "For OpenAI SDK compatibility, use `openai_chat_completion` or `openai_response` instead.\n\n"
-        "**Find compatible models:** Call `search_models` with `mcp_tool=anthropic_message` "
+        "**Find compatible models:** Call `search_models` with `route=anthropic_message` "
         "to discover model IDs that support this endpoint. "
         "When supplying images or documents, also add `input_modalities=IMAGE` to the filter "
         "so only models that support both the route and image input are returned."
@@ -205,10 +197,6 @@ async def create_message(
 ) -> Message | EventSourceResponse:
     """Create a message using AWS Bedrock Converse APIs.
 
-    This endpoint is compatible with Anthropic's Messages API. It maps the
-    incoming Anthropic-style messages and parameters to AWS Bedrock's
-    converse/converse_stream APIs and returns Anthropic-compatible responses.
-
     Args:
         request: Message creation request following Anthropic spec.
 
@@ -240,7 +228,7 @@ async def create_message(
         "Accounts for all inputs — messages, system prompt, tools, images, and documents. "
         "Useful for estimating costs or checking whether a prompt fits within a model's context window "
         "before making a full `anthropic_message` call.\n\n"
-        "**Find compatible models:** Call `search_models` with `mcp_tool=anthropic_message_count_tokens` "
+        "**Find compatible models:** Call `search_models` with `route=anthropic_message_count_tokens` "
         "to discover model IDs that support this endpoint."
     ),
     response_description="Token count for the provided message parameters.",
@@ -290,11 +278,7 @@ async def create_message(
 async def count_tokens(
     request: MessageCountTokensParams, _: Annotated[None, Depends(authenticate)] = None
 ) -> MessageTokensCount:
-    """Count the number of tokens in a message.
-
-    This endpoint counts the tokens for the provided messages,
-    system prompt, and tools using the AWS Bedrock CountTokens API
-    without creating a message.
+    """Count the number of tokens in a message, without creating it.
 
     Args:
         request: Count tokens request following Anthropic spec.

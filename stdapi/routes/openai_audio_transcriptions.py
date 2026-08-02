@@ -138,7 +138,7 @@ async def _transcript_audio_sse(
         "**Extended output format (beyond original OpenAI API):**\n"
         "- **`diarized_json`**: Speaker diarization — returns labelled segments identifying "
         "which speaker said what, with timestamps.\n\n"
-        "**Find compatible models:** Call `search_models` with `mcp_tool=openai_audio_transcription` "
+        "**Find compatible models:** Call `search_models` with `route=openai_audio_transcription` "
         "to discover model IDs that support speech-to-text."
     ),
     response_description="Returns transcription in the specified format",

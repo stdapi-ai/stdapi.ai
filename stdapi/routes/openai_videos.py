@@ -1,8 +1,4 @@
-"""OpenAI-compatible Videos API implementation using AWS Bedrock.
-
-This module implements the /v1/videos endpoints following the OpenAI API
-specification, calling AWS Bedrock video generation models (e.g., Amazon Nova
-Reel, Luma Ray) through asynchronous invocations.
+"""OpenAI-compatible ``/v1/videos`` endpoints using AWS Bedrock.
 
 Video generation is asynchronous: creating a video returns a job object whose
 ID encodes the Bedrock async invocation ARN, so job state lives entirely on
@@ -185,7 +181,7 @@ def _to_video(video_id: str, job: VideoJob, seconds: str, size: str) -> Video:
         "binary `input_reference` first-frame image, or `application/json` to pass "
         "it as a base64 string, data URI, URL, S3 URI, or Files API ID.\n\n"
         "**Find compatible models:** Call `search_models` with "
-        "`mcp_tool=openai_video_generation` to discover model IDs that support "
+        "`route=openai_video_generation` to discover model IDs that support "
         "video generation."
     ),
     response_description="The created video job.",

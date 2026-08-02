@@ -1,9 +1,4 @@
-"""Cohere-compatible Embed API implementation using AWS Bedrock.
-
-This module implements the /v2/embed endpoint following the Cohere API
-specification shape, calling AWS Bedrock embedding models (e.g., Cohere Embed,
-Amazon Titan Embeddings) to compute embedding vectors.
-"""
+"""Cohere-compatible ``/v2/embed`` endpoint using AWS Bedrock embedding models."""
 
 from typing import Annotated
 
@@ -49,7 +44,7 @@ router = APIRouter(
         "and `max_tokens` parameters are applied to Cohere models and ignored "
         "for providers without an equivalent.\n\n"
         "**Find compatible models:** Call `search_models` with "
-        "`mcp_tool=cohere_embed` to discover model IDs that support embeddings."
+        "`route=cohere_embed` to discover model IDs that support embeddings."
     ),
     response_description="Embed response.",
     responses={

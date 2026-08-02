@@ -1,9 +1,4 @@
-"""OpenAI-compatible Embeddings API implementation using AWS Bedrock.
-
-This module implements the /v1/embeddings endpoint following the OpenAI API
-specification shape, calling AWS Bedrock embedding models (e.g., Amazon Titan
-Embeddings, Cohere Embed v3) to compute embedding vectors.
-"""
+"""OpenAI-compatible ``/v1/embeddings`` endpoint using AWS Bedrock embedding models."""
 
 from array import array
 from typing import TYPE_CHECKING, Annotated
@@ -53,7 +48,7 @@ router = APIRouter(
         "**Extended input support (beyond original OpenAI API):**\n"
         "- **Multimodal inputs:** For models that support it, pass URLs, S3 URIs, or data URIs "
         "instead of plain strings to embed images or other media.\n\n"
-        "**Find compatible models:** Call `search_models` with `mcp_tool=openai_embedding` "
+        "**Find compatible models:** Call `search_models` with `route=openai_embedding` "
         "to discover model IDs that support embeddings. "
         "For multimodal inputs (URLs, S3 URIs), also add `input_modalities=IMAGE` to find models "
         "that accept both the embedding route and image input."

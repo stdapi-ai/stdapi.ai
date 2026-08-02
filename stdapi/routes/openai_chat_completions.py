@@ -1,15 +1,11 @@
-"""OpenAI Chat Completions API endpoint implementation.
+"""OpenAI-compatible Chat Completions API endpoints using AWS Bedrock Converse.
 
-This module implements the OpenAI-compatible /v1/chat/completions endpoints,
-providing AWS Bedrock Converse integration while maintaining API compatibility.
-
-The module provides:
-    - POST /v1/chat/completions — create a chat completion
-    - GET /v1/chat/completions — list stored chat completions
-    - POST /v1/chat/completions/{completion_id} — update a stored chat completion
-    - GET /v1/chat/completions/{completion_id} — retrieve a stored chat completion
-    - DELETE /v1/chat/completions/{completion_id} — delete a stored chat completion
-    - GET /v1/chat/completions/{completion_id}/messages — list a stored chat completion's messages
+- POST /v1/chat/completions — create a chat completion
+- GET /v1/chat/completions — list stored chat completions
+- POST /v1/chat/completions/{completion_id} — update a stored chat completion
+- GET /v1/chat/completions/{completion_id} — retrieve a stored chat completion
+- DELETE /v1/chat/completions/{completion_id} — delete a stored chat completion
+- GET /v1/chat/completions/{completion_id}/messages — list a stored chat completion's messages
 """
 
 from asyncio import gather
@@ -98,7 +94,7 @@ _LIST_LOAD_BATCH_SIZE: int = 10
         "**When to use:** Prefer this endpoint for OpenAI SDK compatibility or when using the "
         "`messages` array format. For the newer stateless Responses API, use `openai_response` instead. "
         "For Anthropic SDK compatibility, use `anthropic_message`.\n\n"
-        "**Find compatible models:** Call `search_models` with `mcp_tool=openai_chat_completion` "
+        "**Find compatible models:** Call `search_models` with `route=openai_chat_completion` "
         "to discover model IDs that support this endpoint. "
         "When using extended multimodal inputs, also filter by the required modality — for example, "
         "add `input_modalities=IMAGE` for vision requests or `input_modalities=SPEECH` for audio input, "
@@ -192,10 +188,6 @@ async def create_chat_completion(
     request: CompletionCreateParams, _: Annotated[None, Depends(authenticate)] = None
 ) -> ChatCompletion | EventSourceResponse:
     """Create a chat completion using AWS Bedrock Converse APIs.
-
-    This endpoint is compatible with OpenAI's Chat Completions API. It maps the
-    incoming OpenAI-style chat messages and parameters to AWS Bedrock's
-    converse/converse_stream APIs and returns OpenAI-compatible responses.
 
     Args:
         request: Chat completion creation request following OpenAI spec.

@@ -123,7 +123,7 @@ Any rerank model available in your configured Bedrock regions can be used, for e
 |-------------------|----------------------|----------------------------------------------------------------|
 | Amazon Rerank 1.0 | `amazon.rerank-v1:0` | Not available in every region (e.g. absent from `us-east-1`) |
 
-**Find compatible models:** Call [`/search_models`](api_search_models.md) with `mcp_tool=cohere_rerank` to discover model IDs that support reranking in your deployment.
+**Find compatible models:** Call [`/search_models`](api_search_models.md) with `route=cohere_rerank` to discover model IDs that support reranking in your deployment.
 
 ## Cohere v1 Rerank API (Legacy)
 

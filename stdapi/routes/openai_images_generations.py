@@ -1,9 +1,4 @@
-"""OpenAI-compatible Images API implementation using AWS Bedrock.
-
-This module implements the /v1/images/generations endpoint following the OpenAI API
-specification, calling AWS Bedrock image generation models (e.g., Stability AI,
-Amazon Nova Canvas) to generate images.
-"""
+"""OpenAI-compatible ``/v1/images/generations`` endpoint using AWS Bedrock."""
 
 from typing import TYPE_CHECKING, Annotated, Any
 
@@ -179,7 +174,7 @@ async def stream_generator(
         "Returns image URLs or base64-encoded data (`b64_json`). Supports streaming via SSE "
         "for incremental partial-image previews while generation is in progress (`stream=true`). "
         "Multiple images can be requested with the `n` parameter.\n\n"
-        "**Find compatible models:** Call `search_models` with `mcp_tool=openai_image_generation` "
+        "**Find compatible models:** Call `search_models` with `route=openai_image_generation` "
         "to discover model IDs that support image generation."
     ),
     response_description="The response from the image generation endpoint.",

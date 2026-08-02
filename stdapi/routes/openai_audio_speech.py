@@ -112,7 +112,7 @@ async def _speech_audio_sse(
         "Amazon Polly `SpeechMarkTypes` returns timing marks as an "
         "`application/x-json-stream` JSON lines stream, which ignores "
         "`response_format` and does not support `stream_format=sse`.\n\n"
-        "**Find compatible models:** Call `search_models` with `mcp_tool=openai_audio_speech` "
+        "**Find compatible models:** Call `search_models` with `route=openai_audio_speech` "
         "to discover model IDs that support text-to-speech."
     ),
     response_description="Returns audio file in the specified format",

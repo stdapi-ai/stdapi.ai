@@ -99,7 +99,7 @@ curl -X POST "$BASE/v1/moderations" \
 
 ## Model Support
 
-The moderation models appear in the [`/v1/models`](api_openai_models.md) and [`/search_models`](api_search_models.md) listings (`mcp_tool=openai_moderation`) with their OpenAI aliases.
+The moderation models appear in the [`/v1/models`](api_openai_models.md) and [`/search_models`](api_search_models.md) listings (`route=openai_moderation`) with their OpenAI aliases.
 
 ### ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Bedrock Guardrails
 

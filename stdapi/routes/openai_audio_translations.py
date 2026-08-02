@@ -53,7 +53,7 @@ router = APIRouter(
         "**MCP / AI agent usage:** Call this tool with a JSON body containing the audio as a "
         "data URI or URL, along with `model`. Example: "
         '`{"file": "data:audio/mp3;base64,<data>", "model": "amazon.transcribe"}`.\n\n'
-        "**Find compatible models:** Call `search_models` with `mcp_tool=openai_audio_translation` "
+        "**Find compatible models:** Call `search_models` with `route=openai_audio_translation` "
         "to discover model IDs that support speech-to-text translation."
     ),
     response_description="Returns translation in the specified format",

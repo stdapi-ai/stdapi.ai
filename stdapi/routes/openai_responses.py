@@ -1,16 +1,12 @@
-"""OpenAI Responses API endpoint implementation.
+"""OpenAI-compatible Responses API endpoints using AWS Bedrock Converse.
 
-This module implements the OpenAI-compatible /v1/responses endpoints, providing
-AWS Bedrock Converse integration while maintaining full API compatibility.
-
-The module provides:
-    - POST /v1/responses — create a model response
-    - POST /v1/responses/input_tokens — count input tokens without generating a response
-    - POST /v1/responses/compact — compact a conversation into a reusable summary item
-    - GET /v1/responses/{response_id} — retrieve a stored model response
-    - POST /v1/responses/{response_id}/cancel — cancel a background model response
-    - DELETE /v1/responses/{response_id} — delete a stored model response
-    - GET /v1/responses/{response_id}/input_items — list a stored model response's input items
+- POST /v1/responses — create a model response
+- POST /v1/responses/input_tokens — count input tokens without generating a response
+- POST /v1/responses/compact — compact a conversation into a reusable summary item
+- GET /v1/responses/{response_id} — retrieve a stored model response
+- POST /v1/responses/{response_id}/cancel — cancel a background model response
+- DELETE /v1/responses/{response_id} — delete a stored model response
+- GET /v1/responses/{response_id}/input_items — list a stored model response's input items
 """
 
 from functools import partial
@@ -535,7 +531,7 @@ async def _apply_prompt_template(
         "- **Audio input** is not supported — use `openai_chat_completion` for audio input.\n\n"
         "**When to use:** This is the newer OpenAI API style. For the classic `messages`-array format, "
         "use `openai_chat_completion` instead. For Anthropic SDK compatibility, use `anthropic_message`.\n\n"
-        "**Find compatible models:** Call `search_models` with `mcp_tool=openai_response` "
+        "**Find compatible models:** Call `search_models` with `route=openai_response` "
         "to discover model IDs that support this endpoint. "
         "For image inputs, also add `input_modalities=IMAGE` to the filter."
     ),
@@ -552,10 +548,6 @@ async def create_response(
     request: ResponseCreateParams, _: Annotated[None, Depends(authenticate)] = None
 ) -> Response | EventSourceResponse:
     """Create a model response using AWS Bedrock Converse APIs.
-
-    Compatible with the OpenAI Responses API. Maps input items and parameters
-    to the Bedrock Converse/ConverseStream APIs and returns an OpenAI-compatible
-    response.
 
     Args:
         request: Responses API creation request.
@@ -662,7 +654,7 @@ async def create_response(
         "estimating costs or checking context-window fit before making a full "
         "`openai_response` call.\n\n"
         "**Find compatible models:** Call `search_models` with "
-        "`mcp_tool=openai_response_input_tokens` to discover model IDs that "
+        "`route=openai_response_input_tokens` to discover model IDs that "
         "support this endpoint."
     ),
     response_description="Token count for the provided input.",
@@ -735,7 +727,7 @@ async def count_input_tokens(
         "is needed on the server; `previous_response_id` may reference a "
         "stored response to compact its conversation too.\n\n"
         "**Find compatible models:** Call `search_models` with "
-        "`mcp_tool=openai_response_compact` to discover model IDs that "
+        "`route=openai_response_compact` to discover model IDs that "
         "support this endpoint."
     ),
     response_description="The compacted response.",
