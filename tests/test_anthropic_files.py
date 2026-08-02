@@ -31,7 +31,7 @@ from stdapi.files import FileRecord
 from stdapi.routes import anthropic_files
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import AsyncIterator, Callable, Iterator
 
     from anthropic.types.beta import FileMetadata
     from openai import OpenAI
@@ -581,3 +581,46 @@ class TestAnthropicFilesJsonBodySources:
         assert body["type"] == "error"
         assert body["error"]["type"] == "invalid_request_error"
         assert not uploaded_source, "no object may be created for a rejected source"
+
+
+class TestAnthropicFileContentDownloadHardening:
+    """Browser-safety headers on the Anthropic ``/v1/files/{id}/content`` download.
+
+    ``mime_type`` is chosen by the uploading client and echoed back as the
+    response ``Content-Type``, so the gateway would otherwise serve attacker-
+    supplied bytes as active content on its own origin. The declared type is kept
+    for API clients while ``Content-Disposition`` and ``X-Content-Type-Options``
+    deny both inline rendering and MIME sniffing.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/files
+         https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Content-Type-Options
+         stdapi/routes/anthropic_files.py:get_content
+    """
+
+    pytestmark = pytest.mark.local
+
+    def test_html_content_is_served_as_a_non_sniffable_attachment(
+        self, anthropic_app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ``text/html`` file streams back verbatim but cannot be rendered by a browser.
+
+        The body and the declared type must be untouched; only the two hardening
+        headers are added, which is what turns a stored payload into a download.
+        """
+        payload = b"<script>alert(document.domain)</script>"
+
+        async def _fake_get_file_content(_: str) -> tuple[AsyncIterator[bytes], str]:
+            async def _stream() -> AsyncIterator[bytes]:
+                yield payload
+
+            return _stream(), "text/html"
+
+        monkeypatch.setattr(anthropic_files, "get_file_content", _fake_get_file_content)
+        response = anthropic_app_client.get(
+            f"/anthropic/v1/files/file_{'b' * 32}/content"
+        )
+        assert response.status_code == 200, response.text
+        assert response.content == payload
+        assert response.headers["content-type"].startswith("text/html")
+        assert response.headers["content-disposition"] == "attachment"
+        assert response.headers["x-content-type-options"] == "nosniff"

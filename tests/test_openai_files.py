@@ -34,6 +34,8 @@ from stdapi.routes import openai_files as openai_files_routes
 from tests._helpers import make_client_error
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     import httpx
     from anthropic import Anthropic
     from starlette.testclient import TestClient
@@ -1309,7 +1311,7 @@ class TestOpenAIFilesExpiresAfterBracketNotation:
     def test_bracket_seconds_valid_value_accepted(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A valid bracket-notation value (7200s) is still accepted (regression guard).
+        """A valid bracket-notation value reaches the route as a 7200 s TTL.
 
         Ref: stdapi/routes/openai_files.py:upload
         """
@@ -2905,3 +2907,47 @@ class TestMissingFileIsNotFoundUnit:
 
         assert response.status_code == 404, response.text
         assert response.json()["error"]["code"] == "not_found"
+
+
+@pytest.mark.local
+class TestFileContentDownloadHardening:
+    """Browser-safety headers on ``GET /v1/files/{id}/content`` (unit, stubbed storage).
+
+    The stored content type comes from the uploading client (``mime_type`` on an
+    upload, the multipart part otherwise) and is echoed back verbatim, so the
+    gateway would otherwise serve attacker-supplied bytes as active content on its
+    own origin. The declared type is kept for API clients while
+    ``Content-Disposition`` and ``X-Content-Type-Options`` deny both inline
+    rendering and MIME sniffing.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Content-Type-Options
+         stdapi/routes/openai_files.py:get_content
+    """
+
+    def test_html_content_is_served_as_a_non_sniffable_attachment(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ``text/html`` file streams back verbatim but cannot be rendered by a browser.
+
+        The body and the declared type must be untouched; only the two hardening
+        headers are added, which is what turns a stored payload into a download.
+        """
+        payload = b"<script>alert(document.domain)</script>"
+
+        async def _fake_get_file_content(_: str) -> tuple[AsyncIterator[bytes], str]:
+            async def _stream() -> AsyncIterator[bytes]:
+                yield payload
+
+            return _stream(), "text/html"
+
+        monkeypatch.setattr(
+            openai_files_routes, "get_file_content", _fake_get_file_content
+        )
+        response = app_client.get(f"/v1/files/file-{'b' * 32}/content")
+
+        assert response.status_code == 200, response.text
+        assert response.content == payload
+        assert response.headers["content-type"].startswith("text/html")
+        assert response.headers["content-disposition"] == "attachment"
+        assert response.headers["x-content-type-options"] == "nosniff"

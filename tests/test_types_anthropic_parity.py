@@ -1,15 +1,19 @@
-"""Anthropic request-model parity with the Anthropic SDK types (no AWS calls).
+"""Anthropic model parity with the Anthropic SDK types (no AWS calls).
 
 The gateway's Pydantic models mirror ``anthropic.types.*``; fields the SDK carries
 but the mirror does not declare must survive validation as extras so newer clients
-are not rejected, while documented numeric bounds must still be enforced.
+are not rejected, while documented numeric bounds, discriminators and enumerations
+must still match the SDK.
 
 Ref: https://platform.claude.com/docs/en/api/messages
      https://github.com/anthropics/anthropic-sdk-python/tree/main/src/anthropic/types
      stdapi/types/anthropic_messages.py:MessageCreateParams
 """
 
+from typing import get_args
+
 import pytest
+from anthropic.types import WebSearchToolResultError as SdkWebSearchToolResultError
 from pydantic import ValidationError
 
 from stdapi.types.anthropic_messages import (
@@ -17,6 +21,8 @@ from stdapi.types.anthropic_messages import (
     ThinkingConfigAdaptiveParam,
     ThinkingConfigEnabledParam,
     ToolInputSchema,
+    WebSearchToolRequestErrorParam,
+    WebSearchToolResultError,
 )
 
 #: All tests in this module exercise the local implementation in-process.
@@ -154,3 +160,40 @@ class TestTopPRange:
         """``top_p=1.0`` (the upper bound) validates successfully."""
         params = MessageCreateParams.model_validate({**_BASE_REQUEST, "top_p": 1.0})
         assert params.top_p == 1.0
+
+
+class TestWebSearchToolResultErrorParity:
+    """The error variant of a ``web_search_tool_result`` block matches the SDK.
+
+    This block is published in the gateway's OpenAPI schema, so a client generated
+    from it resolves the union by the ``type`` discriminator: a value the API never
+    sends yields a variant that can never match.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
+         stdapi/types/anthropic_messages.py:WebSearchToolResultError
+    """
+
+    def test_type_discriminator_matches_the_sdk(self) -> None:
+        """``type`` is ``web_search_tool_result_error``, as the SDK and the request side spell it."""
+        assert get_args(WebSearchToolResultError.model_fields["type"].annotation) == (
+            get_args(SdkWebSearchToolResultError.model_fields["type"].annotation)
+        )
+        assert get_args(
+            WebSearchToolRequestErrorParam.model_fields["type"].annotation
+        ) == (get_args(WebSearchToolResultError.model_fields["type"].annotation))
+
+    def test_error_code_is_narrowed_to_the_sdk_literals(self) -> None:
+        """``error_code`` publishes the SDK's enumeration instead of an open string."""
+        assert get_args(
+            WebSearchToolResultError.model_fields["error_code"].annotation
+        ) == get_args(SdkWebSearchToolResultError.model_fields["error_code"].annotation)
+
+    def test_a_real_error_payload_validates(self) -> None:
+        """A block Anthropic actually sends round-trips through the mirror."""
+        error = WebSearchToolResultError.model_validate(
+            {"type": "web_search_tool_result_error", "error_code": "max_uses_exceeded"}
+        )
+        assert error.model_dump() == {
+            "type": "web_search_tool_result_error",
+            "error_code": "max_uses_exceeded",
+        }

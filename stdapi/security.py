@@ -79,14 +79,10 @@ def _parse_ip_literal(hostname: str) -> IPv4Address | IPv6Address | None:
 def _is_unsafe_ip(ip: int | str | bytes | IPv4Address | IPv6Address | None) -> bool:
     """Validate the IP to avoid SSRF attacks.
 
-    This function checks if an IP address is considered unsafe for making
-    external requests. It performs multiple security checks including:
-    - Loopback addresses (127.0.0.1, ::1)
-    - Unspecified addresses (0.0.0.0, ::)
-    - Link-local addresses
-    - Reserved addresses
-    - Multicast addresses
-    - Private network addresses (when enabled in config)
+    Rejects loopback, unspecified, link-local, reserved and multicast addresses,
+    plus — when enabled in config — every non-globally-reachable address, which
+    covers private ranges and the other special-purpose blocks such as RFC 6598
+    shared address space (100.64.0.0/10).
 
     Args:
         ip: IP address string to check.
@@ -104,7 +100,7 @@ def _is_unsafe_ip(ip: int | str | bytes | IPv4Address | IPv6Address | None) -> b
         or address.is_reserved
         or address.is_multicast
         or address.is_unspecified
-        or (SETTINGS.ssrf_protection_block_private_networks and address.is_private)
+        or (SETTINGS.ssrf_protection_block_private_networks and not address.is_global)
     )
 
 

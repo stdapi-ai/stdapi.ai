@@ -90,6 +90,31 @@ async def test_validate_host_ssrf_blocks_unsafe_ip_literals(
     assert str(exc.value) == f"Forbidden host in URL: {host}."
 
 
+@pytest.mark.parametrize(
+    "host",
+    ["100.64.0.1", "::ffff:100.64.0.1", "192.0.0.171", "198.18.0.1", "2001:db8::1"],
+)
+async def test_validate_host_ssrf_blocks_non_globally_reachable_ip_literals(
+    host: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Special-purpose ranges outside ``is_private`` are rejected as 403 too.
+
+    ``ssrf_protection_block_private_networks`` promises no reachability into the
+    deployment's own network, and on AWS the RFC 6598 shared address space
+    (100.64.0.0/10, plus its IPv4-mapped form) carries EKS custom-networking pod
+    CIDRs and managed-service ENIs while ``is_private`` reports False for it. The
+    same holds for the other non-globally-reachable blocks listed here.
+
+    Ref: https://www.iana.org/assignments/iana-ipv4-special-registry/
+         stdapi/security.py:_is_unsafe_ip
+    """
+    _forbid_resolution(monkeypatch)
+    with pytest.raises(ApiError) as exc:
+        await security.validate_host_ssrf(host)
+    assert exc.value.status == 403
+    assert str(exc.value) == f"Forbidden host in URL: {host}."
+
+
 async def test_validate_host_ssrf_allows_public_ip_literal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -100,6 +125,21 @@ async def test_validate_host_ssrf_allows_public_ip_literal(
     """
     _forbid_resolution(monkeypatch)
     assert await security.validate_host_ssrf("93.184.216.34") == ["93.184.216.34"]
+
+
+@pytest.mark.parametrize(
+    "host", ["2606:4700:4700::1111", "::ffff:93.184.216.34", "[2606:4700:4700::1111]"]
+)
+async def test_validate_host_ssrf_allows_public_ip_literal_of_any_family(
+    host: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Globally reachable IPv6, IPv4-mapped and bracketed literals still pass.
+
+    The unsafe check classifies by reachability rather than by family, so a public
+    address must be allowed however it is written.
+    """
+    _forbid_resolution(monkeypatch)
+    assert await security.validate_host_ssrf(host) == [host.strip("[]")]
 
 
 def _patch_resolution(monkeypatch: pytest.MonkeyPatch, addresses: list[str]) -> None:

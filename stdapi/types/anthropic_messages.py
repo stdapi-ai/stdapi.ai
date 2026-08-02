@@ -527,12 +527,25 @@ class WebSearchResultBlock(BaseModelResponse):
     )
 
 
+# Ref: anthropic.types.web_search_tool_result_error_code.WebSearchToolResultErrorCode
+WebSearchToolResultErrorCode = Literal[
+    "invalid_tool_input",
+    "unavailable",
+    "max_uses_exceeded",
+    "too_many_requests",
+    "query_too_long",
+    "request_too_large",
+]
+
+
 # Ref: anthropic.types.web_search_tool_result_error.WebSearchToolResultError
 class WebSearchToolResultError(BaseModelResponse):
     """Web search tool result error."""
 
-    error_code: str = Field(description="Error code.")
-    type: Literal["error"] = Field(description="Result type. Always `error`.")
+    error_code: WebSearchToolResultErrorCode = Field(description="Error code.")
+    type: Literal["web_search_tool_result_error"] = Field(
+        description="Result type. Always `web_search_tool_result_error`."
+    )
 
 
 # Ref: anthropic.types.web_search_tool_result_block_content.WebSearchToolResultBlockContent
@@ -945,17 +958,6 @@ class WebSearchResultBlockParam(BaseModelRequest):
     page_age: str | None = Field(
         default=None, description="How long ago the page was published or updated."
     )
-
-
-# Ref: anthropic.types.web_search_tool_result_error_code.WebSearchToolResultErrorCode
-WebSearchToolResultErrorCode = Literal[
-    "invalid_tool_input",
-    "unavailable",
-    "max_uses_exceeded",
-    "too_many_requests",
-    "query_too_long",
-    "request_too_large",
-]
 
 
 # Ref: anthropic.types.web_search_tool_request_error_param.WebSearchToolRequestErrorParam

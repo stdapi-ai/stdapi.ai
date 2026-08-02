@@ -31,6 +31,13 @@ from stdapi.types.openai_files import (
 )
 from stdapi.utils import missing_file_error, validation_error_handler
 
+#: Download hardening: the stored content type is client-controlled, so the
+#: response must never be rendered inline nor content-type-sniffed by a browser.
+_CONTENT_DOWNLOAD_HEADERS = {
+    "Content-Disposition": "attachment",
+    "X-Content-Type-Options": "nosniff",
+}
+
 #: Minimum accepted value (seconds) for ``expires_after[seconds]`` (1 hour).
 _EXPIRES_AFTER_SECONDS_MIN = 3600
 #: Maximum accepted value (seconds) for ``expires_after[seconds]`` (30 days).
@@ -423,11 +430,13 @@ async def get_content(
         file_id: Unique file identifier.
 
     Returns:
-        StreamingResponse with raw file bytes.
+        StreamingResponse with raw file bytes, served as a non-sniffable download.
 
     Raises:
         FileNotExistError: If the file does not exist or has expired (404).
     """
     log_request_params({"file_id": file_id})
     stream, content_type = await get_file_content(_strip(file_id))
-    return StreamingResponse(stream, media_type=content_type)
+    return StreamingResponse(
+        stream, media_type=content_type, headers=_CONTENT_DOWNLOAD_HEADERS
+    )
