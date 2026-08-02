@@ -40,7 +40,7 @@ def _format_error(
     """Format an error as an OpenAI-compatible JSON envelope.
 
     Args:
-        status: HTTP status code (unused in body but kept for signature symmetry).
+        status: HTTP status code, also used to derive the error type.
         message: Human-readable error message.
         param: Optional parameter name that caused the error.
         code: Optional machine-readable error code.
@@ -65,11 +65,6 @@ def set_openai_headers(
     request: Request, response: Response, processing_ms: int
 ) -> None:
     """Attach OpenAI-compatible headers to all responses.
-
-    Adds:
-    - openai-processing-ms: processing time in milliseconds
-    - openai-version: OpenAI API version header.
-    - openai-organization: echo of incoming OpenAI-Organization header, if present
 
     Args:
         request: Incoming HTTP request.

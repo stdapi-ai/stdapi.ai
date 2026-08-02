@@ -20,10 +20,6 @@ class ApiError(Exception):
     def __init__(self, message: str, *, status: int | None = None) -> None:
         """Create an API error.
 
-        When *status* is provided and the subclass has not overridden
-        ``error_type``, the type is automatically derived from the status code
-        (e.g. 401 → ``"authentication_error"``).
-
         Args:
             message: Human-readable error message.
             status: Optional HTTP status code override (defaults to class-level ``status``).

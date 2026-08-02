@@ -35,9 +35,6 @@ class AuthenticationHandler:
     def _hash_api_key(self, api_key: SecretStr) -> None:
         """Hash the API key with a random salt using BLAKE2.
 
-        Generates a random 32-byte salt and uses BLAKE2b for secure hashing.
-        The salt and hash are stored as instance attributes for later verification.
-
         Args:
             api_key: The plain text API key to hash and store securely.
         """
@@ -52,8 +49,7 @@ class AuthenticationHandler:
     async def initialize(self) -> bool:
         """Initialize authentication by retrieving and securely hashing the API key.
 
-        This method should be called once during application startup to retrieve
-        the API key from the configured source and store its salted hash securely.
+        Called once during application startup.
 
         Priority order:
         1. Direct configuration (SETTINGS.api_key)
@@ -149,9 +145,8 @@ class AuthenticationHandler:
     def verify_credentials(self, token: SecretStr | None) -> None:
         """Verify authentication for API endpoints.
 
-        This method validates the Authorization header against the cached API key hash
-        using secure constant-time comparison. If authentication is disabled, this method
-        does nothing and allows all requests.
+        Compares *token* against the cached salted hash in constant time. No-op
+        when authentication is disabled, allowing all requests.
 
         Args:
             token: Authentication token.
@@ -186,9 +181,8 @@ _auth_handler = AuthenticationHandler()
 async def initialize_authentication(start_event: EventLog) -> None:
     """Initialize the global authentication handler.
 
-    This function should be called once during application startup to retrieve
-    and cache the API key from the configured source. Records a security
-    warning on *start_event* if authentication ends up disabled.
+    Called once during application startup; records a security warning on
+    *start_event* if authentication ends up disabled.
 
     Args:
         start_event: Startup event log to update if authentication is disabled.
@@ -207,8 +201,7 @@ async def authenticate(
 ) -> None:
     """Verify API key authentication dependency for FastAPI routes.
 
-    This dependency validates the Authorization header against the cached API key.
-    If authentication is disabled, this dependency does nothing and allows all requests.
+    No-op when authentication is disabled, allowing all requests.
 
     Args:
         credentials: HTTP Bearer token credentials from the Authorization header.

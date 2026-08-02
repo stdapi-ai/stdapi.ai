@@ -1,10 +1,4 @@
-"""OpenAI-compatible Completions API endpoint.
-
-This module implements the OpenAI-compatible Completions API endpoint, routing
-``POST /v1/completions`` through ``ChatModelBase.create_text_completion`` to the
-configured AWS Bedrock model. Recommended for MCP and simple text-only flows; for
-richer inputs use ``/v1/chat/completions`` or ``/v1/responses``.
-"""
+"""OpenAI-compatible ``POST /v1/completions`` endpoint using AWS Bedrock."""
 
 from typing import TYPE_CHECKING, Annotated
 
@@ -149,10 +143,6 @@ async def create_completion(
     request: CompletionCreateParams, _: Annotated[None, Depends(authenticate)] = None
 ) -> Completion | EventSourceResponse:
     """Create a text completion using AWS Bedrock Converse APIs.
-
-    This endpoint is compatible with OpenAI's Completions API. It maps the
-    incoming OpenAI-style completion request to AWS Bedrock's converse API
-    and returns OpenAI-compatible responses.
 
     Args:
         request: Completion creation request following OpenAI spec.
