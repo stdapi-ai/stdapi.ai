@@ -12,6 +12,7 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-sup
      stdapi/models/__init__.py:route_and_execute
 """
 
+from time import monotonic
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -310,6 +311,39 @@ class TestRouteAndExecuteFailover:
             "vendor.model-v1", "us-east-1"
         ).is_usable
 
+    async def test_throttling_attempts_each_region_once(
+        self, routed: RegionRouter
+    ) -> None:
+        """Under throttling every candidate is tried once, so none is escalated twice.
+
+        The retry budget outnumbers the candidates here, and once both are blocked the
+        router leads with the primary again: re-invoking it on the single-attempt
+        no-retry client cannot succeed and only doubles its backoff — up to the
+        hour-long ceiling — while the client is told to retry after the base delay.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
+             stdapi/region_routing.py:RegionRouter.mark_error
+        """
+        seen: list[str] = []
+
+        async def fn(region: RegionName) -> str:
+            seen.append(region)
+            raise ClientError(
+                {"Error": {"Code": "ThrottlingException", "Message": "Too many."}},
+                "Converse",
+            )
+
+        with pytest.raises(ClientError) as excinfo:
+            await route_and_execute("vendor.model-v1", _CANDIDATES, fn)
+
+        assert excinfo.value.response["Error"]["Code"] == "ThrottlingException"
+        assert seen == list(_CANDIDATES)
+        base = SETTINGS.aws_bedrock_region_routing_quota_backoff_seconds
+        for region in _CANDIDATES:
+            state = routed._index.get("vendor.model-v1", region)  # noqa: SLF001
+            assert state.consecutive_quota_errors == 1
+            assert state.quota_blocked_until <= monotonic() + base
+
     async def test_reraises_unrelated_api_error(self, routed: RegionRouter) -> None:
         """An ``ApiError`` carrying a non-retryable AWS code is raised, not failed over.
 
@@ -379,6 +413,35 @@ class TestRouteAndExecuteFailover:
                 "vendor.model-v1", cast("list[RegionName]", ["us-east-1"]), fn
             )
 
+        assert excinfo.value.status == 400
+        assert "no profile" not in str(excinfo.value), (
+            "the routing diagnostic must stay server-side"
+        )
+        assert "not available" in str(excinfo.value)
+        assert isinstance(excinfo.value.__cause__, ModelRegionUnavailableError)
+
+    async def test_all_regions_unavailable_becomes_api_error(
+        self, routed: RegionRouter
+    ) -> None:
+        """Exhausting every candidate ends as the same 400 the single-candidate path gives.
+
+        ``ModelRegionUnavailableError`` is an internal routing signal with no exception
+        handler, so escaping the failover loop answers a bare 500 outside the error
+        envelope and logs a critical traceback for an expected propagation lag.
+
+        Ref: stdapi/models/__init__.py:_model_unavailable_api_error
+        """
+        seen: list[str] = []
+
+        async def fn(region: RegionName) -> str:
+            seen.append(region)
+            msg = "no profile"
+            raise ModelRegionUnavailableError(msg, region=region)
+
+        with pytest.raises(ApiError) as excinfo:
+            await route_and_execute("vendor.model-v1", _CANDIDATES, fn)
+
+        assert seen == list(_CANDIDATES)
         assert excinfo.value.status == 400
         assert "no profile" not in str(excinfo.value), (
             "the routing diagnostic must stay server-side"

@@ -352,9 +352,9 @@ class ModelRegionUnavailableError(Exception):
 
     Signals the region-routing layer to skip the region and try another instead
     of sending a geographically-scoped inference profile that AWS Bedrock would
-    reject with ``ValidationException`` ("The provided model identifier is invalid.").
-    This happens transiently when a region is discovered as offering a model
-    before its inference profile has propagated there.
+    reject with ``ValidationException``: "The provided model identifier is
+    invalid." Happens transiently when a region is
+    discovered as offering a model before its profile has propagated there.
     """
 
     def __init__(self, message: str, *, region: RegionName) -> None:
@@ -567,9 +567,9 @@ class ModelBase[RequestT, ResponseT]:
     def model(self) -> ModelDetails:
         """Model details for this instance.
 
-        A plain registry lookup: per-instance caching would require ``__dict__``
-        (the hierarchy is fully slotted) and could serve stale details after a
-        catalog refresh on long-lived cached instances.
+        A plain registry lookup: caching it per instance would require
+        ``__dict__`` (the hierarchy is fully slotted) and could serve details
+        made stale by a catalog refresh.
 
         Returns:
             Model details including region, provider, and capabilities.
@@ -588,10 +588,8 @@ class ModelBase[RequestT, ResponseT]:
         Call this only when the region must be known *before* building the
         request body — for example to upload S3 inputs to the correct bucket
         first.  Pass the result to :meth:`invoke` / :meth:`invoke_stream` as
-        ``region=`` to lock the retry loop to that region.
-
-        When no S3 is involved, skip this call entirely and let :meth:`invoke`
-        handle region selection and multi-region retry on its own.
+        ``region=`` to lock the retry loop to that region. Otherwise skip it
+        and let :meth:`invoke` handle selection and multi-region retry itself.
 
         Args:
             s3_required: When ``True``, only regions with a configured S3
@@ -1096,7 +1094,9 @@ class ModelBase[RequestT, ResponseT]:
         If the consumer disconnects (``GeneratorExit``/cancellation) before
         that event arrives, the remaining upstream events are drained --
         bounded by :data:`_DISCONNECT_DRAIN_MAX_EVENTS` -- so the trailing
-        usage event, already billed by Bedrock, is still recorded.
+        usage event, already billed by Bedrock, is still recorded. Not when
+        the cancellation lands while a read is in flight: it closes the
+        Bedrock stream first, leaving the drain nothing to read.
 
         Args:
             stream: Original Bedrock event stream.
@@ -1564,10 +1564,10 @@ def _filter_inference_profiles(
 async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetails]:
     """Fetch available foundation models from *region* and return filtered ``ModelDetails``.
 
-    Models restricted via ``aws_bedrock_model_region_restrict`` to regions that exclude
-    *region* are dropped immediately. Models whose ``end_of_life_time`` falls before the
-    next scheduled cache refresh are also excluded, so a model that goes EOL between two
-    cache updates is proactively dropped rather than served until the next refresh.
+    Models restricted via ``aws_bedrock_model_region_restrict`` to regions that
+    exclude *region* are dropped, as are models whose ``end_of_life_time`` falls
+    before the next scheduled cache refresh (a model going EOL between two cache
+    updates is dropped proactively rather than served until the next refresh).
 
     Args:
         region: AWS region to query.
@@ -1823,10 +1823,10 @@ async def _check_candidates(
     Each round checks every still-unresolved model against its next candidate
     region, all models concurrently; nearly all resolve in the first round. A
     model failing in one region falls through to its next candidate region.
-    Once a model passes, its remaining candidate regions are merged unchecked,
-    matching the long-standing "later regions are trusted" behavior. A check
-    failing with an AWS error is recorded as an issue for that region, so one
-    degraded region cannot fail a whole refresh.
+    Once a model passes, its remaining candidate regions are merged unchecked
+    (later regions are trusted). A check failing with an AWS error is recorded
+    as an issue for that region, so one degraded region cannot fail a whole
+    refresh.
 
     Args:
         candidates: Per model ID, per-region candidates in priority order.
@@ -1885,13 +1885,11 @@ async def _collect_all_models(
 ) -> tuple[dict[str, ModelDetails], dict[str, str]]:
     """Collect bedrock-runtime and Mantle models concurrently and merge them.
 
-    Mantle is a separate endpoint from bedrock-runtime, so its discovery is
-    started immediately and runs alongside the bedrock-runtime region-candidate
-    collection and availability checks instead of after them. If the
+    Mantle is a separate endpoint, so its discovery runs alongside the
+    bedrock-runtime region-candidate collection and availability checks. If the
     bedrock-runtime path raises first, or the caller is cancelled, the
-    still-running Mantle task is cancelled and awaited so its outcome is
-    always retrieved (never left as an un-retrieved task warning) before the
-    error propagates.
+    still-running Mantle task is cancelled and awaited so its outcome is never
+    left as an un-retrieved task warning.
 
     Args:
         failed_regions: Accumulator mapping unreachable regions to the error.
@@ -1932,12 +1930,11 @@ async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool
     the next refresh); the refresh only fails when every region fails or
     every availability check errors.
 
-    When this is a lazy on-demand refresh (``start_event`` is None, i.e. not
-    the initial startup call) and it discovers model IDs not previously
-    registered, triggers an immediate price-catalog refresh for those model
-    IDs (see :func:`stdapi.pricing.refresh_price_catalog_for_new_models`) so
-    newly released models get cost tracking without waiting on a proactive
-    background poll.
+    A lazy on-demand refresh (``start_event`` is None) that discovers
+    previously unregistered model IDs triggers an immediate price-catalog
+    refresh for them (see
+    :func:`stdapi.pricing.refresh_price_catalog_for_new_models`), so newly
+    released models get cost tracking without a background poll.
 
     Args:
         start_event: Optional startup event log to record warnings on for
@@ -2372,14 +2369,12 @@ async def compute_candidate_regions(
     The priority rules are:
 
     1. **S3 inputs present** — regions are ranked by descending total S3 input
-       data volume.  Only the single best region is returned so that the retry
-       loop stays pinned to it.  S3 content blocks are resolved as a terminal
-       operation (the ``s3Location`` URI is written into the request body and
-       ``_bedrock_source`` is deleted); retrying on a different region would
-       send a cross-region S3 reference that Bedrock cannot access.  When
-       ``s3_required`` is also set, an S3 input region without a configured
-       bucket is never pinned to (it cannot serve an async invocation), so the
-       ranking only considers bucket-configured regions.
+       data volume, and only the single best one is returned: S3 content blocks
+       are resolved as a terminal operation (the ``s3Location`` URI is written
+       into the request body and ``_bedrock_source`` is deleted), so retrying
+       elsewhere would send a cross-region S3 reference Bedrock cannot access.
+       When ``s3_required`` is also set, the ranking only considers
+       bucket-configured regions (the others cannot serve an async invocation).
        When no S3 input region overlaps with the model's available regions,
        falls back to the first model region that has a configured S3 bucket
        (the object will be copied there).  Raises :class:`ApiError` when no
@@ -2458,9 +2453,10 @@ async def route_and_execute[T](
 
     With a single candidate (region lock or S3-constrained), delegates directly to
     botocore's adaptive retries within that region. With routing disabled, uses
-    the first candidate. Otherwise cycles through router-ordered regions up to
-    ``SETTINGS.aws_bedrock_max_retries + 1`` attempts, escalating to the next region
-    on any retryable error and marking the region healthy on success.
+    the first candidate. Otherwise walks router-ordered regions for up to
+    ``SETTINGS.aws_bedrock_max_retries + 1`` attempts — each candidate tried at most
+    once — escalating to the next region on any retryable error and marking the
+    region healthy on success.
 
     A region that cannot serve the model — because it has no valid inference
     profile (:class:`ModelRegionUnavailableError`) or because Bedrock reports the
@@ -2481,8 +2477,8 @@ async def route_and_execute[T](
         Result of the first successful ``fn`` call.
 
     Raises:
-        ApiError: When the only candidate region cannot serve the model, or (wrapping
-            a retryable AWS error code such as ``ModelNotReadyException``) as the last
+        ApiError: When no candidate region can serve the model, or (wrapping a
+            retryable AWS error code such as ``ModelNotReadyException``) as the last
             error when all attempts exhausted.
         ClientError: Last non-retryable error, or last retryable error when all attempts exhausted.
         BotocoreConnectionError: Last connection error when all attempts exhausted.
@@ -2490,17 +2486,7 @@ async def route_and_execute[T](
             for a ``ReadTimeoutError`` (never retried).
     """
     if not REGION_ROUTER or len(candidates) == 1:
-        try:
-            return await fn(candidates[0])
-        except ModelRegionUnavailableError as exc:
-            # The exception text is a routing diagnostic naming regions and
-            # profiles; it belongs in the log, not in the client's response.
-            log_error_details(str(exc), level="warning")
-            msg = (
-                "The requested model is not available. Select a different model, "
-                "or check that access to this one has been granted."
-            )
-            raise ApiError(msg) from exc
+        return await _execute_pinned(candidates[0], fn)
 
     last_exc: (
         ClientError
@@ -2510,35 +2496,25 @@ async def route_and_execute[T](
         | ModelRegionUnavailableError
         | MantleError
     )
-    for _ in range(SETTINGS.aws_bedrock_max_retries + 1):
-        region = REGION_ROUTER.ordered_regions(model_id, candidates)[0]
+    # A region is attempted at most once per request: every failed attempt marks its
+    # region, so once all candidates are blocked the router leads with the same one
+    # again — and re-invoking it back-to-back on the single-attempt no-retry client
+    # cannot succeed, while a second quota error would double its backoff, letting a
+    # single request escalate one region to the hour-long ceiling that the
+    # ``retry-after`` the client receives never reflects.
+    remaining = list(candidates)
+    for _ in range(min(SETTINGS.aws_bedrock_max_retries + 1, len(candidates))):
+        region = REGION_ROUTER.ordered_regions(model_id, remaining)[0]
+        remaining.remove(region)
         try:
             result = await fn(region)
         except MantleError as exc:
             if not exc.failover:
                 raise
             last_exc = exc
-            # Reuse the Converse code taxonomy so the router applies the
-            # matching quota vs unavailability backoff.
-            REGION_ROUTER.mark_error(
-                model_id,
-                region,
-                "ThrottlingException"
-                if exc.status == 429
-                else "ServiceUnavailableException",
-            )
+            REGION_ROUTER.mark_error(model_id, region, _mantle_failover_label(exc))
         except (ClientError, ApiError) as exc:
-            # handle_bedrock_client_error() converts some ClientErrors (e.g.
-            # ModelNotReadyException) to ApiError before we get to see them; recover
-            # the original AWS error code either way to classify retryability. A
-            # ClientError always carries a code, so only a bare ApiError can yield
-            # None here, and that never satisfies the invalid-model-identifier check.
-            if (code := _client_error_code(exc)) is None or (
-                code not in ROUTING_RETRYABLE_CODES
-                and not (
-                    isinstance(exc, ClientError) and _is_invalid_model_identifier(exc)
-                )
-            ):
+            if (code := _retryable_error_code(exc)) is None:
                 raise
             last_exc = exc
             REGION_ROUTER.mark_error(model_id, region, code)
@@ -2553,7 +2529,84 @@ async def route_and_execute[T](
             REGION_ROUTER.mark_success(model_id, region)
             return result
 
+    if isinstance(last_exc, ModelRegionUnavailableError):
+        raise _model_unavailable_api_error(last_exc) from last_exc
     raise last_exc
+
+
+async def _execute_pinned[T](
+    region: RegionName, fn: Callable[[RegionName], Awaitable[T]]
+) -> T:
+    """Invoke *fn* on *region* with no other region to fail over to.
+
+    Args:
+        region: The only region able to serve the request.
+        fn: Must call ``set_effective_region`` before the AWS call.
+
+    Returns:
+        Result of the ``fn`` call.
+
+    Raises:
+        ApiError: When *region* cannot serve the model.
+    """
+    try:
+        return await fn(region)
+    except ModelRegionUnavailableError as exc:
+        raise _model_unavailable_api_error(exc) from exc
+
+
+def _mantle_failover_label(exc: MantleError) -> str:
+    """Return the router health-bookkeeping label for a failover *exc*.
+
+    Args:
+        exc: Mantle error that allows failover.
+
+    Returns:
+        The Converse error code whose backoff matches *exc*'s HTTP status, so the
+        router applies the quota escalation only to a throttle.
+    """
+    return "ThrottlingException" if exc.status == 429 else "ServiceUnavailableException"
+
+
+def _retryable_error_code(exc: ClientError | ApiError) -> str | None:
+    """Return the AWS error code of *exc* when another region should be tried.
+
+    A ``ClientError`` always carries a code, so only a bare ``ApiError`` can yield
+    None, and that never satisfies the invalid-model-identifier check.
+
+    Args:
+        exc: Error raised by a Bedrock invocation.
+
+    Returns:
+        The AWS error code to record via ``mark_error``, or None when the error is
+        fatal in every region and must be re-raised.
+    """
+    if (code := _client_error_code(exc)) is None:
+        return None
+    retryable = code in ROUTING_RETRYABLE_CODES or (
+        isinstance(exc, ClientError) and _is_invalid_model_identifier(exc)
+    )
+    return code if retryable else None
+
+
+def _model_unavailable_api_error(exc: ModelRegionUnavailableError) -> ApiError:
+    """Return the client-facing error for *exc*, logging its routing diagnostic.
+
+    Args:
+        exc: Signal that a region has no valid identifier for the model.
+
+    Returns:
+        ``ApiError`` to raise in place of *exc*, which is an internal routing
+        signal that Starlette would otherwise answer as a bare 500.
+    """
+    # The exception text is a routing diagnostic naming regions and profiles;
+    # it belongs in the log, not in the client's response.
+    log_error_details(str(exc), level="warning")
+    msg = (
+        "The requested model is not available. Select a different model, "
+        "or check that access to this one has been granted."
+    )
+    return ApiError(msg)
 
 
 def _region_failover_label(
