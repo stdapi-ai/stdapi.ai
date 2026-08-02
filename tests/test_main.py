@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from inspect import signature
 from io import BytesIO
 from json import loads
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
 import pytest
 from botocore.exceptions import ClientError
@@ -24,12 +24,13 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 
 from stdapi import main as stdapi_main
-from stdapi import metering
+from stdapi import metering, monitoring
 from stdapi.cleanup import schedule_cleanup
-from stdapi.config import AWS_REGION
+from stdapi.config import AWS_REGION, SETTINGS
 from stdapi.exceptions import (
     InvalidProductError,
     NotEntitledError,
+    ServerError,
     UnsupportedPlatformError,
 )
 from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile
@@ -181,11 +182,11 @@ class TestRequestScopedInputFiles:
     ) -> None:
         """A stale InputFile bound to an outer context does not reach a request.
 
-        Reproduces the cross-request leak: an ``InputFile`` tracked in a
-        longer-lived context (here, the test task; in production, a keep-alive
-        connection task) whose backing file is already closed used to make
-        every later request 500 during content-type prefetch. The backend records
-        what it saw, so an empty list is the proof the reset happened.
+        Without the reset, an ``InputFile`` tracked in a longer-lived context
+        (here the test task; in production a keep-alive connection task) whose
+        backing file is already closed 500s every later request during
+        content-type prefetch. The backend records what it saw, so an empty
+        list is the proof the reset happened.
         """
         from stdapi.main import app  # noqa: PLC0415
 
@@ -278,7 +279,7 @@ class TestSharedPrefixRouterOptOut:
         from importlib import reload  # noqa: PLC0415
 
         from fastapi import FastAPI  # noqa: PLC0415
-        from fastapi.routing import APIRoute  # noqa: PLC0415
+        from fastapi.routing import iter_route_contexts  # noqa: PLC0415
 
         from stdapi.config import SETTINGS  # noqa: PLC0415
         from stdapi.routes import (  # noqa: PLC0415
@@ -294,12 +295,14 @@ class TestSharedPrefixRouterOptOut:
             assert reload(anthropic_models).router is None
             app = FastAPI()
             discover_routers(app)
+            # Routes are enumerated through the router wrappers FastAPI mounts:
+            # app.routes holds those wrappers, never the routes themselves.
             methods_seen = Counter(
-                (route.path, method)
-                for route in app.routes
-                if isinstance(route, APIRoute)
-                for method in route.methods or ()
+                (context.path, method)
+                for context in iter_route_contexts(app.routes)
+                for method in context.methods or ()
             )
+            assert methods_seen, "no route was enumerated, so nothing was checked"
             assert not [key for key, count in methods_seen.items() if count > 1]
         finally:
             monkeypatch.undo()
@@ -623,3 +626,137 @@ class TestValidationErrorSelection:
             ".input_text.text: Field required"
         ), message
         assert "[" not in message, "the union wrappers Pydantic walked leaked out"
+
+
+class TestRequestSetupErrors:
+    """A header rejected before routing still answers with the API error envelope.
+
+    The per-request setup runs in the outermost middleware, above the
+    ``ExceptionMiddleware`` that serves the exception handlers and before the
+    route's ``authenticate`` dependency: an ``ApiError`` escaping it reaches
+    ``ServerErrorMiddleware``, which answers any caller, credentials or not, a
+    bare ``500 Internal Server Error`` in ``text/plain`` and logs the request as
+    critical.
+
+    Ref: stdapi/main.py:_middleware
+         stdapi/aws_bedrock_mantle.py:set_mantle_project
+    """
+
+    @pytest.mark.parametrize("header", ["OpenAI-Project", "anthropic-workspace"])
+    def test_malformed_project_header_is_a_logged_400(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch, header: str
+    ) -> None:
+        """Either Mantle project header, when malformed, answers 400 and logs a warning.
+
+        Both header names feed the same setup call, and a request-supplied
+        header is honored on every default deployment (no configured project),
+        so either one decides the request's status, body and log level.
+        """
+        written: list[dict[str, Any]] = []
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_project", None)
+        monkeypatch.setattr(monitoring, "write_log_event", written.append)
+
+        response = app_client.get("/v1/models", headers={header: "not a project!"})
+
+        assert response.status_code == 400, response.text
+        assert response.json()["error"]["type"] == "invalid_request_error"
+        assert response.headers["x-request-id"]
+        assert [event["level"] for event in written] == ["warning"]
+
+    def test_an_unauthenticated_caller_cannot_force_a_server_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without credentials the same header is a client error, not a 500.
+
+        The setup runs before the route's authentication dependency, so any
+        anonymous caller reaches it: it must not be a way to have every request
+        answered as a server fault and logged critical.
+        """
+        from fastapi.testclient import TestClient  # noqa: PLC0415
+
+        written: list[dict[str, Any]] = []
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_project", None)
+        monkeypatch.setattr(monitoring, "write_log_event", written.append)
+
+        response = TestClient(stdapi_main.app).get(
+            "/v1/models", headers={"OpenAI-Project": "not a project!"}
+        )
+
+        assert response.status_code < 500, response.text
+        assert [event["level"] for event in written] == ["warning"]
+
+    def test_the_error_envelope_follows_the_target_route(
+        self, anthropic_app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An Anthropic route answers its own error shape, not the default envelope.
+
+        The request has not been routed when the setup fails, so the envelope
+        only matches the API the client called if the target route is resolved
+        before the error is formatted.
+        """
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_project", None)
+
+        response = anthropic_app_client.post(
+            f"{SETTINGS.anthropic_routes_prefix}/v1/messages",
+            headers={"anthropic-workspace": "not a project!"},
+            json={},
+        )
+
+        assert response.status_code == 400, response.text
+        body = response.json()
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "invalid_request_error"
+        assert response.headers["request-id"]
+
+
+class TestWarmedS3Clients:
+    """Startup warms an S3 client for every region a configured bucket lives in.
+
+    ``get_client`` only falls back to the single pooled client when exactly one
+    exists, so a bucket whose region was never warmed raises ``KeyError`` on a
+    multi-region deployment and turns an accepted input file into a 500.
+
+    Ref: stdapi/main.py:lifespan
+         stdapi/aws.py:get_client
+         https://stdapi.ai/operations_configuration/
+    """
+
+    async def test_accepted_bucket_regions_are_warmed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The region declared for an accepted bucket gets its own S3 client.
+
+        ``AWS_S3_ACCEPTED_BUCKETS`` declares buckets the gateway reads but does
+        not own, in regions no other setting mentions.
+        """
+        warmed: list[tuple[str, str | None]] = []
+
+        class _RecordingConnectionManager:
+            """Records the requested clients, then aborts the startup."""
+
+            def __init__(self, *clients: tuple[str, str | None]) -> None:
+                warmed.extend(clients)
+
+            async def __aenter__(self) -> Self:
+                """Stop the startup once the client list is known."""
+                msg = "startup aborted after the client list was built"
+                raise ServerError(msg)
+
+            async def __aexit__(self, *_exc: object) -> None:
+                """Never reached: ``__aenter__`` always raises."""
+
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1", "eu-west-1"])
+        monkeypatch.setattr(SETTINGS, "aws_s3_regional_buckets", {"eu-west-1": "b-eu"})
+        monkeypatch.setattr(SETTINGS, "aws_s3_accepted_buckets", {"data": "eu-west-3"})
+        monkeypatch.setattr(
+            stdapi_main, "AWSConnectionManager", _RecordingConnectionManager
+        )
+        monkeypatch.setattr(stdapi_main, "write_log_event", lambda _event: None)
+
+        with pytest.raises(ServerError):
+            async with stdapi_main.lifespan(stdapi_main.app):
+                pass  # pragma: no cover - the manager aborts the startup
+
+        assert ("s3", "eu-west-3") in warmed, (
+            "the accepted bucket's region has no S3 client to reach it with"
+        )

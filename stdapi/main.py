@@ -16,8 +16,10 @@ from botocore.exceptions import ConnectionError as BotocoreConnectionError
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import Response
+from fastapi.routing import iter_route_contexts
 from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException
+from starlette.routing import Match
 
 from stdapi import server
 from stdapi.api_errors import ApiError
@@ -90,12 +92,11 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
     """
     start = time_ns()
     # Fall back to the configured/default region so a bucket-less deployment
-    # still warms one Transcribe client (requests then 404 as before).
+    # still warms one Transcribe client.
     transcribe_regions: list[RegionName | None] = [
         region for region, _ in transcribe_job_candidates()
     ] or [SETTINGS.aws_transcribe_region]
     try:
-        # Prepare AWS clients list
         async with AWSConnectionManager(
             *(
                 *(
@@ -130,9 +131,9 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                     ("translate", region)
                     for region in service_regions(SETTINGS.aws_translate_region)
                 ),
-                # Only warmed when cost tracking is enabled: its sole
-                # consumer (the price catalog loader) otherwise no-ops.
-                # None (GovCloud, no Price List endpoint) warms the default
+                # Only warmed when cost tracking is enabled: its sole consumer,
+                # the price catalog loader, otherwise no-ops. A None region
+                # (GovCloud, which has no Price List endpoint) warms the default
                 # client, which the never-loading catalog then never uses.
                 *(
                     (("pricing", pricing_endpoint_region()),)
@@ -143,6 +144,12 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 ("s3", SETTINGS.aws_bedrock_regions[0]),
                 ("s3.accelerate", SETTINGS.aws_bedrock_regions[0]),
                 *(("s3", region) for region in SETTINGS.aws_s3_regional_buckets),
+                # Externally owned read-only buckets live in their own regions,
+                # which no other setting warms.
+                *(
+                    ("s3", region)
+                    for region in SETTINGS.aws_s3_accepted_buckets.values()
+                ),
             )
         ):
             span_context = otel_manager.start_span(
@@ -290,10 +297,9 @@ if SETTINGS.cors_allow_origins:
 def set_retry_after_header(request: Request, response: Response) -> None:
     """Attach ``retry-after`` to a rate-limited response when a delay is known.
 
-    Rate-limited responses advertise the region router's own quota backoff, so
-    OpenAI/Anthropic/Cohere SDKs wait the server-driven delay instead of falling
-    back to blind exponential backoff. The header is omitted when no region was
-    put on a quota backoff while serving the request, rather than guessing.
+    Advertises the region router's own quota backoff so client SDKs wait the
+    server-driven delay instead of a blind exponential backoff; omitted when no
+    region was put on a quota backoff while serving the request.
 
     Args:
         request: Incoming HTTP request.
@@ -322,12 +328,14 @@ async def _middleware(
         CLEANUPS.set([])
         reset_current_input_files()
         with log_request_event(request) as log:
-            set_guardrail_configuration(request.headers)
-            set_performance_configuration(request.headers)
-            set_mantle_project(request.headers)
             try:
                 try:
+                    set_guardrail_configuration(request.headers)
+                    set_performance_configuration(request.headers)
+                    set_mantle_project(request.headers)
                     response = await call_next(request)
+                except ApiError as exc:
+                    response = await _handle_request_setup_error(request, exc)
                 except RuntimeError as exc:
                     if await request.is_disconnected():
                         log["status_code"] = 499
@@ -400,6 +408,30 @@ async def handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
     )
 
 
+async def _handle_request_setup_error(request: Request, exc: ApiError) -> JSONResponse:
+    """Format an error raised before routing with the target route's envelope.
+
+    The middleware runs above the ``ExceptionMiddleware`` holding the registered
+    handlers, so an ``ApiError`` raised while preparing the request context (the
+    per-request header configuration) reaches ``ServerErrorMiddleware`` as a bare
+    500 instead. Nothing has matched a route yet either, so the route is resolved
+    here to pick the envelope and headers of the API the client called.
+
+    Args:
+        request: The current request.
+        exc: The ApiError raised while preparing the request context.
+
+    Returns:
+        JSONResponse formatted in the appropriate error schema.
+    """
+    if "route" not in request.scope:
+        for context in iter_route_contexts(app.routes):
+            if context.matches(request.scope)[0] is not Match.NONE:
+                request.scope["route"] = context.original_route
+                break
+    return await handle_api_error(request, exc)
+
+
 #: Pydantic's own container and union tags in an error location, e.g. ``list[union[A,B]]``.
 _PYDANTIC_TYPE_TAG = compile_regex(r"[a-z-]+\[.+\]")
 
@@ -407,11 +439,9 @@ _PYDANTIC_TYPE_TAG = compile_regex(r"[a-z-]+\[.+\]")
 def _validation_error_path(loc: Iterable[Any]) -> str:
     """Join a Pydantic error location into a field path a client can act on.
 
-    The location also names the union and list wrappers Pydantic descended
-    through -- ``list[union[EasyInputMessage, InputMessage, ...]]`` -- which
-    buries the field that actually failed under the whole member list. Only
-    those carry a parameterized type name; a field the client itself sent, such
-    as the multipart ``image[]``, keeps its empty brackets.
+    Drops the union and list wrappers Pydantic descended through, which bury the
+    failing field: only those carry a parameterized type name, while a field the
+    client sent, such as the multipart ``image[]``, keeps its empty brackets.
 
     Args:
         loc: Location parts of one Pydantic error.
@@ -439,11 +469,9 @@ async def handle_validation_exception(
     """
     errors = exc.errors()
 
-    # Report the deepest location rather than the first error. A field typed as
-    # a union -- `input: str | list[...]` on the Responses API, say -- reports one
-    # error per branch, and the first is the shallowest: it says the whole field
-    # should be a string, when the real fault is one item inside the list the
-    # client did send. The longest path is the specific one.
+    # Report the deepest location: a union-typed field reports one error per
+    # branch, and the shallowest blames the whole field instead of the single
+    # item inside it that actually failed.
     match max(errors, key=lambda error: len(error.get("loc", ())), default=None):
         case {"loc": loc, "msg": msg} if path := _validation_error_path(loc):
             message = f"Validation error at {path}: {msg}"
@@ -531,10 +559,8 @@ _EXCEPTION_HANDLERS: dict[
 async def handle_exception_group(request: Request, exc: ExceptionGroup) -> JSONResponse:
     """Unwrap ExceptionGroup (from TaskGroup) and handle known sub-exceptions.
 
-    If all sub-exceptions are of a known handled type, returns the appropriate
-    error response for the first match. If any sub-exception is unhandled,
-    logs all sub-exceptions and re-raises to trigger the default 500 path with
-    critical logging.
+    Re-raises unchanged when any sub-exception is unhandled, to fall back on the
+    default 500 path with critical logging.
 
     Args:
         request: The current request.
