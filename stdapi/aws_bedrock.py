@@ -685,18 +685,17 @@ def set_performance_configuration(headers: Headers) -> None:
 
 #: Per-model_id validated-defaults cache: model_id -> (settings sub-dict, validated instance).
 _DEFAULT_MODEL_PARAMETERS_CACHE: dict[
-    str, tuple[JsonMapping, _DefaultModelParameters]
+    str, tuple[JsonMapping | None, _DefaultModelParameters]
 ] = {}
 
 
 def _get_default_model_parameters(model_id: str) -> _DefaultModelParameters:
     """Return the validated default parameters for *model_id*, cached by settings identity.
 
-    Settings are immutable after startup, so the cache entry is reused as long
-    as ``SETTINGS.default_model_params[model_id]`` is the same object; it is
-    keyed by that object's identity (rather than an unbounded pure function
-    cache) so tests that monkeypatch ``SETTINGS.default_model_params`` with a
-    new mapping transparently invalidate it.
+    Settings are immutable after startup, so the entry is reused while
+    ``SETTINGS.default_model_params[model_id]`` is the same object; replacing
+    that mapping (e.g. in a test) invalidates it. A model with no configured
+    defaults is keyed by ``None``, which compares identical across calls.
 
     Args:
         model_id: Bedrock model identifier; used to look up
@@ -708,12 +707,12 @@ def _get_default_model_parameters(model_id: str) -> _DefaultModelParameters:
     Raises:
         ApiError: When the configured defaults for *model_id* fail validation.
     """
-    raw = SETTINGS.default_model_params.get(model_id, {})
+    raw = SETTINGS.default_model_params.get(model_id)
     cached = _DEFAULT_MODEL_PARAMETERS_CACHE.get(model_id)
     if cached is not None and cached[0] is raw:
         return cached[1]
     with validation_error_handler():
-        parameters = _DefaultModelParameters(**raw)  # type: ignore[arg-type]
+        parameters = _DefaultModelParameters(**(raw or {}))  # type: ignore[arg-type]
     _DEFAULT_MODEL_PARAMETERS_CACHE[model_id] = (raw, parameters)
     return parameters
 
