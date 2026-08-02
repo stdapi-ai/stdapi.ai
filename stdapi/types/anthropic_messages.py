@@ -57,20 +57,6 @@ ServerTools = Literal[
     "computer",
 ]
 
-SERVER_TOOL_NAMES: frozenset[ServerTools] = frozenset(
-    {
-        "web_search",
-        "web_fetch",
-        "code_execution",
-        "memory",
-        "tool_search",
-        "bash",
-        "str_replace_editor",
-        "str_replace_based_edit_tool",
-        "computer",
-    }
-)
-
 #: Thinking effort level
 ThinkingEffort = Literal["low", "medium", "high", "xhigh", "max"]
 

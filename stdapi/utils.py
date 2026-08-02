@@ -19,7 +19,6 @@ from typing import (
     NotRequired,
     Protocol,
     TypedDict,
-    TypeVar,
 )
 from urllib.parse import unquote
 from uuid import uuid7 as uuid
@@ -41,8 +40,6 @@ if TYPE_CHECKING:
 
         async def read(self, size: int, /) -> bytes: ...
 
-
-T = TypeVar("T")
 
 #: Maximum decoded image size in pixels, guarding Pillow against decompression bombs.
 _MAX_IMAGE_PIXELS: int = 50_000_000

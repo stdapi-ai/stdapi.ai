@@ -4,7 +4,7 @@ from asyncio import gather, sleep
 from contextlib import AsyncExitStack, suppress
 from logging import getLogger
 from os import environ
-from typing import TYPE_CHECKING, Any, Final, NotRequired, Self, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, Final, NotRequired, Self, TypedDict
 
 from aiobotocore.config import AioConfig
 from aiohttp import ClientError as HttpClientError
@@ -259,8 +259,6 @@ class AWSConnectionManager:
         await self._exit_stack.__aexit__(exc_type, exc_val, exc_tb)
         _CLIENTS.clear()
 
-
-ClientT = TypeVar("ClientT")
 
 #: ClientError codes indicating a region-level issue worth failing over.
 _FAILOVER_ERROR_CODES: Final[frozenset[str]] = frozenset(

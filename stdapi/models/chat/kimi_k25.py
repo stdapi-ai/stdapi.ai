@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from stdapi.models.chat import Effort
     from stdapi.types import JsonMapping
 
-KimiReasoning = Literal["low", "medium", "high"]
+type KimiReasoning = Literal["low", "medium", "high"]
 
 #: OpenAI effort levels mapped onto the values Kimi accepts (``minimal`` is rejected).
 _REASONING_OVERRIDE: dict[Effort | None, KimiReasoning] = {

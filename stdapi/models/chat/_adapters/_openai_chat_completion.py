@@ -547,7 +547,7 @@ def _build_tool_use_block(
     Args:
         name: Function/tool name.
         arguments: Either a JSON string (function tools) or a JSON value (custom tools).
-        call_id: Optional stable tool call id.
+        call_id: Stable tool call id.
 
     Returns:
         A ContentBlockTypeDef representing a toolUse block.
@@ -1133,7 +1133,6 @@ def _stream_delta_chunk(
     tool_call_indices: dict[int, int],
     *,
     legacy_function: bool,
-    chunk: ChatCompletionChunk | None = None,
     suppress_reasoning: bool = False,
 ) -> tuple[ChatCompletionChunk | None, bool]:
     """Process a streaming event into a ChatCompletionChunk.
@@ -1147,27 +1146,22 @@ def _stream_delta_chunk(
         tool_call_indices: Mutable mapping of content block index to tool call
             position.
         legacy_function: Whether to use legacy function handling.
-        chunk: The current chunk to update. Defaults to None.
         suppress_reasoning: Drop the reasoning text deltas, emitting no chunk
             for an event that carries nothing else.
 
     Returns:
         Tuple of (updated chunk, whether stream has ended).
     """
-    if chunk:
-        choice = chunk.choices[0]
-        choice_delta = choice.delta
-    else:
-        choice_delta = ChoiceDelta()
-        choice = ChunkChoice(index=0, delta=choice_delta)
-        chunk = ChatCompletionChunk(
-            id=completion_id,
-            choices=[choice],
-            created=created,
-            model=model_id,
-            object="chat.completion.chunk",
-            service_tier=service_tier,
-        )
+    choice_delta = ChoiceDelta()
+    choice = ChunkChoice(index=0, delta=choice_delta)
+    chunk = ChatCompletionChunk(
+        id=completion_id,
+        choices=[choice],
+        created=created,
+        model=model_id,
+        object="chat.completion.chunk",
+        service_tier=service_tier,
+    )
     end = False
 
     match event:
@@ -1294,7 +1288,6 @@ async def format_stream(
 
     legacy_function = _LEGACY_FUNCTION.get()
     end_state = False
-    chunk: ChatCompletionChunk | None = None
     suppressed_indices: set[int] = set()
     # Bedrock content block index -> contiguous position in the OpenAI tool_calls array
     tool_call_indices: dict[int, int] = {}
@@ -1326,7 +1319,6 @@ async def format_stream(
             service_tier,
             tool_call_indices,
             legacy_function=legacy_function,
-            chunk=chunk,
             suppress_reasoning=suppress_reasoning,
         )
         end_state |= end
@@ -1334,5 +1326,4 @@ async def format_stream(
             yield JSONServerSentEvent(
                 data=chunk.model_dump(mode="json", exclude_none=True)
             )
-            chunk = None
     yield ServerSentEvent(data="[DONE]", event=None)

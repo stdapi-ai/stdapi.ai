@@ -460,6 +460,21 @@ def resolve_moderation_model(model: str | None) -> tuple[str, str] | None:
     return resolve_guardrail_model(model)
 
 
+def validate_bedrock_region(region: str, *, label: str = "Region") -> None:
+    """Ensure *region* is configured, so a lookup by region cannot raise an unhandled ``KeyError``.
+
+    Args:
+        region: AWS region to validate.
+        label: Noun phrase describing the region's origin, prefixed to the error message.
+
+    Raises:
+        ApiError: If *region* is not in ``SETTINGS.aws_bedrock_regions``.
+    """
+    if region not in SETTINGS.aws_bedrock_regions:
+        msg = f"{label} '{region}' is not a configured Bedrock region."
+        raise ApiError(msg)
+
+
 def guardrail_region(identifier: str) -> RegionName:
     """Return the AWS region hosting the guardrail.
 
@@ -474,10 +489,9 @@ def guardrail_region(identifier: str) -> RegionName:
     """
     if identifier.startswith("arn:"):
         region = identifier.split(":")[3]
-        if region not in SETTINGS.aws_bedrock_regions:
-            msg = f"Guardrail ARN region '{region}' is not a configured Bedrock region."
-            raise ApiError(msg)
-        return region
+        validate_bedrock_region(region, label="Guardrail ARN region")
+        # Membership was just checked against SETTINGS.aws_bedrock_regions.
+        return region  # type: ignore[return-value]
     return SETTINGS.aws_bedrock_regions[0]
 
 

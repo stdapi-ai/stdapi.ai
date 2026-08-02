@@ -76,10 +76,8 @@ MODEL_KEY_OVERRIDES: Final[dict[str, str]] = {
     "nvidia.nemotron-nano-12b-v2": "nvidianemotronnano2vl",
     "amazon.nova-2-lite-v1:0": "nova20lite",
     "amazon.nova-2-sonic-v1:0": "novasonic20",
-    # These have no Price List `model` attribute at all -- keyed from
-    # `usagetype` text instead (see normalize_usagetype_model()). Values
-    # below are that function's actual output for the real usagetype string,
-    # not normalize_model_key() output.
+    # No Price List `model` attribute at all: values below are
+    # normalize_usagetype_model()'s output, not normalize_model_key()'s.
     "amazon.titan-embed-text-v1": "titanembeddingsg1text",
     "amazon.titan-embed-text-v2:0": "titanembeddingv2text",
     "amazon.nova-2-multimodal-embeddings-v1:0": "novamultimodalembeddings",
@@ -87,13 +85,10 @@ MODEL_KEY_OVERRIDES: Final[dict[str, str]] = {
     "amazon.titan-text-express-v1": "titantextg1express",
     "amazon.titan-text-lite-v1": "titantextg1lite",
     "amazon.titan-embed-image-v1": "titanembeddingsg1",
-    # normalize_model_key() strips "V2" as a version suffix (matching
-    # titanModel "Titan Image Generator V2" -> "titanimagegenerator" too, no
-    # override needed there) but not "G1" -- these two aren't symmetric.
+    # normalize_model_key() strips "V2" as a version suffix but not "G1".
     "amazon.titan-image-generator-v1": "titanimagegeneratorg1",
-    # Deprecated/legacy IDs (stdapi/models/deprecation.py) -- these still get
-    # invoked as-is for accounts where AWS hasn't fully retired them yet, so
-    # they need pricing coverage too, not just their replacement model.
+    # Deprecated/legacy IDs (stdapi/models/deprecation.py): still invoked as-is
+    # where AWS hasn't retired them, so they need pricing coverage of their own.
     "anthropic.claude-v2": "claude20",
     "anthropic.claude-v2:1": "claude21",
     "meta.llama3-1-405b-instruct-v1:0": "llama31405b",
@@ -126,8 +121,7 @@ DEFAULT_MODEL_PRICE_REGIONS: Final[tuple[str, ...]] = (
     "us-west-2",
 )
 
-#: USD rates AWS publishes only on its pricing page, absent from the Price List API.
-#: Pricing-page per-generation fallback for models without any Price List row.
+#: Pricing-page per-generation fallback rates, absent from the Price List API.
 DEFAULT_MODEL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
     "stability.stable-image-remove-background-v1:0": {Dimension.OUTPUT_IMAGES: "0.07"},
     "stability.stable-image-erase-object-v1:0": {Dimension.OUTPUT_IMAGES: "0.07"},
@@ -142,10 +136,9 @@ DEFAULT_MODEL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
     "stability.stable-creative-upscale-v1:0": {Dimension.OUTPUT_IMAGES: "0.60"},
     "stability.stable-fast-upscale-v1:0": {Dimension.OUTPUT_IMAGES: "0.03"},
     "stability.stable-outpaint-v1:0": {Dimension.OUTPUT_IMAGES: "0.06"},
-    # OpenAI Mantle models: per-token rates from the Bedrock pricing page
-    # (per-1M page rates / 1e6; retrieved 2026-07-19), absent from the Price
-    # List API outside GovCloud. Dated aliases share these via
-    # MODEL_KEY_OVERRIDES.
+    # OpenAI Mantle models: Bedrock pricing page per-1M rates / 1e6 (retrieved
+    # 2026-07-19), absent from the Price List API outside GovCloud. Dated
+    # aliases share these via MODEL_KEY_OVERRIDES.
     "openai.gpt-5.4": {
         Dimension.INPUT_TOKENS: "0.00000275",
         Dimension.CACHE_READ_TOKENS: "0.000000275",

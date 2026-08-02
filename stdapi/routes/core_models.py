@@ -173,7 +173,7 @@ async def search_models(
         Query(
             description="Filter by legacy status (true = deprecated models only, false = "
             "non-deprecated models only). Legacy models are excluded when omitted; pass "
-            "legacy=true to include them."
+            "legacy=true to list them."
         ),
     ] = None,
     _: Annotated[None, Depends(authenticate)] = None,
@@ -188,7 +188,7 @@ async def search_models(
         region: Filter to models available in a specific AWS region.
         streaming: Filter by streaming support.
         legacy: Filter by legacy/deprecated status. Legacy models are excluded when
-            omitted; pass True to include them.
+            omitted; pass True to list them.
 
     Returns:
         Filtered and sorted list of model details.
@@ -227,9 +227,8 @@ async def search_models(
         }
     # Legacy models are not guaranteed to stay invokable, so they are excluded by
     # default and only surfaced when explicitly requested with legacy=true.
-    effective_legacy = legacy if legacy is not None else False
     models_ids &= {
-        mid for mid, m in models.items() if (m.legacy is True) is effective_legacy
+        mid for mid, m in models.items() if (m.legacy is True) is bool(legacy)
     }
     return log_response_params([models[model_id] for model_id in sorted(models_ids)])
 

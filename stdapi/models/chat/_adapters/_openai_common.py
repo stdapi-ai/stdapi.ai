@@ -169,8 +169,7 @@ def cap_cache_points(
         blocks[:] = kept
 
 
-#: Appended to the system prompt when ``json_object`` output is requested, since
-#: Bedrock's ``outputConfig`` applies no schema for it (see ``build_output_config``).
+#: Appended to the system prompt when Bedrock's ``outputConfig`` applies no JSON schema.
 JSON_OBJECT_SYSTEM_INSTRUCTION: SystemContentBlockTypeDef = {
     "text": "Respond with a single syntactically valid JSON object and no other text."
 }
@@ -183,8 +182,8 @@ def enforce_json_object(
 
     Bedrock applies no decoding constraint for ``json_object`` output (unlike
     ``json_schema``), so this system-prompt nudge is the only enforcement
-    available. It is appended as a new block, never merged into or replacing an
-    existing one, so an explicit user/system prompt is preserved untouched.
+    available.  It is appended as its own block, leaving any explicit
+    user/system prompt untouched.
 
     Args:
         system_blocks: Mutable system content blocks list to append to.

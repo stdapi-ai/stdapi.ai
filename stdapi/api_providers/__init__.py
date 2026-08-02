@@ -1,6 +1,6 @@
 """Handle API polymorphism based on the upstream API provider."""
 
-from typing import TYPE_CHECKING, TypeVar, overload
+from typing import TYPE_CHECKING, overload
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -11,8 +11,6 @@ if TYPE_CHECKING:
 
     from stdapi.monitoring import EventLog
     from stdapi.types import JsonMapping
-
-T = TypeVar("T")
 
 #: Route tag to request-id header name mapping (Else default to "x-request-id").
 REQUEST_ID_HEADER_BY_TAG: dict[str, str] = {}
@@ -113,9 +111,7 @@ def format_http_error(
 def get_request_id_header(request: Request) -> str:
     """Return the appropriate request-id header name for the matched route.
 
-    Inspects the resolved route's tags to determine which API provider handled
-    the request, then returns the corresponding header name.
-    Falls back to ``x-request-id`` (OpenAI convention) when no tag matches.
+    Falls back to ``x-request-id`` (OpenAI convention) when no route tag matches.
 
     Args:
         request: Incoming HTTP request.

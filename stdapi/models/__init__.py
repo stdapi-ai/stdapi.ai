@@ -9,7 +9,7 @@ from importlib import import_module
 from pkgutil import iter_modules
 from re import Pattern
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Never, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Never, TypedDict
 
 from botocore.exceptions import (
     BotoCoreError,
@@ -34,6 +34,7 @@ from stdapi.aws_bedrock import (
     check_stream_event,
     handle_bedrock_client_error,
     usage_from_amazon_bedrock_invocation_metrics,
+    validate_bedrock_region,
 )
 from stdapi.aws_bedrock_mantle import MantleError
 from stdapi.aws_bedrock_mantle import request_json as mantle_request_json
@@ -474,10 +475,6 @@ class ModelDetails(BaseModel):
         if self.inference_profiles_regional is None:
             self.inference_profiles_regional = {}
         self.inference_profiles_regional[region] = name
-
-
-RequestT = TypeVar("RequestT")
-ResponseT = TypeVar("ResponseT")
 
 
 class ModelBase[RequestT, ResponseT]:
@@ -1154,9 +1151,6 @@ class ModelBase[RequestT, ResponseT]:
                 request, r, single_region=len(candidates) == 1
             ),
         )
-
-
-ModelT = TypeVar("ModelT", bound=ModelBase[Any, Any])
 
 
 async def get_model_details(model_id: str) -> ModelDetails:
@@ -2400,14 +2394,18 @@ async def route_and_execute[T](
         except (ClientError, ApiError) as exc:
             # handle_bedrock_client_error() converts some ClientErrors (e.g.
             # ModelNotReadyException) to ApiError before we get to see them; recover
-            # the original AWS error code either way to classify retryability.
-            code = _client_error_code(exc)
-            if code not in ROUTING_RETRYABLE_CODES and not (
-                isinstance(exc, ClientError) and _is_invalid_model_identifier(exc)
+            # the original AWS error code either way to classify retryability. A
+            # ClientError always carries a code, so only a bare ApiError can yield
+            # None here, and that never satisfies the invalid-model-identifier check.
+            if (code := _client_error_code(exc)) is None or (
+                code not in ROUTING_RETRYABLE_CODES
+                and not (
+                    isinstance(exc, ClientError) and _is_invalid_model_identifier(exc)
+                )
             ):
                 raise
             last_exc = exc
-            REGION_ROUTER.mark_error(model_id, region, code or exc.__class__.__name__)
+            REGION_ROUTER.mark_error(model_id, region, code)
         except (
             ModelRegionUnavailableError,
             BotocoreConnectionError,
@@ -2908,20 +2906,6 @@ async def _validate_model_from_arn(arn: str) -> ModelDetails | None:
         return model
 
 
-def _validate_bedrock_region(region: str) -> None:
-    """Ensure *region* is configured, so a lookup by region cannot raise an unhandled ``KeyError``.
-
-    Args:
-        region: AWS region parsed from a client-supplied ARN.
-
-    Raises:
-        ApiError: If *region* is not in ``SETTINGS.aws_bedrock_regions``.
-    """
-    if region not in SETTINGS.aws_bedrock_regions:
-        msg = f"Region '{region}' is not a configured Bedrock region."
-        raise ApiError(msg)
-
-
 async def _get_prompt_router_models(
     arn: str,
 ) -> tuple[Sequence[PromptRouterTargetModelTypeDef], RegionName] | None:
@@ -2941,7 +2925,7 @@ async def _get_prompt_router_models(
             msg = "Prompt router are not allowed by server configuration."
             raise ApiError(msg)
         region: RegionName = result.group("region")  # type: ignore[assignment]
-        _validate_bedrock_region(region)
+        validate_bedrock_region(region)
         return (
             await get_client("bedrock", region).get_prompt_router(promptRouterArn=arn)
         ).get("models") or (), region
@@ -2973,7 +2957,7 @@ async def _get_application_inference_profile_models(
             msg = "Cross-region inference profile are not allowed by server configuration."
             raise ApiError(msg)
         region: RegionName = result.group("region")  # type: ignore[assignment]
-        _validate_bedrock_region(region)
+        validate_bedrock_region(region)
         return (
             await get_client("bedrock", region).get_inference_profile(
                 inferenceProfileIdentifier=arn
@@ -3066,7 +3050,7 @@ async def resolve_bedrock_prompt(prompt_id: str, version: str | None) -> Bedrock
         version = arn_version
     base_arn: str = result.group("base")
     region: RegionName = result.group("region")  # type: ignore[assignment]
-    _validate_bedrock_region(region)
+    validate_bedrock_region(region)
     model = await validate_model(
         await _get_prompt_model_id(base_arn, version, region),
         input_modality="TEXT",

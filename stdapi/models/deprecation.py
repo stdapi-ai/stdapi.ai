@@ -8,6 +8,7 @@ Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.
 
 from stdapi.config import SETTINGS
 
+#: Deprecated Bedrock model IDs mapped to their recommended replacement.
 DEPRECATED_MODELS: dict[str, str] = {
     # AI21
     "ai21.j2-mid-v1": "ai21.jamba-instruct-v1:0",

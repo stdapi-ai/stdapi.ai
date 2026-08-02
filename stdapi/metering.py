@@ -16,7 +16,9 @@ from stdapi.server import SERVER_ID, SERVER_VERSION
 if TYPE_CHECKING:
     from stdapi.monitoring import EventLog
 
+#: AWS Marketplace product code; empty for the community (unmetered) build.
 PRODUCT_CODE = ""
+#: License metadata reported in the OpenAPI spec.
 LICENCE_INFO = (
     {"name": "Commercial License", "url": "https://stdapi.ai/operations_licensing/"}
     if PRODUCT_CODE
@@ -25,7 +27,9 @@ LICENCE_INFO = (
         "identifier": "AGPL-3.0-or-later",
     }
 )
+#: Server edition title reported in the OpenAPI spec.
 EDITION_TITLE = f"stdapi.ai ({'Enterprise' if PRODUCT_CODE else 'Community'} Edition)"
+#: Full server version string, suffixed with the edition marker ('e'/'c').
 SERVER_FULL_VERSION = f"{SERVER_VERSION}+{'e' if PRODUCT_CODE else 'c'}"
 
 

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
-from stdapi.models import ModelBase, RequestT, ResponseT, get_model, load_model_plugins
+from stdapi.models import ModelBase, get_model, load_model_plugins
 
 if TYPE_CHECKING:
     from re import Pattern
@@ -62,7 +62,7 @@ class EmbeddingResponse(BaseModel):
     embeddings_by_type: dict[str, list[list[float | int]]] | None = None
 
 
-class EmbeddingModelBase(ModelBase[RequestT, ResponseT]):
+class EmbeddingModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
     """Base class for provider-specific embedding models."""
 
     @abstractmethod

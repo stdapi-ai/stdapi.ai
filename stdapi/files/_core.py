@@ -77,8 +77,7 @@ _FILENAME_MAX_LEN: int = 500
 #: OpenAI purpose stored for files uploaded without a purpose (OpenAI's "any purpose" value).
 DEFAULT_PURPOSE = "user_data"
 
-#: S3's hard size limit for a single-request ``CopyObject`` call; larger objects
-#: need the multipart ``UploadPartCopy`` API instead.
+#: S3's single-request ``CopyObject`` size cap; larger objects need ``UploadPartCopy``.
 _COPY_OBJECT_MAX_BYTES = 5 * 1024**3
 
 #: Part size used when correcting metadata on an object above :data:`_COPY_OBJECT_MAX_BYTES`.

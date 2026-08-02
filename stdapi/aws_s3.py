@@ -153,24 +153,6 @@ def require_s3_bucket_for_region(region: RegionName) -> str:
     raise ApiError(msg)
 
 
-async def _delete_s3_objects(s3_objects_to_delete: list[tuple[str, str]]) -> None:
-    """Delete S3 temporary objects.
-
-    The S3 client is resolved automatically from :data:`BUCKET_TO_REGION`.
-
-    Args:
-        s3_objects_to_delete: List of (bucket, key) tuples to delete.
-    """
-    await gather(
-        *(
-            get_client("s3", BUCKET_TO_REGION.get(bucket)).delete_object(
-                Bucket=bucket, Key=key
-            )
-            for bucket, key in s3_objects_to_delete
-        )
-    )
-
-
 async def put_object_and_get_url(body: bytes, content_type: str, filename: str) -> str:
     """Uploads an object to an AWS S3 bucket and retrieves the pre-signed URL to access it.
 

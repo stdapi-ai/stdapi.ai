@@ -82,10 +82,7 @@ _FileId = Annotated[
 def _to_file_object(record: FileRecord) -> FileObject:
     """Convert a ``_FileRecord`` to an OpenAI ``FileObject`` response.
 
-    The ``purpose or DEFAULT_PURPOSE`` fallback only matters for records
-    written before ``upload_file`` started storing the default explicitly for
-    every input source (including ``s3://``/``file-id:`` references); every
-    current record already carries a stored purpose.
+    Falls back to ``DEFAULT_PURPOSE`` when the record carries no stored purpose.
 
     Args:
         record: Internal ``_FileRecord`` instance.
