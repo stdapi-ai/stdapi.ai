@@ -6,6 +6,8 @@ Ref: https://developers.openai.com/api/reference/resources/audio/subresources/tr
 """
 
 import io
+import json
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -30,7 +32,7 @@ from stdapi.types.openai_audio import (
 from tests.conftest import logged_usage_entries
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import AsyncGenerator, Iterator
 
     from starlette.testclient import TestClient as TestClientType
 
@@ -247,7 +249,6 @@ class TestAudioTranscriptions:
             stream=True,
         )
 
-        # Validate streaming response and collect chunks with content validation
         chunks = []
         accumulated_text = ""
         has_delta_events = False
@@ -255,39 +256,31 @@ class TestAudioTranscriptions:
         for chunk in response:
             chunks.append(chunk)
 
-            # Validate chunk structure and content
             assert hasattr(chunk, "type"), f"Chunk missing 'type' attribute: {chunk}"
 
-            # Check for delta chunk type and validate content
             if chunk.type == "transcript.text.delta":
                 has_delta_events = True
                 assert hasattr(chunk, "delta"), (
                     f"Delta chunk missing 'delta' attribute: {chunk}"
                 )
 
-                # Delta is a direct string attribute in OpenAI API
                 if chunk.delta:
                     accumulated_text += chunk.delta
-                    # Validate delta text is not empty or just whitespace when present
                     assert chunk.delta.strip(), (
                         f"Delta text is empty or whitespace: '{chunk.delta}'"
                     )
 
-            # Limit chunks for efficiency while ensuring we get meaningful content
-            if len(chunks) >= 15:  # Allow more chunks to capture complete transcription
+            # Cap the chunks read so a long transcript cannot stall the test.
+            if len(chunks) >= 15:
                 break
 
-        # Validate overall streaming behavior
         assert len(chunks) > 0, "No streaming chunks received"
         assert has_delta_events, "No delta transcription events received"
-
-        # Ensure we accumulated meaningful text from delta events
         assert accumulated_text.strip(), (
             f"No meaningful text accumulated from delta events: '{accumulated_text}'"
         )
 
-        # The sample audio speaks "This is a test.": match its words tolerantly
-        # rather than the exact ASR output.
+        # Match the sample audio's words tolerantly rather than the exact ASR output.
         final_text = accumulated_text.strip()
 
         final_text_lower = final_text.lower()
@@ -297,20 +290,17 @@ class TestAudioTranscriptions:
             f"Transcription doesn't contain expected content: '{final_text}'"
         )
 
-        # Validate text quality - should be reasonably long and contain meaningful content
         assert len(final_text) > 10, f"Transcription text too short: '{final_text}'"
         assert not final_text.isdigit(), (
             f"Transcription contains only digits: '{final_text}'"
         )
 
-        # Validate that we got multiple delta chunks (streaming behavior)
         delta_chunks = [c for c in chunks if c.type == "transcript.text.delta"]
         assert len(delta_chunks) >= 1, (
             f"Expected multiple delta chunks, got {len(delta_chunks)}"
         )
 
-        # The stream terminates with a single done event carrying the full
-        # transcript; only assert it when the chunk cap did not truncate it.
+        # The terminating done event is only reached when the chunk cap did not truncate.
         if len(chunks) < 15:
             done_chunks = [c for c in chunks if c.type == "transcript.text.done"]
             assert len(done_chunks) == 1, (
@@ -599,7 +589,6 @@ class TestAudioTranscriptions:
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/models/audio/amazon_transcribe.py:_format_json_response
         """
-        # Test segment-level timestamps only
         response = openai_client.audio.transcriptions.create(
             file=("test.wav", io.BytesIO(sample_audio_file)),
             model=transcription_model,
@@ -615,7 +604,6 @@ class TestAudioTranscriptions:
             assert segment.end >= segment.start
         assert response.words is None, "words returned without word granularity"
 
-        # Test word-level timestamps only
         response = openai_client.audio.transcriptions.create(
             file=("test.wav", io.BytesIO(sample_audio_file)),
             model=transcription_model,
@@ -717,7 +705,6 @@ class TestAudioTranscriptions:
         segments = response.segments
         assert segments, "Diarization returned no speaker segments"
         for segment in segments:
-            # Validate segment types
             assert isinstance(segment.id, str)
             assert segment.id.startswith("seg_")
             assert isinstance(segment.start, int | float)
@@ -727,11 +714,9 @@ class TestAudioTranscriptions:
             assert isinstance(segment.text, str)
             assert segment.type == "transcript.text.segment"
 
-            # Validate timing
             assert segment.start >= 0
             assert segment.end >= segment.start
 
-            # Validate speaker label format (should be A, B, C, etc.)
             assert segment.speaker.isalpha()
             assert segment.speaker.isupper()
             assert len(segment.speaker) == 1
@@ -1267,9 +1252,8 @@ class TestTranscriptionMultipartFormParsing:
     ) -> None:
         """The bare ``include`` field keeps binding for non-SDK multipart clients.
 
-        ``include`` moved from a scalar to a list to match upstream; this checks
-        the bare field name (this gateway's own convenience path, not the SDK's
-        wire format) still reaches the request model as a single-item list.
+        The bare field name is this gateway's own convenience path, not the SDK's
+        ``include[]`` wire format, and binds as a single-item list.
         """
         captured: dict[str, TranscriptionCreateParams] = {}
 
@@ -1472,6 +1456,128 @@ class TestTranscribeStreamTermination:
         assert isinstance(done, TranscriptionTextDoneEvent)
         assert done.type == "transcript.text.done"
         assert done.text == "hello world"
+
+
+@pytest.mark.local
+class TestStreamingTranscriptionRoute:
+    """The route serialises the model's events as ``text/event-stream``.
+
+    The SSE framing is what an OpenAI client parses, so it is asserted on the
+    raw body rather than through the SDK: one data-only event per model event,
+    each carrying its own ``type``.
+
+    Ref: https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create
+         stdapi/routes/openai_audio_transcriptions.py:_transcript_audio_sse
+    """
+
+    @staticmethod
+    def _stub_model(monkeypatch: pytest.MonkeyPatch) -> None:
+        """Serve the route from a model streaming two deltas and a done event."""
+
+        class _StubModel:
+            @staticmethod
+            async def stt_stream(
+                **_kwargs: object,
+            ) -> AsyncGenerator[
+                TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent
+            ]:
+                yield TranscriptionTextDeltaEvent(
+                    delta="hello ", type="transcript.text.delta"
+                )
+                yield TranscriptionTextDeltaEvent(
+                    delta="world", type="transcript.text.delta"
+                )
+                yield TranscriptionTextDoneEvent(
+                    text="hello world", type="transcript.text.done"
+                )
+
+        async def _validate_model(*_args: object, **_kwargs: object) -> Any:  # noqa: ANN401
+            return SimpleNamespace(id="stub-speech-model")
+
+        monkeypatch.setattr(
+            openai_audio_transcriptions, "validate_model", _validate_model
+        )
+        monkeypatch.setattr(
+            openai_audio_transcriptions,
+            "get_audio_model",
+            lambda _model_id: _StubModel(),
+        )
+
+    @staticmethod
+    def _post_stream(app_client: TestClientType) -> Any:  # noqa: ANN401
+        """Post a streaming transcription request through the multipart path."""
+        return app_client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("test.wav", io.BytesIO(b"fake"), "audio/wav")},
+            data={
+                "model": "stub-speech-model",
+                "response_format": "json",
+                "stream": "true",
+            },
+        )
+
+    @staticmethod
+    def _sse_payloads(body: str) -> list[dict[str, Any]]:
+        """Return the JSON payload of every ``data:`` line in an SSE body."""
+        return [
+            json.loads(line.removeprefix("data:").strip())
+            for line in body.splitlines()
+            if line.startswith("data:") and "[DONE]" not in line
+        ]
+
+    def test_events_are_streamed_as_server_sent_events(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Each model event becomes one SSE data payload keeping its ``type``."""
+        self._stub_model(monkeypatch)
+
+        response = self._post_stream(app_client)
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        payloads = self._sse_payloads(response.text)
+        assert [payload["type"] for payload in payloads] == [
+            "transcript.text.delta",
+            "transcript.text.delta",
+            "transcript.text.done",
+        ]
+        assert [payload["delta"] for payload in payloads[:-1]] == ["hello ", "world"]
+        assert payloads[-1]["text"] == "hello world"
+
+    def test_a_configured_guardrail_masks_the_streamed_transcript(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With a guardrail configured, the stream carries the guarded transcript only.
+
+        The deltas are withheld until the transcript is complete, so a masked
+        transcript replaces them instead of being emitted after the raw text
+        has already reached the client.
+        """
+        self._stub_model(monkeypatch)
+
+        async def _mask(text: str, **_kwargs: object) -> str:
+            return text.replace("world", "*****")
+
+        monkeypatch.setattr(
+            openai_audio_transcriptions, "apply_guardrail_to_text", _mask
+        )
+        monkeypatch.setattr(
+            openai_audio_transcriptions,
+            "GUARDRAIL_CONFIG_VAR",
+            SimpleNamespace(get=lambda _default=None: {"guardrailIdentifier": "gr"}),
+        )
+
+        response = self._post_stream(app_client)
+
+        assert response.status_code == 200
+        payloads = self._sse_payloads(response.text)
+        assert [payload["type"] for payload in payloads] == [
+            "transcript.text.delta",
+            "transcript.text.done",
+        ]
+        assert payloads[0]["delta"] == "hello *****"
+        assert payloads[-1]["text"] == "hello *****"
+        assert "world" not in response.text
 
 
 @pytest.fixture

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import warnings
 from io import BytesIO
+from json import loads
 
 import pytest
 from PIL import Image
@@ -337,3 +338,35 @@ async def test_alpha_mask_to_bw_maps_alpha_to_black_and_white(
          https://docs.aws.amazon.com/nova/latest/userguide/image-gen-access.html
     """
     assert await _mask_pixel(alpha, invert=invert, threshold=threshold) == expected
+
+
+class TestJsonResponseRendering:
+    """The gateway renders every response body with pydantic_core, not the stdlib.
+
+    ``JSONResponse`` is installed as the app's ``default_response_class``, so
+    its output is the wire format of every route: compact separators and raw
+    UTF-8, byte-identical to what the FastAPI default would have produced.
+
+    Ref: stdapi/utils.py:JSONResponse.render
+         stdapi/main.py:app
+    """
+
+    def test_content_renders_compactly_without_ascii_escaping(self) -> None:
+        """A payload is rendered with no spaces between items and non-ASCII left raw."""
+        body = utils.JSONResponse(content={"model": "nova", "text": "héllo"}).body
+        assert body == '{"model":"nova","text":"héllo"}'.encode()
+        assert loads(bytes(body).decode()) == {"model": "nova", "text": "héllo"}
+
+    def test_a_lone_surrogate_is_escaped_instead_of_failing_the_response(self) -> None:
+        """Text pydantic_core refuses still renders, through the escaping fallback.
+
+        A lone surrogate has no UTF-8 encoding, so both encoders raise unless the
+        fallback escapes it. Without the escape the render itself fails, turning
+        a served answer into an unhandled error after the status was decided.
+
+        Ref: https://docs.python.org/3/library/json.html#json.dumps
+        """
+        body = utils.JSONResponse(content={"text": "a\ud800b"}).body
+
+        assert body == b'{"text":"a\\ud800b"}'
+        assert loads(bytes(body).decode())["text"] == "a\ud800b"

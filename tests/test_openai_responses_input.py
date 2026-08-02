@@ -41,6 +41,7 @@ from stdapi.types.openai_responses import (
     McpCallInput,
     McpListToolsInput,
     Reasoning,
+    ReasoningItemContent,
     ReasoningItemSummary,
     ResponseCreateParams,
     ResponseInputFile,
@@ -499,7 +500,7 @@ class TestEchoedItemsTolerateUnknownFields:
 
         Every message the API hands back carries an ``id``; a client replaying a
         listed item sends it straight back. Codex does so from its very first
-        request, and rejecting the field failed the whole turn.
+        request, so rejecting the field fails the whole turn.
 
         Ref: https://developers.openai.com/api/reference/resources/responses/methods/list_input_items
              stdapi/types/openai_responses.py:EasyInputMessage
@@ -770,6 +771,20 @@ class TestSystemMessageContentParts:
         assert messages == []
         assert system == [{"text": "be brief"}, {"text": "and kind"}]
 
+    @pytest.mark.parametrize("role", ["system", "developer"])
+    async def test_plain_string_content_becomes_a_system_block(self, role: str) -> None:
+        """A string ``content`` is lifted just like the list form, not left as a turn.
+
+        The string shorthand is the common spelling for instructions; leaving it
+        in the message list would make it a user-precedence turn.
+        """
+        item = _parse({"type": "message", "role": role, "content": "be brief"})
+        messages, system = await map_input(
+            cast("list[ResponseInputItem]", [item]), None
+        )
+        assert messages == []
+        assert system == [{"text": "be brief"}]
+
 
 class TestSystemBreakpointCachePoints:
     """System-part cache breakpoints never lead with nor repeat a cache point.
@@ -865,6 +880,74 @@ class TestCountInputTokensToolConfig:
         assert synthetic["required"] == ["prompt"], (
             "the synthetic tool must be counted with its real schema"
         )
+
+    @pytest.mark.usefixtures("captured_count_tokens")
+    async def test_reasoning_config_reaches_the_model_hook(self) -> None:
+        """A ``reasoning`` request calls the model's reasoning hook with its effort.
+
+        Each model builds its own reasoning fields in that hook, so the counted
+        request only matches the one the model receives if the adapter hands the
+        requested effort over; the resulting fields are the model's business.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:count_input_tokens_via_bedrock
+             stdapi/models/chat/_default.py:ChatModel._req_configure_reasoning
+        """
+        received: dict[str, Any] = {}
+
+        class _ReasoningChatModel(ChatModel):
+            """Model whose reasoning hook records the arguments it was handed."""
+
+            def _req_configure_reasoning(
+                self,
+                additional_request_fields: dict[str, Any],
+                *,
+                enabled: bool,
+                reasoning_effort: str | None = None,
+                budget_tokens: int | None = None,
+                max_tokens: int | None = None,
+            ) -> None:
+                """Record the reasoning arguments without writing any request field."""
+                received.update(
+                    enabled=enabled,
+                    reasoning_effort=reasoning_effort,
+                    budget_tokens=budget_tokens,
+                    max_tokens=max_tokens,
+                )
+
+        request = InputTokenCountParams.model_validate(
+            {"model": "m", "input": "hi", "reasoning": {"effort": "high"}}
+        )
+        assert (
+            await adapter.count_input_tokens_via_bedrock(
+                request, "model-id", "us-east-1", _ReasoningChatModel("model-id")
+            )
+            == 7
+        )
+        assert received == {
+            "enabled": True,
+            "reasoning_effort": "high",
+            "budget_tokens": None,
+            "max_tokens": None,
+        }
+
+    async def test_no_reasoning_leaves_the_request_bare(
+        self, captured_count_tokens: dict[str, Any]
+    ) -> None:
+        """Without ``reasoning`` no additional field is sent, not an empty object.
+
+        Bedrock validates ``additionalModelRequestFields`` against the model, so
+        an always-present empty object would be a gratuitous divergence from the
+        Converse request being counted.
+        """
+        captured = captured_count_tokens
+        request = InputTokenCountParams.model_validate({"model": "m", "input": "hi"})
+        assert (
+            await adapter.count_input_tokens_via_bedrock(
+                request, "model-id", "us-east-1", ChatModel("model-id")
+            )
+            == 7
+        )
+        assert "additionalModelRequestFields" not in captured["input"]["converse"]
 
     async def test_tool_choice_none_omits_tool_config(
         self, captured_count_tokens: dict[str, Any]
@@ -1166,9 +1249,8 @@ class TestEchoedAssistantContentShapes:
         """A text part maps to assistant text whichever shape the client replayed.
 
         ``output_text`` without ``annotations`` is the shape Hermes replays; it
-        validates as ``ResponseOutputTextContent`` rather than
-        ``ResponseOutputText``, which the mapper used to handle only by falling
-        through to a refusal attribute that shape does not have.
+        validates as ``ResponseOutputTextContent``, not ``ResponseOutputText``,
+        so the mapper must not reach for a ``refusal`` attribute it lacks.
         """
         item = _parse(self._echo(part))
         assert isinstance(item, ResponseOutputMessageInput)
@@ -1333,4 +1415,101 @@ class TestReasoningSummarySignatures:
         assert messages[0]["content"] == [
             {"reasoningContent": {"reasoningText": {"text": "sum"}}},
             {"reasoningContent": {"redactedContent": b"\x02"}},
+        ]
+
+
+class TestReplayedReasoningSignatureRequirement:
+    """Unsigned replayed reasoning is dropped for models that mandate signatures.
+
+    Some models reject a ``reasoningText`` block they cannot verify, which would
+    fail the whole turn.  Replaying only the texts that still carry their
+    signature keeps the turn alive at the cost of some replayed context; models
+    that do not require signatures keep everything.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ReasoningContentBlock.html
+         stdapi/models/chat/_adapters/_openai_responses.py:_map_reasoning_item
+    """
+
+    @staticmethod
+    def _item(encrypted_content: str | None) -> ResponseReasoningItem:
+        """Build a two-part reasoning item with the given envelope.
+
+        Args:
+            encrypted_content: Envelope to attach, or ``None`` for a bare item.
+
+        Returns:
+            The reasoning item to replay as an input.
+        """
+        return ResponseReasoningItem(
+            id="rs_1",
+            summary=[],
+            type="reasoning",
+            content=[
+                ReasoningItemContent(text="first", type="reasoning_text"),
+                ReasoningItemContent(text="second", type="reasoning_text"),
+            ],
+            encrypted_content=encrypted_content,
+        )
+
+    async def test_unsigned_texts_beyond_the_signatures_are_dropped(self) -> None:
+        """Only the texts covered by a signature survive, in order."""
+        messages, _ = await map_input(
+            cast(
+                "list[ResponseInputItem]",
+                [self._item(encode_reasoning_content(["sig-1"], []))],
+            ),
+            None,
+            reasoning_signature_required=True,
+        )
+        assert messages[0]["content"] == [
+            {
+                "reasoningContent": {
+                    "reasoningText": {"text": "first", "signature": "sig-1"}
+                }
+            }
+        ], "an unsigned text would be rejected by the model, failing the whole turn"
+
+    async def test_a_fully_unsigned_item_contributes_no_reasoning(self) -> None:
+        """An item whose envelope was stripped replays no reasoning at all.
+
+        Clients that drop ``encrypted_content`` (it is only returned on request)
+        must not turn the next turn into a model-side rejection.
+        """
+        messages, _ = await map_input(
+            cast("list[ResponseInputItem]", [self._item(None)]),
+            None,
+            reasoning_signature_required=True,
+        )
+        assert messages == [], "an assistant turn with no block at all is not emitted"
+
+    async def test_redacted_blocks_are_unaffected_by_the_requirement(self) -> None:
+        """``redactedContent`` carries no text binding, so it is always replayed."""
+        messages, _ = await map_input(
+            cast(
+                "list[ResponseInputItem]",
+                [self._item(encode_reasoning_content([], [b"\x02"]))],
+            ),
+            None,
+            reasoning_signature_required=True,
+        )
+        assert messages[0]["content"] == [
+            {"reasoningContent": {"redactedContent": b"\x02"}}
+        ]
+
+    async def test_models_without_the_requirement_keep_every_text(self) -> None:
+        """Without the requirement, the unsigned text is replayed as-is."""
+        messages, _ = await map_input(
+            cast(
+                "list[ResponseInputItem]",
+                [self._item(encode_reasoning_content(["sig-1"], []))],
+            ),
+            None,
+        )
+        assert messages[0]["content"] == [
+            {
+                "reasoningContent": {
+                    "reasoningText": {"text": "first", "signature": "sig-1"}
+                }
+            },
+            {"reasoningContent": {"reasoningText": {"text": "second"}}},
         ]

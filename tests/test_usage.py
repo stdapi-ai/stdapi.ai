@@ -723,6 +723,29 @@ class TestEmitUsageMetrics:
         metrics = payload["_aws"]["CloudWatchMetrics"][0]
         assert metrics["Dimensions"] == [["Model"]]
 
+    def test_a_record_with_nothing_to_report_emits_no_line(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A record with no billed quantity and no cost is skipped, not emitted empty.
+
+        ``total_tokens`` is a reporting total rather than one of the billed
+        ``Dimension`` entries in ``_DIMENSION_INFO``, so a record carrying only
+        it has empty ``quantities`` and nothing to meter. An EMF directive that
+        declares dimensions but names no metric is an invalid document
+        CloudWatch rejects, so the whole line is dropped.
+        """
+        monkeypatch.setattr(SETTINGS, "cloudwatch_metrics", True)
+        get_model_state("emfmodel").region = "us-east-1"
+        record_bedrock_usage("emfmodel", total_tokens=1000)
+        compute_costs()
+
+        written: list[dict[str, Any]] = []
+        monkeypatch.setattr(usage, "stdout_write", written.append)
+        emit_usage_metrics()
+
+        assert usage.USAGE.get(), "the record itself must still exist"
+        assert written == []
+
     def test_multi_currency_emits_one_extra_line_without_duplicating_quantities(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -7,12 +7,15 @@ Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
 
 from __future__ import annotations
 
+from base64 import b64encode
+
 import pytest
 
 from stdapi.api_errors import ApiError
 from stdapi.models.chat._adapters._anthropic_message import _map_tool_result_to_bedrock
 from stdapi.types.anthropic_messages import (
     DocumentBlockParam,
+    ImageBlockParam,
     PlainTextSourceParam,
     SearchResultBlockParam,
     TextBlockParam,
@@ -98,6 +101,43 @@ async def test_map_tool_result_to_bedrock_maps_document_block() -> None:
         "source": {"bytes": b"doc body"},
     }
     assert "status" not in result["toolResult"], "a successful result carries no status"
+
+
+async def test_map_tool_result_to_bedrock_keeps_mixed_text_and_image_parts() -> None:
+    """Text and image parts of one tool result keep their order and their kinds.
+
+    ``ToolResultBlockParam.content`` is a heterogeneous list, so each part goes
+    through its own Bedrock mapping while the list order — which carries the
+    caller's meaning — is preserved.  The declared ``media_type`` drives the
+    Bedrock image ``format`` rather than content sniffing.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolResultContentBlock.html
+         stdapi/models/chat/_adapters/_anthropic_message.py:_map_tool_result_part_to_bedrock
+    """
+    block = ToolResultBlockParam(
+        type="tool_result",
+        tool_use_id="toolu_1",
+        content=[
+            TextBlockParam(type="text", text="chart below"),
+            ImageBlockParam.model_validate(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": b64encode(b"PNGDATA").decode(),
+                    },
+                }
+            ),
+            TextBlockParam(type="text", text="chart above"),
+        ],
+    )
+    result = await _map_tool_result_to_bedrock(block)
+    first, second, third = result["toolResult"]["content"]
+    assert first == {"text": "chart below"}
+    assert second["image"]["format"] == "png"
+    assert third == {"text": "chart above"}
 
 
 async def test_map_tool_result_to_bedrock_maps_search_result_block() -> None:

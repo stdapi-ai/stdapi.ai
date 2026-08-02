@@ -499,6 +499,36 @@ class TestPaginateModelsOffline:
         assert [m.id for m in page] == ["m0", "m1", "m2"]
         assert has_more is False
 
+    def test_both_cursors_are_ignored_and_the_first_page_is_served(self) -> None:
+        """Passing ``after_id`` and ``before_id`` together applies neither cursor.
+
+        The two cursors would slice in opposite directions, so the combination has
+        no defined page; the helper degrades to the unpaginated first page instead
+        of picking one cursor arbitrarily or returning nothing.
+
+        Ref: https://platform.claude.com/docs/en/api/models/list
+             stdapi/routes/anthropic_models.py:paginate_models
+        """
+        data = self._models(10)
+
+        page, has_more = paginate_models(data, limit=3, after_id="m1", before_id="m8")
+
+        assert [m.id for m in page] == ["m0", "m1", "m2"]
+        assert has_more is True
+
+    def test_no_cursor_serves_the_head_of_the_list(self) -> None:
+        """With no cursor the first ``limit`` items are returned in catalog order.
+
+        ``has_more`` reports whether anything was truncated, which is what a client
+        polls to decide it needs a second page.
+        """
+        data = self._models(4)
+
+        page, has_more = paginate_models(data, limit=4, after_id=None, before_id=None)
+
+        assert [m.id for m in page] == ["m0", "m1", "m2", "m3"]
+        assert has_more is False
+
     def test_unknown_before_id_falls_back_to_start_of_list(self) -> None:
         """An unmatched ``before_id`` is ignored rather than switching to the end of the list.
 

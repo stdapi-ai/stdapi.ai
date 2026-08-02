@@ -148,6 +148,54 @@ async def test_search_result_block_wrapped_in_web_search_tool_result() -> None:
     assert message.model == "model-x"
 
 
+async def test_forced_tool_drops_tool_uses_naming_another_tool() -> None:
+    """``tool_choice`` naming one tool filters out calls to any other tool.
+
+    Converse's ``toolChoice.tool`` mandates a tool but does not forbid the rest,
+    so the model may still answer with a call the caller excluded; only
+    ``tool_use`` blocks are filtered, and the surrounding text is untouched.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
+         https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools#forcing-tool-use
+         stdapi/models/chat/_adapters/_anthropic_message.py:format_response
+    """
+    contents = cast(
+        "list[ContentBlockOutputTypeDef]",
+        [
+            {"text": "Let me check."},
+            {
+                "toolUse": {
+                    "toolUseId": "tooluse_t1",
+                    "name": "other_tool",
+                    "input": cast("dict[str, Any]", {"secret": "leak"}),
+                }
+            },
+            {
+                "toolUse": {
+                    "toolUseId": "tooluse_t2",
+                    "name": "get_time",
+                    "input": cast("dict[str, Any]", {"tz": "utc"}),
+                }
+            },
+        ],
+    )
+    message = await format_response(
+        contents=contents,
+        stop_reason="tool_use",
+        usage={},
+        message_id="msg_1",
+        model_id="model-x",
+        forced_tool="get_time",
+        resp_map_tool_result=lambda *_args: None,
+    )
+    text, tool_use = message.content
+    assert isinstance(text, TextBlock)
+    assert text.text == "Let me check."
+    assert isinstance(tool_use, ToolUseBlock)
+    assert tool_use.name == "get_time"
+    assert tool_use.input == {"tz": "utc"}
+
+
 def _search_result_contents() -> list[ContentBlockOutputTypeDef]:
     """Return a Bedrock ``toolUse`` block followed by a bare ``searchResult`` one."""
     return cast(

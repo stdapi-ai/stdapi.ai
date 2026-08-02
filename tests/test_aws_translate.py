@@ -1,8 +1,17 @@
 """Unit tests for the AWS Translate wrapper: failover, language codes, extra params.
 
+Also covers subtitle translation, which batches every cue of an SRT/VTT file into
+a single HTML document so one ``TranslateText`` call serves the whole file, then
+puts the translations back without touching cue numbers or timings.
+
 Ref: https://docs.aws.amazon.com/translate/latest/APIReference/API_TranslateText.html
+     https://docs.aws.amazon.com/translate/latest/dg/translating-html.html
      stdapi/aws_translate.py:translate
+     stdapi/aws_translate.py:translate_subtitle
 """
+
+from re import DOTALL
+from re import compile as compile_regex
 
 import pytest
 from botocore.exceptions import ParamValidationError
@@ -10,13 +19,16 @@ from botocore.exceptions import ParamValidationError
 import stdapi.aws
 from stdapi import usage
 from stdapi.api_errors import ApiError
-from stdapi.aws_translate import translate
+from stdapi.aws_translate import translate, translate_subtitle
 from stdapi.config import SETTINGS
 from stdapi.pricing import Dimension, Service
 from tests._helpers import make_client_error
 
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
+
+#: Reads the segment number and inner text of each span the wrapper sends out.
+_SPAN_RE = compile_regex(r'<span id="seg(\d+)">(.*?)</span>', DOTALL)
 
 
 class _StubTranslateClient:
@@ -261,3 +273,160 @@ class TestTranslateExtraParams:
         assert "Invalid Formality value" not in str(excinfo.value)
         assert clients["us-east-1"].calls == 1
         assert clients["eu-west-1"].calls == 1
+
+
+class _StubSubtitleTranslateClient:
+    """Translate stub that brackets each span and returns them in reverse order.
+
+    Amazon Translate is free to reorder or re-wrap the spans it returns, so the
+    stub emits the last segment first: a reader that trusted document order rather
+    than the ``seg<n>`` ID would swap the cues.
+    """
+
+    def __init__(self) -> None:
+        self.requests: list[dict[str, object]] = []
+
+    async def translate_text(self, **kwargs: object) -> dict[str, str]:
+        """Record the request and echo every span back, bracketed and reversed."""
+        self.requests.append(kwargs)
+        spans = _SPAN_RE.findall(str(kwargs["Text"]))
+        body = "".join(
+            f'<span id="seg{index}">[{text}]</span>' for index, text in reversed(spans)
+        )
+        return {"TranslatedText": f"<!DOCTYPE html><html><body>{body}</body></html>"}
+
+
+#: Three-cue SRT sample: single-line, two-line, and markup-bearing cue text.
+_SRT = """1
+00:00:01,000 --> 00:00:03,000
+Bonjour tout le monde
+
+2
+00:00:04,000 --> 00:00:06,000
+Comment ca va ?
+Tres bien
+
+3
+00:00:07,000 --> 00:00:09,000
+Tom & Jerry <3
+"""
+
+#: WebVTT sample whose header must survive untranslated.
+_VTT = """WEBVTT
+
+1
+00:00:01.000 --> 00:00:03.000
+Hola mundo
+"""
+
+
+class TestTranslateSubtitle:
+    """translate_subtitle(): cue text is translated, everything else is preserved.
+
+    Ref: https://docs.aws.amazon.com/translate/latest/dg/translating-html.html
+         stdapi/aws_translate.py:_subtitle_extract_text_segments
+         stdapi/aws_translate.py:_subtitle_parse_translated_html
+         stdapi/aws_translate.py:_subtitle_reconstruct_with_translation
+    """
+
+    def _patch(self, monkeypatch: pytest.MonkeyPatch) -> _StubSubtitleTranslateClient:
+        """Serve the same subtitle stub from every candidate region.
+
+        Returns:
+            The stub client every region resolves to.
+        """
+        client = _StubSubtitleTranslateClient()
+        monkeypatch.setattr(
+            stdapi.aws, "get_client", lambda _service, _region=None: client
+        )
+        return client
+
+    async def test_srt_cue_text_is_replaced_and_the_structure_preserved(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cue numbers, timings and blank lines survive; only the text lines change.
+
+        A single call carries all three cues, a two-line cue stays one segment (so
+        the translator sees the sentence whole), and the segments are re-applied by
+        span ID even though the stub returns them last-first.
+        """
+        client = self._patch(monkeypatch)
+
+        result = await translate_subtitle(_SRT, "fr-FR")
+
+        assert (
+            result
+            == """1
+00:00:01,000 --> 00:00:03,000
+[Bonjour tout le monde]
+
+2
+00:00:04,000 --> 00:00:06,000
+[Comment ca va ?
+Tres bien]
+
+3
+00:00:07,000 --> 00:00:09,000
+[Tom & Jerry <3]
+"""
+        )
+        assert len(client.requests) == 1, "the whole file must cost one call"
+
+    async def test_cue_text_is_html_escaped_on_the_wire_and_unescaped_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Markup characters in a cue are escaped into the span and restored after.
+
+        Sending ``<3`` raw would make Translate treat it as a tag and drop it from
+        the returned document; leaving the entities in place would surface
+        ``&amp;`` to the end user.
+        """
+        client = self._patch(monkeypatch)
+
+        result = await translate_subtitle(_SRT, "fr-FR")
+
+        (request,) = client.requests
+        assert "Tom &amp; Jerry &lt;3" in str(request["Text"])
+        assert "Tom & Jerry <3" not in str(request["Text"])
+        assert "[Tom & Jerry <3]" in result
+        assert "&amp;" not in result
+
+    async def test_webvtt_header_and_cue_numbers_are_never_sent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only cue text reaches Translate: the WEBVTT header and numbers stay put.
+
+        Both are structural, and a translated ``WEBVTT`` line makes the file
+        unparseable for every player.
+
+        Ref: https://www.w3.org/TR/webvtt1/#file-structure
+        """
+        client = self._patch(monkeypatch)
+
+        result = await translate_subtitle(_VTT, "es-US")
+
+        (request,) = client.requests
+        assert _SPAN_RE.findall(str(request["Text"])) == [("0", "Hola mundo")]
+        assert (
+            result
+            == """WEBVTT
+
+1
+00:00:01.000 --> 00:00:03.000
+[Hola mundo]
+"""
+        )
+
+    async def test_content_without_cue_text_is_returned_without_any_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A header-only file is returned unchanged and costs nothing.
+
+        Amazon Translate bills per input character, so a file with no cue text must
+        short-circuit rather than send an empty HTML document.
+        """
+        client = self._patch(monkeypatch)
+
+        assert await translate_subtitle("WEBVTT\n\n", "es-US") == "WEBVTT\n\n"
+
+        assert client.requests == []

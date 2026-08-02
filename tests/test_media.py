@@ -237,6 +237,36 @@ class TestFailedEncodeIsReported:
         assert "exited with code 3" in details
         assert "ffmpeg said: bad input" in details
 
+    async def test_a_broken_input_stream_is_named_in_the_failure_log(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """A source that dies mid-upload is reported as the cause, not as ffmpeg's fault.
+
+        The encode fails either way; only the input task's state says whether
+        the payload stopped arriving or the encoder rejected it, and the two
+        need opposite fixes. The caller still gets the mapped ``ApiError``: the
+        cleanup reaps the failed input task, and re-raising its exception there
+        would replace the answer with an unmapped 500.
+        """
+        monkeypatch.setattr(
+            "stdapi.media._ffmpeg_args",
+            lambda *_args: ["sh", "-c", "cat >/dev/null; exit 3"],
+        )
+
+        async def _failing_source() -> AsyncGenerator[bytes]:
+            yield b"audio"
+            msg = "upload aborted"
+            raise ValueError(msg)
+
+        with pytest.raises(ApiError) as excinfo:
+            async for _chunk in encode_audio_stream(_failing_source(), "mp3"):
+                pass
+
+        assert excinfo.value.status == 500
+        details = "".join(map(str, request_log["error_detail"]))
+        assert "exited with code 3" in details
+        assert "Input: failed with ValueError('upload aborted')" in details
+
     async def test_a_zero_exit_is_not_an_error(
         self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
     ) -> None:

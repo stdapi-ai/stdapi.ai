@@ -18,11 +18,12 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass
 from time import monotonic
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
+from aiohttp import ClientError as AIOHTTPClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
 
 if TYPE_CHECKING:
@@ -146,8 +147,8 @@ async def _routing_fixture_context(
         "aws_bedrock_regions", _ROUTING_REGIONS
     )
 
-    # Temporarily set the strategy so RegionRouter.__init__ picks it up,
-    # then restore immediately — the patch.object below handles test-time value.
+    # Set the strategy only so RegionRouter.__init__ picks it up; the patch.object
+    # below carries the test-time value.
     orig_strategy = SETTINGS.aws_bedrock_region_routing
     SETTINGS.aws_bedrock_region_routing = strategy  # type: ignore[assignment]
     router: _rr_mod.RegionRouter | None = (
@@ -155,8 +156,8 @@ async def _routing_fixture_context(
     )
     SETTINGS.aws_bedrock_region_routing = orig_strategy
 
-    # create_client() returns a ClientCreatorContext (async context manager),
-    # not a plain coroutine — use AsyncExitStack to own all clients.
+    # create_client() returns an async context manager, not a coroutine, so an
+    # AsyncExitStack owns every client.
     exit_stack = AsyncExitStack()
     no_retry_clients: dict[str, Any] = {}
     await exit_stack.__aenter__()
@@ -176,9 +177,9 @@ async def _routing_fixture_context(
     _aws_mod._CLIENTS["bedrock-runtime.no-retry"] = no_retry_clients  # type: ignore[assignment]  # noqa: SLF001
 
     try:
-        # compute_candidate_regions returns all model.available_regions from the
-        # startup-time cache, which may include regions absent in effective_regions.
-        # Wrap it to restrict candidates so bedrock_client() never KeyErrors.
+        # compute_candidate_regions reads the startup-time cache, which may name
+        # regions outside effective_regions; restrict it so bedrock_client() cannot
+        # KeyError.
         _orig_ccr = _models_mod.compute_candidate_regions
         _effective_regions_set = set(effective_regions)
 
@@ -918,9 +919,8 @@ class TestRegionRouterUnit:
         router = self._make_router()
         state = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
 
-        # Simulate a recent prior error: set last_quota_error_time to just now
-        # and quota_blocked_until to 0 (expired), so the region is usable again
-        # but the last error is within the stale threshold.
+        # A recent prior error with an expired backoff: the region is usable again
+        # while its last error is still within the stale threshold.
         state.consecutive_quota_errors = 1
         state.last_quota_error_time = monotonic()  # recent
         state.quota_blocked_until = 0.0  # not currently blocked
@@ -1172,6 +1172,82 @@ class TestBedrockProbeUrl:
         assert _rr_mod._bedrock_probe_url(region) == url  # noqa: SLF001
 
 
+class TestSingleProbe:
+    """_single_probe: an unreachable region costs a latency of ``inf``, never an error.
+
+    Latency probing runs inside application startup, so any failure it can meet
+    -- a region botocore cannot resolve, a refused connection, a timeout -- must
+    degrade that one region to ``inf`` (which drops it from the ranking) instead
+    of aborting the boot.
+
+    Ref: stdapi/region_routing.py:_single_probe
+         stdapi/region_routing.py:measure_region_latencies
+    """
+
+    async def test_unresolvable_endpoint_is_infinite_without_probing(self) -> None:
+        """A ``None`` URL yields ``inf`` and the session is never touched.
+
+        ``_bedrock_probe_url`` answers ``None`` for a region with no endpoint
+        data, and probing that would mean building a URL out of a guess.
+        """
+        import stdapi.region_routing as _rr_mod  # noqa: PLC0415
+
+        class _NoCallSession:
+            """Session whose use would fail the test."""
+
+            def head(self, _url: str) -> object:
+                """Fail: no probe may be issued for an unresolvable endpoint."""
+                raise AssertionError
+
+        latency = await _rr_mod._single_probe(  # noqa: SLF001
+            cast("Any", _NoCallSession()), None
+        )
+        assert latency == float("inf")
+
+    @pytest.mark.parametrize(
+        "error",
+        [TimeoutError(), AIOHTTPClientError(), OSError(111, "Connection refused")],
+        ids=["timeout", "aiohttp-client-error", "os-error"],
+    )
+    async def test_a_failing_probe_is_infinite(self, error: Exception) -> None:
+        """Every transport failure a HEAD probe can raise resolves to ``inf``."""
+        import stdapi.region_routing as _rr_mod  # noqa: PLC0415
+
+        class _FailingSession:
+            """Session whose HEAD probe always raises *error*."""
+
+            def head(self, _url: str) -> object:
+                """Raise the parametrized transport failure."""
+                raise error
+
+        latency = await _rr_mod._single_probe(  # noqa: SLF001
+            cast("Any", _FailingSession()), "https://bedrock-runtime.example.invalid"
+        )
+        assert latency == float("inf")
+
+    async def test_a_successful_probe_returns_a_finite_latency(self) -> None:
+        """A probe that completes returns a non-negative, finite millisecond value.
+
+        Finite is the whole contract: ``inf`` is the sentinel reserved for a
+        probe that failed or had no endpoint to reach, and it would rank the
+        region last.
+        """
+        import stdapi.region_routing as _rr_mod  # noqa: PLC0415
+
+        class _OkSession:
+            """Session whose HEAD probe succeeds immediately."""
+
+            @asynccontextmanager
+            async def head(self, _url: str) -> AsyncGenerator[None]:
+                """Answer the probe without doing anything."""
+                yield
+
+        latency = await _rr_mod._single_probe(  # noqa: SLF001
+            cast("Any", _OkSession()), "https://bedrock-runtime.us-east-1.amazonaws.com"
+        )
+        assert 0 <= latency < float("inf")
+
+
 # ---------------------------------------------------------------------------
 # Group 9 — measure_region_latencies (pure logic, no real network)
 # ---------------------------------------------------------------------------
@@ -1216,12 +1292,9 @@ class TestMeasureRegionLatencies:
         import stdapi.region_routing as _rr_mod  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
-        # _single_probe uses `async with session.head(url):`, so head() must return
-        # an async context manager directly (not a coroutine). AsyncMock() supports
-        # `async with` natively; MagicMock(return_value=AsyncMock()) satisfies this
-        # without wrapping the call in a coroutine.
-        # __aenter__ must explicitly return mock_session so that `session` inside
-        # `async with ClientSession() as session:` is the same object we configured.
+        # _single_probe uses `async with session.head(url):`, so head() must return an
+        # async context manager rather than a coroutine, and __aenter__ must return
+        # mock_session so the configured object is the one under `async with`.
         mock_response = AsyncMock()
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -1347,8 +1420,8 @@ class TestRouteAndExecute:
         import stdapi.region_routing as _rr_mod  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
-        # RegionRouter uses __slots__, so we cannot patch instance attributes.
-        # Patch the class method instead and track all calls during the test.
+        # RegionRouter uses __slots__, so instance attributes cannot be patched;
+        # the class method is patched instead.
         router = _rr_mod.RegionRouter()
         calls: list[str] = []
 
@@ -1641,13 +1714,10 @@ class S3FileFixture:
 async def s3_file(sample_image_file: bytes) -> AsyncGenerator[S3FileFixture]:
     """Upload *sample_image_file* to S3 and yield an :class:`S3FileFixture`.
 
-    Skipped when ``aws_s3_bucket`` is not configured.  The uploaded object is
-    deleted from S3 after the module finishes.
-
-    Creates a fresh S3 client bound to the module event loop (bypassing the
-    module-level ``_CLIENTS`` cache that is bound to the app startup loop) and
-    injects it into ``_CLIENTS["s3"]`` for the duration of the module so that
-    all S3 calls inside the tests resolve correctly.
+    Skipped when ``aws_s3_bucket`` is not configured; the uploaded object is
+    deleted after the module finishes. A fresh S3 client bound to the module
+    event loop is injected into ``_CLIENTS["s3"]`` for the module's duration,
+    since the cached one is bound to the app startup loop.
     """
     _require_s3_bucket()
 
@@ -1674,10 +1744,9 @@ async def s3_file(sample_image_file: bytes) -> AsyncGenerator[S3FileFixture]:
             await exit_stack.__aexit__(None, None, None)
         raise
 
-    # Inject it so get_client("s3", region) resolves to this loop-local client.
-    # Save only the original per-region entry (not the whole dict reference) to
-    # avoid the in-place mutation bug: setdefault() returns the existing dict, so
-    # saving it before mutating would still capture the post-mutation state.
+    # Inject it so get_client("s3", region) resolves to this loop-local client. Only
+    # the per-region entry is saved: setdefault() returns the live dict, so saving
+    # that reference would capture the post-mutation state.
     orig_s3_region_client = _aws_mod._CLIENTS.get("s3", {}).get(region)  # noqa: SLF001
     _aws_mod._CLIENTS.setdefault("s3", {})[region] = s3_client  # noqa: SLF001
 
@@ -1829,9 +1898,8 @@ class TestS3SourceToS3:
         dest_bucket = get_s3_bucket_for_region(dest_region)
         assert dest_bucket is not None
 
-        # Create a loop-local S3 client for the dest region so that copy_s3_object
-        # and the verification head_object call don't hit a client bound to a
-        # different event loop (the app-startup loop).
+        # A loop-local S3 client for the dest region, so copy_s3_object and the
+        # verification head_object do not hit one bound to the app-startup loop.
         exit_stack = AsyncExitStack()
         await exit_stack.__aenter__()
         try:
@@ -2262,9 +2330,9 @@ class TestHttpSourceWithPresignedUrl:
     ) -> None:
         """_HttpSource.to_s3 streams a real HTTP download directly to S3.
 
-        Patches _ACCEPTED_BUCKETS to empty so the presigned URL is treated as
-        a plain HTTP source (not converted to s3://), exercising the real HTTP→S3
-        streaming upload path.  Cleanup uses a raw aiobotocore client.
+        _ACCEPTED_BUCKETS is emptied so the presigned URL stays a plain HTTP
+        source rather than being normalised to ``s3://``, which is what reaches
+        the streaming upload path.
         """
         _require_s3_bucket()
         from unittest.mock import patch  # noqa: PLC0415

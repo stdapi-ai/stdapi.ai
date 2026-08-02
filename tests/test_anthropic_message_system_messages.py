@@ -109,6 +109,45 @@ class TestPrepareMessagesAndSystem:
             TextBlockParam(type="text", text="Now be verbose."),
         ]
 
+    def test_folded_directive_contributes_only_its_text_blocks(self) -> None:
+        """A folded block-content directive yields its text blocks, in order.
+
+        The ``system`` field only accepts ``TextBlockParam`` entries, so a
+        directive carrying non-text blocks — an image, say — has them dropped
+        instead of failing the request or being flattened into a string.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/models/chat/_adapters/_anthropic_message.py:_extract_system_messages
+        """
+        messages, system = _prepare_messages_and_system(
+            [
+                MessageParam.model_validate(
+                    {
+                        "role": "system",
+                        "content": [
+                            {"type": "text", "text": "Answer in one word."},
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "url",
+                                    "url": "https://example.com/logo.png",
+                                },
+                            },
+                            {"type": "text", "text": "Never apologize."},
+                        ],
+                    }
+                ),
+                _message("user", "Hello."),
+            ],
+            None,
+            system_message_as_messages=True,
+        )
+        assert [message.role for message in messages] == ["user"]
+        assert system == [
+            TextBlockParam(type="text", text="Answer in one word."),
+            TextBlockParam(type="text", text="Never apologize."),
+        ]
+
     def test_forwarded_directive_keeps_its_block_content(self) -> None:
         """A forwarded directive is passed through untouched, blocks included.
 

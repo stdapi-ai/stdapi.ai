@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from stdapi.input_file import InputFile
 from stdapi.models.chat._adapters._anthropic_message import _map_messages
 from stdapi.types.anthropic_messages import (
+    Base64ImageSource,
     CacheControlEphemeralParam,
     DocumentBlockParam,
     FileSource,
@@ -26,6 +27,7 @@ from stdapi.types.anthropic_messages import (
     MessageParam,
     PlainTextSourceParam,
     RedactedThinkingBlockParam,
+    SearchResultBlockParam,
     TextBlockParam,
     ThinkingBlockParam,
     ToolResultBlockParam,
@@ -435,6 +437,116 @@ class TestMapMessagesRemoteSources:
         assert "not-an-allowed-bucket" in str(excinfo.value)
 
 
+class TestMapMessagesInlineSources:
+    """Base64 image sources carry their bytes inline instead of being fetched.
+
+    The ``base64`` member is the only image source that is not resolved from a
+    remote location, and the caller's declared ``media_type`` — not content
+    sniffing — decides the Bedrock ``format``.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/vision
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ImageBlock.html
+         stdapi/models/chat/_adapters/_anthropic_message.py:_map_image_to_bedrock
+    """
+
+    @staticmethod
+    def _image(media_type: str, payload: bytes) -> ImageBlockParam:
+        """Return a base64 image block carrying *payload* declared as *media_type*."""
+        return ImageBlockParam.model_validate(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": b64encode(payload).decode(),
+                },
+            }
+        )
+
+    @pytest.mark.parametrize(
+        ("media_type", "expected_format"),
+        [("image/png", "png"), ("image/jpeg", "jpeg"), ("image/webp", "webp")],
+    )
+    async def test_declared_media_type_drives_the_bedrock_format(
+        self, media_type: str, expected_format: str
+    ) -> None:
+        """The Bedrock ``format`` is the subtype of the declared ``media_type``.
+
+        Anthropic sends the media type alongside the payload, so the gateway must
+        not re-sniff the bytes: a mismatch would make Bedrock reject the block
+        with an unsupported-format error the caller cannot explain.
+        """
+        block = self._image(media_type, b"not-a-real-image")
+        result = await _map_messages(
+            [MessageParam(role="user", content=[block])],
+            allow_explicit_caching=False,
+            allow_tool_caching=False,
+        )
+        (content_block,) = result[0]["content"]
+        assert content_block["image"]["format"] == expected_format
+
+    async def test_base64_payload_is_resolved_to_inline_bytes(self) -> None:
+        """The decoded payload lands in the Bedrock block as inline ``bytes``.
+
+        ``_map_messages`` only builds the partial block; the source is filled by
+        the per-region resolver, which must produce the caller's raw bytes rather
+        than an ``s3Location`` for an inline base64 image.
+
+        Ref: stdapi/input_file.py:InputFile.resolve_bedrock_content_block
+        """
+        block = self._image("image/png", b"PNGDATA")
+        assert isinstance(block.source, Base64ImageSource)
+        result = await _map_messages(
+            [MessageParam(role="user", content=[block])],
+            allow_explicit_caching=False,
+            allow_tool_caching=False,
+        )
+        (content_block,) = result[0]["content"]
+        assert content_block["image"]["source"] == {}, (
+            "the payload must stay deferred until the region is known"
+        )
+        await block.source.data.resolve_bedrock_content_block("us-east-1")
+        assert content_block["image"]["source"] == {"bytes": b"PNGDATA"}
+
+    async def test_search_result_block_maps_at_the_top_level(self) -> None:
+        """A top-level ``search_result`` block becomes a Bedrock ``searchResult``.
+
+        The block is valid both inside a ``tool_result`` and as a direct message
+        content block; the second call site shares the same mapping, so ``source``
+        and ``title`` are copied verbatim and nested text parts are flattened.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/search-results
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_SearchResultContentBlock.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_search_result_to_bedrock
+        """
+        result = await _map_messages(
+            [
+                MessageParam(
+                    role="user",
+                    content=[
+                        SearchResultBlockParam(
+                            type="search_result",
+                            source="https://example.com/doc",
+                            title="Example",
+                            content=[
+                                TextBlockParam(type="text", text="first"),
+                                TextBlockParam(type="text", text="second"),
+                            ],
+                        )
+                    ],
+                )
+            ],
+            allow_explicit_caching=False,
+            allow_tool_caching=False,
+        )
+        (content_block,) = result[0]["content"]
+        assert content_block["searchResult"] == {
+            "source": "https://example.com/doc",
+            "title": "Example",
+            "content": [{"text": "first"}, {"text": "second"}],
+        }
+
+
 def _text_msg(role: str, text: str) -> MessageParam:
     """Return a message with a single text block, for role-merging tests."""
     return MessageParam(role=role, content=[TextBlockParam(type="text", text=text)])  # type: ignore[arg-type]
@@ -450,7 +562,7 @@ class TestMapMessagesRoleMerging:
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
          stdapi/models/chat/_adapters/_anthropic_message.py:_map_messages
-         stdapi/models/chat/_adapters/_anthropic_message.py:_append_or_merge
+         stdapi/models/chat/_adapters/_common.py:append_or_merge
     """
 
     async def test_consecutive_user_messages_are_merged(self) -> None:

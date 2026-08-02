@@ -241,10 +241,8 @@ class TestClientToolNameCollision:
     ``bash``, ``memory`` or ``str_replace_editor`` with a real schema -- the pi
     coding agent ships exactly such a ``bash`` tool -- and promoting it would swap
     the client's schema for a typed server tool and forward the schema keys as
-    tool configuration. Anthropic rejects that outright:
-    ``tools.4.bash_20250124.properties: Extra inputs are not permitted`` (measured
-    against a live gateway on 2026-07-31), so a whole class of agentic clients
-    could not use the gateway at all.
+    tool configuration, which Anthropic rejects outright with
+    ``tools.4.bash_20250124.properties: Extra inputs are not permitted``.
 
     Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
          stdapi/models/chat/_anthropic_claude.py:_req_extract_server_tools
@@ -301,13 +299,11 @@ class TestClientToolNameCollision:
 class TestServerToolRePromotion:
     """Server tools keep their native Anthropic definition on every turn (issue #97).
 
-    ``_req_configure_tools`` used to move a server tool's real definition into
-    ``additionalModelRequestFields["tools"]`` only on the first turn, leaving a
-    schema-less ``toolSpec`` stub in ``toolConfig`` from the second turn on — so
-    the model never saw the documented argument names again.  It must now be
-    re-promoted regardless of prior ``toolResult`` blocks in history, without
-    ever also leaving a same-named stub behind in ``toolConfig`` (Anthropic
-    rejects duplicate tool names).
+    A server tool's real definition moves to ``additionalModelRequestFields["tools"]``
+    regardless of prior ``toolResult`` blocks in history -- otherwise the model
+    stops seeing the documented argument names from the second turn on -- and no
+    same-named stub may be left behind in ``toolConfig``, since Anthropic rejects
+    duplicate tool names.
 
     Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
          stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
@@ -328,8 +324,7 @@ class TestServerToolRePromotion:
         }
         additional_request_fields: JsonMapping = {}
         server_tools: list[JsonMapping] = [{"name": "bash", "type": "bash_20250124"}]
-        # A minimal Bedrock message history containing a toolResult block, the
-        # shape that previously kept the tool in schema-less stub mode.
+        # Minimal Bedrock history carrying a toolResult block.
         bedrock_messages = [
             {
                 "role": "user",
@@ -365,14 +360,11 @@ class TestServerToolRePromotion:
         Realistic turn-2+ history carries a ``toolUse`` block for the tool the
         assistant just invoked, not only the ``toolResult``. History here also
         references a *second*, non-native tool name (``get_time``) so the
-        history-based resynthesis branch actually fires: with only the
-        native tool's own name in history, ``other_names`` comes out empty and
-        the resynthesis branch this test targets never even runs, which is
-        exactly what made an earlier version of this test unable to catch a
-        reintroduced duplicate. This only checks ``_req_configure_tools``'s
-        own output in isolation; see
+        history-based resynthesis branch actually fires: with only the native
+        tool's own name in history ``other_names`` comes out empty and that
+        branch never runs. This checks ``_req_configure_tools`` in isolation; see
         ``test_assembled_converse_request_has_no_duplicate_tool_name`` for the
-        full-pipeline check and its known limitation on a server-tool-only turn.
+        full-pipeline check.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview#tool-use-examples
              stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
@@ -678,31 +670,16 @@ class TestServerToolRePromotion:
         """The final Converse payload never names a natively-promoted tool twice.
 
         Drives the full ``_req_configure_tools`` + ``_prepare_converse_request``
-        pipeline for a turn-2 conversation mixing a server tool with a custom
-        tool: this is the level at which a duplicate would actually reach
-        Bedrock, since ``_prepare_converse_request`` is where the base class's
-        history-based ``toolConfig`` fallback is applied. The custom tool's name
-        must still reach ``toolConfig`` (its definition never moves to
-        ``additionalModelRequestFields``), while ``bash`` must appear there
-        only, not also as a ``toolConfig`` stub.
+        pipeline, the level at which a duplicate would actually reach Bedrock,
+        since ``_prepare_converse_request`` applies the base class's
+        history-based ``toolConfig`` fallback. History mixes ``bash`` (natively
+        promoted) with ``get_time`` (a custom tool) so that fallback resynthesizes
+        stubs from history and must skip ``bash``; a history naming only
+        ``get_time`` could never collide and would not catch the duplicate.
 
-        History references ``bash`` (the natively-promoted tool) *and*
-        ``get_time`` (a custom tool). Without the exclusion this test guards,
-        ``_req_configure_tools`` would leave ``toolConfig`` fully empty, and
-        the base class's own ``_synthesize_tool_config_from_history`` fallback
-        in ``_prepare_converse_request`` would then resynthesize a stub for
-        *every* name found in history -- including ``bash`` -- reproducing the
-        duplicate. A history that only mentions ``get_time`` cannot catch this:
-        the fallback would only ever regenerate ``get_time``, which never
-        collides with ``bash`` regardless of whether the exclusion runs.
-
-        A server-tool-*only* turn-2 conversation (no custom tool anywhere in
-        history) is not covered here: closing that gap requires
-        ``_synthesize_tool_config_from_history`` in ``_anthropic_message.py`` — outside
-        this module — to skip names already present in
-        ``additionalModelRequestFields["tools"]``, since it unconditionally
-        resynthesizes a stub for every ``toolUse`` name it finds once
-        ``tool_config`` is left empty.
+        A server-tool-*only* turn-2 conversation takes the other branch -- the
+        stub is retained rather than promoted -- and is covered by
+        ``TestMultiTurnStubSchema.test_server_tool_only_turn_two_names_the_tool_once``.
 
         Ref: stdapi/models/chat/_default.py:ChatModel._prepare_converse_request
              stdapi/models/chat/_adapters/_anthropic_message.py:_synthesize_tool_config_from_history
@@ -929,6 +906,50 @@ class TestMultiTurnStubSchema:
         second_schema = self._stub_schema(second)
         assert first_schema == second_schema
         assert first_schema is not second_schema
+
+    async def test_server_tool_only_turn_two_names_the_tool_once(self) -> None:
+        """The assembled request names a server-tool-only turn's tool exactly once.
+
+        Completes the turn-2 coverage of the sibling class, which stops at
+        ``_req_configure_tools``: this drives ``_prepare_converse_request`` too,
+        where the base class's history-based ``toolConfig`` fallback runs.  With
+        history referencing only ``bash`` the stub is retained instead of being
+        promoted, so the fallback must not fire at all — a resynthesized stub
+        beside the retained one would send the name twice, which Anthropic
+        rejects with "Tool names must be unique".
+
+        Ref: stdapi/models/chat/_default.py:ChatModel._prepare_converse_request
+             stdapi/models/chat/_adapters/_anthropic_message.py:_synthesize_tool_config_from_history
+        """
+        model = _claude_model("anthropic.claude-haiku-4-5-20251001-v1:0")
+        tool_config, additional_request_fields = self._configure(
+            "bash", "bash_20250124"
+        )
+        token = REQUEST.set(cast("Request", _StubRequest({})))
+        try:
+            request = await model._prepare_converse_request(  # noqa: SLF001
+                bedrock_messages=self._turn_two_history("bash"),  # type: ignore[arg-type]
+                inference_cfg={},
+                system_blocks=None,
+                tool_config=tool_config,  # type: ignore[arg-type]
+                additional_request_fields=additional_request_fields,
+                service_tier=None,
+            )
+        finally:
+            REQUEST.reset(token)
+
+        config_names = [
+            entry["toolSpec"]["name"]
+            for entry in request.get("toolConfig", {}).get("tools", [])
+        ]
+        native_names = [
+            tool["name"]
+            for tool in request.get("additionalModelRequestFields", {}).get("tools", [])
+        ]
+        assert config_names == ["bash"]
+        assert native_names == [], (
+            "the native definition must stay unsent while the stub holds the name"
+        )
 
     @pytest.mark.parametrize("model_id", [*_COMPUTER_TOOL_TYPES, *_FUTURE_MODELS])
     def test_every_promotable_tool_version_has_a_documented_schema(

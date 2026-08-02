@@ -15,7 +15,8 @@ Ref: https://stdapi.ai/api_search_models/
 """
 
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from re import compile as compile_regex
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -24,6 +25,7 @@ from starlette.testclient import TestClient
 
 from stdapi import auth, pricing
 from stdapi.config import SETTINGS
+from stdapi.main import app
 from stdapi.models import MANTLE_SERVICE, ModelDetails
 from stdapi.pricing import Dimension, Price, PriceKey, Service
 from stdapi.routes import core_models
@@ -1307,6 +1309,112 @@ class TestModelPricingEndpoint:
         assert card["prices"]
         assert all(row["currency"] == "USD" for row in card["prices"])
 
+    def test_tier_filter_narrows_the_card_to_that_tier(
+        self, client: TestClient, priced_catalog: dict[str, str]
+    ) -> None:
+        """tier=flex returns only what is published at that tier, not the standard rows.
+
+        The seeded catalogue publishes a flex rate for ``input_tokens`` alone, so an
+        explicit tier must collapse the three-row default card to that single row —
+        and must not rewrite the ``default_tier`` the card reports for the server.
+
+        Ref: stdapi/pricing.py:model_prices
+             stdapi/routes/core_models.py:model_pricing
+        """
+        response = client.get(
+            "/model_pricing",
+            params={"model": "amazon.pricedmodel-v1:0", "tier": "flex"},
+            headers=priced_catalog,
+        )
+        assert response.status_code == 200, response.text
+        (card,) = response.json()
+        assert [
+            (row["dimension"], row["tier"], row["unit_price"]) for row in card["prices"]
+        ] == [("input_tokens", "flex", "0.0000015")]
+        assert card["default_tier"] == "standard"
+
+    def test_routing_filter_narrows_the_card_to_that_serving_profile(
+        self,
+        client: TestClient,
+        priced_catalog: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """routing=global returns only the distinctly priced global row.
+
+        Without the filter the card mixes the plain regional rows with the global
+        variant; asking for one serving profile must drop every row AWS does not
+        publish under it, rather than falling back to the regional price.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html
+             stdapi/pricing.py:model_prices
+        """
+        monkeypatch.setitem(
+            pricing._state.price_index,  # noqa: SLF001
+            PriceKey(
+                Service.BEDROCK,
+                "pricedmodel",
+                "us-east-1",
+                Dimension.INPUT_TOKENS,
+                "standard",
+                "",
+                "global",
+            ),
+            Price(Decimal("0.0000028"), "USD"),
+        )
+        response = client.get(
+            "/model_pricing",
+            params={"model": "amazon.pricedmodel-v1:0", "routing": "global"},
+            headers=priced_catalog,
+        )
+        assert response.status_code == 200, response.text
+        (card,) = response.json()
+        assert [
+            (row["dimension"], row["routing"], row["unit_price"])
+            for row in card["prices"]
+        ] == [("input_tokens", "global", "0.0000028")]
+
+    def test_context_filter_narrows_the_card_to_the_long_context_rows(
+        self,
+        client: TestClient,
+        priced_catalog: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """context=long returns only the beyond-200K-token rate, not the standard one.
+
+        The long-context premium is a distinct published rate on the same
+        dimension, so the filter has to select on the context axis alone and leave
+        the standard-context row out.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters.html
+             stdapi/pricing.py:model_prices
+        """
+        monkeypatch.setitem(
+            pricing._state.price_index,  # noqa: SLF001
+            PriceKey(
+                Service.BEDROCK,
+                "pricedmodel",
+                "us-east-1",
+                Dimension.INPUT_TOKENS,
+                "standard",
+                "",
+                "",
+                "",
+                "long",
+            ),
+            Price(Decimal("0.000006"), "USD"),
+        )
+        response = client.get(
+            "/model_pricing",
+            params={"model": "amazon.pricedmodel-v1:0", "context": "long"},
+            headers=priced_catalog,
+        )
+        assert response.status_code == 200, response.text
+        (card,) = response.json()
+        assert [
+            (row["dimension"], row["context"], row["unit_price"])
+            for row in card["prices"]
+        ] == [("input_tokens", "long", "0.000006")]
+
     def test_mantle_model_prices_not_duplicated(
         self,
         client: TestClient,
@@ -1356,3 +1464,82 @@ class TestModelPricingEndpoint:
         assert len(card["prices"]) == 1
         assert card["prices"][0]["dimension"] == "input_tokens"
         assert card["prices"][0]["unit_price"] == "0.000002"
+
+
+class TestModelDiscoveryHints:
+    """Every ``param=value`` hint pointing at ``search_models`` names real inputs.
+
+    The hints in the OpenAPI descriptions are what an MCP client reads before
+    picking a model, and a wrong parameter name is invisible until an agent
+    calls the tool: the filter is dropped and the agent gets the unfiltered
+    catalogue instead of an error. Only the quoted pairs are checked, so the
+    count is asserted too -- a pattern that stops matching would otherwise
+    check nothing at all.
+
+    Ref: https://modelcontextprotocol.io/specification/server/tools
+         stdapi/routes/core_models.py:search_models
+    """
+
+    #: Routes carrying a quoted hint pair, as of the current route set.
+    _EXPECTED_HINTS = 18
+
+    #: Hint pattern: a ``param=value`` pair quoted near a ``search_models`` mention.
+    _HINT = compile_regex(r"`search_models`[^.]{0,120}?`([a-z_]+)=([a-zA-Z0-9_./-]+)`")
+
+    @classmethod
+    def _hints(cls, spec: dict[str, Any]) -> set[tuple[str, str]]:
+        """Return every ``(parameter, value)`` pair the route descriptions suggest."""
+        return {
+            (match.group(1), match.group(2))
+            for operation in cls._operations(spec)
+            for match in cls._HINT.finditer(
+                f"{operation.get('summary') or ''}{operation.get('description') or ''}"
+            )
+        }
+
+    @staticmethod
+    def _operations(spec: dict[str, Any]) -> list[dict[str, Any]]:
+        """Return every operation object in the OpenAPI *spec*."""
+        return [
+            operation
+            for methods in spec["paths"].values()
+            for operation in methods.values()
+            if isinstance(operation, dict)
+        ]
+
+    def test_the_hinted_parameter_exists_on_the_route(self) -> None:
+        """Each hinted parameter is a real ``search_models`` query parameter."""
+        spec = app.openapi()
+        accepted = {
+            parameter["name"]
+            for operation in self._operations(spec)
+            if operation.get("operationId") == "search_models"
+            for parameter in operation.get("parameters", ())
+        }
+        hints = self._hints(spec)
+
+        assert len(hints) >= self._EXPECTED_HINTS, (
+            f"only {len(hints)} hints matched; the pattern no longer finds them all"
+        )
+        unknown = sorted({name for name, _value in hints} - accepted)
+        assert not unknown, (
+            f"hints name parameters search_models does not accept: {unknown}"
+        )
+
+    def test_the_hinted_value_names_an_exposed_operation(self) -> None:
+        """Each hinted value is an operation ID the catalogue can filter on.
+
+        ``route`` accepts a path or the MCP tool name, which is the operation
+        ID; a renamed route would leave the hint pointing at nothing.
+        """
+        spec = app.openapi()
+        exposed = {
+            operation["operationId"]
+            for operation in self._operations(spec)
+            if "operationId" in operation
+        }
+
+        unknown = sorted(
+            value for _name, value in self._hints(spec) if value not in exposed
+        )
+        assert not unknown, f"hints name routes the server does not expose: {unknown}"

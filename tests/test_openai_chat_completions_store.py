@@ -387,6 +387,48 @@ class TestStoreOnChatCreate:
         assert store.discarded == ["chatcmpl-sess-1"]
         assert not store.saved
 
+    def test_session_creation_failure_is_surfaced(
+        self,
+        app_client: TestClient,
+        backend: _StubChatBackend,
+        store: _StubStore,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A session creation error fails the request instead of downgrading ``store``.
+
+        Session creation is gathered with the generation, so its exception has to
+        be re-raised explicitly. Only an *unavailable* session API downgrades
+        silently (``try_create_stored_response_session`` returning ``None``); a
+        real error must not hand back a completion the client believes is
+        stored.
+
+        Ref: stdapi/routes/openai_chat_completions.py:create_chat_completion
+             https://developers.openai.com/api/docs/guides/error-codes
+        """
+
+        async def _raise(_kind: str) -> str:
+            msg = "session creation failure"
+            raise ApiError(msg, status=503)
+
+        monkeypatch.setattr(
+            openai_chat_completions, "try_create_stored_response_session", _raise
+        )
+        response = app_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "amazon.nova-micro-v1:0",
+                "messages": [{"role": "user", "content": "hello"}],
+                "store": True,
+            },
+        )
+        assert response.status_code == 503, response.text
+        assert response.json()["error"]["message"] == "session creation failure"
+        assert not store.saved
+        assert not store.discarded, "no session exists, so there is nothing to discard"
+        assert backend.requests, (
+            "generation still ran: it is gathered with the session creation"
+        )
+
     def test_save_failure_discards_pending_session(
         self,
         app_client: TestClient,

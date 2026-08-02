@@ -11,21 +11,29 @@ Ref: stdapi/monitoring.py:_finalize_usage
 
 from asyncio import create_task, sleep
 from gc import collect
+from json import loads
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from botocore.exceptions import ClientError
+from botocore.exceptions import ConnectionError as BotocoreConnectionError
 from sse_starlette import ServerSentEvent
 from starlette.requests import Request as StarletteRequest
 
 from stdapi import monitoring, usage
+from stdapi.api_errors import ApiError
+from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.config import SETTINGS
 from stdapi.models import ModelBase
 from stdapi.monitoring import (
+    REQUEST,
     REQUEST_ID,
     REQUEST_LOG,
     EventLog,
     SseHandledStreamError,
     _finalize_usage,
+    log_background_event,
     log_request_event,
 )
 from stdapi.pricing import Dimension
@@ -54,6 +62,23 @@ def _make_request(method: str = "GET", path: str = "/test") -> StarletteRequest:
         "path": path,
         "query_string": b"",
         "headers": [],
+    }
+    return StarletteRequest(scope)
+
+
+def _openai_tagged_request() -> StarletteRequest:
+    """Build a request whose matched route is tagged OpenAI.
+
+    The error envelope is picked from the resolved route's tags, so a terminal
+    SSE error event only takes the OpenAI shape when a tagged route is active.
+    """
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "query_string": b"",
+        "headers": [],
+        "route": SimpleNamespace(tags=[TAG_OPENAI]),
     }
     return StarletteRequest(scope)
 
@@ -726,9 +751,9 @@ class TestSseHandledStreamErrorLevel:
 class TestMidStreamErrorLoggedInStreamEvent:
     """A mid-stream error lands in the request_stream log instead of the request log.
 
-    Only the ``SseHandledStreamError`` branch is covered here; the ``ApiError`` and
-    ``ClientError`` branches, which additionally yield a terminal ``error`` SSE
-    event, are not.
+    Only the ``SseHandledStreamError`` branch is covered here; the branches that
+    additionally yield a terminal ``error`` SSE event live in
+    :class:`TestMidStreamTerminalErrorEvent`.
 
     Ref: stdapi/monitoring.py:log_request_sse_stream_event
          stdapi/monitoring.py:_stream_exception_detail
@@ -766,3 +791,230 @@ class TestMidStreamErrorLoggedInStreamEvent:
             )
         finally:
             REQUEST_ID.reset(id_token)
+
+
+#: An ARN and an account ID, the two identifiers AWS messages routinely embed.
+_LEAKY_DETAIL = (
+    "Operation not allowed on "
+    "arn:aws:bedrock:us-east-1:123456789012:inference-profile/secret in 123456789012"
+)
+
+
+class TestMidStreamTerminalErrorEvent:
+    """A mid-stream failure closes the SSE stream with a provider-formatted error event.
+
+    Once the response headers are on the wire the gateway can no longer answer
+    with an HTTP error, so the wrapper turns the exception into a terminal
+    ``error`` event in the envelope the matched route's provider uses. What that
+    event may say is the security contract: an AWS message reaches the client
+    only after ``hide_security_details`` redacts it, and a 5xx is replaced by a
+    fixed sentence so backend internals never leave the process.
+
+    Ref: stdapi/monitoring.py:log_request_sse_stream_event
+         stdapi/utils.py:hide_security_details
+         stdapi/aws_bedrock.py:AWS_ERROR_MAP
+    """
+
+    @staticmethod
+    async def _run(
+        monkeypatch: pytest.MonkeyPatch, exc: BaseException
+    ) -> tuple[list[ServerSentEvent], EventLog]:
+        """Fail a one-chunk SSE stream with *exc* and return its events and stream log.
+
+        Args:
+            monkeypatch: Fixture used to capture the written log events.
+            exc: Exception raised after the first chunk was produced.
+
+        Returns:
+            Every event the consumer saw, and the ``request_stream`` log entry.
+        """
+        written: list[EventLog] = []
+        monkeypatch.setattr(monitoring, "write_log_event", written.append)
+
+        async def source() -> AsyncGenerator[ServerSentEvent]:
+            yield ServerSentEvent(data="first")
+            raise exc
+
+        id_token = REQUEST_ID.set("test-request-id")
+        request_token = REQUEST.set(cast("Any", _openai_tagged_request()))
+        try:
+            events = [
+                chunk
+                async for chunk in monitoring.log_request_sse_stream_event(source())
+            ]
+        finally:
+            REQUEST.reset(request_token)
+            REQUEST_ID.reset(id_token)
+        (stream_log,) = [w for w in written if w["type"] == "request_stream"]
+        return events, stream_log
+
+    async def test_api_error_keeps_its_message_param_and_code(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """An ApiError becomes an OpenAI error envelope carrying its param and code.
+
+        ``param`` and ``code`` are what an SDK matches on, so they must survive
+        the trip through the SSE boundary rather than collapse into a bare
+        message the way a generic failure does.
+        """
+        error = ApiError("Unsupported voice", status=400)
+        error.param = "voice"
+        error.code = "invalid_value"
+
+        events, stream_log = await self._run(monkeypatch, error)
+
+        assert [event.event for event in events] == [None, "error"]
+        assert loads(str(events[-1].data)) == {
+            "error": {
+                "message": "Unsupported voice",
+                "type": "invalid_request_error",
+                "param": "voice",
+                "code": "invalid_value",
+            }
+        }
+        assert stream_log["level"] == "warning"
+        assert request_log["level"] == "warning"
+
+    async def test_client_error_below_500_is_relayed_redacted(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """A 4xx AWS message reaches the client only with its ARN and account ID masked.
+
+        The client needs to know what it did wrong, so the message is relayed --
+        but ``ValidationException`` messages quote the resource, and neither the
+        inference-profile ARN nor the account ID may be disclosed.
+        """
+        error = ClientError(
+            {"Error": {"Code": "ValidationException", "Message": _LEAKY_DETAIL}},
+            "ConverseStream",
+        )
+
+        events, stream_log = await self._run(monkeypatch, error)
+
+        body = loads(str(events[-1].data))["error"]
+        assert body["type"] == "invalid_request_error"
+        assert body["message"] == ("Operation not allowed on <arn> in <account-id>")
+        assert "arn:aws" not in body["message"]
+        assert "123456789012" not in body["message"]
+        # The unredacted original stays server-side, in the operator's log.
+        assert any(_LEAKY_DETAIL in str(d) for d in stream_log["error_detail"])
+        assert request_log["level"] == "warning"
+
+    async def test_client_error_at_500_or_above_is_replaced_wholesale(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """A 5xx AWS message is swapped for a fixed sentence, not merely redacted.
+
+        Redaction only masks identifiers it recognises; a backend fault message
+        can describe internals in prose, so nothing of it is relayed at all.
+        """
+        error = ClientError(
+            {
+                "Error": {
+                    "Code": "InternalServerException",
+                    "Message": f"backend pool exhausted: {_LEAKY_DETAIL}",
+                }
+            },
+            "ConverseStream",
+        )
+
+        events, stream_log = await self._run(monkeypatch, error)
+
+        body = loads(str(events[-1].data))["error"]
+        assert (
+            body["message"] == "The request could not be completed. Retry the request."
+        )
+        assert body["type"] == "server_error"
+        assert "backend pool" not in str(events[-1].data)
+        assert any("backend pool" in str(d) for d in stream_log["error_detail"])
+        assert request_log["level"] == "error"
+
+    async def test_connection_failure_is_a_service_unavailable_event(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """A botocore connection failure closes the stream as a retryable 503.
+
+        The error is not a ``ClientError`` and carries no AWS error code, so it
+        falls to the transport branch and its default 503 rather than the 502
+        an unmapped service code would get.
+        """
+        events, stream_log = await self._run(
+            monkeypatch, BotocoreConnectionError(error=OSError("connection refused"))
+        )
+
+        body = loads(str(events[-1].data))["error"]
+        assert body["message"] == (
+            "The service is temporarily unavailable. Retry the request."
+        )
+        assert body["type"] == "server_error"
+        # An unexpected transport failure is a server fault, logged as critical.
+        assert stream_log["level"] == "critical"
+        assert request_log["level"] == "error"
+
+    async def test_unexpected_exception_yields_a_bare_500(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """An unforeseen exception yields "Internal Server Error" and a critical log.
+
+        The exception text is never echoed: it is arbitrary Python detail. The
+        traceback is kept in the request log instead, which is the only place it
+        remains diagnosable.
+        """
+        events, _ = await self._run(monkeypatch, RuntimeError(_LEAKY_DETAIL))
+
+        body = loads(str(events[-1].data))["error"]
+        assert body["message"] == "Internal Server Error"
+        assert body["type"] == "server_error"
+        assert "arn:aws" not in str(events[-1].data)
+        assert request_log["level"] == "critical"
+        assert any("RuntimeError" in str(d) for d in request_log["error_detail"])
+
+
+class TestBackgroundEventLog:
+    """log_background_event writes one ``background`` entry, critical on failure.
+
+    Scheduled cleanups run after the response was sent, so a failure there has
+    no HTTP status to surface it: the log entry is the only signal, and it must
+    carry the traceback.
+
+    Ref: stdapi/monitoring.py:log_background_event
+    """
+
+    def test_failure_is_logged_critical_with_traceback_and_reraised(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An exception inside the scope is re-raised after being logged as critical."""
+        written: list[EventLog] = []
+        monkeypatch.setattr(monitoring, "write_log_event", written.append)
+
+        def fail() -> None:
+            """Fail inside the background scope."""
+            message = "cleanup failed"
+            raise RuntimeError(message)
+
+        with (
+            pytest.raises(RuntimeError, match=r"^cleanup failed$"),
+            log_background_event("cleanup", "rid-background"),
+        ):
+            fail()
+
+        (log,) = written
+        assert log["type"] == "background"
+        assert log["id"] == "rid-background"
+        assert log["level"] == "critical"
+        assert any(
+            "RuntimeError: cleanup failed" in str(d) for d in log["error_detail"]
+        )
+        assert "execution_time_ms" in log
+
+    def test_success_stays_info(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A clean scope writes a single info entry, so failures stand out."""
+        written: list[EventLog] = []
+        monkeypatch.setattr(monitoring, "write_log_event", written.append)
+
+        with log_background_event("cleanup", "rid-ok") as log:
+            assert log["level"] == "info"
+
+        (written_log,) = written
+        assert written_log["level"] == "info"
+        assert "error_detail" not in written_log

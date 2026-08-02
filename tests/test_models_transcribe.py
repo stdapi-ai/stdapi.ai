@@ -756,6 +756,192 @@ class TestTranscriptOutputKeys:
         assert subtitle_key == "tmp/job/out.srt"
 
 
+class TestFailedTranscriptionJob:
+    """A job the backend fails is the caller's input, reported without its reason.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_TranscriptionJob.html
+         stdapi/models/audio/amazon_transcribe.py:_wait_for_transcription_completion
+    """
+
+    @staticmethod
+    def _client(statuses: list[str]) -> Any:  # noqa: ANN401
+        """Return a stub client reporting *statuses* in order, then completing."""
+
+        class _Client:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def get_transcription_job(self, **_params: Any) -> dict[str, Any]:  # noqa: ANN401
+                status = statuses[self.calls]
+                self.calls += 1
+                return {
+                    "TranscriptionJob": {
+                        "TranscriptionJobStatus": status,
+                        "FailureReason": (
+                            "Invalid file format: file did not match the file "
+                            "format in s3://internal-bucket/tmp/job/audio.wav"
+                        ),
+                        "Transcript": {
+                            "TranscriptFileUri": (
+                                "https://s3.us-east-1.amazonaws.com/b/tmp/job/out.json"
+                            )
+                        },
+                    }
+                }
+
+        return _Client()
+
+    async def test_failed_job_is_a_400_that_keeps_the_reason_in_the_log(
+        self, request_log: dict[str, Any]
+    ) -> None:
+        """A FAILED job answers 400 with an actionable message and no backend detail.
+
+        The AWS failure reason names the service and the staging bucket, so it
+        belongs in the server log, never in the response.
+        """
+        with pytest.raises(ApiError) as excinfo:
+            await amazon_transcribe._wait_for_transcription_completion(  # noqa: SLF001
+                self._client(["FAILED"]), "job", "b"
+            )
+
+        assert excinfo.value.status == 400
+        message = str(excinfo.value)
+        assert "could not be transcribed" in message
+        assert "s3://" not in message, "the staging location must not be returned"
+        assert "bucket" not in message.lower()
+        details = "".join(map(str, request_log["error_detail"]))
+        assert "Invalid file format" in details, "the AWS reason must reach the log"
+        assert "s3://internal-bucket/tmp/job/audio.wav" in details
+
+    async def test_polling_backs_off_between_attempts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unfinished job is re-polled with a doubling, capped interval.
+
+        A fixed short interval would multiply GetTranscriptionJob calls on the
+        long jobs, and a fixed long one would add latency to the short ones.
+        """
+        waits: list[float] = []
+
+        async def _fake_sleep(delay: float) -> None:
+            waits.append(delay)
+
+        monkeypatch.setattr(amazon_transcribe, "sleep", _fake_sleep)
+        client = self._client(
+            ["IN_PROGRESS", "QUEUED", "IN_PROGRESS", "IN_PROGRESS", "COMPLETED"]
+        )
+
+        output_key, _ = await amazon_transcribe._wait_for_transcription_completion(  # noqa: SLF001
+            client, "job", "b"
+        )
+
+        assert output_key == "tmp/job/out.json"
+        assert waits == [0.5, 1.0, 2.0, 2.0], "expected a capped exponential backoff"
+
+
+class TestTranscriptionResultsFetch:
+    """The transcript, and the subtitle file when one was requested, come from S3.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/dg/subtitles.html
+         stdapi/models/audio/amazon_transcribe.py:_get_transcription_results
+    """
+
+    @staticmethod
+    def _patch_s3(
+        monkeypatch: pytest.MonkeyPatch, objects: dict[str, str]
+    ) -> list[str]:
+        """Serve *objects* by key from S3; return the read key log."""
+        reads: list[str] = []
+
+        async def _fake_get_text(_bucket: str, key: str) -> str:
+            reads.append(key)
+            return objects[key]
+
+        monkeypatch.setattr(amazon_transcribe, "get_text_from_s3", _fake_get_text)
+        return reads
+
+    async def test_subtitle_content_is_merged_into_the_job_results(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A subtitle object is fetched alongside the transcript and carried inline.
+
+        The SRT/VTT body is produced by the backend as a separate object; the
+        response formatter reads it from ``subtitle_content``, so losing the
+        merge would return an empty subtitle file with a 200.
+        """
+        reads = self._patch_s3(
+            monkeypatch,
+            {
+                "out.json": '{"results": {"transcripts": [{"transcript": "hi"}]}}',
+                "out.srt": "1\n00:00:00,000 --> 00:00:01,000\nhi\n",
+            },
+        )
+
+        results = await amazon_transcribe._get_transcription_results(  # noqa: SLF001
+            "bucket", "out.json", "out.srt"
+        )
+
+        assert results["transcripts"] == [{"transcript": "hi"}]
+        assert results["subtitle_content"] == "1\n00:00:00,000 --> 00:00:01,000\nhi\n"
+        assert sorted(reads) == ["out.json", "out.srt"]
+
+    async def test_without_a_subtitle_key_only_the_transcript_is_read(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A json/text request reads one object and reports no subtitle content."""
+        reads = self._patch_s3(
+            monkeypatch,
+            {"out.json": '{"results": {"transcripts": [{"transcript": "hi"}]}}'},
+        )
+
+        results = await amazon_transcribe._get_transcription_results(  # noqa: SLF001
+            "bucket", "out.json", None
+        )
+
+        assert reads == ["out.json"]
+        assert "subtitle_content" not in results
+
+
+class TestStartTranscriptionErrorMapping:
+    """StartTranscriptionJob client errors become actionable caller errors.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_StartTranscriptionJob.html
+         stdapi/models/audio/amazon_transcribe.py:_handle_transcription_error
+    """
+
+    def test_unreadable_media_becomes_a_400_without_the_staging_uri(
+        self, request_log: dict[str, Any]
+    ) -> None:
+        """A media-access rejection answers 400 and keeps the S3 URI out of it.
+
+        Transcribe reports the staged object it could not read; that location is
+        gateway-internal, so only the log may name it.
+        """
+        error = make_client_error(
+            "BadRequestException",
+            "StartTranscriptionJob",
+            message=(
+                "The S3 URI that you provided can't be accessed. Make sure that "
+                "you have read permission and try your request again: the file "
+                "s3://internal-bucket/tmp/job/audio.wav"
+            ),
+        )
+
+        with (
+            pytest.raises(ApiError) as excinfo,
+            amazon_transcribe._handle_transcription_error(None),  # noqa: SLF001
+        ):
+            raise error
+
+        assert excinfo.value.status == 400
+        assert "could not be accessed" in str(excinfo.value)
+        assert "s3://" not in str(excinfo.value)
+        details = "".join(map(str, request_log["error_detail"]))
+        assert "s3://internal-bucket/tmp/job/audio.wav" in details, (
+            "the staged location must reach the log"
+        )
+
+
 class TestNoCandidateRegions:
     """No usable bucket anywhere: documented 404 on requests.
 

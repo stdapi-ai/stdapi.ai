@@ -24,7 +24,9 @@ if TYPE_CHECKING:
 pytestmark = [pytest.mark.local, pytest.mark.usefixtures("request_log")]
 
 
-async def _collect(events: list[dict[str, Any]]) -> list[tuple[str, dict[str, Any]]]:
+async def _collect(
+    events: list[dict[str, Any]], forced_tool: str | None = None
+) -> list[tuple[str, dict[str, Any]]]:
     """Run *events* through ``format_stream`` and return ``(event, data)`` pairs."""
 
     async def _stream() -> AsyncIterator[dict[str, Any]]:
@@ -34,7 +36,7 @@ async def _collect(events: list[dict[str, Any]]) -> list[tuple[str, dict[str, An
     stream = cast("AsyncIterator[ConverseStreamOutputTypeDef]", _stream())
     return [
         (sse.event or "", loads(cast("str", sse.data)))
-        async for sse in format_stream("msg_1", "model-x", stream, None)
+        async for sse in format_stream("msg_1", "model-x", stream, forced_tool)
     ]
 
 
@@ -266,6 +268,131 @@ async def test_redacted_thinking_spanning_several_deltas_keeps_every_chunk() -> 
     )
     assert starts[0]["index"] == 0
     assert starts[1]["index"] == 1, "the following text block must get the next index"
+
+
+class TestForcedToolSuppression:
+    """``tool_choice`` naming one tool drops the streamed calls to any other tool.
+
+    Converse's ``toolChoice.tool`` mandates a tool but does not forbid the others,
+    so the model may still stream a call to a tool the caller excluded; the
+    non-streaming path filters those blocks out and the stream must match, keeping
+    the Anthropic block indices contiguous from zero.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
+         https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools
+         stdapi/models/chat/_adapters/_anthropic_message.py:_process_content_block_start
+    """
+
+    @staticmethod
+    def _tool_start(index: int, name: str) -> dict[str, Any]:
+        """Return a ``contentBlockStart`` event opening a tool_use block for *name*."""
+        return {
+            "contentBlockStart": {
+                "contentBlockIndex": index,
+                "start": {"toolUse": {"toolUseId": f"t{index}", "name": name}},
+            }
+        }
+
+    async def test_unforced_tool_block_emits_no_events(self) -> None:
+        """A tool_use block for another tool produces no SSE event at all.
+
+        Neither ``content_block_start`` nor the synthetic empty-input delta nor
+        ``content_block_stop`` may be emitted: a half-open block would leave the
+        Anthropic SDK accumulating a block it never closes.
+        """
+        pairs = await _collect(
+            [
+                self._tool_start(0, "other_tool"),
+                {"contentBlockStop": {"contentBlockIndex": 0}},
+                {"messageStop": {"stopReason": "tool_use"}},
+            ],
+            forced_tool="get_time",
+        )
+        assert [event for event, _data in pairs] == [
+            "message_start",
+            "message_delta",
+            "message_stop",
+        ]
+
+    async def test_forced_tool_keeps_index_zero_after_a_dropped_block(self) -> None:
+        """The forced tool's block is indexed from zero despite the dropped one.
+
+        Anthropic indices count emitted blocks, not Bedrock ones, so a suppressed
+        block must not consume an index — a gap would break clients that address
+        content by index.
+        """
+        pairs = await _collect(
+            [
+                self._tool_start(0, "other_tool"),
+                {"contentBlockStop": {"contentBlockIndex": 0}},
+                self._tool_start(1, "get_time"),
+                {
+                    "contentBlockDelta": {
+                        "contentBlockIndex": 1,
+                        "delta": {"toolUse": {"input": '{"tz":"utc"}'}},
+                    }
+                },
+                {"contentBlockStop": {"contentBlockIndex": 1}},
+                {"messageStop": {"stopReason": "tool_use"}},
+            ],
+            forced_tool="get_time",
+        )
+        starts = [data for event, data in pairs if event == "content_block_start"]
+        assert [start["content_block"]["name"] for start in starts] == ["get_time"]
+        assert starts[0]["index"] == 0
+        assert _tool_input_json(pairs, 0) == '{"tz":"utc"}'
+
+    async def test_dropped_block_keeps_its_input_deltas_off_the_wire(self) -> None:
+        """The excluded tool's arguments never reach the client.
+
+        A suppressed block still receives its ``input_json_delta`` events from
+        Bedrock. Those deltas carry the arguments of the tool the caller ruled
+        out, and they arrive with no open Anthropic block, so the delta handler
+        would otherwise synthesize one for them -- publishing the excluded call
+        under a nameless ``tool_use`` block the non-streaming path drops.
+
+        Ref: stdapi/models/chat/_adapters/_anthropic_message.py:_process_content_block_delta
+        """
+        pairs = await _collect(
+            [
+                self._tool_start(0, "other_tool"),
+                {
+                    "contentBlockDelta": {
+                        "contentBlockIndex": 0,
+                        "delta": {"toolUse": {"input": '{"secret":"leak"}'}},
+                    }
+                },
+                {"contentBlockStop": {"contentBlockIndex": 0}},
+                {"messageStop": {"stopReason": "tool_use"}},
+            ],
+            forced_tool="get_time",
+        )
+        assert [event for event, _data in pairs] == [
+            "message_start",
+            "message_delta",
+            "message_stop",
+        ]
+        assert "leak" not in str(pairs)
+
+    async def test_matching_tool_block_is_untouched(self) -> None:
+        """The forced tool's own block streams normally when it is the only one.
+
+        This is the control case: the filter must not fire when every streamed
+        tool_use names the forced tool.
+        """
+        pairs = await _collect(
+            [
+                self._tool_start(0, "get_time"),
+                {"contentBlockStop": {"contentBlockIndex": 0}},
+                {"messageStop": {"stopReason": "tool_use"}},
+            ],
+            forced_tool="get_time",
+        )
+        (start_data,) = [
+            data for event, data in pairs if event == "content_block_start"
+        ]
+        assert start_data["content_block"]["name"] == "get_time"
+        assert any(event == "content_block_stop" for event, _data in pairs)
 
 
 async def test_message_delta_usage_reads_bedrock_cache_token_keys() -> None:

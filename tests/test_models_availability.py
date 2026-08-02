@@ -227,6 +227,101 @@ class TestMergeCandidate:
         )
 
 
+#: Application inference profile ARN an operator maps a model onto.
+_APP_PROFILE_ARN = (
+    "arn:aws:bedrock:eu-west-3:123456789012:application-inference-profile/abc123"
+)
+
+#: Prompt router ARN an operator maps a model onto.
+_PROMPT_ROUTER_ARN = "arn:aws:bedrock:us-east-1:123456789012:prompt-router/my-router"
+
+
+class TestApplyUserProfiles:
+    """_apply_user_profiles: AWS_BEDROCK_MODEL_ARN_MAPPING becomes the invoked model ID.
+
+    The setting is how an operator routes a catalogue model through their own
+    application inference profile (for cost allocation tags) or prompt router. The
+    mapping is only worth anything if the ARN replaces the model ID Bedrock is
+    actually called with, and if the ARN's own region joins the model's region list
+    -- otherwise the profile is stored somewhere nothing reads, or is stored for a
+    region the router will never route to.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-use.html
+         stdapi/config.py:_Settings.aws_bedrock_model_arn_mapping
+         stdapi/models/__init__.py:_apply_user_profiles
+    """
+
+    @pytest.mark.parametrize(
+        ("arn", "region"),
+        [
+            pytest.param(_APP_PROFILE_ARN, "eu-west-3", id="application-profile"),
+            pytest.param(_PROMPT_ROUTER_ARN, "us-east-1", id="prompt-router"),
+        ],
+    )
+    def test_mapped_arn_becomes_the_id_invoked_in_its_region(
+        self, monkeypatch: pytest.MonkeyPatch, arn: str, region: RegionName
+    ) -> None:
+        """Both accepted ARN shapes are installed as the model's profile for their region.
+
+        ``get_id(..., inference_profile=True)`` is what the Converse/Invoke callers
+        pass as ``modelId``, so asserting on it pins the mapping end to end rather
+        than just its storage.
+        """
+        model = _make_model(region="us-west-2")
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_model_arn_mapping", {model.id: arn})
+
+        assert stdapi.models._apply_user_profiles({model.id: model}) == {}  # noqa: SLF001
+
+        assert model.regions == ["us-west-2", region], (
+            "the ARN's region must be added, and the discovered regions kept"
+        )
+        assert model.get_id(region, inference_profile=True) == arn
+        assert model.get_id(region) == model.id, (
+            "the bare model ID is still what a non-profile call uses"
+        )
+
+    def test_arn_region_already_known_is_not_duplicated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Mapping an ARN in a region the model already serves leaves the list unchanged.
+
+        A duplicated region would be tried twice by the region-routing loop.
+        """
+        model = _make_model(region="eu-west-3")
+        monkeypatch.setattr(
+            SETTINGS, "aws_bedrock_model_arn_mapping", {model.id: _APP_PROFILE_ARN}
+        )
+
+        stdapi.models._apply_user_profiles({model.id: model})  # noqa: SLF001
+
+        assert model.regions == ["eu-west-3"]
+        assert model.get_id("eu-west-3", inference_profile=True) == _APP_PROFILE_ARN
+
+    def test_mapping_for_an_absent_model_is_reported_not_raised(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A mapping naming a model the account cannot see degrades to a startup warning.
+
+        A typo or a model lost to a region change must not abort the catalogue
+        refresh: the entry is returned for the startup event log instead.
+
+        Ref: stdapi/models/__init__.py:initialize_bedrock_models
+        """
+        model = _make_model()
+        monkeypatch.setattr(
+            SETTINGS,
+            "aws_bedrock_model_arn_mapping",
+            {"vendor.not-in-this-account-v1": _APP_PROFILE_ARN},
+        )
+
+        invalid = stdapi.models._apply_user_profiles({model.id: model})  # noqa: SLF001
+
+        assert invalid == {
+            "vendor.not-in-this-account-v1": "Model not found in available Bedrock models"
+        }
+        assert model.inference_profiles is None
+
+
 class TestFilterInferenceProfiles:
     """_filter_inference_profiles: pick the preferred profile per model, keep a regional fallback.
 

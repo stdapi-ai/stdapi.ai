@@ -11,14 +11,25 @@ Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html
 """
 
 from asyncio import Event, wait_for
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from botocore.exceptions import ClientError
 
 from stdapi import aws_s3
-from stdapi.aws_s3 import S3Object, copy_s3_object, multipart_copy_parts
+from stdapi.api_errors import ApiError
+from stdapi.aws_s3 import (
+    S3Object,
+    copy_s3_object,
+    get_s3_bucket_for_region,
+    multipart_copy_parts,
+    require_s3_bucket_for_region,
+)
+from stdapi.config import SETTINGS
 from stdapi.utils import async_iter
+
+if TYPE_CHECKING:
+    from types_aiobotocore_bedrock.literals import RegionName
 
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
@@ -38,10 +49,15 @@ class _BarrierCopyClient:
         self.copy_ranges: dict[int, str] = {}
         self.completed_parts: list[dict[str, Any]] | None = None
         self.aborted = False
+        self.single_copies: list[dict[str, Any]] = []
         self._all_started = Event()
 
     async def head_object(self, **_kwargs: object) -> dict[str, Any]:
         return {"ContentLength": self.size}
+
+    async def copy_object(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
+        self.single_copies.append(kwargs)
+        return {}
 
     async def create_multipart_upload(self, **_kwargs: object) -> dict[str, Any]:
         return {"UploadId": "mpu-1"}
@@ -188,6 +204,34 @@ class TestCopyS3ObjectMultipart:
         assert stub.max_in_flight == 3
         assert stub.aborted is False
 
+    async def test_small_object_uses_one_copy_that_replaces_the_tags(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """At or below the limit a single CopyObject runs, re-tagging the destination.
+
+        ``TaggingDirective="REPLACE"`` is what puts the gateway's own tag set on
+        the copy: the S3 default copies the source's tags instead, and the
+        lifecycle rule that expires temporary objects keys off those tags.
+
+        Ref: https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html
+        """
+        stub = _BarrierCopyClient(expected=1, size=20)
+        monkeypatch.setattr(aws_s3, "get_client", lambda *_: stub)
+
+        result = await wait_for(
+            copy_s3_object("src", "sk", dest_bucket="dest", dest_key="dk"),
+            timeout=_OVERLAP_TIMEOUT,
+        )
+
+        assert result == S3Object(bucket="dest", key="dk")
+        (call,) = stub.single_copies
+        assert call["CopySource"] == {"Bucket": "src", "Key": "sk"}
+        assert call["Bucket"] == "dest"
+        assert call["Key"] == "dk"
+        assert call["TaggingDirective"] == "REPLACE"
+        assert call["Tagging"] == aws_s3.S3_TAGGING
+        assert stub.completed_parts is None, "no multipart upload may be started"
+
     async def test_part_failure_aborts_upload_and_propagates(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -230,7 +274,7 @@ class _PipelinedUploadClient:
         if self.in_flight >= 2:
             self.window_full.set()
         if PartNumber == 1:
-            # Completes only once part 2 also uploads: the old sequential
+            # Completes only once part 2 also uploads, so a sequential
             # read-upload-read-upload loop times out here.
             await wait_for(self.window_full.wait(), timeout=_OVERLAP_TIMEOUT)
         self.part_bodies[PartNumber] = bytes(Body)
@@ -281,10 +325,10 @@ class TestMultipartUploadPipelining:
     async def test_reads_next_chunk_while_part_uploads(self) -> None:
         """The next chunk is read while the previous part uploads.
 
-        Part 1 completes only once part 2 is in flight, so the old sequential
-        loop deadlocks (times out) here. The completion list stays part-number
-        ordered even though part 2 finishes before part 1, and the in-flight
-        window never exceeds the documented bound of 2.
+        Part 1 completes only once part 2 is in flight, so a sequential loop
+        times out here. The completion list stays part-number ordered even
+        though part 2 finishes before part 1, and the in-flight window never
+        exceeds the documented bound of 2.
         """
         stub = _PipelinedUploadClient()
         await wait_for(
@@ -341,3 +385,80 @@ class TestBytesChunks:
         assert all(type(chunk) is bytes for chunk in chunks)
         assert [len(chunk) for chunk in chunks] == [4096, 4096, 2048]
         assert b"".join(chunks) == data
+
+
+@pytest.mark.usefixtures("request_log")
+class TestBucketForRegion:
+    """Bucket resolution is per-region, and a miss is an operator problem, not a leak.
+
+    Async invocation writes its input and output in the region the model runs
+    in, so each additional Bedrock region needs its own bucket; only the primary
+    region may use the single ``aws_s3_bucket``. When none is configured the
+    operator gets the setting name in the server log while the client gets a
+    fixed sentence that names neither bucket, region nor setting.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-files.html
+         stdapi/aws_s3.py:get_s3_bucket_for_region
+         stdapi/aws_s3.py:require_s3_bucket_for_region
+    """
+
+    @staticmethod
+    def _configure(
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        bucket: str = "",
+        regional: dict[str, str] | None = None,
+    ) -> None:
+        """Pin the two Bedrock regions and the configured buckets."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1", "eu-west-1"])
+        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", bucket)
+        monkeypatch.setattr(SETTINGS, "aws_s3_regional_buckets", regional or {})
+
+    def test_regional_bucket_wins_over_the_default_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A region with its own bucket uses it, even when it is the primary region."""
+        self._configure(
+            monkeypatch, bucket="default", regional={"us-east-1": "regional"}
+        )
+        assert get_s3_bucket_for_region("us-east-1") == "regional"
+
+    def test_default_bucket_serves_only_the_primary_region(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The single ``aws_s3_bucket`` is never used for a secondary region.
+
+        Reusing it there would send a cross-region job to a bucket Bedrock
+        cannot read from, so the resolution returns None instead.
+        """
+        self._configure(monkeypatch, bucket="default")
+        assert get_s3_bucket_for_region("us-east-1") == "default"
+        assert get_s3_bucket_for_region("eu-west-1") is None
+
+    @pytest.mark.parametrize(
+        ("region", "expected_setting"),
+        [("us-east-1", "aws_s3_bucket"), ("eu-west-1", "aws_s3_regional_buckets")],
+    )
+    def test_missing_bucket_names_the_setting_only_in_the_server_log(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        request_log: dict[str, Any],
+        region: RegionName,
+        expected_setting: str,
+    ) -> None:
+        """The client message is fixed; the setting to fix is logged server-side.
+
+        Which of the two settings is missing depends on whether the region is
+        the primary one, and that distinction is what the operator needs.
+        """
+        self._configure(monkeypatch)
+        with pytest.raises(ApiError) as raised:
+            require_s3_bucket_for_region(region)
+
+        assert str(raised.value) == (
+            "Async invocation is not available on the current server. "
+            "Please contact the administrator to enable it."
+        )
+        details = " ".join(str(detail) for detail in request_log["error_detail"])
+        assert expected_setting in details
+        assert expected_setting not in str(raised.value)

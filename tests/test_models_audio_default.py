@@ -21,6 +21,7 @@ from stdapi.aws_bedrock import BEDROCK_BODY_SIZE_LIMIT, MIME_TYPES_TO_AUDIO_TYPE
 from stdapi.models import ModelDetails, _compute_model_capabilities
 from stdapi.models.audio import _default, get_audio_model
 from stdapi.models.audio._default import CONVERSE_AUDIO_FORMATS, AudioModel
+from stdapi.types.openai_audio import TranscriptionTextDoneEvent
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -329,8 +330,8 @@ class TestAudioFormatMapping:
 
         libmagic identifies the ASF container by its header GUID and reports
         ``video/x-ms-asf`` whether or not the payload carries a video track, so
-        gating the fallback on ``media_type == "audio"`` made WMA — the flagship
-        legacy case for this fallback — unreachable.
+        gating the fallback on ``media_type == "audio"`` would make WMA — the
+        flagship legacy case for this fallback — unreachable.
         """
         captured: dict[str, Any] = {}
 
@@ -535,6 +536,153 @@ class TestInlineBodySizeGuard:
         )
 
         assert len(block["audio"]["source"]["bytes"]) == BEDROCK_BODY_SIZE_LIMIT  # type: ignore[typeddict-item]
+
+
+class TestConverseStreamEvents:
+    """``stt_stream()`` maps Converse stream events onto the OpenAI SSE events.
+
+    Ref: https://developers.openai.com/api/docs/api-reference/audio/create-transcription
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStream.html
+         stdapi/models/audio/_default.py:AudioModel.stt_stream
+    """
+
+    @staticmethod
+    def _patch_stream(
+        monkeypatch: pytest.MonkeyPatch, events: list[dict[str, Any]]
+    ) -> None:
+        """Make ``converse_stream`` replay *events* instead of calling Bedrock."""
+
+        async def _fake_converse_stream(
+            self: AudioModel,  # noqa: ARG001
+            _request: object,
+        ) -> dict[str, Any]:
+            async def _stream() -> AsyncGenerator[dict[str, Any]]:
+                for event in events:
+                    yield event
+
+            return {"stream": _stream()}
+
+        monkeypatch.setattr(
+            _default.AudioModel, "converse_stream", _fake_converse_stream
+        )
+
+    async def test_deltas_stream_then_a_done_event_carries_the_full_text(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Each text delta is forwarded, and the done event concatenates them all.
+
+        A client rendering only the deltas and a client reading only the final
+        event must end up with the same transcript.
+        """
+        self._patch_stream(
+            monkeypatch,
+            [
+                {"contentBlockDelta": {"delta": {"text": "hello "}}},
+                # A non-text block (e.g. reasoning) must not become a delta.
+                {"contentBlockDelta": {"delta": {"reasoningContent": {}}}},
+                {"contentBlockDelta": {"delta": {"text": "world"}}},
+                {
+                    "metadata": {
+                        "usage": {
+                            "inputTokens": 10,
+                            "outputTokens": 2,
+                            "totalTokens": 12,
+                        }
+                    }
+                },
+            ],
+        )
+
+        events = [
+            event
+            async for event in AudioModel(_MODEL_ID).stt_stream(
+                _FakeAudioContent(),  # type: ignore[arg-type]
+                "text",
+                logprobs=False,
+            )
+        ]
+
+        assert [event.delta for event in events[:-1]] == ["hello ", "world"]  # type: ignore[union-attr]
+        done = events[-1]
+        assert isinstance(done, TranscriptionTextDoneEvent)
+        assert done.text == "hello world"
+        assert done.usage is not None
+        assert done.usage.model_dump() == {
+            "input_tokens": 10,
+            "output_tokens": 2,
+            "total_tokens": 12,
+            "type": "tokens",
+            # Converse reports no audio/text input split (issue #95).
+            "input_token_details": None,
+        }
+        assert all(event.logprobs is None for event in events)
+
+    async def test_stream_without_usage_metadata_reports_no_usage(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A stream carrying no ``metadata.usage`` leaves the done event's usage unset.
+
+        Reporting zeros instead would bill-report a request as free.
+        """
+        self._patch_stream(
+            monkeypatch, [{"contentBlockDelta": {"delta": {"text": "hi"}}}]
+        )
+
+        events = [
+            event
+            async for event in AudioModel(_MODEL_ID).stt_stream(
+                _FakeAudioContent(),  # type: ignore[arg-type]
+                "text",
+                logprobs=False,
+            )
+        ]
+
+        done = events[-1]
+        assert isinstance(done, TranscriptionTextDoneEvent)
+        assert done.text == "hi"
+        assert done.usage is None
+
+
+class TestUnsupportedResponseFormats:
+    """The Converse default serves ``json``/``text`` only, and says so.
+
+    Subtitle and verbose formats are built from timestamps the Converse API
+    never returns, so they are refused up front instead of returning an
+    empty-timestamp response.
+
+    Ref: https://developers.openai.com/api/docs/api-reference/audio/create-transcription
+         stdapi/models/audio/__init__.py:AudioModelBase._validate_response_formats
+    """
+
+    @pytest.mark.parametrize(
+        "response_format", ["srt", "vtt", "verbose_json", "diarized_json"]
+    )
+    async def test_transcription_rejects_timestamped_formats(
+        self, response_format: str
+    ) -> None:
+        """An unsupported ``response_format`` fails with a 400 naming it."""
+        with pytest.raises(ApiError, match="is not supported") as exc_info:
+            await AudioModel(_MODEL_ID).stt(
+                _FakeAudioContent(),  # type: ignore[arg-type]
+                response_format,  # type: ignore[arg-type]
+                logprobs=False,
+            )
+
+        assert exc_info.value.status == 400
+        assert response_format in str(exc_info.value)
+
+    async def test_translation_rejects_timestamped_formats(self) -> None:
+        """``stt_translate()`` applies the same response-format allowlist."""
+        with pytest.raises(ApiError, match="is not supported"):
+            await AudioModel(_MODEL_ID).stt_translate(
+                _FakeAudioContent(),  # type: ignore[arg-type]
+                "srt",
+                None,
+            )
+
+    def test_supported_response_formats_are_json_and_text(self) -> None:
+        """The allowlist itself is pinned: widening it needs the formats built."""
+        assert frozenset({"json", "text"}) == AudioModel.SUPPORTED_RESPONSES_FORMATS
 
 
 class TestTranslatePromptPath:

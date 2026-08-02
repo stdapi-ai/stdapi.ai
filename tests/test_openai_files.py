@@ -31,6 +31,7 @@ from stdapi.aws_s3 import S3Object
 from stdapi.config import SETTINGS
 from stdapi.files import FileRecord, _core, _multipart
 from stdapi.routes import openai_files as openai_files_routes
+from tests._helpers import make_client_error
 
 if TYPE_CHECKING:
     import httpx
@@ -2835,3 +2836,72 @@ class TestCompleteMultipartSessionMissingPartUnit:
         await _multipart.complete_multipart_session(session.upload_id, [part_1])
 
         assert stub_s3.complete_called is True
+
+
+class _StubMissingS3Client:
+    """Stub S3 client whose ``HeadObject`` always reports the key as absent."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+
+    async def head_object(self, **_kwargs: object) -> dict[str, Any]:
+        """Raise the configured not-found ``ClientError``."""
+        raise make_client_error(self.code, "HeadObject")
+
+
+@pytest.mark.local
+@pytest.mark.parametrize("code", ["404", "NoSuchKey"])
+class TestMissingFileIsNotFoundUnit:
+    """A well-formed ID whose S3 object is gone answers 404, not 500 (unit, stubbed S3).
+
+    The ID carries its own bucket fingerprint, so an ID for a deleted — or never
+    created — file passes every format check and only ``HeadObject`` can tell it
+    is missing. S3 reports that with two different codes depending on the caller's
+    permissions (``404`` and ``NoSuchKey``); a code that fell through would surface
+    as a 500, which the OpenAI SDK retries instead of reporting to the user.
+
+    Ref: https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html
+         stdapi/files/_core.py:_get_file_impl
+         stdapi/api_errors.py:FileNotExistError
+    """
+
+    @pytest.fixture
+    def file_id(self, monkeypatch: pytest.MonkeyPatch, code: str) -> str:
+        """Point the Files API at a stubbed bucket holding nothing.
+
+        Returns:
+            A well-formed file ID for that bucket.
+        """
+        monkeypatch.setattr(_core, "get_client", lambda *_: _StubMissingS3Client(code))
+        monkeypatch.setattr(_core, "_require_bucket", lambda: "bucket")
+        monkeypatch.setattr(_core, "BUCKET_TO_REGION", {"bucket": "us-east-1"})
+        return f"file-{_core.encode_id_payload('bucket')}"
+
+    def test_metadata_lookup_reports_not_found(
+        self, app_client: TestClient, file_id: str
+    ) -> None:
+        """GET /v1/files/{id} answers 404 and names the file it could not find.
+
+        The message carries the ID payload without its ``file-`` prefix, which is
+        what identifies the object to the caller.
+        """
+        response = app_client.get(f"/v1/files/{file_id}")
+
+        assert response.status_code == 404, response.text
+        error = response.json()["error"]
+        assert error["code"] == "not_found"
+        assert error["type"] == "invalid_request_error"
+        assert file_id.removeprefix("file-") in error["message"], error
+
+    def test_content_download_reports_not_found(
+        self, app_client: TestClient, file_id: str
+    ) -> None:
+        """GET /v1/files/{id}/content answers 404 rather than streaming an empty body.
+
+        The download route resolves the record before opening the stream, so it
+        must fail the same way the metadata route does.
+        """
+        response = app_client.get(f"/v1/files/{file_id}/content")
+
+        assert response.status_code == 404, response.text
+        assert response.json()["error"]["code"] == "not_found"

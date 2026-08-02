@@ -20,11 +20,15 @@ from stdapi.aws_bedrock_mantle import (
     cached_response_surface,
     encode_mantle_response_id,
 )
+from stdapi.config import SETTINGS
 from stdapi.routes import openai_responses
 from stdapi.routes.openai_responses import _mantle_stored_response
 
 if TYPE_CHECKING:
     from collections.abc import Generator
+
+    from starlette.testclient import TestClient
+    from types_aiobotocore_bedrock.literals import RegionName
 
 pytestmark = pytest.mark.local
 
@@ -195,6 +199,62 @@ async def test_stored_response_proxy_double_404_uses_the_message_override(
 
     assert excinfo.value.status == 404
     assert str(excinfo.value) == "listings are not available"
+
+
+@pytest.mark.usefixtures("_empty_surface_cache")
+def test_input_items_route_proxies_a_region_tagged_id(
+    app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``GET /v1/responses/{mantle_id}/input_items`` proxies to the tagged region.
+
+    The public ID embeds the serving region, so the listing route must decode it
+    and query that region's native ID rather than the local session store. The
+    upstream list is returned as-is: Mantle does not paginate it, so ``limit``
+    and ``order`` are not forwarded.
+
+    Ref: stdapi/routes/openai_responses.py:list_response_input_items
+    """
+    region: RegionName = "us-east-1"
+    monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_enabled", True)
+    monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_regions", [region])
+    public_id = encode_mantle_response_id(region, "resp-native-1")
+    calls: list[tuple[str, str]] = []
+
+    async def _fake_request_json(
+        called_region: str,
+        _method: str,
+        path: str,
+        *,
+        headers: dict[str, str] | None = None,  # noqa: ARG001
+    ) -> dict[str, Any]:
+        calls.append((called_region, path))
+        return {
+            "object": "list",
+            "data": [
+                {
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hi"}],
+                    "status": "completed",
+                }
+            ],
+            "first_id": "msg_1",
+            "last_id": "msg_1",
+            "has_more": False,
+        }
+
+    monkeypatch.setattr(openai_responses, "request_json", _fake_request_json)
+
+    response = app_client.get(f"/v1/responses/{public_id}/input_items?limit=5")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [item["id"] for item in body["data"]] == ["msg_1"]
+    assert body["has_more"] is False
+    assert calls == [(region, "/openai/v1/responses/resp-native-1/input_items")], (
+        "the tagged region is queried and Mantle serves the whole list unpaginated"
+    )
 
 
 @pytest.mark.usefixtures("_empty_surface_cache")

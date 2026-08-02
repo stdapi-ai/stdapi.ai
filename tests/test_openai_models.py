@@ -13,14 +13,22 @@ Ref: https://developers.openai.com/api/reference/resources/models/methods/list
 """
 
 import time
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
 from openai import NotFoundError, OpenAI
 
+from stdapi.routes import openai_models as openai_models_routes
+from stdapi.routes.openai_models import ModelsResponse
+from tests._helpers import make_model_details
+
 if TYPE_CHECKING:
     from openai.pagination import SyncPage
     from openai.types import Model
+    from starlette.testclient import TestClient
+
+    from stdapi.models import ModelDetails
 
 #: The four fields the OpenAI Models API documents on a Model object.
 _MODEL_FIELDS = frozenset({"id", "object", "created", "owned_by"})
@@ -327,3 +335,110 @@ class TestModels:
             assert models[capability] in model_ids, (
                 f"{capability} model {models[capability]} is not advertised by /v1/models"
             )
+
+
+@pytest.mark.local
+class TestListModelsCacheUnit:
+    """``GET /v1/models`` serves a cached response until the catalogue refreshes.
+
+    The whole catalogue is formatted once and held in module state, so the route
+    is a dict read on the hot path. That is only safe if the cache is invalidated
+    by the very same signal that changed the catalogue: a cache that outlived a
+    refresh would keep serving a retired model, and one rebuilt on every call
+    would re-format the catalogue for every listing.
+
+    Ref: https://developers.openai.com/api/reference/resources/models/methods/list
+         stdapi/routes/openai_models.py:list_models
+    """
+
+    @pytest.fixture
+    def catalog(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+        """Drive the route from an injected catalogue and refresh flag.
+
+        Returns:
+            The mutable control dict: ``models`` (the catalogue the route reads)
+            and ``updated`` (what ``initialize_bedrock_models`` reports).
+        """
+        control: dict[str, object] = {
+            "models": {
+                "vendor.zeta-v1": make_model_details(
+                    "vendor.zeta-v1", provider="Zeta Labs"
+                ),
+                "vendor.alpha-v1": make_model_details(
+                    "vendor.alpha-v1",
+                    provider="Alpha Inc",
+                    start_of_life_time=datetime(2025, 3, 4, tzinfo=UTC),
+                ),
+            },
+            "updated": True,
+        }
+
+        async def _initialize() -> bool:
+            return bool(control["updated"])
+
+        async def _details() -> dict[str, ModelDetails]:
+            return control["models"]  # type: ignore[return-value]
+
+        monkeypatch.setattr(openai_models_routes, "_ALL_MODELS", [])
+        monkeypatch.setattr(
+            openai_models_routes, "_MODELS_RESPONSE", ModelsResponse(data=[])
+        )
+        monkeypatch.setattr(
+            openai_models_routes, "initialize_bedrock_models", _initialize
+        )
+        monkeypatch.setattr(openai_models_routes, "get_all_models_details", _details)
+        return control
+
+    def test_models_are_listed_sorted_with_provider_ownership(
+        self, app_client: TestClient, catalog: dict[str, object]
+    ) -> None:
+        """Models come back sorted by ID, owned by their provider, created from its GA date.
+
+        ``owned_by`` is the provider name — not ``openai``/``system`` — and
+        ``created`` is the Bedrock ``startOfLifeTime`` epoch, falling back to 0.
+        """
+        body = app_client.get("/v1/models").json()
+
+        assert body["object"] == "list"
+        assert body["data"] == [
+            {
+                "id": "vendor.alpha-v1",
+                "object": "model",
+                "created": int(datetime(2025, 3, 4, tzinfo=UTC).timestamp()),
+                "owned_by": "Alpha Inc",
+            },
+            {
+                "id": "vendor.zeta-v1",
+                "object": "model",
+                "created": 0,
+                "owned_by": "Zeta Labs",
+            },
+        ]
+
+    def test_cache_is_served_until_a_refresh_reports_a_change(
+        self, app_client: TestClient, catalog: dict[str, object]
+    ) -> None:
+        """A catalogue change is invisible until the refresh reports it, then it is served.
+
+        The middle call proves the response is genuinely cached (the changed
+        catalogue is not read), and the last one proves the cache is dropped as
+        soon as the refresh signals an update.
+        """
+        assert [m["id"] for m in app_client.get("/v1/models").json()["data"]] == [
+            "vendor.alpha-v1",
+            "vendor.zeta-v1",
+        ]
+
+        catalog["models"] = {
+            "vendor.beta-v1": make_model_details("vendor.beta-v1", provider="Beta")
+        }
+        catalog["updated"] = False
+        assert [m["id"] for m in app_client.get("/v1/models").json()["data"]] == [
+            "vendor.alpha-v1",
+            "vendor.zeta-v1",
+        ], "an unchanged catalogue must not be re-formatted"
+
+        catalog["updated"] = True
+        assert [m["id"] for m in app_client.get("/v1/models").json()["data"]] == [
+            "vendor.beta-v1"
+        ]

@@ -18,6 +18,7 @@ from stdapi.types.openai_chat_completions import (
     ChatCompletionMessage,
     ChoiceDelta,
     CompletionCreateParams,
+    ReasoningOptions,
 )
 
 pytestmark = pytest.mark.local
@@ -65,6 +66,54 @@ class TestReasoningEffort:
             "reasoning_effort must be consumed by the declared Literal, "
             "not stored as an extra field"
         )
+
+
+class TestReasoningObjectNormalizationInputs:
+    """``reasoning`` is folded onto the flat fields whatever shape it arrives in.
+
+    The normalizer runs in ``before`` mode, so it sees whatever the caller
+    passed: a JSON object from a client, an already-built ``ReasoningOptions``
+    from in-process construction, or a whole request object being re-validated.
+    Only the mapping shapes carry values to fold; the rest must pass through
+    untouched instead of raising.
+
+    Ref: https://openrouter.ai/docs/guides/best-practices/reasoning-tokens
+         stdapi/types/openai_chat_completions.py:CompletionCreateParams._normalize_reasoning
+    """
+
+    def test_a_reasoning_options_instance_is_folded(self) -> None:
+        """An in-process ``ReasoningOptions`` configures the flat fields too."""
+        request = CompletionCreateParams.model_validate(
+            _BASE_REQUEST | {"reasoning": ReasoningOptions(max_tokens=2048)}
+        )
+        assert request.thinking_budget == 2048
+        assert request.enable_thinking is True, (
+            "an explicit budget implies reasoning is on, as thinking_budget requires"
+        )
+
+    def test_an_instance_still_enforces_the_conflict_rules(self) -> None:
+        """The mutual exclusions apply to the object form as well as the JSON one."""
+        with pytest.raises(ValidationError, match="Only one of"):
+            CompletionCreateParams.model_validate(
+                _BASE_REQUEST
+                | {"reasoning": ReasoningOptions(effort="high", max_tokens=2048)}
+            )
+
+    def test_a_non_mapping_body_is_a_validation_error(self) -> None:
+        """A JSON array body fails validation instead of crashing the normalizer.
+
+        The normalizer runs before pydantic has checked the payload shape, so it
+        must hand a non-mapping straight back; touching it would turn a client's
+        malformed body into a 500.
+        """
+        with pytest.raises(ValidationError) as excinfo:
+            CompletionCreateParams.model_validate([_BASE_REQUEST])
+        assert excinfo.value.errors()[0]["type"] == "model_type"
+
+    def test_a_non_mapping_reasoning_value_is_left_to_the_field(self) -> None:
+        """A ``reasoning`` that is not an object is rejected by the field, not folded."""
+        with pytest.raises(ValidationError, match="reasoning"):
+            CompletionCreateParams.model_validate(_BASE_REQUEST | {"reasoning": "high"})
 
 
 class TestPromptCacheOptions:

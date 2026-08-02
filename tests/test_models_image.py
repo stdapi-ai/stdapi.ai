@@ -16,7 +16,9 @@ from pybase64 import b64decode as pybase64_b64decode
 from pybase64 import b64encode
 
 import stdapi.models
+import stdapi.models.image
 from stdapi import usage
+from stdapi.api_errors import ApiError
 from stdapi.models import InvokeResult
 from stdapi.models.image import (
     ImageGenerationJobBase,
@@ -38,6 +40,7 @@ from stdapi.models.image.amazon_titan_image_generator import (
 from stdapi.monitoring import REQUEST_ID
 from stdapi.pricing import Dimension, Price, PriceKey, Service, _state
 from stdapi.usage import IMAGE_SPEC, compute_costs
+from stdapi.utils import convert_base64_image
 from tests.conftest import set_test_price
 
 if TYPE_CHECKING:
@@ -483,13 +486,8 @@ class TestStreamCancelsAbandonedJobs:
                 raise
             return ImageGenerationResponse(image="bbb", index=1)
 
-        async def _passthrough(
-            _self: object, response: Awaitable[ImageGenerationResponse]
-        ) -> ImageGenerationResponse:
-            return await response
-
         monkeypatch.setattr(
-            ImageGenerationJobBase, "_ensure_image_output_format", _passthrough
+            ImageGenerationJobBase, "_ensure_image_output_format", _passthrough_format
         )
         job = object.__new__(ImageGenerationJobBase)
         stream = job._stream_completed_images([_fast(), _never()])  # noqa: SLF001
@@ -545,6 +543,403 @@ class TestStabilityMultiImageTokenAccumulation:
         assert [image.index for image in images] == [0, 1, 2]
         assert job.input_tokens == 15
         assert job.output_tokens == 27
+
+
+class _StreamingJob(ImageGenerationJobBase[Any]):
+    """Job whose backend returns images resolving in a controlled order."""
+
+    async def _generate_images_from_text(
+        self,
+    ) -> list[Awaitable[ImageGenerationResponse]]:
+        """Return a slow first image and an immediate second one."""
+        return [_slow_image(0), _immediate_image(1)]
+
+    async def _edit_image(
+        self, images: list[str], mask: str | None
+    ) -> list[Awaitable[ImageGenerationResponse]]:
+        """Return one image per source, echoing the mask into the payload."""
+
+        async def _edited(index: int) -> ImageGenerationResponse:
+            return ImageGenerationResponse(image=f"{images[index]}-{mask}", index=index)
+
+        return [_edited(index) for index in range(len(images))]
+
+
+async def _passthrough_format(
+    _self: object,
+    response: Awaitable[ImageGenerationResponse] | ImageGenerationResponse,
+) -> ImageGenerationResponse:
+    """Resolve an image response without converting its format.
+
+    The real method takes either an awaitable or an already-resolved response,
+    so the stub standing in for it accepts both too.
+
+    Args:
+        _self: The job, unused.
+        response: The awaitable or resolved image response.
+
+    Returns:
+        The resolved image response.
+    """
+    if isinstance(response, ImageGenerationResponse):
+        return response
+    return await response
+
+
+async def _slow_image(index: int) -> ImageGenerationResponse:
+    """Resolve after a yield to the event loop, so it completes second."""
+    await sleep(0)
+    return ImageGenerationResponse(image="slow", index=index)
+
+
+async def _immediate_image(index: int) -> ImageGenerationResponse:
+    """Resolve without suspending, so it completes first."""
+    return ImageGenerationResponse(image="fast", index=index)
+
+
+class TestGenericImageStreamFallback:
+    """Models without a native streaming API still serve ``stream=true``.
+
+    No image backend streams partial images, so both streaming routes run on
+    the generic fallback: the per-image jobs are started together and each
+    image is emitted as it completes, rather than after the slowest one.
+
+    Ref: https://developers.openai.com/api/docs/api-reference/images/create
+         stdapi/models/image/__init__.py:ImageGenerationJobBase._generate_images_stream
+         stdapi/models/image/__init__.py:ImageGenerationJobBase._edit_images_stream
+    """
+
+    @staticmethod
+    def _job() -> _StreamingJob:
+        """Build a streaming job that leaves the backend format untouched."""
+        return _StreamingJob(
+            model=cast("Any", None),
+            prompt="a cat",
+            count=2,
+            width=64,
+            height=64,
+            quality=None,
+            style=None,
+            output_format=None,
+            output_compression=0,
+            extra_params={},
+        )
+
+    async def test_generation_stream_emits_images_in_completion_order(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The image finishing first is streamed first, not the one requested first."""
+        monkeypatch.setattr(
+            ImageGenerationJobBase, "_ensure_image_output_format", _passthrough_format
+        )
+
+        images = [image async for image in self._job().generate_images_stream()]
+
+        assert [image.image for image in images] == ["fast", "slow"]
+        assert [image.index for image in images] == [1, 0]
+
+    async def test_edit_stream_forwards_the_sources_and_the_mask(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The edit stream reaches ``_edit_image`` with both the images and the mask."""
+        monkeypatch.setattr(
+            ImageGenerationJobBase, "_ensure_image_output_format", _passthrough_format
+        )
+
+        images = [
+            image
+            async for image in self._job().edit_images_stream(["src0", "src1"], "mask")
+        ]
+
+        assert sorted(image.image for image in images) == ["src0-mask", "src1-mask"]
+
+
+class _ConvertingStreamJob(ImageGenerationJobBase[Any]):
+    """Job whose backend answers with one real PNG, so conversion runs for real."""
+
+    async def _generate_images_from_text(
+        self,
+    ) -> list[Awaitable[ImageGenerationResponse]]:
+        """Return a single already-resolved PNG image."""
+
+        async def _png() -> ImageGenerationResponse:
+            return ImageGenerationResponse(image=_b64_noisy_rgb_png(), index=0)
+
+        return [_png()]
+
+
+class TestStreamConvertsEachImageOnce:
+    """A streamed image is re-encoded once, not once per pipeline stage.
+
+    The conversion belongs to the stage that resolves the backend jobs, so the
+    public stream must not repeat it: a second pass would re-encode an image
+    that already carries the requested format, losing quality on every lossy
+    output and spending the encoder twice per image.
+
+    Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase.generate_images_stream
+         stdapi/models/image/__init__.py:ImageGenerationJobBase._stream_completed_images
+    """
+
+    async def test_a_streamed_image_is_encoded_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Exactly one ``convert_base64_image`` call serves one streamed image."""
+        calls: list[str] = []
+
+        async def _counting_convert(
+            image: str, output_format: str, compression: int
+        ) -> tuple[str, int, int]:
+            """Record the requested format, then convert for real."""
+            calls.append(output_format)
+            return await convert_base64_image(
+                image, output_format=cast("Any", output_format), compression=compression
+            )
+
+        monkeypatch.setattr(
+            "stdapi.models.image.convert_base64_image", _counting_convert
+        )
+        job = _ConvertingStreamJob(
+            model=cast("Any", None),
+            prompt="a cat",
+            count=1,
+            width=64,
+            height=64,
+            quality=None,
+            style=None,
+            output_format="jpeg",
+            output_compression=50,
+            extra_params={},
+        )
+
+        images = [image async for image in job.generate_images_stream()]
+
+        assert calls == ["jpeg"]
+        assert pybase64_b64decode(images[0].image).startswith(b"\xff\xd8\xff")
+
+
+class TestUrlResponseFormatUpload:
+    """``response_format="url"`` uploads the image and returns its link instead.
+
+    Ref: https://developers.openai.com/api/docs/api-reference/images/create
+         stdapi/models/image/__init__.py:ImageGenerationJobBase._get_image_url
+    """
+
+    @pytest.fixture(autouse=True)
+    def _request_context(self, request_log: dict[str, Any]) -> Generator[None]:
+        """Provide the request ID the uploaded object key is built from."""
+        id_token = REQUEST_ID.set("img7")
+        yield
+        REQUEST_ID.reset(id_token)
+
+    @staticmethod
+    def _job(output_format: str | None) -> ImageGenerationJobBase[Any]:
+        """Build a URL-returning job producing *output_format*."""
+        return ImageGenerationJobBase(
+            model=cast("Any", None),
+            prompt="a cat",
+            count=1,
+            width=64,
+            height=64,
+            quality=None,
+            style=None,
+            output_format=cast("Any", output_format),
+            output_compression=0,
+            extra_params={},
+            is_url=True,
+        )
+
+    @staticmethod
+    def _capture_upload(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+        """Replace the S3 upload with a recorder returning a fixed URL."""
+        captured: dict[str, Any] = {}
+
+        async def _fake_put(data: bytes, content_type: str, key: str) -> str:
+            captured["data"] = data
+            captured["content_type"] = content_type
+            captured["key"] = key
+            return f"https://example.invalid/{key}"
+
+        monkeypatch.setattr(stdapi.models.image, "put_object_and_get_url", _fake_put)
+        return captured
+
+    async def test_base64_payload_is_replaced_by_the_uploaded_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The response carries the URL, and the upload the decoded image bytes.
+
+        The base64 string never reaches the client in URL mode, and what is
+        stored is the binary image, not its encoding.
+        """
+        captured = self._capture_upload(monkeypatch)
+        source = _b64_noisy_rgb_png()
+
+        result = await self._job(None)._ensure_image_output_format(  # noqa: SLF001
+            ImageGenerationResponse(image=source, index=0)
+        )
+
+        assert result.image == f"https://example.invalid/{captured['key']}"
+        assert captured["data"] == pybase64_b64decode(source)
+        assert captured["data"].startswith(b"\x89PNG")
+        assert captured["content_type"] == "image/png"
+
+    async def test_object_key_is_scoped_to_the_request_and_1_based(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The key namespaces the request ID and numbers images from 001.
+
+        Two concurrent requests must never write the same object, and the
+        JPEG extension is ``.jpg`` while the content type stays ``image/jpeg``.
+        """
+        captured = self._capture_upload(monkeypatch)
+
+        await self._job("jpeg")._ensure_image_output_format(  # noqa: SLF001
+            ImageGenerationResponse(image=_b64_noisy_rgb_png(), index=0)
+        )
+
+        assert captured["key"] == "img7/image-img7-001.jpg"
+        assert captured["content_type"] == "image/jpeg"
+        assert captured["data"].startswith(b"\xff\xd8\xff"), "not a JPEG payload"
+
+
+class TestStabilityContentFilter:
+    """A Stability response reporting a filter reason is a client-visible refusal.
+
+    Stability answers 200 with a ``finish_reasons`` entry instead of failing the
+    invocation, so an unchecked response would return a blank image as success.
+
+    Ref: https://platform.stability.ai/docs/api-reference
+         stdapi/models/image/_stability.py:StabilityImageGenerationJobBase._get_image_from_response
+    """
+
+    @staticmethod
+    def _job(response: dict[str, Any]) -> StabilityImageGenerationJobBase:
+        """Build a job whose single invocation returns *response*."""
+
+        class _FakeModel:
+            """Fake Stability model returning a fixed invocation result."""
+
+            async def invoke(self, _request: object) -> InvokeResult[dict[str, Any]]:
+                """Return the canned response with no usage reported."""
+                return InvokeResult(
+                    response=response, input_tokens=None, output_tokens=None
+                )
+
+        job = object.__new__(StabilityImageGenerationJobBase)
+        job._model = cast("StabilityImageModelBase", _FakeModel())  # noqa: SLF001
+        job._input_tokens = None  # noqa: SLF001
+        job._output_tokens = None  # noqa: SLF001
+        return job
+
+    async def test_filtered_response_raises_naming_the_reason(self) -> None:
+        """A non-empty finish reason aborts with a 400 quoting it."""
+        job = self._job({"images": [""], "finish_reasons": ["CONTENT_FILTERED"]})
+
+        with pytest.raises(ApiError, match="Request was filtered") as exc_info:
+            await job._get_image_from_response({}, 0)  # type: ignore[arg-type]  # noqa: SLF001
+
+        assert exc_info.value.status == 400
+        assert "CONTENT_FILTERED" in str(exc_info.value)
+
+    async def test_null_finish_reason_is_a_successful_image(self) -> None:
+        """``finish_reasons: [null]`` is how a clean generation reports itself."""
+        job = self._job({"images": ["aaa"], "finish_reasons": [None]})
+
+        result = await job._get_image_from_response({}, 3)  # type: ignore[arg-type]  # noqa: SLF001
+
+        assert result.image == "aaa"
+        assert result.index == 3
+
+
+class TestStabilityRequestShaping:
+    """Stability takes an aspect ratio and its own output format, not a pixel size.
+
+    Ref: https://platform.stability.ai/docs/api-reference
+         stdapi/models/image/_stability.py:StabilityImageGenerationJobBase
+    """
+
+    @staticmethod
+    def _job(**overrides: Any) -> StabilityImageGenerationJobBase:  # noqa: ANN401
+        """Build a text-to-image Stability job with the given overrides."""
+        params: dict[str, Any] = {
+            "model": cast("Any", None),
+            "prompt": "a cat",
+            "count": 1,
+            "width": 1024,
+            "height": 1024,
+            "quality": None,
+            "style": None,
+            "output_format": None,
+            "output_compression": 0,
+            "extra_params": {},
+        }
+        params.update(overrides)
+        return StabilityImageGenerationJobBase(**params)
+
+    @pytest.mark.parametrize(
+        ("width", "height", "expected"),
+        [
+            (1024, 1024, "1:1"),
+            (1920, 1080, "16:9"),
+            (1080, 1920, "9:16"),
+            (1536, 1024, "3:2"),
+            # An unsupported ratio snaps to the nearest supported one.
+            (1000, 1010, "1:1"),
+            (2000, 900, "21:9"),
+        ],
+    )
+    def test_size_is_mapped_to_the_closest_supported_aspect_ratio(
+        self, width: int, height: int, expected: str
+    ) -> None:
+        """Any requested size resolves to a supported ratio instead of failing."""
+        assert (
+            StabilityImageGenerationJobBase._get_aspect_ratio(width, height)  # noqa: SLF001
+            == expected
+        )
+
+    def test_unsupported_quality_and_style_are_dropped_with_a_warning(
+        self, request_log: dict[str, Any]
+    ) -> None:
+        """Quality and style steer the backend; an unusable one must not fail the request.
+
+        Every OpenAI client sends a default ``quality``, so refusing it would
+        break them all; the request proceeds and the response echoes what was
+        actually produced.
+        """
+        job = self._job(quality="high", style="vivid")
+
+        request = job._build_text_to_image_base_request()  # noqa: SLF001
+
+        assert request == {"prompt": "a cat", "output_format": "png"}
+        warnings = "".join(map(str, request_log["error_detail"]))
+        assert '"quality" is not supported' in warnings
+        assert '"style" is not supported' in warnings
+
+    def test_no_requested_format_is_produced_as_png(self) -> None:
+        """Without an explicit format the backend is asked for PNG, the lossless one."""
+        job = self._job(output_format=None)
+
+        request = job._build_text_to_image_base_request()  # noqa: SLF001
+
+        assert request["output_format"] == "png"
+        assert job._response_output_format == "png"  # noqa: SLF001
+
+    def test_supported_output_format_is_requested_from_the_backend(self) -> None:
+        """A natively supported format is asked for, avoiding a re-encode."""
+        job = self._job(output_format="jpeg")
+
+        request = job._build_text_to_image_base_request()  # noqa: SLF001
+
+        assert request["output_format"] == "jpeg"
+        assert job._response_output_format == "jpeg"  # noqa: SLF001
+
+    def test_extra_params_are_merged_into_the_request(self) -> None:
+        """Model-specific extras (seed, negative_prompt) reach the backend request."""
+        job = self._job(extra_params={"seed": 42, "negative_prompt": "blurry"})
+
+        request = job._build_text_to_image_base_request()  # noqa: SLF001
+
+        assert request["seed"] == 42
+        assert request["negative_prompt"] == "blurry"
 
 
 def _b64_noisy_rgb_png(size: int = 64) -> str:

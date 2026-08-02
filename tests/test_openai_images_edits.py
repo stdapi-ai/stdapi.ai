@@ -29,10 +29,15 @@ from .test_openai_images_generations import (
 )
 
 if TYPE_CHECKING:
+    from fastapi import UploadFile
+    from starlette.datastructures import FormData
     from starlette.testclient import TestClient
 
 #: Shape of the ``size`` field built by ``build_images_response`` ("WIDTHxHEIGHT")
 _SIZE_PATTERN = re.compile(r"^\d+x\d+$")
+
+#: Model id used by tests that must fail at model resolution, before any AWS call.
+_PROBE_MODEL_ID = "probe-model-id"
 
 
 class TestImagesEditsBasic:
@@ -81,7 +86,6 @@ class TestImagesEditsBasic:
         assert response.size is not None
         assert _SIZE_PATTERN.match(response.size), response.size
 
-        # Validate usage metadata
         assert response.usage is not None
         assert response.usage.output_tokens > 0
         validate_image_usage(response.usage)
@@ -196,10 +200,9 @@ class TestImagesEditsBasic:
     ) -> None:
         """The multipart ``image[]`` field name is merged into the image list.
 
-        Regression: ``image[]`` was silently ignored after the JSON body support
-        was added, causing a 400 "at least 1 image" error instead of reaching
-        the model. Failing on the unknown model instead proves the upload was
-        parsed.
+        An ignored ``image[]`` field fails with a 400 "at least 1 image" before
+        model resolution, so failing on the unknown model is what proves the
+        upload was parsed.
 
         OpenAI labels that unknown-model 400 ``image_generation_user_error`` on
         its image endpoints, where the gateway uses ``invalid_request_error``.
@@ -274,7 +277,6 @@ class TestImagesEditsBasic:
 
         Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._edit_image
         """
-        # Use a model that only supports text-to-image generation (not editing)
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.edit(
                 image=sample_image_file,
@@ -329,7 +331,6 @@ class TestImagesEditsBasic:
         Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._validate_no_mask
              stdapi/models/image/stability_stable_image_remove_background.py:_RemoveBackgroundJob
         """
-        # Use a model that doesn't support masks (like background removal or upscale)
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.edit(
                 image=sample_image_file,
@@ -354,15 +355,12 @@ class TestImagesEditsBasic:
         its ``referenceImage``, so the parameter is mandatory for that task type
         even though it is optional for the endpoint.
 
-        Nova Canvas is the only backend offering VIRTUAL_TRY_ON and it is legacy.
-        Keeping the task reachable through legacy model support is the deliberate
-        answer to #93, so this test pinning a legacy model is intended, not an
-        oversight to report.
+        Nova Canvas is the only backend offering VIRTUAL_TRY_ON and it is legacy,
+        so pinning a legacy model here is deliberate (#93).
 
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
              stdapi/models/image/amazon_nova_canvas.py:_get_request_virtual_try_on
         """
-        # Use VIRTUAL_TRY_ON taskType which requires a mask
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.edit(
                 image=sample_image_file,
@@ -402,7 +400,6 @@ class TestImagesEditsBasic:
         )
 
         events = list(response)
-        # Validate the streaming response structure
         validate_streaming_image_response(events, prefix="image_edit")
         assert [str(event.type) for event in events] == ["image_edit.completed"]
         assert validate_base64_image(events[-1].b64_json) == "png"
@@ -447,16 +444,13 @@ class TestImagesEditsBasic:
 
         Ref: stdapi/routes/openai_images_edits.py:_merge_image_parameters
         """
-        # Derive HTTP client from OpenAI client
         http_client = openai_client._client  # noqa: SLF001
 
-        # Prepare common headers with authentication
         headers = {
             "Authorization": f"Bearer {openai_client.api_key}",
             "OpenAI-Organization": openai_client.organization or "",
         }
 
-        # Test with 'image' parameter name
         files_image = {
             "image": ("image.png", sample_image_file, "image/png"),
             "mask": ("mask.png", sample_mask_file, "image/png"),
@@ -485,7 +479,6 @@ class TestImagesEditsBasic:
         assert json_response_image["data"][0].get("url") is not None
         validate_url_format(json_response_image["data"][0]["url"])
 
-        # Test with 'image[]' parameter name (array notation)
         files_image_array = {
             "image[]": ("image.png", sample_image_file, "image/png"),
             "mask": ("mask.png", sample_mask_file, "image/png"),
@@ -514,7 +507,6 @@ class TestImagesEditsBasic:
         assert json_response_array["data"][0].get("url") is not None
         validate_url_format(json_response_array["data"][0]["url"])
 
-        # Test error case: no image provided
         data_no_image = {
             "prompt": "A test image",
             "model": "stability.stable-image-inpaint-v1:0",
@@ -530,7 +522,6 @@ class TestImagesEditsBasic:
         assert "error" in error_response
         assert error_response["error"]["type"] == "invalid_request_error"
 
-        # Verify the error details match Pydantic's min_length validation format
         assert "message" in error_response["error"]
         error_message = error_response["error"]["message"]
         assert "body.image" in error_message, error_message
@@ -538,7 +529,6 @@ class TestImagesEditsBasic:
             "validation" in error_message.lower() or "at least" in error_message.lower()
         )
 
-        # Test error case: invalid type for image[] (string instead of file)
         data_invalid_type = {
             "prompt": "A test image",
             "model": "stability.stable-image-inpaint-v1:0",
@@ -557,7 +547,6 @@ class TestImagesEditsBasic:
         assert "error" in error_response_invalid
         assert error_response_invalid["error"]["type"] == "invalid_request_error"
 
-        # Verify the error message indicates type mismatch
         assert "message" in error_response_invalid["error"]
         error_message_invalid = error_response_invalid["error"]["message"]
         assert "body.image[]" in error_message_invalid, error_message_invalid
@@ -728,9 +717,9 @@ class TestImagesEditsModelField:
     ) -> None:
         """A model supplied only in the JSON body reaches model resolution.
 
-        Regression: the unused, form-only 'model' Form parameter carried
-        'min_length=1' with an empty-string default, which rejected every
-        JSON-body request with a 422 before the JSON 'model' field was read.
+        The form-only ``model`` Form parameter must not constrain this path: a
+        ``min_length`` on it rejects every JSON-body request with a 422 before
+        the JSON ``model`` field is read.
 
         Ref: stdapi/types/openai_images.py:ImageEditJsonBody
         """
@@ -761,6 +750,89 @@ class TestImagesEditsModelField:
         assert response.status_code == 400
         assert response.json()["error"]["code"] == "model_not_found"
         assert probed_model_ids == ["probe-model-id"]
+
+
+@pytest.mark.local
+class TestImagesEditsImageFieldBinding:
+    """``image`` and ``image[]`` are merged by hand, so both are validated by hand.
+
+    FastAPI resolves no ``validation_alias`` for multipart ``File`` parameters,
+    so the route reads ``image[]`` off the raw form; the errors that binding
+    would normally raise have to be produced explicitly and stay OpenAI-shaped.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/routes/openai_images_edits.py:_merge_image_parameters
+    """
+
+    def test_multipart_without_any_image_is_a_field_error_on_image(
+        self, app_client: TestClient
+    ) -> None:
+        """A form carrying neither ``image`` nor ``image[]`` fails on ``image``.
+
+        Model resolution must not run first: the client's mistake is the
+        missing file, not an unknown model.
+        """
+        response = app_client.post(
+            "/v1/images/edits",
+            data={"model": "probe-model-id", "prompt": "Make it darker"},
+        )
+
+        assert response.status_code == 400
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "image" in error["message"]
+        assert error["code"] != "model_not_found"
+
+    def test_a_non_file_value_under_image_bracket_is_rejected(
+        self, app_client: TestClient
+    ) -> None:
+        """A plain text value posted as ``image[]`` cannot be read as an upload."""
+        response = app_client.post(
+            "/v1/images/edits",
+            data={
+                "model": "probe-model-id",
+                "prompt": "Make it darker",
+                "image[]": "not-a-file",
+            },
+        )
+
+        assert response.status_code == 400
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "image[]" in error["message"]
+
+    def test_bracket_suffixed_uploads_are_merged_with_the_bare_field(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Files sent as ``image`` and as ``image[]`` are collected into one list.
+
+        The official SDK posts repeated files under ``image[]``; a client
+        mixing both encodings must not lose either upload.
+        """
+        counts: list[int] = []
+
+        def _capture(
+            form_data: FormData, image_param: list[UploadFile] | None
+        ) -> list[UploadFile]:
+            """Count the merged uploads, then stop the request before any backend call."""
+            counts.append(len(original(form_data, image_param)))
+            raise UnsupportedModelError(_PROBE_MODEL_ID, status=400)
+
+        original = openai_images_edits._merge_image_parameters  # noqa: SLF001
+        monkeypatch.setattr(openai_images_edits, "_merge_image_parameters", _capture)
+
+        response = app_client.post(
+            "/v1/images/edits",
+            data={"model": "probe-model-id", "prompt": "Make it darker"},
+            files=[
+                ("image", ("a.png", b"fake-a", "image/png")),
+                ("image[]", ("b.png", b"fake-b", "image/png")),
+                ("image[]", ("c.png", b"fake-c", "image/png")),
+            ],
+        )
+
+        assert response.status_code == 400
+        assert counts == [3]
 
 
 @pytest.mark.local
@@ -875,9 +947,8 @@ class TestImagesEditsSizeAuto:
     ) -> None:
         """`size=auto` in multipart form data is resolved instead of rejected with 422.
 
-        Regression: the Form `size` parameter's pattern only matched
-        `WIDTHxHEIGHT`, rejecting the OpenAI `auto` literal already accepted
-        by the JSON body path.
+        The Form ``size`` pattern must accept the OpenAI ``auto`` literal and
+        not only ``WIDTHxHEIGHT``, as the JSON body path already does.
 
         Ref: stdapi/routes/openai_images_edits.py:edit_images
         """

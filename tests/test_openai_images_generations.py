@@ -67,7 +67,6 @@ def validate_base64_image(b64_data: str) -> str:
     except ValueError as e:
         pytest.fail(f"Invalid base64 format: {e}")
 
-    # Check image format by header bytes
     if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
         return "png"
     if image_bytes.startswith(b"\xff\xd8\xff"):
@@ -223,17 +222,14 @@ def validate_streaming_image_response(
     Raises:
         AssertionError: If the stream does not match the OpenAI streaming shape.
     """
-    # Response should be iterable for streaming
     assert hasattr(response, "__iter__"), "Streaming response must be iterable"
 
-    # Collect events from the stream
     events: list[ImageStreamEvent] = []
     event_types_seen = set()
 
     for event in response:
         events.append(event)
 
-        # Each event should have basic attributes
         assert hasattr(event, "type"), f"Event missing 'type' attribute: {event}"
         assert hasattr(event, "created_at"), (
             f"Event missing 'created_at' attribute: {event}"
@@ -241,16 +237,13 @@ def validate_streaming_image_response(
 
         event_types_seen.add(event.type)
 
-        # Validate event type-specific attributes
         if event.type == f"{prefix}.completed":
-            # Final completion event should have all metadata
             assert hasattr(event, "output_format"), (
                 f"Completion event missing 'output_format': {event}"
             )
             assert hasattr(event, "size"), f"Completion event missing 'size': {event}"
             assert hasattr(event, "usage"), f"Completion event missing 'usage': {event}"
 
-            # Validate format values
             assert event.output_format in ["png", "jpeg", "webp"], (
                 f"Invalid output_format: {event.output_format}"
             )
@@ -264,7 +257,6 @@ def validate_streaming_image_response(
                 "Completed event payload does not match the announced output_format"
             )
 
-            # Usage should have token information
             assert event.usage, f"Usage missing total_tokens: {event.usage}"
             assert (
                 event.usage.total_tokens
@@ -291,17 +283,14 @@ def validate_streaming_image_response(
                 f"Partial index must be 0-based: {partial.partial_image_index}"
             )
 
-        # Validate created_at is a reasonable timestamp
         validate_timestamp(event.created_at)
 
         # Don't process too many events to avoid hanging
         if len(events) > 20:
             break
 
-    # Should have at least one event
     assert len(events) > 0, "Streaming response should contain at least one event"
 
-    # Should have a completion event for successful generation
     assert f"{prefix}.completed" in event_types_seen, (
         f"Missing completion event. Event types seen: {event_types_seen}"
     )
@@ -499,7 +488,6 @@ class TestImageGeneration:
         assert image.b64_json is not None, "Missing b64_json in base64 format response"
         assert image.url is None, "Unexpected URL in base64 format response"
 
-        # Validate base64 format and image content
         image_format = validate_base64_image(image.b64_json)
         assert image_format in ["png", "jpeg", "webp"], (
             f"Unsupported image format: {image_format}"
@@ -558,10 +546,9 @@ class TestImageGeneration:
         levels and then reports the level actually used, so the Bedrock
         ``premium`` tier surfaces as ``high``.
 
-        Only Amazon's image models map ``quality``, and they are all legacy;
-        every Stability model rejects it. Keeping the parameter reachable through
-        legacy model support is the deliberate answer to #93, so this test
-        pinning a legacy model is intended, not an oversight to report.
+        Only Amazon's image models map ``quality`` and they are all legacy (every
+        Stability model rejects it), so pinning a legacy model here is
+        deliberate (#93).
 
         Ref: stdapi/routes/openai_images_generations.py:_OPENAI_QUALITY_LEVELS
              stdapi/models/image/amazon_titan_image_generator.py:AMZ_QUALITY_MAP
@@ -610,10 +597,9 @@ class TestImageGeneration:
         parameter and it has been retired, so ``gpt-image-1`` answers 400
         ``unknown_parameter`` for ``style`` whatever the value.
 
-        Only Amazon's image models accept ``style``, and they are all legacy;
-        every Stability model rejects it. Keeping the parameter reachable through
-        legacy model support is the deliberate answer to #93, so this test
-        pinning a legacy model is intended, not an oversight to report.
+        Only Amazon's image models accept ``style`` and they are all legacy
+        (every Stability model rejects it), so pinning a legacy model here is
+        deliberate (#93).
 
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
              stdapi/types/openai_images.py:ImageGenerateParams
@@ -653,7 +639,6 @@ class TestImageGeneration:
             stream=True,
         )
 
-        # Validate the streaming response structure
         assert response is not None
         events = validate_streaming_image_response(response)
         completed = [e for e in events if e.type == "image_generation.completed"]
@@ -1028,7 +1013,6 @@ class TestImageGeneration:
 
         Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._generate_images_from_text
         """
-        # Use a model that only supports variations (not text-to-image)
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.generate(
                 prompt="A test image",
@@ -1184,6 +1168,86 @@ class TestStreamGeneratorUsageMatchesNonStream:
             )
         finally:
             REQUEST_LOG.reset(log_token)
+
+
+class TestBuildImagesResponseUrlFormat:
+    """``response_format="url"`` returns links, ``b64_json`` returns payloads.
+
+    The job has already turned each image into a presigned link by then, so the
+    only difference here is the field it lands in — and putting a URL in
+    ``b64_json`` (or the reverse) breaks every client that reads one of them.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/routes/_images_common.py:build_images_response
+    """
+
+    @staticmethod
+    def _job(input_tokens: int, output_tokens: int) -> ImageGenerationJobBase[Any]:
+        """Build a finished 512x512 PNG job billed *input_tokens*/*output_tokens*."""
+        job = ImageGenerationJobBase(
+            model=cast("Any", None),
+            prompt="a cat",
+            count=1,
+            width=512,
+            height=512,
+            quality="medium",
+            style=None,
+            output_format="png",
+            output_compression=0,
+            extra_params={},
+        )
+        # Response-side counters a real invocation fills in from the model.
+        job._response_width = 512  # noqa: SLF001
+        job._response_height = 512  # noqa: SLF001
+        job._input_tokens = input_tokens  # noqa: SLF001
+        job._output_tokens = output_tokens  # noqa: SLF001
+        return job
+
+    @pytest.mark.local
+    @pytest.mark.usefixtures("request_log")
+    async def test_url_format_fills_url_and_leaves_b64_json_unset(self) -> None:
+        """Each result lands in ``url`` only, with the usage split still reported."""
+        REQUEST_TIME.set(datetime.now(UTC))
+
+        response = await build_images_response(
+            job=self._job(5, 1),
+            results=[
+                ImageGenerationResponse(image="https://example.invalid/a", index=0)
+            ],
+            response_format="url",
+            output_image_count=1,
+            input_image_count=2,
+        )
+
+        assert response.data is not None
+        assert response.data[0].url == "https://example.invalid/a"
+        assert response.data[0].b64_json is None
+        assert response.usage is not None
+        assert response.usage.input_tokens_details is not None
+        # Two input images out of five input tokens leaves three text tokens.
+        assert response.usage.input_tokens_details.image_tokens == 2
+        assert response.usage.input_tokens_details.text_tokens == 3
+
+    @pytest.mark.local
+    @pytest.mark.usefixtures("request_log")
+    async def test_b64_json_format_fills_b64_json_and_leaves_url_unset(self) -> None:
+        """The same results in ``b64_json`` mode land in the payload field instead."""
+        REQUEST_TIME.set(datetime.now(UTC))
+
+        response = await build_images_response(
+            job=self._job(0, 0),
+            results=[ImageGenerationResponse(image="aaa", index=0)],
+            response_format="b64_json",
+            output_image_count=1,
+        )
+
+        assert response.data is not None
+        assert response.data[0].b64_json == "aaa"
+        assert response.data[0].url is None
+        assert response.usage is not None
+        # A reported zero is a real count, not a missing one to substitute.
+        assert response.usage.input_tokens == 0
+        assert response.usage.output_tokens == 0
 
 
 class TestStreamGeneratorEventNames:

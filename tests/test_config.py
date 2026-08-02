@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from stdapi.config import SETTINGS, _Settings
+from stdapi.config import AWS_SESSION, SETTINGS, _Settings
 
 pytestmark = pytest.mark.local
 
@@ -596,3 +596,39 @@ class TestOpenApiJsonImplication:
             enable_openapi_json=False, enable_docs=False, enable_redoc=False
         )
         assert settings.enable_openapi_json is False
+
+
+class TestBedrockRegionDetection:
+    """aws_bedrock_regions falls back to the SDK's own region, or refuses to start.
+
+    The region list drives every downstream default -- routing, S3 buckets,
+    pricing -- so an unset ``AWS_BEDROCK_REGIONS`` may only be filled from the
+    SDK's resolved region. When the SDK has none either, startup must fail loudly
+    rather than leave the gateway with an empty region list.
+
+    Ref: stdapi/config.py:_Settings._parse_bedrock_regions
+    """
+
+    @staticmethod
+    def _pin_sdk_region(monkeypatch: pytest.MonkeyPatch, region: str | None) -> None:
+        """Make the shared botocore session resolve (or fail to resolve) *region*."""
+        monkeypatch.setattr(AWS_SESSION, "get_config_variable", lambda _name: region)
+
+    def test_empty_value_falls_back_to_the_sdk_region(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no configured region, the SDK's resolved region becomes the only region."""
+        self._pin_sdk_region(monkeypatch, "eu-west-3")
+        settings = _Settings(aws_bedrock_regions="")  # type: ignore[arg-type]
+        assert settings.aws_bedrock_regions == ["eu-west-3"]
+
+    def test_no_region_anywhere_is_rejected_at_startup(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With nothing configured and nothing detected, the settings refuse to build."""
+        self._pin_sdk_region(monkeypatch, None)
+        with pytest.raises(
+            ValidationError,
+            match=r"No AWS region specified in environment or configuration\.",
+        ):
+            _Settings(aws_bedrock_regions="")  # type: ignore[arg-type]

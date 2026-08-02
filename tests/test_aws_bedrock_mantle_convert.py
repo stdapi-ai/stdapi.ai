@@ -621,6 +621,36 @@ class TestChatToMessagesRequestRich:
         out = mantle_convert._chat_to_messages_request(payload)  # noqa: SLF001
         assert out["messages"] == []
 
+    def test_unmappable_content_part_is_dropped_without_losing_the_turn(self) -> None:
+        """An audio part has no Anthropic equivalent and is dropped, not forwarded.
+
+        Anthropic's content-block union has no audio member, so forwarding the
+        part verbatim would make upstream reject the whole request; the
+        surrounding text must survive so the turn still carries the question.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/models/chat/_mantle/_convert.py:_anthropic_block_from_chat_part
+        """
+        payload = {
+            "model": "m",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Transcribe this."},
+                        {
+                            "type": "input_audio",
+                            "input_audio": {"data": "QUJD", "format": "wav"},
+                        },
+                    ],
+                }
+            ],
+        }
+        out = mantle_convert._chat_to_messages_request(payload)  # noqa: SLF001
+        assert out["messages"][0]["content"] == [
+            {"type": "text", "text": "Transcribe this."}
+        ]
+
     def test_http_image_url_becomes_url_source(self) -> None:
         """A non-data-URI image URL becomes an Anthropic ``url`` source.
 
@@ -2548,6 +2578,40 @@ class TestChatCompletionsPayloadBuilder:
         assert "propertyNames" not in parameters["properties"]["a"]
         # sanitize_tool_schema only strips "propertyNames": "$schema" is left as-is.
         assert parameters["$schema"] == "http://json-schema.org/draft-07/schema#"
+
+    async def test_text_parts_travel_untouched_beside_the_inlined_ones(self) -> None:
+        """A text part in a multimodal message is forwarded byte for byte.
+
+        The resolver walks the validated parts and their dumped twins in lockstep,
+        touching only the file-backed ones; a text part carries no ``InputFile``,
+        so it must pass through with its position and its content intact rather
+        than being dropped or re-encoded.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_resolve_chat_part
+             stdapi/models/chat/_mantle/_convert.py:_resolve_chat_message_files
+        """
+        image_uri = _data_uri(b"PNGDATA", "image/png")
+        request = ChatCompletionCreateParams.model_validate(
+            {
+                "model": "ignored",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "What is in this picture?"},
+                            {"type": "image_url", "image_url": {"url": image_uri}},
+                            {"type": "text", "text": "Answer in one word."},
+                        ],
+                    }
+                ],
+            }
+        )
+        payload = await mantle_convert.chat_completions_payload(request, "model-id")
+        content = payload["messages"][0]["content"]
+        assert [part["type"] for part in content] == ["text", "image_url", "text"]
+        assert content[0]["text"] == "What is in this picture?"
+        assert content[2]["text"] == "Answer in one word."
+        assert content[1]["image_url"]["url"] == image_uri
 
     async def test_named_tool_choice_forwarded_verbatim(self) -> None:
         """A named-function ``tool_choice`` reaches the upstream payload unchanged.

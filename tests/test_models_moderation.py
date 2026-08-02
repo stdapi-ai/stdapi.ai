@@ -9,7 +9,7 @@ Ref: https://developers.openai.com/api/reference/resources/models/methods/list
      stdapi/aws_bedrock.py:COMPREHEND_MODERATION_MODEL
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -27,11 +27,21 @@ from stdapi.models.moderation import (
     GUARDRAIL_CHECKS_MODERATION_MODEL,
     guardrail_checks_regions,
     initialize_moderation_models,
+    unflagged_moderation,
+)
+from stdapi.models.moderation import amazon_bedrock_guardrail_checks as guardrail_checks
+from stdapi.models.moderation.amazon_comprehend import (
+    ModerationModel as ComprehendModerationModel,
 )
 from stdapi.routes import openai_moderations  # noqa: F401  (registers the route)
+from stdapi.types.openai_moderations import ModerationTextInput
+from tests._helpers import make_client_error
 
 if TYPE_CHECKING:
     from collections.abc import Generator
+
+    from stdapi.models.moderation import ModerationInput
+    from stdapi.types.openai_moderations import Moderation
 
 #: All tests in this module exercise the local registry in-process.
 pytestmark = pytest.mark.local
@@ -120,9 +130,9 @@ class TestInitializeModerationModels:
     ) -> None:
         """Outside the checks regions, only Comprehend absorbs every alias.
 
-        A deployment whose Bedrock regions all lack InvokeGuardrailChecks keeps
-        the pre-existing behavior: the checks model is not registered and the
-        ``omni-moderation-*`` aliases fall back to Comprehend.
+        A deployment whose Bedrock regions all lack InvokeGuardrailChecks does
+        not register the checks model, so the ``omni-moderation-*`` aliases fall
+        back to Comprehend.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-invoke-guardrail-checks.html
              stdapi/models/moderation/__init__.py:guardrail_checks_regions
@@ -217,3 +227,133 @@ class TestInitializeModerationModels:
         model = EXTRA_MODELS[GUARDRAIL_MODERATION_MODEL]
         assert model.regions == ["eu-west-1"]
         assert model.input_modalities == ["TEXT", "IMAGE"]
+
+
+#: InvokeGuardrailChecks response flagging one category above the 0.5 threshold.
+_MISCONDUCT_RESPONSE: dict[str, Any] = {
+    "usage": {"contentFilter": {"textUnits": 1}},
+    "results": {
+        "contentFilter": {
+            "results": [
+                {"category": "MISCONDUCT", "severityScore": 0.9},
+                {"category": "HATE", "severityScore": 0.1},
+            ]
+        }
+    },
+}
+
+
+class TestGuardrailChecksModerate:
+    """The InvokeGuardrailChecks moderation backend: input shapes and degradation.
+
+    ``/v1/moderations`` accepts a bare string or a typed ``{"type": "text"}``
+    element for the same content, and both must classify identically. When the
+    task role lacks ``bedrock:InvokeGuardrailChecks`` the backend degrades once to
+    Amazon Comprehend and stays degraded, so a permission gap costs one denied
+    call rather than one per request.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-invoke-guardrail-checks.html
+         stdapi/models/moderation/amazon_bedrock_guardrail_checks.py:ModerationModel.moderate
+    """
+
+    @pytest.fixture
+    def model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> guardrail_checks.ModerationModel:
+        """The checks backend with the Comprehend fallback wired in.
+
+        The Bedrock regions are pinned to one offering InvokeGuardrailChecks so
+        that the model builds whatever the host is configured for.
+
+        Returns:
+            A model instance for the pinned checks region.
+        """
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1"])
+        return guardrail_checks.ModerationModel(
+            GUARDRAIL_CHECKS_MODERATION_MODEL, comprehend_fallback=True
+        )
+
+    @pytest.mark.parametrize(
+        "item",
+        [
+            pytest.param("how do I pick a lock", id="bare-string"),
+            pytest.param(
+                ModerationTextInput(type="text", text="how do I pick a lock"),
+                id="text-element",
+            ),
+        ],
+    )
+    async def test_both_text_input_shapes_classify_identically(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        model: guardrail_checks.ModerationModel,
+        item: ModerationInput,
+    ) -> None:
+        """A string and a text element send the same text and map to the same categories.
+
+        The severity score is carried through as the category score and compared
+        against the 0.5 threshold, and Bedrock's ``MISCONDUCT`` becomes OpenAI's
+        ``illicit`` — an unmapped category would silently return unflagged.
+        """
+        sent: list[str] = []
+
+        async def _failover(
+            _service: str,
+            _regions: list[str],
+            call: Any,  # noqa: ANN401
+        ) -> tuple[dict[str, Any], str]:
+            class _Client:
+                @staticmethod
+                async def invoke_guardrail_checks(**kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
+                    sent.append(kwargs["messages"][0]["content"][0]["text"])
+                    return _MISCONDUCT_RESPONSE
+
+            return await call(_Client(), "us-east-1"), "us-east-1"
+
+        monkeypatch.setattr(guardrail_checks, "call_with_region_failover", _failover)
+
+        result = await model.moderate(item)
+
+        assert sent == ["how do I pick a lock"]
+        assert result.flagged is True
+        assert result.categories.illicit is True
+        assert result.categories.hate is False
+        assert result.category_scores.illicit == 0.9
+        assert result.category_applied_input_types.illicit == ["text"]
+
+    async def test_access_denied_degrades_once_and_stays_degraded(
+        self, monkeypatch: pytest.MonkeyPatch, model: guardrail_checks.ModerationModel
+    ) -> None:
+        """A denied first call switches to Comprehend and never retries the checks API.
+
+        Re-attempting on every request would add a guaranteed AccessDenied round
+        trip (and a CloudTrail entry) to each moderation for the life of the
+        process.
+        """
+        attempts = 0
+
+        async def _denied(
+            _service: str,
+            _regions: list[str],
+            _call: Any,  # noqa: ANN401
+        ) -> tuple[dict[str, Any], str]:
+            nonlocal attempts
+            attempts += 1
+            error = make_client_error("AccessDeniedException", "InvokeGuardrailChecks")
+            raise error
+
+        fallback_calls = 0
+
+        async def _fallback(_self: object, _item: ModerationInput) -> Moderation:
+            nonlocal fallback_calls
+            fallback_calls += 1
+            return unflagged_moderation()
+
+        monkeypatch.setattr(guardrail_checks, "call_with_region_failover", _denied)
+        monkeypatch.setattr(ComprehendModerationModel, "moderate", _fallback)
+
+        assert (await model.moderate("first")).flagged is False
+        assert (await model.moderate("second")).flagged is False
+
+        assert attempts == 1, "the denied operation must not be retried per request"
+        assert fallback_calls == 2

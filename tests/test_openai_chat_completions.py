@@ -20,6 +20,7 @@ from pybase64 import b64encode
 from pydantic import ConfigDict, ValidationError
 
 from stdapi.config import SETTINGS
+from stdapi.models.chat._adapters import _openai_chat_completion as chat_adapter
 from stdapi.models.chat._adapters._openai_chat_completion import (
     _LEGACY_FUNCTION,
     extract_reasoning,
@@ -34,6 +35,8 @@ from stdapi.models.chat._default import ChatModel
 from stdapi.models.deprecation import DEPRECATED_MODELS
 from stdapi.types.openai_chat_completions import (
     ChatCompletionAssistantMessageParam,
+    ChatCompletionAudio,
+    ChatCompletionAudioParam,
     CompletionCreateParams,
 )
 from tests._helpers import strip_code_fence
@@ -186,7 +189,6 @@ class TestChatCompletions:
             safety_identifier="test-chat-completion",
         )
 
-        # Validate response structure
         assert response.object == "chat.completion"
         assert len(response.choices) == 1
         assert response.choices[0].index == 0
@@ -196,7 +198,6 @@ class TestChatCompletions:
         assert response.choices[0].message.tool_calls is None
         assert response.choices[0].finish_reason in ("stop", "length")
 
-        # Validate usage information
         assert response.usage is not None
         assert response.usage.prompt_tokens > 0
         assert response.usage.completion_tokens > 0
@@ -219,7 +220,6 @@ class TestChatCompletions:
             model=chat_model, messages=[{"role": "user", "content": "Say hello."}], n=2
         )
 
-        # Validate multiple choices
         assert len(response.choices) == 2
 
         for i, choice in enumerate(response.choices):
@@ -267,7 +267,6 @@ class TestChatCompletions:
             ],
         )
 
-        # Validate the whole history was accepted and answered
         assert len(response.choices) == 1
         assert response.choices[0].message.role == "assistant"
         assert isinstance(response.choices[0].message.content, str)
@@ -321,7 +320,6 @@ class TestChatCompletions:
                 if chunk.choices[0].finish_reason is not None:
                     finish_reasons.append(chunk.choices[0].finish_reason)
 
-        # Validate streaming behavior
         assert len(chunks) > 0, "No streaming chunks received"
         assert len(accumulated_content) > 0, "No content accumulated from stream"
         assert chunks[0].choices[0].delta.role == "assistant", (
@@ -348,7 +346,6 @@ class TestChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
              stdapi/models/chat/_adapters/_openai_chat_completion.py:_FINISH_REASONS
         """
-        # Test single stop string
         response = openai_client.chat.completions.create(
             model=chat_legacy_model,
             messages=[
@@ -361,7 +358,6 @@ class TestChatCompletions:
         assert response.choices[0].finish_reason == "stop"
         assert isinstance(response.choices[0].message.content, str)
 
-        # Test multiple stop sequences
         response = openai_client.chat.completions.create(
             model=chat_legacy_model,
             messages=[
@@ -434,7 +430,6 @@ class TestChatCompletions:
         assert len(response.choices) == 1
         choice = response.choices[0]
 
-        # When a tool is called, content is typically None and tool_calls is populated
         assert choice.message.role == "assistant"
         assert choice.finish_reason in ("tool_calls", "stop")
         assert choice.message.tool_calls is not None
@@ -445,7 +440,6 @@ class TestChatCompletions:
         assert first_call.id
         assert first_call.function.name == "get_weather"
         assert isinstance(first_call.function.arguments, str)
-        # Arguments should be valid JSON string
         args_dict = _json.loads(first_call.function.arguments)
         assert isinstance(args_dict, dict)
         assert "location" in args_dict, "The required schema property must be filled"
@@ -492,8 +486,7 @@ class TestChatCompletions:
         assert final_choice.message.tool_calls is None
         assert final_choice.finish_reason == "stop"
 
-        # Test tool result with non-JSON content (plain text)
-        # This validates _req_parse_tool_content handles non-JSON correctly
+        # A plain-text tool result must reach Bedrock as a ``text`` block.
         followup_messages_plain_text = [
             {"role": "user", "content": "What's the weather in New York?"},
             {
@@ -574,9 +567,7 @@ class TestChatCompletions:
         )
         assert len(response.choices) == 1
         choice = response.choices[0]
-        # With legacy flow, function_call field is populated
-        # finish_reason may be "function_call" (OpenAI)
-        # Some models may return a regular assistant message with content (finish_reason 'stop'/'length').
+        # A model that answers in plain text instead reports 'stop'.
         assert choice.finish_reason in ("function_call", "stop")
         fc = choice.message.function_call
         assert fc is not None, choice.message
@@ -590,7 +581,6 @@ class TestChatCompletions:
         args = {"a": 2, "b": 3}
         tool_answer = _json.dumps({"result": args["a"] + args["b"]})
 
-        # Build follow-up messages using legacy "function" role message
         followup_messages = [
             {"role": "user", "content": "What is 2 + 3?"},
             {
@@ -674,19 +664,13 @@ class TestChatCompletions:
             assert isinstance(args_joined, str)
             assert len(args_joined) > 0
 
-            # Validate the joined arguments are parseable
-            # With the change to _resp_stream_get_content_block_delta,
-            # arguments should still be valid when accumulated
             try:
                 parsed_args = _json.loads(args_joined)
-                # Should be a valid dict with expected keys
                 assert isinstance(parsed_args, dict)
-                # For calculate_sum, we expect 'a' and 'b' keys (or empty if streaming incomplete)
-                if parsed_args:  # Only check if not empty
+                if parsed_args:
                     assert "a" in parsed_args or "b" in parsed_args
             except _json.JSONDecodeError:
-                # If not valid JSON, it might be incomplete streaming
-                # Accept partial JSON if it starts correctly
+                # A stream cut short leaves a JSON prefix rather than an object.
                 assert args_joined.startswith(("{", '"'))
 
     def test_empty_messages_error(self, openai_client: OpenAI, chat_model: str) -> None:
@@ -843,11 +827,9 @@ class TestChatCompletions:
 
         chunks = list(response)
         assert len(chunks) > 0
-        # Validate streamed chunks have expected structure
         has_tool_delta = False
         has_finish = False
         for ch in chunks:
-            # Each chunk should have choices
             choices = getattr(ch, "choices", None)
             if not choices:
                 continue
@@ -858,7 +840,6 @@ class TestChatCompletions:
             # role may appear only once as a delta; tolerate None
             if getattr(c0.delta, "tool_calls", None):
                 has_tool_delta = True
-                # Validate tool call delta
                 t = c0.delta.tool_calls[0]
                 assert t.index >= 0
                 # Type may stream as None on some chunks; when present it must be 'function'
@@ -870,8 +851,7 @@ class TestChatCompletions:
                 if t.function is not None and hasattr(t.function, "arguments"):
                     func_args = t.function.arguments
                     if func_args:
-                        # Arguments in streaming should be a string (delta fragment) or dict/object
-                        # With the change, arguments should be the raw input value, not JSON-encoded
+                        # A fragment is the raw input value, never JSON-encoded.
                         assert isinstance(func_args, (str, dict)) or func_args is None
             if c0.finish_reason is not None:
                 has_finish = True
@@ -884,7 +864,6 @@ class TestChatCompletions:
             )
             for ch in chunks
         )
-        # The whole stream was consumed, so the finish chunk must have been seen.
         assert has_finish, "Stream ended without a finish_reason chunk"
 
     def test_multiple_tool_calls_flow(
@@ -927,11 +906,9 @@ class TestChatCompletions:
             },
         ]
 
-        # Pre-generate stable IDs for the two calls
         call1_id = "call_1"
         call2_id = "call_2"
 
-        # Build a conversation where the assistant previously called two tools
         messages = [
             {
                 "role": "user",
@@ -990,8 +967,7 @@ class TestChatCompletions:
         assert final.usage is not None
         assert final.usage.prompt_tokens > 0, "Both tool results are billed as input"
 
-        # Test mixed JSON and non-JSON tool results
-        # This validates _req_parse_tool_content handles both formats
+        # Mixing a JSON and a plain-text result exercises both toolResult shapes.
         messages_mixed = [
             {
                 "role": "user",
@@ -1178,7 +1154,6 @@ class TestChatCompletions:
         assert isinstance(body, dict)
         assert body["type"] == "invalid_request_error"
         assert body.get("code") is None
-        # Message should mention both parameters
         msg = body["message"].lower()
         assert "functions" in msg
         assert "tools" in msg
@@ -1303,7 +1278,6 @@ class TestChatCompletions:
             assert first_call.function.name in ("get_weather", "get_time")
             assert isinstance(first_call.function.arguments, str)
         else:
-            # No tool call; ensure assistant content present
             assert isinstance(choice.message.content, str)
             assert len(choice.message.content) > 0
         assert choice.finish_reason in ("stop", "tool_calls", "length")
@@ -1372,14 +1346,12 @@ class TestChatCompletions:
             assert isinstance(choice.message.tool_calls, list)
             assert len(choice.message.tool_calls) >= 1
             tc = choice.message.tool_calls[0]
-            # For custom tool, type must be 'custom' and fields present
             assert tc.type == "custom"
             assert tc.id
             assert tc.custom.name == "my_custom_tool"
             assert isinstance(tc.custom.input, str)
             assert len(tc.custom.input) >= 0
         else:
-            # No tool call; ensure assistant content present
             assert isinstance(choice.message.content, str)
             assert len(choice.message.content) > 0
         assert choice.finish_reason in ("stop", "tool_calls", "length")
@@ -1423,7 +1395,6 @@ class TestChatCompletions:
             ],
         )
 
-        # Validate successful assistant response structure
         assert len(response.choices) >= 1
         choice = response.choices[0]
         assert choice.message.role == "assistant"
@@ -1956,7 +1927,6 @@ class TestChatCompletions:
              https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html
              stdapi/models/chat/_adapters/_openai_common.py:parse_prompt_cache_key
         """
-        # First request - should cache the prompt
         with _xfail_on_invalid_tool_use():
             response1 = openai_client.chat.completions.create(
                 model=chat_model,
@@ -1971,7 +1941,6 @@ class TestChatCompletions:
         assert response1.usage is not None
         assert response1.usage.prompt_tokens > 0
 
-        # Second request - should use cached prompt
         with _xfail_on_invalid_tool_use():
             response2 = openai_client.chat.completions.create(
                 model=chat_model,
@@ -2011,7 +1980,6 @@ class TestChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStreamMetadataEvent.html
              stdapi/models/chat/_adapters/_openai_common.py:extract_stream_usage
         """
-        # First streaming request - should cache the prompt
         with _xfail_on_invalid_tool_use():
             stream1 = openai_client.chat.completions.create(
                 model=chat_model,
@@ -2030,11 +1998,9 @@ class TestChatCompletions:
                     break
                 last_chunk1 = chunk
 
-        # Validate first stream was successful
         assert last_chunk1 is not None
         assert last_chunk1.object == "chat.completion.chunk"
 
-        # Second streaming request - should use cached prompt
         with _xfail_on_invalid_tool_use():
             stream2 = openai_client.chat.completions.create(
                 model=chat_model,
@@ -2053,7 +2019,6 @@ class TestChatCompletions:
                     break
                 last_chunk2 = chunk
 
-        # Validate second stream uses cache
         assert last_chunk2 is not None
         assert last_chunk2.choices == [], (
             "Usage is reported in its own chunk with empty choices"
@@ -2061,7 +2026,6 @@ class TestChatCompletions:
         usage2 = getattr(last_chunk2, "usage", None)
         assert usage2 is not None
 
-        # Check that cached tokens were used
         usage_details = getattr(usage2, "prompt_tokens_details", None)
         if use_official_api and usage_details is None:
             pytest.xfail(
@@ -2728,7 +2692,6 @@ class TestChatCompletions:
         assert audio is not None
         assert isinstance(audio.data, str)
         assert audio.transcript
-        # Verify base64 encoded
         try:
             decoded = base64.b64decode(audio.data)
         except (ValueError, TypeError) as error:
@@ -2857,9 +2820,6 @@ class TestChatCompletions:
             "Audio is generated exactly when the choice carries text"
         )
         if choice.message.tool_calls is not None and len(choice.message.tool_calls) > 0:
-            # If model chose to call a tool, no audio should be generated
-            # (or minimal audio from any brief text response)
-            # This validates audio is not generated for tool call responses
             assert choice.finish_reason == "tool_calls"
 
     @pytest.mark.slow
@@ -2879,7 +2839,6 @@ class TestChatCompletions:
         inference_profile_arn = None
         async with get_session().create_client("bedrock") as bedrock:
             try:
-                # Create the application inference profile
                 inference_profile_arn = (
                     await bedrock.create_inference_profile(
                         inferenceProfileName=f"test-profile-{token_hex(8)}",
@@ -2907,14 +2866,12 @@ class TestChatCompletions:
                         f"Inference profile did not become active within {max_wait} seconds"
                     )
 
-                # Test using the inference profile as model parameter
                 response = openai_client.chat.completions.create(
                     model=inference_profile_arn,
                     messages=[{"role": "user", "content": "Say OK"}],
                     max_completion_tokens=10,
                 )
 
-                # Validate response structure
                 assert len(response.choices) == 1
                 assert response.choices[0].message.role == "assistant"
                 assert isinstance(response.choices[0].message.content, str)
@@ -2942,14 +2899,12 @@ class TestChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
              stdapi/models/__init__.py:_validate_model_from_arn
         """
-        # Test using the prompt router as model parameter
         response = openai_client.chat.completions.create(
             model=f"arn:aws:bedrock:{aws_region}:{aws_account_id}:default-prompt-router/amazon.nova:1",
             messages=[{"role": "user", "content": "Say OK"}],
             max_completion_tokens=10,
         )
 
-        # Validate response structure
         assert len(response.choices) == 1
         assert response.choices[0].message.role == "assistant"
         assert isinstance(response.choices[0].message.content, str)
@@ -3518,6 +3473,122 @@ class TestPromptTokensDetailsGate:
         assert usage.prompt_tokens_details is not None
         assert usage.prompt_tokens_details.cached_tokens == 0
         assert usage.prompt_tokens_details.cache_write_tokens == 7
+
+
+class TestAudioOutputTtsFallback:
+    """Audio output is synthesized when the model returns no audio block (unit).
+
+    Bedrock Converse only returns an ``audio`` content block for the handful of
+    audio-native models; every other model answers ``modalities: ["text",
+    "audio"]`` with text alone, so the adapter synthesizes the spoken form
+    itself instead of dropping the requested modality. ``pcm16`` is the OpenAI
+    spelling of the format the speech surface calls ``pcm``, so it has to be
+    translated rather than forwarded verbatim.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlock.html
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:_get_or_generate_audio
+    """
+
+    pytestmark = pytest.mark.local
+
+    #: Audio output parameters requesting the OpenAI-only ``pcm16`` spelling.
+    _AUDIO_PARAMS: ClassVar[dict[str, str]] = {"format": "pcm16", "voice": "alloy"}
+
+    @pytest.fixture(autouse=True)
+    def _adapter_call_context(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+        """Bind the per-request state ``format_response`` reads outside a request.
+
+        Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:_LEGACY_FUNCTION
+        """
+        monkeypatch.setattr(SETTINGS, "log_request_params", False)
+        token = _LEGACY_FUNCTION.set(False)
+        try:
+            yield
+        finally:
+            _LEGACY_FUNCTION.reset(token)
+
+    @pytest.fixture
+    def tts_calls(self, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+        """Replace the speech backend with a recorder yielding two audio chunks.
+
+        Returns:
+            The keyword arguments of every ``synthesize_speech`` call, in order.
+        """
+        calls: list[dict[str, Any]] = []
+
+        async def _chunks() -> AsyncIterator[bytes]:
+            yield b"\x01\x02"
+            yield b"\x03"
+
+        async def _synthesize_speech(**kwargs: Any) -> AsyncIterator[bytes]:  # noqa: ANN401
+            calls.append(kwargs)
+            return _chunks()
+
+        monkeypatch.setattr(chat_adapter, "synthesize_speech", _synthesize_speech)
+        return calls
+
+    @staticmethod
+    async def _audio_of(content: list[dict[str, Any]]) -> ChatCompletionAudio | None:
+        """Format a Converse response with audio output and return its audio.
+
+        Args:
+            content: Bedrock output content blocks of the single choice.
+
+        Returns:
+            The audio attached to the first choice's message, if any.
+        """
+        converse_response: dict[str, Any] = {
+            "output": {"message": {"role": "assistant", "content": content}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 10, "outputTokens": 5},
+        }
+        completion = await format_response(
+            completion_id="chatcmpl-1",
+            created=1752000000,
+            model_id="model",
+            responses=[converse_response],  # type: ignore[list-item]
+            service_tier=None,
+            audio_params=ChatCompletionAudioParam.model_validate(
+                TestAudioOutputTtsFallback._AUDIO_PARAMS
+            ),
+            modalities=["text", "audio"],
+        )
+        return completion.choices[0].message.audio
+
+    async def test_text_only_output_is_synthesized(
+        self, tts_calls: list[dict[str, Any]]
+    ) -> None:
+        """A text-only answer still yields audio, built from every TTS chunk in order.
+
+        Divergence: upstream ``expires_at`` is when the audio stops being usable
+        as a follow-up-turn input, whereas the gateway reports the completion's
+        own ``created`` -- it stores no audio, so an ID is never replayable.
+        """
+        audio = await self._audio_of([{"text": "hello"}])
+        assert audio is not None, "the requested audio modality must be honored"
+        assert audio.id == "audio-chatcmpl-1-0"
+        assert audio.transcript == "hello"
+        assert audio.expires_at == 1752000000
+        assert base64.b64decode(audio.data) == b"\x01\x02\x03"
+        assert tts_calls == [
+            {"text": "hello", "voice": "alloy", "resp_format": "pcm"}
+        ], "`pcm16` is the OpenAI spelling of the speech surface's `pcm` format"
+
+    async def test_model_audio_block_is_returned_verbatim(
+        self, tts_calls: list[dict[str, Any]]
+    ) -> None:
+        """A model-native ``audio`` block is passed through without re-synthesis.
+
+        Re-synthesizing would replace the model's own voice with the TTS one and
+        bill a second service, so the block wins over the fallback.
+        """
+        audio = await self._audio_of(
+            [{"text": "hello"}, {"audio": {"source": {"bytes": b"\xff\xfe"}}}]
+        )
+        assert audio is not None
+        assert base64.b64decode(audio.data) == b"\xff\xfe"
+        assert not tts_calls, "model-native audio must never be re-synthesized"
 
 
 #: Stubbed Bedrock Converse stream for one text turn: a delta, the stop, then usage metadata.

@@ -26,6 +26,12 @@ pytestmark = pytest.mark.local
 class _StubFailedChatModel:
     """Stub chat backend returning a terminal ``status='failed'`` Response."""
 
+    def __init__(self) -> None:
+        #: Error object carried by the failed Response; ``None`` leaves it unset.
+        self.error: ResponseError | None = ResponseError(
+            code="server_error", message="The model failed to generate output."
+        )
+
     def native_store_supported(self) -> bool:
         """Report Converse-style (non-Mantle) storage."""
         return False
@@ -48,9 +54,7 @@ class _StubFailedChatModel:
             tool_choice="auto",
             tools=[],
             status="failed",
-            error=ResponseError(
-                code="server_error", message="The model failed to generate output."
-            ),
+            error=self.error,
             background=request.background,
         )
 
@@ -87,6 +91,28 @@ def test_synchronous_failed_response_returns_502(app_client: TestClient) -> None
     assert response.status_code == 502
     error = response.json()["error"]
     assert "failed to generate" in error["message"]
+    assert error["type"] == "server_error"
+
+
+def test_failed_response_without_error_uses_the_fallback_message(
+    app_client: TestClient, failed_chat_backend: _StubFailedChatModel
+) -> None:
+    """A failed Response with no ``error`` still 502s, with generic wording.
+
+    ``error`` is optional on the Response object, so a backend can fail without
+    filling it. The gateway must not raise an empty message: it substitutes the
+    same wording the Mantle passthrough guard uses, keeping both paths
+    indistinguishable to the client.
+
+    Ref: stdapi/routes/openai_responses.py:_failed_response_error
+    """
+    failed_chat_backend.error = None
+    response = app_client.post(
+        "/v1/responses", json={"model": "amazon.nova-pro-v1:0", "input": "hi"}
+    )
+    assert response.status_code == 502, response.text
+    error = response.json()["error"]
+    assert error["message"] == "The upstream model response failed."
     assert error["type"] == "server_error"
 
 

@@ -11,6 +11,8 @@ Ref: https://stdapi.ai/api_openai_files/
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Self
+
 import pytest
 from pybase64 import b64encode
 
@@ -20,6 +22,9 @@ from stdapi.aws_s3 import BUCKET_TO_REGION
 from stdapi.config import SETTINGS
 from stdapi.files._multipart import create_multipart_session
 from stdapi.input_file import InputFile
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 pytestmark = pytest.mark.local
 
@@ -164,6 +169,170 @@ def test_s3_uri_accepts_bucket_declared_only_as_accepted(
     assert file.region == "eu-west-3", (
         "the declared region must route the S3 calls, not the default region"
     )
+
+
+async def test_unsupported_document_type_is_a_caller_error() -> None:
+    """A file Bedrock has no document format for is refused with a 400, naming the type.
+
+    Every non-image/video/audio input falls through to the document branch, so an
+    unhandled type there would reach Converse and come back as a 500 instead of
+    telling the caller which attachment it has to drop.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_DocumentBlock.html
+         stdapi/input_file.py:InputFile.to_bedrock_content_block
+    """
+    payload = b64encode(b"x" * 32).decode()
+    file = InputFile(f"data:application/x-tar;base64,{payload}")
+
+    with pytest.raises(ApiError, match="Unsupported document type") as exc:
+        await file.to_bedrock_content_block()
+
+    assert exc.value.status == 400
+    assert "application/x-tar" in str(exc.value), (
+        "the caller needs to know which attachment was refused"
+    )
+
+
+class _StubHttpResponse:
+    """Minimal aiohttp response stand-in serving a fixed body and headers."""
+
+    def __init__(self, body: bytes, content_length: int | None = None) -> None:
+        self.body = body
+        self.headers = {
+            "Content-Type": "application/pdf",
+            "Content-Length": str(
+                len(body) if content_length is None else content_length
+            ),
+        }
+        self.content = self
+
+    async def __aenter__(self) -> Self:
+        """Enter the response context."""
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        """Leave the response context."""
+
+    def raise_for_status(self) -> None:
+        """Accept the stubbed 200 response."""
+
+    async def read(self) -> bytes:
+        """Return the whole stubbed body."""
+        return self.body
+
+    async def iter_chunked(self, size: int) -> AsyncIterator[bytes]:
+        """Yield the stubbed body in *size*-byte chunks."""
+        for start in range(0, len(self.body), size):
+            yield self.body[start : start + size]
+
+
+class _StubHttpSession:
+    """Minimal aiohttp session stand-in recording the requests it served."""
+
+    def __init__(self, response: _StubHttpResponse) -> None:
+        self.response = response
+        self.requests: list[str] = []
+
+    async def __aenter__(self) -> Self:
+        """Enter the session context."""
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        """Leave the session context."""
+
+    def head(self, url: str) -> _StubHttpResponse:
+        """Serve the stubbed response to a ``HEAD``."""
+        self.requests.append(f"HEAD {url}")
+        return self.response
+
+    def get(self, url: str) -> _StubHttpResponse:
+        """Serve the stubbed response to a ``GET``."""
+        self.requests.append(f"GET {url}")
+        return self.response
+
+
+def _patch_http(
+    monkeypatch: pytest.MonkeyPatch, response: _StubHttpResponse
+) -> _StubHttpSession:
+    """Serve *response* to every request the HTTPS input source makes.
+
+    Returns:
+        The stub session, for asserting on the requests it served.
+    """
+    session = _StubHttpSession(response)
+    monkeypatch.setattr(
+        input_file._HttpSource,  # noqa: SLF001
+        "_client_session",
+        lambda _self, _extra_headers=None: session,
+    )
+    return session
+
+
+class TestHttpsSourceDownload:
+    """An ``https://`` input is fetched server-side, under the configured size cap.
+
+    ``max_input_file_size`` is the memory-exhaustion guard for remote inputs. It
+    cannot be enforced from the ``Content-Length`` alone: that header is supplied
+    by the origin the *caller* chose, so the body itself has to be metered while it
+    streams in.
+
+    Ref: stdapi/input_file.py:_HttpSource._read
+         stdapi/input_file.py:_HttpSource._read_capped
+         stdapi/config.py:_Settings.max_input_file_size
+    """
+
+    async def test_body_is_downloaded_and_returned(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no size cap the body is read in one shot and returned verbatim."""
+        monkeypatch.setattr(SETTINGS, "max_input_file_size", 0)
+        session = _patch_http(monkeypatch, _StubHttpResponse(b"%PDF-1.7 body"))
+
+        assert await InputFile("https://example.com/doc.pdf").to_bytes() == (
+            b"%PDF-1.7 body"
+        )
+
+        assert session.requests == ["GET https://example.com/doc.pdf"], (
+            "an unlimited read must not pay for a metadata HEAD"
+        )
+
+    async def test_oversized_body_is_rejected_despite_an_honest_looking_header(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A body larger than the cap is refused even when Content-Length understates it.
+
+        The origin is attacker-controlled, so the declared length only decides
+        whether the download starts; the streamed body is what the cap is applied
+        to.
+        """
+        monkeypatch.setattr(SETTINGS, "max_input_file_size", 1024)
+        session = _patch_http(
+            monkeypatch, _StubHttpResponse(b"x" * 4096, content_length=1)
+        )
+
+        with pytest.raises(ApiError, match="1024 bytes") as exc:
+            await InputFile("https://example.com/big.pdf").to_bytes()
+
+        assert exc.value.status == 413
+        assert session.requests[0].startswith("HEAD "), (
+            "the declared size is probed before the body is pulled"
+        )
+
+    async def test_empty_body_is_a_download_error_not_an_empty_file(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A 200 with no body is reported as a download failure, with the query redacted.
+
+        An empty input would otherwise travel on and fail deep inside a model call,
+        and the URL may carry a pre-signed token that must not reach the message.
+        """
+        monkeypatch.setattr(SETTINGS, "max_input_file_size", 0)
+        _patch_http(monkeypatch, _StubHttpResponse(b""))
+
+        with pytest.raises(ApiError, match="Empty body") as exc:
+            await InputFile("https://example.com/none.pdf?sig=secret").to_bytes()
+
+        assert "secret" not in str(exc.value)
 
 
 async def test_create_multipart_session_rejects_unsafe_filename() -> None:

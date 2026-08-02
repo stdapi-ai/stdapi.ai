@@ -108,6 +108,7 @@ def _capture_exc_info(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.local
 class TestLogRequestEventIdPropagation:
     """log_request_event reuses the parent request ID only for internal MCP calls.
 
@@ -531,12 +532,15 @@ def _mcp_only_app(*, stateless: bool) -> FastAPI:
     return app
 
 
-def _tools_list(app: FastAPI, *, session_id: str | None) -> Any:  # noqa: ANN401
+def _tools_list(
+    app: FastAPI, *, session_id: str | None, api_key: str | None = None
+) -> Any:  # noqa: ANN401
     """POST a bare ``tools/list`` to *app*, without initializing a session first.
 
     Args:
         app: App exposing the transport.
         session_id: Value for the ``Mcp-Session-Id`` header, or None to omit it.
+        api_key: Bearer token, for a transport guarded by ``authenticate``.
 
     Returns:
         The raw HTTP response.
@@ -546,6 +550,8 @@ def _tools_list(app: FastAPI, *, session_id: str | None) -> Any:  # noqa: ANN401
     headers = {"Accept": "application/json, text/event-stream"}
     if session_id is not None:
         headers["mcp-session-id"] = session_id
+    if api_key is not None:
+        headers["Authorization"] = f"Bearer {api_key}"
     with TestClient(app) as client:
         return client.post(
             "/mcp",
@@ -554,6 +560,7 @@ def _tools_list(app: FastAPI, *, session_id: str | None) -> Any:  # noqa: ANN401
         )
 
 
+@pytest.mark.local
 class TestStatelessStreamableHttp:
     """``mcp_stateless_http`` makes /mcp answer a request that owns no session.
 
@@ -566,7 +573,7 @@ class TestStatelessStreamableHttp:
 
     Ref: https://docs.aws.amazon.com/marketplace/latest/userguide/bedrock-agentcore-runtime.html
          stdapi/mcp.py:_make_stateless
-         stdapi/config.py:Settings.mcp_stateless_http
+         stdapi/config.py:_Settings.mcp_stateless_http
     """
 
     def test_unknown_session_id_is_served(self) -> None:
@@ -607,6 +614,116 @@ class TestStatelessStreamableHttp:
         assert response.status_code == expected_status
 
 
+#: Operation IDs of the throwaway app used to observe include/exclude filtering.
+_TOOL_OPERATION_IDS = ("tool_alpha", "tool_beta", "tool_gamma")
+
+
+def _three_tool_app() -> FastAPI:
+    """Build an app exposing one operation per :data:`_TOOL_OPERATION_IDS` entry."""
+    app = FastAPI()
+    for operation_id in _TOOL_OPERATION_IDS:
+
+        async def endpoint() -> dict[str, str]:
+            """Return a fixed payload."""
+            return {"ok": "yes"}
+
+        app.get(f"/{operation_id}", operation_id=operation_id)(endpoint)
+    return app
+
+
+@pytest.mark.local
+class TestToolSelectionSettings:
+    """MCP_INCLUDE_TOOLS / MCP_EXCLUDE_TOOLS decide which tools the server advertises.
+
+    What an operator buys with either setting is an operation that no MCP client
+    can see or call, so the mount is driven with each filter in turn and both the
+    ``tools/list`` answer and the SEP-1649 server card are checked, since a
+    client may read either. The settings are applied here directly, past the
+    include/exclude reconciliation :class:`~stdapi.config._Settings` performs at
+    validation time.
+
+    Ref: stdapi/mcp.py:mount_mcp
+         stdapi/config.py:_Settings.mcp_include_tools
+         stdapi/routes/core_root.py:MCP_SERVER_CARD
+    """
+
+    @staticmethod
+    def _advertised(
+        monkeypatch: pytest.MonkeyPatch,
+        api_key: str,
+        *,
+        include: list[str] | None = None,
+        exclude: list[str] | None = None,
+    ) -> tuple[list[str], list[str]]:
+        """Mount MCP on a throwaway app under the given filters.
+
+        Args:
+            monkeypatch: Fixture used to scope the settings and the server card.
+            api_key: Bearer token for the ``authenticate`` dependency the mount adds.
+            include: Value for ``mcp_include_tools``.
+            exclude: Value for ``mcp_exclude_tools``.
+
+        Returns:
+            The tool names ``tools/list`` returned, and the ones on the server card.
+        """
+        import logging as stdlib_logging  # noqa: PLC0415
+
+        from stdapi import mcp as stdapi_mcp  # noqa: PLC0415
+
+        card: dict[str, Any] = {}
+        monkeypatch.setattr(SETTINGS, "mcp_include_tools", include)
+        monkeypatch.setattr(SETTINGS, "mcp_exclude_tools", exclude)
+        monkeypatch.setattr(SETTINGS, "enable_mcp_streamable_http", True)
+        monkeypatch.setattr(SETTINGS, "enable_mcp_sse", False)
+        monkeypatch.setattr(SETTINGS, "mcp_stateless_http", True)
+        monkeypatch.setattr(stdapi_mcp, "MCP_SERVER_CARD", card)
+        # Restored wholesale, so the extra log handler mount_mcp installs on the
+        # shared fastapi_mcp logger does not leak into the rest of the session.
+        mcp_logger = stdlib_logging.getLogger("fastapi_mcp.server")
+        monkeypatch.setattr(mcp_logger, "handlers", list(mcp_logger.handlers))
+
+        app = _three_tool_app()
+        stdapi_mcp.mount_mcp(app)
+        response = _tools_list(app, session_id=None, api_key=api_key)
+        assert response.status_code == 200
+        served = [tool["name"] for tool in response.json()["result"]["tools"]]
+        return served, [tool["name"] for tool in card["tools"]]
+
+    @pytest.mark.usefixtures("local_test_client")
+    def test_excluded_operation_is_not_advertised(
+        self, monkeypatch: pytest.MonkeyPatch, api_key: str
+    ) -> None:
+        """An excluded operation ID disappears from tools/list and the server card.
+
+        The other two operations stay, so the exclusion is what removed it
+        rather than the mount failing to discover anything.
+        """
+        served, card = self._advertised(monkeypatch, api_key, exclude=["tool_beta"])
+        assert served == ["tool_alpha", "tool_gamma"]
+        assert card == ["tool_alpha", "tool_gamma"]
+
+    @pytest.mark.usefixtures("local_test_client")
+    def test_include_list_is_the_whole_advertised_set(
+        self, monkeypatch: pytest.MonkeyPatch, api_key: str
+    ) -> None:
+        """With an include list, only the named operations are advertised."""
+        served, card = self._advertised(monkeypatch, api_key, include=["tool_gamma"])
+        assert served == ["tool_gamma"]
+        assert card == ["tool_gamma"]
+
+    @pytest.mark.usefixtures("local_test_client")
+    def test_unfiltered_advertises_every_operation(
+        self, monkeypatch: pytest.MonkeyPatch, api_key: str
+    ) -> None:
+        """Unset, both settings advertise the app's full operation set.
+
+        The negative control for the two filtering tests above.
+        """
+        served, card = self._advertised(monkeypatch, api_key)
+        assert served == list(_TOOL_OPERATION_IDS)
+        assert card == list(_TOOL_OPERATION_IDS)
+
+
 # ---------------------------------------------------------------------------
 # Tool schema curation: hidden params, union type repair, compact results
 # ---------------------------------------------------------------------------
@@ -619,6 +736,7 @@ def _make_tool(schema: dict[str, Any]) -> Any:  # noqa: ANN401
     return Tool(name="tool", inputSchema=schema)
 
 
+@pytest.mark.local
 class TestPruneHiddenParams:
     """_prune_hidden_params drops LLM-unusable params and orphaned $defs.
 
@@ -674,6 +792,7 @@ class TestPruneHiddenParams:
         assert tool.inputSchema == schema
 
 
+@pytest.mark.local
 class TestFixUnionParamTypes:
     """_fix_union_param_types removes the random ``type`` beside ``anyOf``.
 
@@ -730,6 +849,7 @@ class TestFixUnionParamTypes:
         assert get_single_param_type_from_schema(union) in {"string", "array"}
 
 
+@pytest.mark.local
 class TestCompactJson:
     """_CompactJson renders tool results compactly in place of stdlib indent=2.
 

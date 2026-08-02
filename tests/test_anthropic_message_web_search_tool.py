@@ -25,7 +25,10 @@ from stdapi.models.chat._adapters._anthropic_message import (
 from stdapi.types.anthropic_messages import (
     ToolChoiceAnyParam,
     ToolChoiceAutoParam,
+    ToolChoiceNoneParam,
     ToolChoiceToolParam,
+    ToolInputSchema,
+    ToolParam,
     ToolSearchToolBm25Param,
     ToolSearchToolRegexParam,
     ToolTextEditorParam,
@@ -234,3 +237,44 @@ class TestToolChoiceDisableParallelToolUse:
             type="tool", name="get_weather", disable_parallel_tool_use=True
         )
         assert _map_tool_choice(choice) == {"tool": {"name": "get_weather"}}
+
+
+class TestToolChoiceNone:
+    """``tool_choice: none`` keeps the tools declared but disables tool calling.
+
+    Converse has no ``none`` choice of its own, so the whole ``toolConfig`` is
+    dropped rather than the request being refused; the model layer re-synthesizes
+    a permissive config when the history still carries ``toolUse``/``toolResult``
+    blocks, which is what makes dropping it safe for multi-turn replay.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools#forcing-tool-use
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
+         stdapi/models/chat/_adapters/_anthropic_message.py:_build_tool_config
+    """
+
+    @staticmethod
+    def _tool() -> ToolParam:
+        """Return one ordinary client function tool."""
+        return ToolParam(
+            name="get_weather",
+            input_schema=ToolInputSchema(
+                type="object", properties={"city": {"type": "string"}}
+            ),
+        )
+
+    def test_none_drops_the_whole_tool_config(self) -> None:
+        """Declared tools produce no ``toolConfig`` when the choice is ``none``.
+
+        Forwarding the tools with no choice would let the model call them, which is
+        exactly what ``none`` forbids.
+        """
+        assert (
+            _build_tool_config([self._tool()], ToolChoiceNoneParam(type="none")) is None
+        )
+
+    def test_auto_keeps_the_tool_config(self) -> None:
+        """The control case: ``auto`` forwards the same tool as a ``toolSpec``."""
+        config = _build_tool_config([self._tool()], ToolChoiceAutoParam(type="auto"))
+        assert config is not None
+        assert [spec["toolSpec"]["name"] for spec in config["tools"]] == ["get_weather"]
+        assert config["toolChoice"] == {"auto": {}}
