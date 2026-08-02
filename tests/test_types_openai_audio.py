@@ -221,6 +221,6 @@ class TestTranscriptionResponseLanguages:
     def test_languages_defaults_to_none(self) -> None:
         """Models without language identification keep the field unset.
 
-        Ref: stdapi/models/audio/mistral_voxtral.py:AudioModel.stt
+        Ref: stdapi/models/audio/_default.py:AudioModel.stt
         """
         assert Transcription(text="hello").languages is None

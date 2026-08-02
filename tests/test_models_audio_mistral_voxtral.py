@@ -2,20 +2,19 @@
 
 The gpt-transcribe context inputs (``keywords[]``, ``languages[]``) have no
 native Voxtral parameter, so the gateway folds them into the transcription
-prompt sent through the chat completions payload. Bedrock is stubbed; no AWS
+prompt sent through the Bedrock Converse request. Bedrock is stubbed; no AWS
 call is made.
 
 Ref: https://developers.openai.com/api/docs/guides/transcription
      https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-voxtral-mini-3b-2507.html
-     stdapi/models/audio/mistral_voxtral.py:AudioModel._build_request
+     stdapi/models/audio/_default.py:AudioModel._build_request
 """
 
 from typing import Any
 
 import pytest
 
-from stdapi.models import InvokeResult
-from stdapi.models.audio import mistral_voxtral
+from stdapi.models.audio import _default, mistral_voxtral
 from stdapi.models.audio.mistral_voxtral import AudioModel
 
 #: All tests in this module exercise the local implementation in-process.
@@ -32,50 +31,32 @@ class _FakeAudioContent:
         """Report a fixed audio/mp3 content type."""
         return ("audio", "mp3")
 
-    async def to_base64(self) -> str:
-        """Return a fixed base64 payload."""
-        return "ZmFrZQ=="
+    async def to_bytes(self) -> bytes:
+        """Return a fixed audio payload."""
+        return b"fake"
 
 
 def _request_prompt(request: dict[str, Any]) -> str:
-    """Return the text prompt carried by a built chat request.
+    """Return the text prompt carried by a built Converse request.
 
     Args:
-        request: The chat completions payload built by ``_build_request``.
+        request: The Converse payload built by ``_build_request``.
 
     Returns:
-        The text content part of the first message.
+        The text content block of the first message.
     """
     content = request["messages"][0]["content"]
-    return str(next(part["text"] for part in content if part["type"] == "text"))
+    return str(next(block["text"] for block in content if "text" in block))
 
 
-def _fake_response() -> dict[str, Any]:
-    """Build a minimal Bedrock Voxtral response payload."""
+def _fake_converse_response() -> dict[str, Any]:
+    """Build a minimal Bedrock Converse response payload."""
     return {
-        "choices": [
-            {
-                "finish_reason": "stop",
-                "index": 0,
-                "logprobs": None,
-                "message": {
-                    "content": "hello world",
-                    "refusal": None,
-                    "role": "assistant",
-                },
-            }
-        ],
-        "created": 0,
-        "id": "id",
-        "model": _MODEL_ID,
-        "object": "chat.completion",
-        "service_tier": "standard",
-        "usage": {
-            "completion_tokens": 2,
-            "prompt_tokens": 10,
-            "total_tokens": 12,
-            "prompt_tokens_details": {"audio_tokens": 7, "cached_tokens": 5},
+        "output": {
+            "message": {"role": "assistant", "content": [{"text": "hello world"}]}
         },
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 10, "outputTokens": 2, "totalTokens": 12},
     }
 
 
@@ -89,7 +70,7 @@ class TestContextFoldedIntoPrompt:
     async def test_keywords_are_folded_into_the_prompt(self) -> None:
         """Every keyword literal appears in the transcription prompt.
 
-        Ref: stdapi/models/audio/mistral_voxtral.py:AudioModel._build_request
+        Ref: stdapi/models/audio/_default.py:AudioModel._build_request
         """
         request = await AudioModel(_MODEL_ID)._build_request(  # noqa: SLF001
             _FakeAudioContent(),  # type: ignore[arg-type]
@@ -104,7 +85,7 @@ class TestContextFoldedIntoPrompt:
     async def test_languages_are_folded_into_the_prompt(self) -> None:
         """Expected languages appear as named language hints in the prompt.
 
-        Ref: stdapi/models/audio/mistral_voxtral.py:AudioModel._build_request
+        Ref: stdapi/models/audio/_default.py:AudioModel._build_request
         """
         request = await AudioModel(_MODEL_ID)._build_request(  # noqa: SLF001
             _FakeAudioContent(),  # type: ignore[arg-type]
@@ -129,20 +110,20 @@ class TestContextFoldedIntoPrompt:
     async def test_stt_passes_context_to_the_invoked_request(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``stt()`` wires keywords and languages through to the Bedrock payload.
+        """``stt()`` wires keywords and languages through to the Converse payload.
 
-        Ref: stdapi/models/audio/mistral_voxtral.py:AudioModel.stt
+        Ref: stdapi/models/audio/_default.py:AudioModel.stt
         """
         captured: dict[str, Any] = {}
 
-        async def _fake_invoke(
+        async def _fake_converse(
             self: AudioModel,  # noqa: ARG001
             request: Any,  # noqa: ANN401
-        ) -> InvokeResult[Any]:
+        ) -> dict[str, Any]:
             captured["request"] = request
-            return InvokeResult(response=_fake_response())
+            return _fake_converse_response()
 
-        monkeypatch.setattr(mistral_voxtral.AudioModel, "invoke", _fake_invoke)
+        monkeypatch.setattr(mistral_voxtral.AudioModel, "converse", _fake_converse)
 
         response = await AudioModel(_MODEL_ID).stt(
             _FakeAudioContent(),  # type: ignore[arg-type]
@@ -157,3 +138,16 @@ class TestContextFoldedIntoPrompt:
         assert "Amoxicillin" in prompt
         assert "english" in prompt
         assert "french" in prompt
+
+
+class TestVoxtralUsesConverseDefault:
+    """The Voxtral class is a registration-only subclass of the Converse default.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference-call.html
+         stdapi/models/audio/mistral_voxtral.py:AudioModel
+    """
+
+    def test_voxtral_is_a_thin_subclass_of_the_converse_default(self) -> None:
+        """Voxtral keeps its MATCHER but inherits the whole Converse STT path."""
+        assert issubclass(AudioModel, _default.AudioModel)
+        assert AudioModel.MATCHER == "mistral.voxtral-"

@@ -4,7 +4,7 @@ Voxtral translates inside the model instead of chaining Amazon Transcribe and
 Amazon Translate, so it supports only the ``json`` and ``text`` response formats.
 
 Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-voxtral-mini-3b-2507.html
-     stdapi/models/audio/mistral_voxtral.py:AudioModel.stt_translate
+     stdapi/models/audio/_default.py:AudioModel.stt_translate
 """
 
 from typing import TYPE_CHECKING
@@ -87,7 +87,7 @@ class TestMistralVoxtralTranslationsResponseFormats:
     transcription surface, before any Bedrock invocation.
 
     Ref: https://stdapi.ai/api_openai_audio_translations/
-         stdapi/models/audio/mistral_voxtral.py:AudioModel.stt_translate
+         stdapi/models/audio/_default.py:AudioModel.stt_translate
          stdapi/models/audio/__init__.py:AudioModelBase._validate_response_formats
     """
 

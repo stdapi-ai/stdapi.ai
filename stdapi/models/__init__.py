@@ -253,6 +253,9 @@ _MODELS: dict[str, ModelDetails] = {}
 #: Service label for models served by the Amazon Bedrock Mantle endpoint.
 MANTLE_SERVICE = "AWS Bedrock Mantle"
 
+#: SPEECH-input model ID prefixes without Bedrock Converse support (bidirectional streaming only).
+NON_CONVERSE_SPEECH_MODEL_PREFIXES: tuple[str, ...] = ("amazon.nova-2-sonic",)
+
 #: Every Mantle-discovered model, including ones served by bedrock-runtime.
 MANTLE_MODELS: dict[str, ModelDetails] = {}
 
@@ -1291,6 +1294,16 @@ def _compute_model_capabilities(
         if model_class is not None
         else Capability(0)
     )
+    # SPEECH-input Converse models transcribe through the generic Converse STT
+    # default even without a dedicated audio model class.
+    if (
+        "SPEECH" in model.input_modalities
+        and "TEXT" in model.output_modalities
+        and model.service != MANTLE_SERVICE
+        and not (capability_flags & Capability.STT)
+        and not model_id.startswith(NON_CONVERSE_SPEECH_MODEL_PREFIXES)
+    ):
+        capability_flags |= Capability.STT | Capability.STT_TRANSLATE
     input_mods = model.input_modalities
     output_mods = model.output_modalities
     routes: list[str] = []

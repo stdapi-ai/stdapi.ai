@@ -52,7 +52,7 @@ class TestMistralVoxtralTranscriptions:
         omitted entirely rather than attributing the whole prompt to text.
 
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-             stdapi/models/audio/mistral_voxtral.py:AudioModel.stt
+             stdapi/models/audio/_default.py:AudioModel.stt
              https://github.com/stdapi-ai/stdapi.ai/issues/95
         """
         response = openai_client.audio.transcriptions.create(
@@ -68,7 +68,6 @@ class TestMistralVoxtralTranscriptions:
             f"Transcript does not match the sample audio: {text!r}"
         )
 
-        # Validate usage information
         usage = response.usage
         assert usage is not None
         assert usage.type == "tokens", f"Unexpected usage variant: {usage!r}"
@@ -76,8 +75,6 @@ class TestMistralVoxtralTranscriptions:
         assert usage.output_tokens > 0
         assert usage.total_tokens == usage.input_tokens + usage.output_tokens
 
-        # Bedrock reports audio_tokens=0 for this short sample, so the breakdown
-        # is omitted rather than fabricated (issue #95).
         assert usage.input_token_details is None
 
     @pytest.mark.parametrize("model_id", VOXTRAL_ALL)
@@ -90,7 +87,7 @@ class TestMistralVoxtralTranscriptions:
         usage or metadata envelope is produced.
 
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-             stdapi/models/audio/mistral_voxtral.py:AudioModel.stt
+             stdapi/models/audio/_default.py:AudioModel.stt
         """
         response = openai_client.audio.transcriptions.create(
             file=("test.mp3", sample_audio_mp3_file),
@@ -115,7 +112,7 @@ class TestMistralVoxtralTranscriptions:
         model whose request body carries a ``temperature`` field (defaulting to 0.0).
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-voxtral-mini-3b-2507.html
-             stdapi/models/audio/mistral_voxtral.py:AudioModel._build_request
+             stdapi/models/audio/_default.py:AudioModel._build_request
         """
         response = openai_client.audio.transcriptions.create(
             file=("test.mp3", sample_audio_mp3_file),
@@ -201,7 +198,7 @@ class TestMistralVoxtralTranscriptions:
         yields a token-billed transcription.
 
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
-             stdapi/models/audio/mistral_voxtral.py:AudioModel._build_request
+             stdapi/models/audio/_default.py:AudioModel._build_request
         """
         response = openai_client.audio.transcriptions.create(
             file=("test.mp3", sample_audio_mp3_file),
@@ -232,10 +229,10 @@ class TestMistralVoxtralTranscriptions:
         the only event carrying usage, taken from
         ``amazon-bedrock-invocationMetrics``. That footer has no audio/text split, so
         ``input_token_details`` is omitted rather than attributing every input token
-        to audio as it previously did (issue #95).
+        to audio (issue #95).
 
         Ref: https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create
-             stdapi/models/audio/mistral_voxtral.py:AudioModel.stt_stream
+             stdapi/models/audio/_default.py:AudioModel.stt_stream
              https://github.com/stdapi-ai/stdapi.ai/issues/95
         """
         response = openai_client.audio.transcriptions.create(
@@ -289,7 +286,7 @@ class TestMistralVoxtralTranscriptions:
         an ``input_audio`` block with format ``plain``, which Bedrock rejects with a
         ``ValidationException`` mapped to 400.
 
-        Ref: stdapi/models/audio/mistral_voxtral.py:AudioModel._build_request
+        Ref: stdapi/models/audio/_default.py:AudioModel._build_request
              stdapi/aws_bedrock.py:AWS_ERROR_MAP
         """
         with pytest.raises(BadRequestError) as exc_info:
@@ -345,7 +342,7 @@ class TestMistralVoxtralTranscriptions:
         the field is always absent from the response.
 
         Ref: https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create
-             stdapi/models/audio/mistral_voxtral.py:AudioModel.stt
+             stdapi/models/audio/_default.py:AudioModel.stt
         """
         response = openai_client.audio.transcriptions.create(
             file=("test.mp3", sample_audio_mp3_file),
