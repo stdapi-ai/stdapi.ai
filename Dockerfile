@@ -2,10 +2,12 @@
 
 FROM python:3-alpine AS ffmpeg-builder
 
-# Build ffmpeg with only the audio encoders this server uses, pinned to the
-# version Alpine packages.  The distribution package links video codecs, X11 and
+# Build ffmpeg with only the audio codecs this server uses, pinned to the
+# version Alpine packages.  The binary encodes Polly output to wav/flac/aac/pcm
+# and decodes legacy "audio/*" uploads (AMR, AIFF, WMA, AU, ...) to FLAC for the
+# Bedrock speech models.  The distribution package links video codecs, X11 and
 # font libraries — none of which are reachable from audio transcoding — and
-# costs ~130 MB for a binary used solely to encode Polly PCM to wav/flac/aac.
+# costs ~130 MB.
 RUN apk add --no-cache build-base nasm curl && \
     apk update >/dev/null && \
     ffmpeg_version="$(apk search -x ffmpeg | head -1 | sed 's/^ffmpeg-//; s/-r[0-9]*$//')" && \
@@ -22,14 +24,14 @@ RUN apk add --no-cache build-base nasm curl && \
         --disable-everything --disable-doc --disable-network --disable-autodetect \
         --disable-debug --disable-shared --enable-static --enable-small \
         --enable-protocol=pipe,file \
-        --enable-demuxer=wav,mp3,ogg,flac,aac,pcm_s16le \
-        --enable-decoder=pcm_s16le,mp3float,vorbis,flac,aac \
+        --enable-demuxer=wav,mp3,ogg,flac,aac,pcm_s16le,amr,aiff,asf,au \
+        --enable-decoder=pcm_s16le,mp3float,vorbis,flac,aac,amrnb,amrwb,pcm_s16be,pcm_s8,pcm_s24be,pcm_s32be,pcm_f32be,pcm_mulaw,pcm_alaw,wmav1,wmav2,wmapro \
         --enable-encoder=pcm_s16le,flac,aac \
-        --enable-muxer=wav,flac,adts \
+        --enable-muxer=wav,flac,adts,pcm_s16le \
         --enable-filter=aresample,aformat,anull \
         --enable-parser=mpegaudio,flac,aac && \
     make -j"$(nproc)" && make install && \
-    printf 'P:ffmpeg\nV:%s-r0\nA:x86_64\nT:Custom audio-only LGPL ffmpeg build (Polly PCM to wav/flac/aac)\nU:https://ffmpeg.org\nL:LGPL-2.1-or-later\no:ffmpeg\n\n' \
+    printf 'P:ffmpeg\nV:%s-r0\nA:x86_64\nT:Custom audio-only LGPL ffmpeg build (Polly output to wav/flac/aac/pcm, legacy audio uploads to flac)\nU:https://ffmpeg.org\nL:LGPL-2.1-or-later\no:ffmpeg\n\n' \
         "${ffmpeg_version}" > /ffmpeg-out/apk-entry
 
 FROM python:3-alpine AS builder
@@ -51,13 +53,16 @@ WORKDIR /opt/app
 
 COPY stdapi /opt/app/stdapi
 
+# Single source of truth for the services the server constructs clients for:
+# botocore/data is pruned to this list and the smoke test below instantiates
+# every entry to catch a miss.
+ENV BOTOCORE_SERVICES="bedrock bedrock-agent bedrock-agent-runtime bedrock-runtime comprehend meteringmarketplace polly pricing s3 secretsmanager ssm sso sso-oidc sts transcribe translate"
+
 # Optimize Python code
 # Can't remove "annotated-doc" .dist-info - needed at runtime
 # Can't remove "mcp" .dist-info - fastapi_mcp uses importlib.metadata.version("mcp")
-# botocore/data is pruned to the services the server constructs clients for;
-# the smoke test below instantiates every allowlisted client to catch a miss.
 RUN find botocore/data -mindepth 1 -maxdepth 1 -type d \
-        | grep -vE '/(bedrock|bedrock-agent|bedrock-agent-runtime|bedrock-runtime|comprehend|meteringmarketplace|polly|pricing|s3|secretsmanager|ssm|sso|sso-oidc|sts|transcribe|translate)$' \
+        | grep -vE "/($(echo "${BOTOCORE_SERVICES}" | tr ' ' '|'))$" \
         | xargs rm -rf && \
     find . -type d -name __pycache__ -a -prune -exec rm -rf {} \; && \
     mv annotated_doc-*.dist-info /tmp/ && \
@@ -75,7 +80,7 @@ RUN find botocore/data -mindepth 1 -maxdepth 1 -type d \
 
 RUN AWS_DEFAULT_REGION=eu-west-3 python -c "import stdapi.main" && \
     python -c "from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware" && \
-    python -c "from botocore.session import Session; s = Session(); [s.create_client(n, region_name='us-east-1', aws_access_key_id='x', aws_secret_access_key='x') for n in ('bedrock', 'bedrock-agent', 'bedrock-agent-runtime', 'bedrock-runtime', 'comprehend', 'meteringmarketplace', 'polly', 'pricing', 's3', 'secretsmanager', 'ssm', 'sso', 'sso-oidc', 'sts', 'transcribe', 'translate')]"
+    python -c "import os; from botocore.session import Session; s = Session(); [s.create_client(n, region_name='us-east-1', aws_access_key_id='x', aws_secret_access_key='x') for n in os.environ['BOTOCORE_SERVICES'].split()]"
 
 FROM python:3-alpine
 
