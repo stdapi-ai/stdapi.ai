@@ -364,8 +364,8 @@ class TestStoredResponseSessions:
         )
 
         assert session_id is None
-        assert any("not available in the configured" in str(w) for w in warnings), (
-            "the warning must name the region as the cause, not a permission"
+        assert any("unreachable or timed out" in str(w) for w in warnings), (
+            "the warning must name the endpoint as the cause, not a permission issue"
         )
 
     async def test_try_create_session_other_errors_propagate(

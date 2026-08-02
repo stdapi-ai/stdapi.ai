@@ -18,6 +18,7 @@ from stdapi.models.chat._adapters._openai_responses import (
     extract_reasoning,
     map_input,
 )
+from stdapi.models.chat._default import ChatModel
 from stdapi.types.openai_responses import (
     ApplyPatchCall,
     ApplyPatchCallOutput,
@@ -742,7 +743,8 @@ class TestSystemMessageContentParts:
     Upstream states that instructions given with the ``developer`` or ``system``
     role take precedence over the ``user`` role, so both roles are lifted out of
     the message list into Converse ``system`` blocks; their ``input_text`` and
-    ``output_text`` parts are joined with a single space.
+    ``output_text`` parts each become one system block, matching the Chat
+    Completions adapter.
 
     Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
          https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html
@@ -751,7 +753,7 @@ class TestSystemMessageContentParts:
 
     @pytest.mark.parametrize("role", ["system", "developer"])
     async def test_output_text_parts_are_included(self, role: str) -> None:
-        """``output_text`` parts join ``input_text`` parts in one system block."""
+        """``output_text`` parts join ``input_text`` parts, one system block each."""
         item = _parse(
             {
                 "type": "message",
@@ -766,7 +768,56 @@ class TestSystemMessageContentParts:
             cast("list[ResponseInputItem]", [item]), None
         )
         assert messages == []
-        assert system == [{"text": "be brief and kind"}]
+        assert system == [{"text": "be brief"}, {"text": "and kind"}]
+
+
+class TestSystemBreakpointCachePoints:
+    """System-part cache breakpoints never lead with nor repeat a cache point.
+
+    Mirrors the Chat Completions guard: an empty part yields no text block, so
+    its breakpoint must not emit a leading cache point, and a breakpoint right
+    after another must not emit consecutive cache points, which Bedrock
+    rejects.
+
+    Ref: https://developers.openai.com/api/docs/guides/prompt-caching
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:_extract_system_content_blocks
+         stdapi/models/chat/_adapters/_openai_responses.py:_map_message_item
+    """
+
+    async def test_leading_and_repeated_cache_points_are_suppressed(self) -> None:
+        """Only the text-backed breakpoint emits a cache point."""
+        breakpoint_ = {"mode": "explicit"}
+        item = _parse(
+            {
+                "type": "message",
+                "role": "system",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "",
+                        "prompt_cache_breakpoint": breakpoint_,
+                    },
+                    {
+                        "type": "input_text",
+                        "text": "cached prefix",
+                        "prompt_cache_breakpoint": breakpoint_,
+                    },
+                    {
+                        "type": "input_text",
+                        "text": "",
+                        "prompt_cache_breakpoint": breakpoint_,
+                    },
+                ],
+            }
+        )
+        messages, system = await map_input(
+            cast("list[ResponseInputItem]", [item]), None, allow_explicit_caching=True
+        )
+        assert messages == []
+        assert system == [
+            {"text": "cached prefix"},
+            {"cachePoint": {"type": "default"}},
+        ]
 
 
 class TestCountInputTokensToolConfig:
@@ -801,7 +852,7 @@ class TestCountInputTokensToolConfig:
             }
         )
         count = await adapter.count_input_tokens_via_bedrock(
-            request, "model-id", "us-east-1"
+            request, "model-id", "us-east-1", ChatModel("model-id")
         )
         assert count == 7, "the route returns Bedrock's inputTokens unmodified"
         assert captured["modelId"] == "model-id"
@@ -834,7 +885,7 @@ class TestCountInputTokensToolConfig:
         )
         assert (
             await adapter.count_input_tokens_via_bedrock(
-                request, "model-id", "us-east-1"
+                request, "model-id", "us-east-1", ChatModel("model-id")
             )
             == 7
         )
@@ -842,6 +893,47 @@ class TestCountInputTokensToolConfig:
         assert captured["input"]["converse"]["messages"] == [
             {"role": "user", "content": [{"text": "hi"}]}
         ]
+
+    async def test_tool_use_history_without_tools_synthesizes_a_tool_config(
+        self, captured_count_tokens: dict[str, Any]
+    ) -> None:
+        """An echoed function_call with no ``tools`` still counts a toolConfig.
+
+        Bedrock CountTokens rejects ``toolUse`` blocks without a ``toolConfig``
+        just like Converse does, so the count path synthesizes the same
+        permissive stub the create path falls back to instead of failing.
+        """
+        request = InputTokenCountParams.model_validate(
+            {
+                "model": "m",
+                "input": [
+                    {"role": "user", "content": "hi"},
+                    {
+                        "type": "function_call",
+                        "call_id": "c1",
+                        "name": "fn",
+                        "arguments": "{}",
+                    },
+                    {"type": "function_call_output", "call_id": "c1", "output": "ok"},
+                ],
+            }
+        )
+        assert (
+            await adapter.count_input_tokens_via_bedrock(
+                request, "model-id", "us-east-1", ChatModel("model-id")
+            )
+            == 7
+        )
+        assert captured_count_tokens["input"]["converse"]["toolConfig"] == {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "name": "fn",
+                        "inputSchema": {"json": {"type": "object"}},
+                    }
+                }
+            ]
+        }
 
     async def test_image_and_file_parts_are_counted(
         self, captured_count_tokens: dict[str, Any], monkeypatch: pytest.MonkeyPatch
@@ -879,7 +971,7 @@ class TestCountInputTokensToolConfig:
         )
         assert (
             await adapter.count_input_tokens_via_bedrock(
-                request, "model-id", "us-east-1"
+                request, "model-id", "us-east-1", ChatModel("model-id")
             )
             == 7
         )

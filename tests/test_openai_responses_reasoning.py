@@ -26,6 +26,7 @@ from stdapi.models.chat._adapters._openai_responses import (
     format_stream,
     map_input,
 )
+from stdapi.models.chat._default import ChatModel
 from stdapi.types.openai_responses import (
     EasyInputMessage,
     InputTokenCountParams,
@@ -773,6 +774,13 @@ class TestReasoningInputSignatureRequired:
         ]
 
 
+class _SignatureRequiredChatModel(ChatModel):
+    """Chat model whose family rejects unsigned replayed reasoning blocks."""
+
+    #: Mirrors the model families that require signed reasoning replays.
+    REASONING_SIGNATURE_REQUIRED: ClassVar[bool] = True
+
+
 class TestInputTokenCountSignatureRequired:
     """The token count reflects the input the generation path would actually send.
 
@@ -837,7 +845,7 @@ class TestInputTokenCountSignatureRequired:
         counted = self._counted_messages(monkeypatch)
 
         tokens = await count_input_tokens_via_bedrock(
-            self._request(None), "m", "us-east-1", reasoning_signature_required=True
+            self._request(None), "m", "us-east-1", _SignatureRequiredChatModel("m")
         )
 
         assert tokens == 7, "the Bedrock inputTokens value is returned unchanged"
@@ -853,7 +861,7 @@ class TestInputTokenCountSignatureRequired:
             self._request(encode_reasoning_content(["sig-1"], [])),
             "m",
             "us-east-1",
-            reasoning_signature_required=True,
+            _SignatureRequiredChatModel("m"),
         )
 
         assert counted[1]["content"] == [
@@ -870,7 +878,9 @@ class TestInputTokenCountSignatureRequired:
         """Model families accepting an unsigned replay receive, and pay for, it."""
         counted = self._counted_messages(monkeypatch)
 
-        await count_input_tokens_via_bedrock(self._request(None), "m", "us-east-1")
+        await count_input_tokens_via_bedrock(
+            self._request(None), "m", "us-east-1", ChatModel("m")
+        )
 
         assert counted[1]["content"] == [
             {"reasoningContent": {"reasoningText": {"text": "think"}}}

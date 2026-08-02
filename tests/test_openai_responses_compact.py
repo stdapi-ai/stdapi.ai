@@ -13,7 +13,7 @@ Ref: https://developers.openai.com/api/reference/resources/responses/methods/com
 """
 
 from base64 import urlsafe_b64decode, urlsafe_b64encode
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import pytest
 from openai._models import construct_type
@@ -34,6 +34,7 @@ from stdapi.types.openai_responses import (
     OutputTokensDetails,
     Response,
     ResponseCreateParams,
+    ResponseError,
     ResponseOutputMessage,
     ResponseOutputText,
     ResponseUsage,
@@ -63,12 +64,25 @@ class _StubChatModel:
     def __init__(self) -> None:
         self.requests: list[ResponseCreateParams] = []
         self.usage: ResponseUsage | None = _usage()
+        #: Terminal state overrides applied to the canned response, when set.
+        self.status: Literal["failed"] | None = None
+        self.error: ResponseError | None = None
 
     async def create_response(
         self, request: ResponseCreateParams, response_id: str, created_at: float
     ) -> Response:
         """Record the request and return a canned summary response."""
         self.requests.append(request)
+        response = self._response(request, response_id, created_at)
+        if self.status is not None:
+            response.status = self.status
+            response.error = self.error
+        return response
+
+    def _response(
+        self, request: ResponseCreateParams, response_id: str, created_at: float
+    ) -> Response:
+        """Build the canned summary response."""
         return Response(
             id=response_id,
             created_at=created_at,
@@ -145,6 +159,32 @@ class TestResponsesCompactRoute:
         assert body["id"] == item["id"].replace("ci-", "resp-", 1)
         assert body["usage"]["total_tokens"] == 18, (
             "the summarisation turn's usage is billed to the caller"
+        )
+
+    def test_failed_generation_is_a_502_not_an_empty_compaction(
+        self, app_client: TestClient, chat_backend: _StubChatModel
+    ) -> None:
+        """A failed summarisation run surfaces its error instead of a 200.
+
+        Wrapping a failed run in a 200 would hand the client an empty summary
+        that silently replaces its conversation; the guard mirrors the one on
+        POST /v1/responses.
+
+        Ref: stdapi/routes/openai_responses.py:_failed_response_error
+        """
+        chat_backend.status = "failed"
+        chat_backend.error = ResponseError(
+            code="server_error",
+            message="The model failed to generate a valid response.",
+        )
+        response = app_client.post(
+            "/v1/responses/compact",
+            json={"model": "amazon.nova-pro-v1:0", "input": "a long conversation"},
+        )
+        assert response.status_code == 502, response.text
+        assert (
+            response.json()["error"]["message"]
+            == "The model failed to generate a valid response."
         )
 
     @pytest.mark.usefixtures("chat_backend")

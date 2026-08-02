@@ -12,6 +12,7 @@ from itertools import pairwise
 from typing import TYPE_CHECKING, Any, get_args
 
 import pytest
+from botocore.exceptions import ClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
 from openai import BadRequestError, NotFoundError, OpenAI
 
@@ -132,9 +133,7 @@ class TestResponses:
         """
         return openai_client.responses.create(model=responses_model, input="Hello.")
 
-    # ---------------------------------------------------------------------------
-    # Group 1: Core Functionality
-    # ---------------------------------------------------------------------------
+    # Core Functionality
 
     def test_basic_response(self, openai_client: OpenAI, responses_model: str) -> None:
         """A minimal create call returns a completed assistant ``message`` item.
@@ -276,9 +275,7 @@ class TestResponses:
         assert response.output_text == manual_text
         assert len(response.output_text) > 0
 
-    # ---------------------------------------------------------------------------
-    # Group 2: Generation Parameters
-    # ---------------------------------------------------------------------------
+    # Generation Parameters
 
     @pytest.mark.parametrize("temperature", [0.0, 0.5, 1.0])
     def test_temperature_parameter(
@@ -410,9 +407,7 @@ class TestResponses:
         assert response.service_tier == "default"
         assert len(response.output_text) > 0
 
-    # ---------------------------------------------------------------------------
-    # Group 3: Response Metadata & Structure
-    # ---------------------------------------------------------------------------
+    # Response Metadata & Structure
 
     def test_response_id_format(self, minimal_response: SdkResponse) -> None:
         """The response id uses a ``resp`` prefix followed by a non-empty suffix.
@@ -482,9 +477,7 @@ class TestResponses:
         assert minimal_response.error is None
         assert minimal_response.completed_at is not None
 
-    # ---------------------------------------------------------------------------
-    # Group 4: Text Format Configuration
-    # ---------------------------------------------------------------------------
+    # Text Format Configuration
 
     def test_text_format_text(
         self, openai_client: OpenAI, responses_model: str
@@ -604,9 +597,7 @@ class TestResponses:
         assert isinstance(parsed["answer"], str)
         assert isinstance(parsed["confidence"], (int, float))
 
-    # ---------------------------------------------------------------------------
-    # Group 5: Function Tool Calling
-    # ---------------------------------------------------------------------------
+    # Function Tool Calling
 
     def test_function_tool_call_basic(
         self, openai_client: OpenAI, responses_model: str
@@ -905,9 +896,7 @@ class TestResponses:
         args = json.loads(tool_calls[0].arguments)
         assert set(args) == {"city"}, f"strict schema requires exactly 'city': {args!r}"
 
-    # ---------------------------------------------------------------------------
-    # Group 6: Built-in Tools
-    # ---------------------------------------------------------------------------
+    # Built-in Tools
 
     @pytest.mark.expensive
     def test_web_search_tool(
@@ -1124,13 +1113,7 @@ class TestResponses:
         )
         assert completed, "Expected response.completed event"
 
-    # ---------------------------------------------------------------------------
-    # Group 7: Multi-turn Conversation
-    # ---------------------------------------------------------------------------
-
-    # ---------------------------------------------------------------------------
-    # Group 8: Multimodal Input
-    # ---------------------------------------------------------------------------
+    # Multimodal Input
 
     def test_image_base64_input(
         self,
@@ -1221,9 +1204,7 @@ class TestResponses:
             f"image URL was not fetched into the prompt: {response.usage!r}"
         )
 
-    # ---------------------------------------------------------------------------
-    # Group 9: Streaming
-    # ---------------------------------------------------------------------------
+    # Streaming
 
     def test_streaming_basic(self, openai_client: OpenAI, responses_model: str) -> None:
         """A stream runs from ``response.created`` to ``response.completed`` in sequence.
@@ -1427,9 +1408,7 @@ class TestResponses:
         assert final_response.usage is not None
         assert final_response.usage.output_tokens > 0
 
-    # ---------------------------------------------------------------------------
-    # Group 10: Response Lifecycle
-    # ---------------------------------------------------------------------------
+    # Response Lifecycle
 
     def test_include_logprobs(
         self, openai_client: OpenAI, chat_legacy_model: str, use_official_api: bool
@@ -1466,9 +1445,7 @@ class TestResponses:
             "top_logprobs=3 caps the alternatives reported per token"
         )
 
-    # ---------------------------------------------------------------------------
-    # Group 11: Advanced Features
-    # ---------------------------------------------------------------------------
+    # Advanced Features
 
     def test_developer_role_input(
         self, openai_client: OpenAI, responses_model: str
@@ -1539,9 +1516,7 @@ class TestResponses:
             <= response.usage.output_tokens
         )
 
-    # ---------------------------------------------------------------------------
-    # Group 12: Error Handling & Validation
-    # ---------------------------------------------------------------------------
+    # Error Handling & Validation
 
     def test_invalid_model_error(self, openai_client: OpenAI) -> None:
         """An unknown model id is rejected as an ``invalid_request_error``.
@@ -1689,9 +1664,7 @@ class TestResponses:
         )
 
 
-# ---------------------------------------------------------------------------
 # Unsupported features — validated at the Pydantic layer before the API runs
-# ---------------------------------------------------------------------------
 
 
 class TestUnsupportedFeatures:
@@ -1827,9 +1800,7 @@ class TestUnsupportedFeatures:
         assert f"'{param}' is not supported" in envelope["message"]
 
 
-# ---------------------------------------------------------------------------
 # image_generation integrated tool — model-agnostic (works for all text models)
-# ---------------------------------------------------------------------------
 
 #: Text models to exercise the image_generation tool against (one per provider family).
 _IMAGE_GEN_TEXT_MODELS = (
@@ -1841,15 +1812,9 @@ _IMAGE_GEN_TEXT_MODELS = (
 class TestImageGenerationTool:
     """image_generation integrated tool works for all text models via the base gateway path.
 
-    The gateway intercepts the ``image_generation`` tool, replaces it with a synthetic
-    function tool the LLM calls with structured parameters, executes the actual image
-    generation against a Bedrock image model, and returns an ``ImageGenerationCall``
-    output item to the client — matching OpenAI's server-side image generation contract.
-
-    When running against the official OpenAI API (``--use-official-api``), parametrized
-    model variants are collapsed to a single run using ``responses_model`` (gpt-5-nano),
-    and the tool definition omits the ``model`` field (OpenAI handles image generation
-    server-side without a client-specified image model).
+    Against the official API (``--use-official-api``) the parametrized model
+    variants collapse to a single ``responses_model`` run and the tool omits the
+    ``model`` field, which OpenAI resolves server-side.
 
     Ref: https://developers.openai.com/api/docs/guides/tools-image-generation
          stdapi/models/chat/_adapters/_openai_responses.py:get_image_generation_tool
@@ -1978,9 +1943,7 @@ class TestImageGenerationTool:
         assert completed, "Expected response.completed event"
 
 
-# ---------------------------------------------------------------------------
 # input_tokens endpoint
-# ---------------------------------------------------------------------------
 
 
 class TestOpenAIInputTokens:
@@ -2185,9 +2148,7 @@ class TestOpenAIInputTokens:
         assert response.object == "response.input_tokens"
 
 
-# ---------------------------------------------------------------------------
 # code_interpreter integrated tool
-# ---------------------------------------------------------------------------
 
 #: Nova models exercised for code_interpreter (autonomous server-side execution).
 _CODE_INTERP_MODELS = ("amazon.nova-2-lite-v1:0",)
@@ -2245,17 +2206,11 @@ class TestInputTokensMantleRejection:
 class TestCodeInterpreterTool:
     """code_interpreter integrated tool tests via the Responses API.
 
-    Local: Amazon Nova 2 Lite — ``code_interpreter`` maps to the
-    ``nova_code_interpreter`` Bedrock system tool, which executes code
-    autonomously in a single call.  The invocation is suppressed from output
-    and the result appears in ``output_text``.
-
-    Official API: ``gpt-5-nano`` — OpenAI executes Python code natively and
-    returns a ``code_interpreter_call`` output item alongside the text result.
-
-    Only Nova 2 exposes an autonomous code-execution system tool, so
-    ``code_interpreter`` is supported there and on the official API but on no
-    other Bedrock model.
+    Only Nova 2 exposes an autonomous code-execution system tool
+    (``nova_code_interpreter``), so ``code_interpreter`` is supported there and
+    on the official API but on no other Bedrock model.  Upstream returns a
+    ``code_interpreter_call`` output item; locally the invocation is suppressed
+    and only its result reaches ``output_text``.
 
     Ref: https://developers.openai.com/api/docs/guides/tools-code-interpreter
          https://docs.aws.amazon.com/nova/latest/nova2-userguide/using-tools.html
@@ -2850,6 +2805,63 @@ class TestStreamErrorHidesTheEndpointHost:
         assert code == "server_error"
         assert "bedrock-runtime.us-east-1.amazonaws.com" in log_message, (
             "the raw endpoint detail must still reach the server-side log"
+        )
+
+
+@pytest.mark.local
+class TestStreamErrorMirrorsTheMonitoringTwin:
+    """Mid-stream AWS errors classify exactly like the REST-envelope SSE path.
+
+    ``monitoring.log_request_sse_stream_event`` is the reference behaviour: a
+    throttling error keeps its ``AWS_ERROR_MAP`` status and error code instead
+    of degrading to ``server_error``, and a >=500 AWS message is replaced by a
+    fixed retry message because it may embed request internals.
+
+    Ref: stdapi/monitoring.py:log_request_sse_stream_event
+         stdapi/aws_bedrock.py:AWS_ERROR_MAP
+         stdapi/models/chat/_adapters/_openai_responses.py:_classify_stream_error
+    """
+
+    def test_throttling_keeps_the_rate_limit_status_and_code(self) -> None:
+        """A mid-stream throttle reports 429/rate_limit_error, not server_error."""
+        exc = ClientError(
+            {"Error": {"Code": "ThrottlingException", "Message": "Too many requests"}},
+            "ConverseStream",
+        )
+
+        status, client_message, param, code, log_message, _level = (
+            _classify_stream_error(exc)
+        )
+
+        assert status == 429
+        assert code == "rate_limit_error"
+        assert client_message == "Too many requests"
+        assert log_message == "Too many requests"
+        assert param is None
+
+    def test_5xx_aws_message_is_replaced_by_a_fixed_retry_message(self) -> None:
+        """A >=500 AWS error message never reaches the client verbatim."""
+        exc = ClientError(
+            {
+                "Error": {
+                    "Code": "ServiceUnavailableException",
+                    "Message": "internal endpoint details",
+                }
+            },
+            "ConverseStream",
+        )
+
+        status, client_message, _param, code, log_message, _level = (
+            _classify_stream_error(exc)
+        )
+
+        assert status == 503
+        assert code == "server_error"
+        assert (
+            client_message == "The request could not be completed. Retry the request."
+        )
+        assert log_message == "internal endpoint details", (
+            "the raw AWS message must still reach the server-side log"
         )
 
 

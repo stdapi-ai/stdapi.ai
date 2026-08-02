@@ -235,11 +235,11 @@ async def test_responses_system_cache_point() -> None:
     assert system_blocks == [{"text": "sys"}, _CACHE_POINT, {"text": "more"}]
 
 
-async def test_responses_system_parts_joined_without_breakpoint() -> None:
-    """Unmarked system parts keep the single joined system block.
+async def test_responses_system_parts_map_one_block_each() -> None:
+    """Each system content part becomes its own system block.
 
-    Splitting unconditionally would change the rendered prompt, so the parts are
-    only separated where a breakpoint asks for it.
+    Mirrors the Chat Completions twin, so both surfaces render the same
+    Bedrock system prompt for the same parts.
 
     Ref: stdapi/models/chat/_adapters/_openai_responses.py:map_input
     """
@@ -252,7 +252,7 @@ async def test_responses_system_parts_joined_without_breakpoint() -> None:
         None,
         allow_explicit_caching=True,
     )
-    assert system_blocks == [{"text": "sys more"}]
+    assert system_blocks == [{"text": "sys"}, {"text": "more"}]
 
 
 # ---------------------------------------------------------------------------

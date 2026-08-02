@@ -2503,6 +2503,10 @@ class ResponseApplyPatchToolCall(BaseModelResponse):
         description="Apply patch status."
     )
     type: Literal["apply_patch_call"] = Field(description="Apply patch call type.")
+    caller: Caller = Field(
+        default=None,
+        description="Provenance of this tool call: direct or programmatic.",
+    )
     created_by: str | None = Field(default=None, description="Tool call creator.")
 
 
@@ -2515,6 +2519,10 @@ class ResponseApplyPatchToolCallOutput(BaseModelResponse):
     status: Literal["completed", "failed"] = Field(description="Output status.")
     type: Literal["apply_patch_call_output"] = Field(
         description="Apply patch output type."
+    )
+    caller: Caller = Field(
+        default=None,
+        description="Provenance of this tool call: direct or programmatic.",
     )
     created_by: str | None = Field(default=None, description="Output creator.")
     output: str | None = Field(
@@ -2637,6 +2645,10 @@ class ResponseCustomToolCallOutput(BaseModelResponse):
     id: str | None = Field(
         default=None, description="The unique ID of the custom tool call output."
     )
+    caller: Caller = Field(
+        default=None,
+        description="Provenance of this tool call: direct or programmatic.",
+    )
 
 
 # Ref: openai.types.responses.response_custom_tool_call_output_item.ResponseCustomToolCallOutputItem
@@ -2664,6 +2676,10 @@ class ResponseFunctionToolCallOutputItem(BaseModelResponse):
     status: ResponseItemStatus = Field(description="The status of the item.")
     type: Literal["function_call_output"] = Field(
         description="The type of the function tool call output. Always `function_call_output`."
+    )
+    caller: Caller = Field(
+        default=None,
+        description="Provenance of this tool call: direct or programmatic.",
     )
     created_by: str | None = Field(
         default=None, description="The identifier of the actor that created the item."
@@ -2736,6 +2752,10 @@ class ResponseFunctionShellToolCall(BaseModelResponse):
         default=None,
         description="Represents the use of a local environment to perform shell actions.",
     )
+    caller: Caller = Field(
+        default=None,
+        description="Provenance of this tool call: direct or programmatic.",
+    )
     created_by: str | None = Field(
         default=None, description="The ID of the entity that created this tool call."
     )
@@ -2796,6 +2816,10 @@ class ResponseFunctionShellToolCallOutput(BaseModelResponse):
     )
     max_output_length: int | None = Field(
         default=None, description="The maximum length of the shell command output."
+    )
+    caller: Caller = Field(
+        default=None,
+        description="Provenance of this tool call: direct or programmatic.",
     )
     created_by: str | None = Field(
         default=None, description="The identifier of the actor that created the item."
@@ -4353,7 +4377,10 @@ class ResponseCreateParams(BaseModelRequest):
             ApiError: If a parameter is incompatible with ``prompt``.
         """
         for key in self._UNSUPPORTED & self.model_fields_set:
-            raise UnsupportedParameterError(key)
+            # `null`/`false` request the supported default behavior, like omission
+            value = getattr(self, key)
+            if value is not None and value is not False:
+                raise UnsupportedParameterError(key)
         if self.prompt is not None and (
             incompatible := sorted(self._PROMPT_INCOMPATIBLE & self.model_fields_set)
         ):
@@ -4427,7 +4454,10 @@ class InputTokenCountParams(BaseModelRequest):
             UnsupportedParameterError: If a parameter marked as unsupported is used.
         """
         for key in self._UNSUPPORTED & self.model_fields_set:
-            raise UnsupportedParameterError(key)
+            # `null`/`false` request the supported default behavior, like omission
+            value = getattr(self, key)
+            if value is not None and value is not False:
+                raise UnsupportedParameterError(key)
         return self
 
 

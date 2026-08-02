@@ -11,7 +11,7 @@ from enum import Enum
 from time import time
 from traceback import format_exception
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from botocore.exceptions import ClientError, HTTPClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
@@ -29,6 +29,9 @@ from stdapi.aws_bedrock import (
 from stdapi.input_file import FileIdInputFile, InputFile
 from stdapi.models import validate_model
 from stdapi.models.chat._adapters import _common, _openai_common
+from stdapi.models.chat._adapters._anthropic_message import (
+    _synthesize_tool_config_from_history,
+)
 from stdapi.models.image import get_image_model
 from stdapi.monitoring import (
     SseHandledStreamError,
@@ -103,6 +106,7 @@ from stdapi.types.openai_responses import (
     WebSearchPreviewTool,
     WebSearchTool,
 )
+from stdapi.utils import b64decode as b64decode_async
 from stdapi.utils import hide_security_details, json_sse, try_parse_json
 
 if TYPE_CHECKING:
@@ -152,6 +156,7 @@ if TYPE_CHECKING:
 
     from stdapi.config import LogLevel
     from stdapi.models.chat import ReasoningParams
+    from stdapi.models.chat._default import ChatModel
     from stdapi.types import JsonMapping
     from stdapi.types.anthropic_messages import ServerTools
     from stdapi.types.openai import ResponseModeration
@@ -751,11 +756,13 @@ def translate_request(
     )
 
 
-def extract_reasoning(request: ResponseCreateParams) -> ReasoningParams | None:
+def extract_reasoning(
+    request: ResponseCreateParams | InputTokenCountParams,
+) -> ReasoningParams | None:
     """Extract reasoning parameters from an OpenAI Responses request.
 
     Args:
-        request: Responses API creation request.
+        request: Responses API creation or input-token count request.
 
     Returns:
         Reasoning parameters to configure, or None if the request has no
@@ -770,7 +777,9 @@ def extract_reasoning(request: ResponseCreateParams) -> ReasoningParams | None:
         "enabled": effort != "none",
         "reasoning_effort": effort,
         "budget_tokens": None,
-        "max_tokens": request.max_output_tokens,
+        "max_tokens": request.max_output_tokens
+        if isinstance(request, ResponseCreateParams)
+        else None,
     }
 
 
@@ -844,14 +853,15 @@ async def _map_message_item(
             for p in content
             if isinstance(p, (ResponseInputText, ResponseOutputTextContent))
         ]
-        if cache_point is None or not any(map(_has_cache_breakpoint, text_parts)):
-            system_blocks.extend(
-                build_system_blocks(" ".join(p.text for p in text_parts))
-            )
-            return
         for text_part in text_parts:
             system_blocks.extend(build_system_blocks(text_part.text))
-            if _has_cache_breakpoint(text_part) and system_blocks:
+            # Empty parts yield no block: never lead with nor repeat a cache point
+            if (
+                cache_point is not None
+                and _has_cache_breakpoint(text_part)
+                and system_blocks
+                and "cachePoint" not in system_blocks[-1]
+            ):
                 system_blocks.append(cache_point)
         return
 
@@ -1059,7 +1069,7 @@ def _sniff_image_format(data: bytes) -> ImageFormatType:
     return "png"
 
 
-def _map_image_generation_call(
+async def _map_image_generation_call(
     item: ImageGenerationCallInput, bedrock_messages: list[MessageTypeDef]
 ) -> None:
     """Map an echoed image_generation_call item back into the conversation.
@@ -1079,7 +1089,7 @@ def _map_image_generation_call(
     if not item.result:
         return
     try:
-        image = b64decode(item.result, validate=True)
+        image = await b64decode_async(item.result, validate=True)
     except ValueError as exc:
         msg = "Invalid image_generation_call result content."
         raise ApiError(msg) from exc
@@ -1186,13 +1196,13 @@ async def _map_input_item(
         case CustomToolCallOutput():
             _map_custom_tool_call_output(item, bedrock_messages)
         case ImageGenerationCallInput():
-            _map_image_generation_call(item, bedrock_messages)
+            await _map_image_generation_call(item, bedrock_messages)
         case ResponseReasoningItem():
             _map_reasoning_item(
                 item, bedrock_messages, signature_required=reasoning_signature_required
             )
         case CompactionItemParam():
-            _map_compaction_item(item, bedrock_messages)
+            await _map_compaction_item(item, bedrock_messages)
 
 
 #: Marker identifying locally-encoded compaction content; ":" is outside the base64url alphabet, so upstream ciphertext can never collide with it.
@@ -1214,7 +1224,7 @@ def encode_compaction_content(summary: str) -> str:
     return f"{COMPACTION_CONTENT_PREFIX}{urlsafe_b64encode(summary.encode()).decode()}"
 
 
-def _map_compaction_item(
+async def _map_compaction_item(
     item: CompactionItemParam, bedrock_messages: list[MessageTypeDef]
 ) -> None:
     """Map a ``compaction`` input item back to a user message with its summary.
@@ -1235,7 +1245,9 @@ def _map_compaction_item(
     if encoded == item.encrypted_content:
         raise ApiError(msg)
     try:
-        summary = b64decode(encoded, altchars=b"-_", validate=True).decode()
+        summary = (
+            await b64decode_async(encoded, altchars=b"-_", validate=True)
+        ).decode()
     except (ValueError, UnicodeDecodeError) as exc:
         raise ApiError(msg) from exc
     _common.append_or_merge(
@@ -1574,7 +1586,7 @@ def _flush_message_item(
 
     Args:
         output_items: Mutable output items list to append to.
-        text_parts: Text blocks of the run, joined with newlines.
+        text_parts: Text blocks of the run, concatenated as streaming does.
         annotations: ``url_citation`` annotations collected for the run.
         response_id: The response identifier for generating item IDs.
     """
@@ -1586,7 +1598,7 @@ def _flush_message_item(
             content=[
                 ResponseOutputText(
                     annotations=list(annotations),
-                    text="\n".join(text_parts),
+                    text="".join(text_parts),
                     type="output_text",
                 )
             ],
@@ -1627,7 +1639,7 @@ def _record_block_citations(
     citations = list(citations)
     # Approximation: Bedrock gives no character indices, so anchor the
     # citation at the end of the text accumulated so far.
-    new_annotations = _citation_annotations(citations, len("\n".join(text_parts)))
+    new_annotations = _citation_annotations(citations, sum(map(len, text_parts)))
     (annotations if text_parts else pending_annotations).extend(new_annotations)
     if collect_sources and (sources := list(_citation_sources(citations))):
         ws_sources.setdefault(last_ws_id, []).extend(sources)
@@ -1771,13 +1783,16 @@ def _map_stop_reason(
     """
     match stop_reason:
         case "malformed_model_output" | "malformed_tool_use":
+            log_error_details(
+                f"Model response failed (Bedrock stop reason: {stop_reason}).",
+                level="warning",
+            )
             return (
                 "failed",
                 None,
                 ResponseError(
                     code="server_error",
-                    message="The model failed to generate a valid response "
-                    f"(Bedrock stop reason: {stop_reason}).",
+                    message="The model failed to generate a valid response.",
                 ),
             )
         case "end_turn" | "stop_sequence" | "tool_use" | None:
@@ -2675,25 +2690,24 @@ def _classify_stream_error(
         )
     if isinstance(exc, ClientError):
         error = exc.response["Error"]
-        status = AWS_ERROR_MAP.get(error["Code"], (502, "server_error"))[0]
+        status, code = AWS_ERROR_MAP.get(error["Code"], (502, "server_error"))
         message = error["Message"]
-        return (
-            status,
-            hide_security_details(status, message),
-            None,
-            "server_error",
-            message,
-            None,
+        # A >=500 AWS message may embed request internals: fixed text only.
+        client_message = (
+            "The request could not be completed. Retry the request."
+            if status >= 500
+            else hide_security_details(status, message)
         )
+        return (status, client_message, None, code, message, None)
     if isinstance(exc, HTTPClientError | BotocoreConnectionError):
         # The raw exception text embeds the request endpoint host, so only a
         # fixed message reaches the client; the raw text is still logged.
-        status = AWS_ERROR_MAP.get(exc.__class__.__name__, (503, "server_error"))[0]
+        status, code = AWS_ERROR_MAP.get(exc.__class__.__name__, (503, "server_error"))
         return (
             status,
             "The service is temporarily unavailable. Retry the request.",
             None,
-            "server_error",
+            code,
             str(exc),
             None,
         )
@@ -2861,8 +2875,8 @@ async def format_stream(
             ):
                 yield sse  # `yield from` is not permitted inside async generators.
 
-        # Defensive: close a reasoning block left open by a stream without contentBlockStop.
-        for sse in _close_reasoning_block(state):
+        # Defensive: close any block left open by a stream without contentBlockStop.
+        for sse in _handle_block_stop(state):
             yield sse
 
         if post_suppress_handler:
@@ -2947,21 +2961,22 @@ async def count_input_tokens_via_bedrock(
     request: InputTokenCountParams,
     model_id: str,
     region: RegionName,
-    *,
-    reasoning_signature_required: bool = False,
+    chat_model: ChatModel,
 ) -> int:
     """Count input tokens using the AWS Bedrock Runtime CountTokens API.
 
-    Builds a Converse-compatible request from the OpenAI Responses input and
-    calls Bedrock's ``count_tokens`` API for an accurate, model-specific count.
+    Builds a Converse-compatible request from the OpenAI Responses input the
+    same way ``create_response`` does — server-tool promotion and the model's
+    tool and reasoning hooks included — so the count matches what the model
+    actually consumes, then calls Bedrock's ``count_tokens`` API.  When that
+    leaves no ``toolConfig`` but history still carries ``toolUse`` blocks, a
+    permissive one is synthesized, mirroring the ``create_response`` fallback.
 
     Args:
         request: The input-token count request (model + input + tools/etc.).
         model_id: The Bedrock model identifier.
         region: The AWS region of the model.
-        reasoning_signature_required: Whether the model rejects an unsigned
-            replayed reasoning block, which the generation path drops and which
-            must therefore not be counted either.
+        chat_model: Model instance providing the request-building hooks.
 
     Returns:
         The total number of input tokens.
@@ -2972,7 +2987,7 @@ async def count_input_tokens_via_bedrock(
     bedrock_messages, system_blocks = await map_input(
         request.input,
         request.instructions,
-        reasoning_signature_required=reasoning_signature_required,
+        reasoning_signature_required=chat_model.REASONING_SIGNATURE_REQUIRED,
     )
 
     req: ConverseTokensRequestTypeDef = {"messages": bedrock_messages}
@@ -2980,8 +2995,39 @@ async def count_input_tokens_via_bedrock(
         req["system"] = system_blocks
 
     # Reuse the converse tool mapping so synthetic and integrated tools count too.
-    if tool_config := _build_tool_config(request):
+    tool_config = _build_tool_config(
+        request, tool_name_map=chat_model.CANONICAL_TO_BEDROCK_TOOL_MAP or None
+    )
+    server_tools = chat_model._req_extract_server_tools(tool_config)  # noqa: SLF001
+    tool_config = chat_model._req_promote_system_tools(tool_config)  # noqa: SLF001
+    additional_request_fields: dict[str, Any] = {}
+    chat_model._req_configure_tools(  # noqa: SLF001
+        tool_config=tool_config,
+        additional_request_fields=additional_request_fields,
+        server_tools=server_tools,
+        bedrock_messages=bedrock_messages,
+    )
+    if reasoning := extract_reasoning(request):
+        chat_model._req_configure_reasoning(  # noqa: SLF001
+            additional_request_fields=additional_request_fields, **reasoning
+        )
+    if tool_config:
         req["toolConfig"] = tool_config
+    else:
+        # Exclude names already promoted to additionalModelRequestFields (e.g.
+        # a Claude server tool): the synthesized stub must never re-add a
+        # toolSpec for a tool name the model already receives natively.
+        native_tool_names = frozenset(
+            str(tool["name"])
+            for tool in additional_request_fields.get("tools", ())
+            if isinstance(tool, dict) and "name" in tool
+        )
+        if synthesized_tool_config := _synthesize_tool_config_from_history(
+            bedrock_messages, exclude=native_tool_names
+        ):
+            req["toolConfig"] = synthesized_tool_config
+    if additional_request_fields:
+        req["additionalModelRequestFields"] = additional_request_fields
 
     with handle_bedrock_client_error():
         resp: CountTokensResponseTypeDef = await get_client(

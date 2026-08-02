@@ -94,11 +94,7 @@ _UNTAGGED: str = ""
 #: AWS error code meaning session storage is not enabled on this server.
 _ACCESS_DENIED_CODE = "AccessDeniedException"
 
-#: Botocore failures meaning the session API is not reachable in this region.
-#:
-#: Amazon Bedrock session storage is served in fewer regions than Bedrock
-#: inference, so a deployment can sit in a region where the endpoint does not
-#: resolve at all. That is an operator's regional choice, not a request error.
+#: Botocore failures meaning the session API endpoint is unreachable or timed out.
 _UNREACHABLE_ERRORS = (
     EndpointConnectionError,
     EndpointResolutionError,
@@ -245,8 +241,8 @@ async def try_create_stored_response_session(kind: StoredObjectKind) -> str | No
         return None
     except _UNREACHABLE_ERRORS:
         log_error_details(
-            "Amazon Bedrock session storage is not available in the configured "
-            "region: 'store' was ignored. Session storage is offered in fewer "
+            "Amazon Bedrock session storage endpoint is unreachable or timed "
+            "out: 'store' was ignored. Session storage is offered in fewer "
             "regions than model inference; configure a region that provides it "
             "to store responses and chat completions.",
             level="warning",

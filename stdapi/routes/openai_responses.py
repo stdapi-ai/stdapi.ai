@@ -199,7 +199,8 @@ def _failed_response_error(response: Response) -> Never:
     """
     message = response.error.message if response.error else None
     if not message:
-        message = "The model failed to generate a valid response."
+        # Same fallback wording as the Mantle passthrough failed-response guard.
+        message = "The upstream model response failed."
     raise ApiError(hide_security_details(502, message), status=502)
 
 
@@ -706,9 +707,8 @@ async def count_input_tokens(
                 request,
                 model_id,
                 model.regions[0],
-                reasoning_signature_required=get_chat_model(
-                    model_id
-                ).REASONING_SIGNATURE_REQUIRED,
+                # Not Mantle-served, so this is always a Converse chat model.
+                get_chat_model(model_id),  # type: ignore[arg-type]
             )
         )
     )
@@ -804,6 +804,10 @@ async def compact_response(
     if not isinstance(response, Response):  # pragma: no cover - stream is never set
         msg = "Unexpected streaming response."
         raise TypeError(msg)
+    if response.status == "failed":
+        # A failed summarisation run must not be wrapped into a 200 compaction
+        # item with an empty summary.
+        _failed_response_error(response)
     summary = "".join(
         part.text
         for item in response.output

@@ -303,13 +303,22 @@ class TestTerminalEvents:
         assert "something_new" in message
         assert logged_kwargs == [{"level": "warning"}]
 
-    async def test_failed_on_malformed_output(self) -> None:
+    async def test_failed_on_malformed_output(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A malformed model output ends with response.failed carrying an error.
 
         ``malformed_model_output`` is not a truncation, so it becomes
-        ``status=failed`` with a ``server_error`` ResponseError instead of
-        ``incomplete_details``.
+        ``status=failed`` with a ``server_error`` ResponseError.  The Bedrock
+        stop reason is a backend detail: it goes to the server log only, never
+        into the client-visible error message.
         """
+        logged: list[tuple[object, ...]] = []
+
+        def _capture(*args: object, **_kwargs: object) -> None:
+            logged.append(args)
+
+        monkeypatch.setattr(responses_adapter, "log_error_details", _capture)
         events = await _collect(
             format_stream(
                 "resp-1",
@@ -326,7 +335,11 @@ class TestTerminalEvents:
         assert "incomplete_details" not in payload["response"]
         error = payload["response"]["error"]
         assert error["code"] == "server_error"
-        assert "malformed_model_output" in error["message"]
+        assert error["message"] == "The model failed to generate a valid response."
+        assert any(
+            isinstance(args[0], str) and "malformed_model_output" in args[0]
+            for args in logged
+        )
         sdk_event = SDKResponseFailedEvent.model_validate(payload)
         assert sdk_event.sequence_number == payload["sequence_number"]
 
@@ -342,6 +355,7 @@ class TestFailedResponseError:
     async def test_error_populated_on_failed_status(self) -> None:
         """A malformed_tool_use stop reason yields status failed with error.
 
+        The stop reason itself stays out of the client-visible message.
         ``completed_at`` stays ``None`` because the gateway only stamps it for a
         ``completed`` status.
         """
@@ -355,7 +369,9 @@ class TestFailedResponseError:
         assert response.status == "failed"
         assert response.error is not None
         assert response.error.code == "server_error"
-        assert "malformed_tool_use" in response.error.message
+        assert (
+            response.error.message == "The model failed to generate a valid response."
+        )
         assert response.incomplete_details is None
         assert response.completed_at is None
 
@@ -368,6 +384,74 @@ class TestFailedResponseError:
         assert response.error is None
         assert response.incomplete_details is None
         assert isinstance(response.completed_at, int)
+
+
+class TestTextBlockJoinMatchesStreaming:
+    """Contiguous Bedrock text blocks concatenate identically on both paths.
+
+    Streaming emits each block's deltas joined with an empty separator, so the
+    non-streaming path must not inject newlines between blocks: the same
+    Converse output must produce the same ``output_text`` either way.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         stdapi/models/chat/_adapters/_openai_responses.py:_flush_message_item
+    """
+
+    async def test_text_blocks_concatenate_without_separator(self) -> None:
+        """Two text blocks yield one message whose text is their concatenation."""
+        response = await format_response(
+            "resp-1",
+            1.0,
+            "model",
+            _bedrock_response([{"text": "Hello"}, {"text": " world"}]),
+            _request(),
+        )
+        message = response.output[0]
+        assert isinstance(message, ResponseOutputMessage)
+        part = message.content[0]
+        assert isinstance(part, ResponseOutputText)
+        assert part.text == "Hello world"
+
+
+class TestOpenBlockFlushedAtStreamEnd:
+    """A stream truncated before ``contentBlockStop`` still delivers its block.
+
+    Reasoning blocks were already flushed defensively at stream end; an open
+    text block must get the same treatment instead of being silently dropped
+    from the final response.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStream.html
+         stdapi/models/chat/_adapters/_openai_responses.py:format_stream
+    """
+
+    async def test_text_block_without_stop_is_flushed(self) -> None:
+        """The message closes and lands in the terminal response snapshot."""
+        events = await _collect(
+            format_stream(
+                "resp-1",
+                1.0,
+                "model",
+                _stream(
+                    [
+                        {"contentBlockStart": {"start": {}, "contentBlockIndex": 0}},
+                        {
+                            "contentBlockDelta": {
+                                "delta": {"text": "Hello"},
+                                "contentBlockIndex": 0,
+                            }
+                        },
+                        {"messageStop": {"stopReason": "end_turn"}},
+                        {"metadata": {"usage": {"inputTokens": 3, "outputTokens": 5}}},
+                    ]
+                ),
+                _request(),
+            )
+        )
+        assert _event_names(events) == [*_TEXT_STREAM_EVENT_NAMES, "response.completed"]
+        final = _payload(events[-1])["response"]
+        message = final["output"][0]
+        assert message["status"] == "completed"
+        assert message["content"][0]["text"] == "Hello"
 
 
 class TestAcceptedButUnsupportedRequestFields:

@@ -11,7 +11,7 @@ Ref: https://github.com/openai/openai-python
 """
 
 import pytest
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from stdapi.api_errors import UnsupportedParameterError
 from stdapi.types import BaseModelRequestWithFormExtra
@@ -29,10 +29,17 @@ from stdapi.types.openai_responses import (
     InputTokenCountParams,
     Mcp,
     Reasoning,
+    ResponseApplyPatchToolCall,
+    ResponseApplyPatchToolCallOutput,
     ResponseCreateParams,
     ResponseCustomToolCall,
+    ResponseCustomToolCallOutput,
+    ResponseCustomToolCallOutputItem,
     ResponseError,
+    ResponseFunctionShellToolCall,
+    ResponseFunctionShellToolCallOutput,
     ResponseFunctionToolCall,
+    ResponseFunctionToolCallOutputItem,
     ResponseItemList,
     ResponseOutputItem,
 )
@@ -242,7 +249,7 @@ class TestResponseErrorCodeParity:
 
     @pytest.mark.parametrize("code", ["data_residency_mismatch", "bio_policy"])
     def test_upstream_only_codes_are_accepted(self, code: str) -> None:
-        """Error codes present upstream but previously missing here validate."""
+        """Error codes documented upstream validate here too."""
         error = ResponseError(code=code, message="m")  # type: ignore[arg-type]
         assert error.code == code
 
@@ -300,6 +307,138 @@ class TestToolCallerParity:
         assert item.caller.type == "program"
         assert item.caller.caller_id == "p1"
 
+    @pytest.mark.parametrize(
+        ("item_type", "payload"),
+        [
+            (
+                ResponseFunctionToolCallOutputItem,
+                {
+                    "id": "o1",
+                    "call_id": "c1",
+                    "output": "ok",
+                    "status": "completed",
+                    "type": "function_call_output",
+                },
+            ),
+            (
+                ResponseCustomToolCallOutput,
+                {"call_id": "c1", "output": "ok", "type": "custom_tool_call_output"},
+            ),
+            (
+                ResponseCustomToolCallOutputItem,
+                {
+                    "id": "o1",
+                    "call_id": "c1",
+                    "output": "ok",
+                    "status": "completed",
+                    "type": "custom_tool_call_output",
+                },
+            ),
+            (
+                ResponseFunctionShellToolCall,
+                {
+                    "id": "s1",
+                    "call_id": "c1",
+                    "action": {"commands": ["ls"]},
+                    "status": "completed",
+                    "type": "shell_call",
+                },
+            ),
+            (
+                ResponseFunctionShellToolCallOutput,
+                {
+                    "id": "o1",
+                    "call_id": "c1",
+                    "output": [
+                        {
+                            "outcome": {"type": "exit", "exit_code": 0},
+                            "stdout": "",
+                            "stderr": "",
+                        }
+                    ],
+                    "status": "completed",
+                    "type": "shell_call_output",
+                },
+            ),
+            (
+                ResponseApplyPatchToolCall,
+                {
+                    "id": "p1",
+                    "call_id": "c1",
+                    "operation": {"type": "create_file", "path": "a.txt", "diff": "+x"},
+                    "status": "completed",
+                    "type": "apply_patch_call",
+                },
+            ),
+            (
+                ResponseApplyPatchToolCallOutput,
+                {
+                    "id": "o1",
+                    "call_id": "c1",
+                    "status": "completed",
+                    "type": "apply_patch_call_output",
+                },
+            ),
+        ],
+    )
+    def test_stored_response_items_keep_a_program_caller(
+        self, item_type: type[BaseModel], payload: dict[str, object]
+    ) -> None:
+        """Every response-side tool item retains `caller` instead of erroring on it.
+
+        These are the shapes the local store replays through the input_items
+        listing: a missing `caller` declaration would reject (``extra="forbid"``)
+        or drop the provenance a program-driven tool call carries.
+        """
+        item = item_type.model_validate(
+            {**payload, "caller": {"type": "program", "caller_id": "p1"}}
+        )
+        caller = item.caller  # type: ignore[attr-defined]
+        assert caller is not None
+        assert caller.type == "program"
+        assert caller.caller_id == "p1"
+
+
+class TestUnsupportedNullIsAccepted:
+    """Explicitly-null unsupported parameters validate like omission.
+
+    SDKs and proxies routinely serialise unset optionals as ``null``; the Chat
+    Completions twin already treats ``null``/``false`` as requesting the
+    supported default behaviour, so the Responses bodies must not 400 on them.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         stdapi/types/openai_chat_completions.py:CompletionCreateParams._unsupported
+         stdapi/types/openai_responses.py:ResponseCreateParams
+         stdapi/types/openai_responses.py:InputTokenCountParams
+    """
+
+    @pytest.mark.parametrize(
+        "key", ["context_management", "conversation", "max_tool_calls", "truncation"]
+    )
+    def test_create_params_accept_an_explicit_null(self, key: str) -> None:
+        """A null unsupported field on ResponseCreateParams validates."""
+        params = ResponseCreateParams.model_validate(
+            {"model": "m", "input": "x", key: None}
+        )
+        assert getattr(params, key) is None
+
+    @pytest.mark.parametrize(
+        "key", ["text", "truncation", "previous_response_id", "conversation"]
+    )
+    def test_count_params_accept_an_explicit_null(self, key: str) -> None:
+        """A null unsupported field on InputTokenCountParams validates."""
+        params = InputTokenCountParams.model_validate(
+            {"model": "m", "input": "x", key: None}
+        )
+        assert getattr(params, key) is None
+
+    def test_a_real_value_is_still_rejected(self) -> None:
+        """Setting an unsupported parameter to a value still 400s."""
+        with pytest.raises(UnsupportedParameterError, match="truncation"):
+            ResponseCreateParams.model_validate(
+                {"model": "m", "input": "x", "truncation": "auto"}
+            )
+
 
 class TestPromptCacheRetentionParity:
     """prompt_cache_retention uses the OpenAI SDK literal `in_memory`.
@@ -355,8 +494,8 @@ class TestPaginatedListEnvelopeParity:
     """Paginated list responses share a common envelope base without changing wire keys.
 
     ``PaginatedListEnvelope`` factors out has_more/first_id/last_id; the dumped
-    key set proves the refactor did not reorder or rename the wire fields, and
-    that ``object`` still defaults to ``"list"`` per subclass.
+    key set proves the shared base neither reorders nor renames the wire fields,
+    and that ``object`` still defaults to ``"list"`` per subclass.
 
     Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/list
          https://developers.openai.com/api/reference/resources/responses/subresources/input_items/methods/list
