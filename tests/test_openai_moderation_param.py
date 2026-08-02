@@ -71,13 +71,6 @@ async def _validate_model(model_id: str, *_args: object, **_kwargs: object) -> A
     return make_model_details(model_id)
 
 
-@pytest.fixture
-def configured_guardrail(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Configure a default server guardrail, as ``moderation: true`` requires."""
-    monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", "gr123")
-    monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_version", "1")
-
-
 @pytest.mark.usefixtures("configured_guardrail")
 class TestApplyRequestModerationTraceMode:
     """apply_request_moderation requests the full guardrail trace.
@@ -85,7 +78,7 @@ class TestApplyRequestModerationTraceMode:
     ``trace: enabled`` only reports assessments for flagged categories, which
     zeroes out every non-detected category's score once mapped by
     ``map_guardrail_filters``; ``enabled_full`` is required to report real
-    confidence for every category, matching the ``/v1/moderations`` fix.
+    confidence for every category, matching ``/v1/moderations``.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
          stdapi/routes/_moderation.py:apply_request_moderation
@@ -216,9 +209,8 @@ class TestChatModerationParam:
     ) -> None:
         """The guardrail config is applied and trace results are reported.
 
-        The Converse request must carry ``trace: enabled_full``, otherwise AWS
-        only reports assessments for flagged categories and every non-flagged
-        category score comes back zeroed. Both directions are reported as
+        The Converse request carries ``trace: enabled_full`` so non-flagged
+        categories keep a real score. Both directions are reported as
         ``moderation_results`` sets even though Converse spells the input
         assessment as an object and the output ones as a list.
 

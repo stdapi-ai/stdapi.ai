@@ -935,6 +935,15 @@ def usage_scope() -> Generator[None]:
     usage.IMAGE_SPEC.reset(image_spec_token)
 
 
+@pytest.fixture
+def configured_guardrail(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Configure a default server guardrail, as ``moderation: true`` requires."""
+    from stdapi.config import SETTINGS  # noqa: PLC0415
+
+    monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", "gr123")
+    monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_version", "1")
+
+
 @pytest.fixture(scope="session")
 def openai_client(
     use_official_api: bool,
