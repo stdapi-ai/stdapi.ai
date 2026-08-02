@@ -123,7 +123,7 @@ class TestConverseRequestShape:
             None,
         )
 
-        content = request["messages"][0]["content"]  # type: ignore[index]
+        content = request["messages"][0]["content"]
         assert len(content) == 2
         assert "audio" in content[0]
         assert "text" in content[1]
@@ -258,7 +258,8 @@ class TestAudioFormatMapping:
         shape = (
             get_session().get_service_model("bedrock-runtime").shape_for("AudioFormat")
         )
-        assert frozenset(shape.enum) == CONVERSE_AUDIO_FORMATS
+        # type-ignore: only botocore's StringShape carries .enum, shape_for is untyped.
+        assert frozenset(shape.enum) == CONVERSE_AUDIO_FORMATS  # type: ignore[attr-defined]
 
     def test_every_mime_alias_targets_a_converse_audio_format(self) -> None:
         """MIME aliases resolve to enum members, so they never trigger a transcode.
@@ -292,8 +293,8 @@ class TestAudioFormatMapping:
             _FakeAudioContent(media_type, file_format)  # type: ignore[arg-type]
         )
 
-        assert block["audio"]["format"] == expected  # type: ignore[typeddict-item]
-        assert block["audio"]["source"] == {"bytes": b"fake"}  # type: ignore[typeddict-item]
+        assert block["audio"]["format"] == expected
+        assert block["audio"]["source"] == {"bytes": b"fake"}
 
     async def test_unsupported_audio_format_is_normalized_to_flac(
         self, monkeypatch: pytest.MonkeyPatch
@@ -320,8 +321,8 @@ class TestAudioFormatMapping:
         )
 
         assert captured == {"input": b"fake", "output_format": "flac"}
-        assert block["audio"]["format"] == "flac"  # type: ignore[typeddict-item]
-        assert block["audio"]["source"] == {"bytes": b"transcoded"}  # type: ignore[typeddict-item]
+        assert block["audio"]["format"] == "flac"
+        assert block["audio"]["source"] == {"bytes": b"transcoded"}
 
     async def test_legacy_audio_seen_as_video_is_normalized_to_flac(
         self, monkeypatch: pytest.MonkeyPatch
@@ -349,8 +350,8 @@ class TestAudioFormatMapping:
         )
 
         assert captured == {"input": b"fake", "output_format": "flac"}
-        assert block["audio"]["format"] == "flac"  # type: ignore[typeddict-item]
-        assert block["audio"]["source"] == {"bytes": b"transcoded"}  # type: ignore[typeddict-item]
+        assert block["audio"]["format"] == "flac"
+        assert block["audio"]["source"] == {"bytes": b"transcoded"}
 
     @pytest.mark.parametrize(
         ("media_type", "file_format"),
@@ -535,7 +536,7 @@ class TestInlineBodySizeGuard:
             )
         )
 
-        assert len(block["audio"]["source"]["bytes"]) == BEDROCK_BODY_SIZE_LIMIT  # type: ignore[typeddict-item]
+        assert len(block["audio"]["source"]["bytes"]) == BEDROCK_BODY_SIZE_LIMIT  # type: ignore[arg-type]
 
 
 class TestConverseStreamEvents:

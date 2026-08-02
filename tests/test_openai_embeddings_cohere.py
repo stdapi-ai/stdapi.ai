@@ -223,7 +223,7 @@ class TestCohereEmbedFusedInputsGuard:
                 extra_params={},
             )
         assert exc_info.value.status == 400
-        model.invoke.assert_not_called()
+        model.invoke.assert_not_called()  # type: ignore[attr-defined]
 
     async def test_mixed_input_on_v4_model_builds_fused_body(
         self, monkeypatch: pytest.MonkeyPatch
@@ -248,7 +248,7 @@ class TestCohereEmbedFusedInputsGuard:
             dimensions=None,
             extra_params={},
         )
-        request = model.invoke.call_args.args[0]
+        request = model.invoke.call_args.args[0]  # type: ignore[attr-defined]
         assert request["inputs"] == [
             {"content": [{"type": "text", "text": "A sample text."}]},
             {

@@ -1,6 +1,6 @@
 [project]
 name = "stdapi"
-version = "1.14.0"
+version = "1.15.0"
 description = "Standard API for AI on AWS"
 authors = [{ name = "J.Goutin", email = "contact@stdapi.ai" }]
 requires-python = ">=3.14"
@@ -33,7 +33,9 @@ opentelemetry = [
 ]
 uvicorn = ["uvicorn[standard]"]
 granian = ["granian[uvloop]"]
-mcp     = ["fastapi-mcp"]
+# fastapi-mcp 0.4.0 declares "mcp>=1.12.0" with no ceiling, but mcp 2.0 changed
+# Server.__init__ and fastapi_mcp fails on it. Cap until fastapi-mcp supports 2.x.
+mcp     = ["fastapi-mcp", "mcp<2"]
 
 [dependency-groups]
 test = [
