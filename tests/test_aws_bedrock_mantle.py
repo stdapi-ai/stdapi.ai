@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from gc import collect as gc_collect
 from json import JSONDecodeError, dumps, loads
 from typing import TYPE_CHECKING, Any, NoReturn, cast
+from urllib.parse import unquote
 
 import pytest
 from aiohttp import ClientError as AiohttpClientError
@@ -3697,6 +3698,93 @@ class TestBearerTokenMintingAndCaching:
         clock[0] += aws_bedrock_mantle._TOKEN_TTL + 1  # noqa: SLF001
         await aws_bedrock_mantle.bearer_token("us-east-1")
         assert mint_calls[0] == 2
+
+
+class TestBearerTokenSurvivesCredentialRotation:
+    """A rotated credential reaches Mantle, which is what long uptime depends on.
+
+    A gateway outlives the session credentials it started with: STS rotates them
+    every few hours. Minting a fresh token is not enough -- the fresh token has
+    to be signed with the *new* credentials, or every Mantle request 403s from
+    the first rotation until the process restarts. That is invisible to a test
+    that only counts how often the token was re-minted.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html
+         stdapi/aws_bedrock_mantle.py:bearer_token
+    """
+
+    @staticmethod
+    def _access_key_in(token: str) -> str:
+        """Return the access key the presigned token was signed with.
+
+        Args:
+            token: A minted bearer token.
+
+        Returns:
+            The key id from the presigned URL's ``X-Amz-Credential`` scope.
+        """
+        decoded = b64decode(token.removeprefix("bedrock-api-key-")).decode()
+        credential = decoded.split("X-Amz-Credential=", 1)[1].split("&", 1)[0]
+        return unquote(credential).split("/", 1)[0]
+
+    async def test_the_new_credential_signs_the_next_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """After the TTL, the token is signed with the rotated key, not the old one."""
+        keys = ["AKIAOLDACCESSKEY00001", "AKIANEWACCESSKEY00002"]
+
+        async def fake_get_credentials() -> _FakeCredentials:
+            return _FakeCredentials(
+                _FakeFrozenCredentials(keys[0], "fakesecretkey", "session-tok")
+            )
+
+        monkeypatch.setattr(AWS_SESSION, "get_credentials", fake_get_credentials)
+        monkeypatch.setattr(aws_bedrock_mantle, "_TOKENS", {})
+        clock = [1_000.0]
+        monkeypatch.setattr(aws_bedrock_mantle, "monotonic", lambda: clock[0])
+
+        before = await aws_bedrock_mantle.bearer_token("us-east-1")
+        assert self._access_key_in(before) == keys[0]
+
+        keys[0] = keys[1]
+        clock[0] += aws_bedrock_mantle._TOKEN_TTL + 1  # noqa: SLF001
+        after = await aws_bedrock_mantle.bearer_token("us-east-1")
+        assert self._access_key_in(after) == keys[1], (
+            "a token minted after rotation must carry the new credential"
+        )
+
+    def test_the_cache_expires_well_inside_a_credential_lifetime(self) -> None:
+        """The cache TTL is far shorter than the signature's own validity.
+
+        The presigned URL claims ``_TOKEN_EXPIRY`` seconds of validity, but AWS
+        rejects it as soon as the signing session credentials expire, whichever
+        comes first. Re-minting on a much shorter clock is what keeps the cached
+        token inside the credentials' remaining life.
+        """
+        ttl = aws_bedrock_mantle._TOKEN_TTL  # noqa: SLF001
+        assert 0 < ttl <= aws_bedrock_mantle._TOKEN_EXPIRY / 4  # noqa: SLF001
+
+    async def test_each_region_keeps_its_own_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Tokens are scoped per Region, since the signature names one.
+
+        A token minted for one Region must never be served for another: the
+        signing scope is part of what AWS validates.
+        """
+
+        async def fake_get_credentials() -> _FakeCredentials:
+            return _FakeCredentials(
+                _FakeFrozenCredentials("AKIAFAKEACCESSKEY", "fakesecretkey", "tok")
+            )
+
+        monkeypatch.setattr(AWS_SESSION, "get_credentials", fake_get_credentials)
+        monkeypatch.setattr(aws_bedrock_mantle, "_TOKENS", {})
+        east = await aws_bedrock_mantle.bearer_token("us-east-1")
+        west = await aws_bedrock_mantle.bearer_token("us-west-2")
+        assert east != west
+        assert "us-east-1" in b64decode(east.removeprefix("bedrock-api-key-")).decode()
+        assert "us-west-2" in b64decode(west.removeprefix("bedrock-api-key-")).decode()
 
 
 class TestRequestConnectionFailure:
