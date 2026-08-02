@@ -31,6 +31,10 @@ class _FakeAudioContent:
         """Report a fixed audio/mp3 content type."""
         return ("audio", "mp3")
 
+    async def get_size(self) -> int:
+        """Report the payload size, as the real source does without reading it."""
+        return len(b"fake")
+
     async def to_bytes(self) -> bytes:
         """Return a fixed audio payload."""
         return b"fake"

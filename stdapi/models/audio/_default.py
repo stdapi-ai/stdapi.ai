@@ -1,17 +1,21 @@
 """Default speech-to-text model implementation using AWS Bedrock Converse API.
 
-This module provides the default transcription implementation for Bedrock
-models accepting SPEECH input: the audio is sent as a Converse audio content
-block followed by a text transcription prompt, and the model's text output is
-returned as the transcript.
+For Bedrock models accepting SPEECH input, the audio is sent as a Converse
+audio content block followed by a text transcription prompt, and the model's
+text output is returned as the transcript.
 """
 
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any
 
 from fastapi import Response
 
 from stdapi.api_errors import ApiError
-from stdapi.aws_bedrock import MIME_TYPES_TO_AUDIO_TYPE, apply_guardrail_to_text
+from stdapi.aws_bedrock import (
+    BEDROCK_BODY_SIZE_LIMIT,
+    MIME_TYPES_TO_AUDIO_TYPE,
+    apply_guardrail_to_text,
+)
 from stdapi.media import encode_audio_stream
 from stdapi.models import NON_CONVERSE_SPEECH_MODEL_PREFIXES
 from stdapi.models.audio import AudioModelBase
@@ -63,6 +67,12 @@ CONVERSE_AUDIO_FORMATS: frozenset[str] = frozenset(
         "x-aac",
     }
 )
+
+#: Media types holding an audio track ffmpeg can extract and transcode.
+_TRANSCODABLE_MEDIA_TYPES: frozenset[str] = frozenset({"audio", "video"})
+
+#: ApiError status returned by the ffmpeg pipeline when the encode itself failed.
+_ENCODE_FAILURE_STATUS = 500
 
 
 async def _single_chunk_stream(data: bytes) -> AsyncGenerator[bytes]:
@@ -139,9 +149,8 @@ class AudioModel(AudioModelBase[Any, Any]):
             text=content,
             # Bedrock reports no log probabilities on the Converse API.
             logprobs=None,
-            # Converse usage carries no audio/text input split, so
-            # input_token_details is left unset rather than guessing a
-            # breakdown (issue #95).
+            # Converse reports no audio/text input split, so
+            # input_token_details is left unset (issue #95).
             usage=self._usage_tokens(response.get("usage")),
         )
 
@@ -202,9 +211,8 @@ class AudioModel(AudioModelBase[Any, Any]):
             if metadata_usage := event.get("metadata", {}).get("usage"):
                 usage = metadata_usage
 
-        # Converse usage carries no audio/text input split, so
-        # input_token_details is left unset rather than guessing a breakdown
-        # (issue #95).
+        # Converse reports no audio/text input split, so input_token_details is
+        # left unset (issue #95).
         yield TranscriptionTextDoneEvent(
             text="".join(full_text_parts),
             type="transcript.text.done",
@@ -317,8 +325,12 @@ class AudioModel(AudioModelBase[Any, Any]):
 
         Audio whose format is outside the Converse ``AudioFormat`` enum is
         normalized to FLAC (lossless, and encodable by minimal ffmpeg builds)
-        through the bounded ffmpeg pipeline; non-audio uploads are rejected
-        with the accepted format list.
+        through the bounded ffmpeg pipeline. Video containers take that path
+        too: they are legitimate transcription inputs (the OpenAI API accepts
+        mp4/mpeg/webm) and ffmpeg's default stream selection picks their audio
+        track. Uploads that are neither audio nor video (images, PDFs, text,
+        ...) are rejected with the accepted format list, and audio too large to
+        embed inline is refused before the Converse call.
 
         Args:
             audio_content: The audio file to embed as inline bytes.
@@ -327,33 +339,87 @@ class AudioModel(AudioModelBase[Any, Any]):
             Bedrock Converse audio content block with an inline bytes source.
 
         Raises:
-            ApiError: If the provided file is not in a supported audio format.
+            ApiError: If the file is not in a supported audio format, holds no
+                decodable audio, or is too large to embed inline.
         """
         media_type, file_format = await audio_content.get_content_type_tuple()
         audio_format = MIME_TYPES_TO_AUDIO_TYPE.get(file_format, file_format)
         if audio_format in CONVERSE_AUDIO_FORMATS:
+            # Checked twice: the reported size avoids reading a body that
+            # cannot fit, and the read length is what actually travels, since a
+            # chunked response or an upload without a length reports zero.
+            self._check_inline_size(
+                await audio_content.get_size(), audio_format, transcoded=False
+            )
+            data = await audio_content.to_bytes()
+            self._check_inline_size(len(data), audio_format, transcoded=False)
             audio_block: AudioBlockTypeDef = {
                 "format": audio_format,  # type: ignore[typeddict-item]
-                "source": {"bytes": await audio_content.to_bytes()},
+                "source": {"bytes": data},
             }
             return {"audio": audio_block}
-        if media_type != "audio":
+        if media_type not in _TRANSCODABLE_MEDIA_TYPES:
             msg = (
                 f"Unsupported audio format '{file_format}'. Accepted formats: "
                 f"{', '.join(sorted(CONVERSE_AUDIO_FORMATS))}."
             )
             raise ApiError(msg)
         buf = bytearray()
-        async for chunk in encode_audio_stream(
-            _single_chunk_stream(await audio_content.to_bytes()), "flac"
-        ):
-            buf.extend(chunk)
-        data = bytes(buf)
+        source = await audio_content.to_bytes()
+        try:
+            async with aclosing(
+                encode_audio_stream(_single_chunk_stream(source), "flac")
+            ) as encoded:
+                async for chunk in encoded:
+                    buf.extend(chunk)
+                    if len(buf) > BEDROCK_BODY_SIZE_LIMIT:
+                        # Closing the stream kills ffmpeg: a long audio track
+                        # would otherwise buffer far past what Converse accepts.
+                        break
+        except ApiError as exception:
+            # Only a failed encode names the upload: a stall (504) and a server
+            # missing ffmpeg keep their own status and message.
+            if exception.status != _ENCODE_FAILURE_STATUS:
+                raise
+            msg = (
+                f"The uploaded '{file_format}' file could not be decoded as "
+                "audio. Upload a file carrying a decodable audio track."
+            )
+            raise ApiError(msg) from exception
+        self._check_inline_size(len(buf), file_format, transcoded=True)
         transcoded_block: AudioBlockTypeDef = {
             "format": "flac",
-            "source": {"bytes": data},
+            "source": {"bytes": bytes(buf)},
         }
         return {"audio": transcoded_block}
+
+    @staticmethod
+    def _check_inline_size(size: int, file_format: str, *, transcoded: bool) -> None:
+        """Reject audio too large for the Converse inline bytes source.
+
+        Args:
+            size: Size of the audio to embed, in bytes. The transcode stops as
+                soon as it passes the limit, so it is a lower bound there.
+            file_format: Format of the uploaded file, for the error message.
+            transcoded: Whether *size* is the FLAC conversion of that upload.
+
+        Raises:
+            ApiError: If the audio exceeds the Bedrock inline body limit.
+        """
+        if size <= BEDROCK_BODY_SIZE_LIMIT:
+            return
+        origin = (
+            f"the '{file_format}' file converted to FLAC exceeds"
+            if transcoded
+            else f"the '{file_format}' file exceeds"
+        )
+        msg = (
+            f"The audio to transcribe is too large: {origin} the "
+            f"{BEDROCK_BODY_SIZE_LIMIT} bytes accepted inline. Upload a shorter "
+            "file, or one already in a natively supported format: "
+            f"{', '.join(sorted(CONVERSE_AUDIO_FORMATS))}."
+        )
+        raise ApiError(msg)
 
     def _validate_converse_supported(self) -> None:
         """Reject speech models that the Bedrock Converse API cannot serve.

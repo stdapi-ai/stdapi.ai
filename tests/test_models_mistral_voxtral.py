@@ -33,6 +33,10 @@ class _FakeAudioContent:
         """Report a fixed audio/mp3 content type."""
         return ("audio", "mp3")
 
+    async def get_size(self) -> int:
+        """Report the payload size, as the real source does without reading it."""
+        return len(b"fake")
+
     async def to_bytes(self) -> bytes:
         """Return a fixed audio payload."""
         return b"fake"
@@ -135,10 +139,9 @@ class TestSttTextFormat:
     """``stt()``/``stt_translate()`` with ``response_format=text``: raw ``text/plain``.
 
     A bare ``Response`` must be returned for this format so FastAPI does not
-    JSON-encode the transcript as a quoted string; a prior regression
-    (``return content``) still passed the existing word-match assertion because
-    FastAPI's default JSON encoding of a bare ``str`` also contains the words,
-    quotes and all.
+    JSON-encode the transcript as a quoted string. A word-match assertion cannot
+    catch that on its own -- FastAPI's JSON encoding of a bare ``str`` contains
+    the same words, quotes and all -- so the body is compared exactly.
 
     Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
          stdapi/models/audio/_default.py:AudioModel.stt

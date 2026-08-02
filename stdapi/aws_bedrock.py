@@ -113,8 +113,12 @@ MIME_TYPES_TO_VIDEO_TYPE: dict[str, VideoFormatType] = {
 #: Bedrock audio types with the matching MIME type
 MIME_TYPES_TO_AUDIO_TYPE: dict[str, AudioFormatType] = {
     "x-aac": "aac",
+    # libmagic reports raw ADTS AAC streams as "audio/x-hx-aac-adts".
+    "x-hx-aac-adts": "aac",
     "x-flac": "flac",
     "x-m4a": "mp4",
+    # libmagic reports Matroska as "x-matroska" for both .mka and .mkv.
+    "x-matroska": "mkv",
     "mpeg": "mp3",
     "x-wav": "wav",
 }

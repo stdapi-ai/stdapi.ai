@@ -17,6 +17,7 @@ from starlette.responses import Response
 import stdapi.routes.openai_audio_transcriptions
 import stdapi.routes.openai_audio_translations  # noqa: F401  (registers the STT_TRANSLATE route capability)
 from stdapi.api_errors import ApiError
+from stdapi.aws_bedrock import BEDROCK_BODY_SIZE_LIMIT, MIME_TYPES_TO_AUDIO_TYPE
 from stdapi.models import ModelDetails, _compute_model_capabilities
 from stdapi.models.audio import _default, get_audio_model
 from stdapi.models.audio._default import CONVERSE_AUDIO_FORMATS, AudioModel
@@ -33,22 +34,47 @@ _MODEL_ID = "synthetic.speech-to-text-v1:0"
 #: The speech model without Converse support (bidirectional streaming API only).
 _NOVA_SONIC_ID = "amazon.nova-2-sonic-v1:0"
 
+#: Chunks the abort test's encode may yield before the test fails on its own.
+_ABORT_CHUNK_BUDGET = 64
+
 
 class _FakeAudioContent:
     """Minimal ``InputFile`` stand-in with a configurable content type."""
 
-    def __init__(self, media_type: str = "audio", file_format: str = "mp3") -> None:
-        """Store the reported content type parts."""
+    def __init__(
+        self,
+        media_type: str = "audio",
+        file_format: str = "mp3",
+        data: bytes = b"fake",
+        reported_size: int | None = None,
+    ) -> None:
+        """Store the reported content type parts, the payload and its size.
+
+        Args:
+            media_type: Media type reported by the content sniffer.
+            file_format: Format subtype reported by the content sniffer.
+            data: The payload returned by ``to_bytes``.
+            reported_size: Size to report instead of the payload length, as a
+                chunked response or a length-less upload reports zero.
+        """
         self._media_type = media_type
         self._file_format = file_format
+        self._data = data
+        self._reported_size = reported_size
 
     async def get_content_type_tuple(self) -> tuple[str, str]:
         """Report the configured content type."""
         return (self._media_type, self._file_format)
 
+    async def get_size(self) -> int:
+        """Report the payload size the source knows before reading the body."""
+        if self._reported_size is not None:
+            return self._reported_size
+        return len(self._data)
+
     async def to_bytes(self) -> bytes:
-        """Return a fixed audio payload."""
-        return b"fake"
+        """Return the configured audio payload."""
+        return self._data
 
 
 def _fake_converse_response(text: str = "hello world") -> dict[str, Any]:
@@ -233,6 +259,13 @@ class TestAudioFormatMapping:
         )
         assert frozenset(shape.enum) == CONVERSE_AUDIO_FORMATS
 
+    def test_every_mime_alias_targets_a_converse_audio_format(self) -> None:
+        """MIME aliases resolve to enum members, so they never trigger a transcode.
+
+        Ref: stdapi/aws_bedrock.py:MIME_TYPES_TO_AUDIO_TYPE
+        """
+        assert set(MIME_TYPES_TO_AUDIO_TYPE.values()) <= CONVERSE_AUDIO_FORMATS
+
     @pytest.mark.parametrize(
         ("media_type", "file_format", "expected"),
         [
@@ -242,6 +275,12 @@ class TestAudioFormatMapping:
             ("audio", "x-wav", "wav"),
             ("audio", "x-m4a", "mp4"),
             ("video", "webm", "webm"),
+            # libmagic labels both .mka and .mkv "video/x-matroska", and both
+            # are Converse audio formats: they must not be transcoded.
+            ("video", "x-matroska", "mkv"),
+            ("audio", "x-matroska", "mkv"),
+            # libmagic labels raw ADTS AAC streams "audio/x-hx-aac-adts".
+            ("audio", "x-hx-aac-adts", "aac"),
         ],
     )
     async def test_supported_formats_pass_through_inline(
@@ -283,15 +322,219 @@ class TestAudioFormatMapping:
         assert block["audio"]["format"] == "flac"  # type: ignore[typeddict-item]
         assert block["audio"]["source"] == {"bytes": b"transcoded"}  # type: ignore[typeddict-item]
 
-    async def test_non_audio_upload_is_rejected_with_the_accepted_list(self) -> None:
-        """Non-audio content outside the enum gets a 400 listing accepted formats."""
+    async def test_legacy_audio_seen_as_video_is_normalized_to_flac(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A WMA upload transcodes instead of being rejected as non-audio.
+
+        libmagic identifies the ASF container by its header GUID and reports
+        ``video/x-ms-asf`` whether or not the payload carries a video track, so
+        gating the fallback on ``media_type == "audio"`` made WMA — the flagship
+        legacy case for this fallback — unreachable.
+        """
+        captured: dict[str, Any] = {}
+
+        async def _fake_encode(
+            stream: AsyncGenerator[bytes], output_format: str
+        ) -> AsyncGenerator[bytes]:
+            captured["input"] = b"".join([chunk async for chunk in stream])
+            captured["output_format"] = output_format
+            yield b"transcoded"
+
+        monkeypatch.setattr(_default, "encode_audio_stream", _fake_encode)
+
+        block = await AudioModel(_MODEL_ID)._audio_content_block(  # noqa: SLF001
+            _FakeAudioContent("video", "x-ms-asf")  # type: ignore[arg-type]
+        )
+
+        assert captured == {"input": b"fake", "output_format": "flac"}
+        assert block["audio"]["format"] == "flac"  # type: ignore[typeddict-item]
+        assert block["audio"]["source"] == {"bytes": b"transcoded"}  # type: ignore[typeddict-item]
+
+    @pytest.mark.parametrize(
+        ("media_type", "file_format"),
+        [("application", "octet-stream"), ("application", "pdf"), ("text", "plain")],
+    )
+    async def test_non_audio_upload_is_rejected_with_the_accepted_list(
+        self, media_type: str, file_format: str
+    ) -> None:
+        """Content that is neither audio nor video gets a 400 listing accepted formats."""
         with pytest.raises(ApiError, match="Accepted formats") as exc_info:
             await AudioModel(_MODEL_ID)._audio_content_block(  # noqa: SLF001
-                _FakeAudioContent("application", "octet-stream")  # type: ignore[arg-type]
+                _FakeAudioContent(media_type, file_format)  # type: ignore[arg-type]
             )
 
+        assert exc_info.value.status == 400
         assert "mp3" in str(exc_info.value)
         assert "wav" in str(exc_info.value)
+
+
+class TestFallbackTranscodeFailure:
+    """An undecodable upload is the client's problem, not a server error.
+
+    Ref: stdapi/media.py:encode_audio_stream
+         stdapi/models/audio/_default.py:AudioModel._audio_content_block
+    """
+
+    async def test_encode_failure_becomes_a_400_naming_the_format(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Ffmpeg failing to decode the upload surfaces as a 400, not a 500.
+
+        A container with no audio track, or a codec the ffmpeg build cannot
+        decode, makes the pipeline exit nonzero and raise a 500; at this point
+        in the flow the payload came from the client, so the status is 400.
+        """
+
+        async def _failing_encode(
+            stream: AsyncGenerator[bytes],  # noqa: ARG001
+            output_format: str,
+        ) -> AsyncGenerator[bytes]:
+            msg = f"Failed to encode the audio to '{output_format}'."
+            raise ApiError(msg, status=500)
+            yield b""  # pragma: no cover - unreachable, keeps this a generator
+
+        monkeypatch.setattr(_default, "encode_audio_stream", _failing_encode)
+
+        with pytest.raises(ApiError, match="could not be decoded as audio") as exc_info:
+            await AudioModel(_MODEL_ID)._audio_content_block(  # noqa: SLF001
+                _FakeAudioContent("video", "x-ms-asf")  # type: ignore[arg-type]
+            )
+
+        assert exc_info.value.status == 400
+        assert "x-ms-asf" in str(exc_info.value)
+
+    async def test_encode_timeout_stays_a_504(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A stalled ffmpeg keeps its gateway-timeout status instead of becoming a 400."""
+
+        async def _timing_out_encode(
+            stream: AsyncGenerator[bytes],  # noqa: ARG001
+            output_format: str,
+        ) -> AsyncGenerator[bytes]:
+            msg = f"Timed out encoding the audio to '{output_format}'."
+            raise ApiError(msg, status=504)
+            yield b""  # pragma: no cover - unreachable, keeps this a generator
+
+        monkeypatch.setattr(_default, "encode_audio_stream", _timing_out_encode)
+
+        with pytest.raises(ApiError, match="Timed out") as exc_info:
+            await AudioModel(_MODEL_ID)._audio_content_block(  # noqa: SLF001
+                _FakeAudioContent("audio", "amr")  # type: ignore[arg-type]
+            )
+
+        assert exc_info.value.status == 504
+
+
+class TestInlineBodySizeGuard:
+    """Inline Converse audio is bounded by the Bedrock request body limit.
+
+    The audio travels as inline bytes in the Converse request, and FLAC is
+    roughly PCM-sized, so a transcoded upload can outgrow what Bedrock accepts
+    and come back as an opaque upstream ValidationException.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_AudioSource.html
+         stdapi/models/audio/_default.py:AudioModel._check_inline_size
+    """
+
+    async def test_oversized_native_format_is_rejected(self) -> None:
+        """A natively supported upload over the limit gets an actionable 400."""
+        with pytest.raises(ApiError, match="too large") as exc_info:
+            await AudioModel(_MODEL_ID)._audio_content_block(  # noqa: SLF001
+                _FakeAudioContent(  # type: ignore[arg-type]
+                    "audio", "mp3", b"\0" * (BEDROCK_BODY_SIZE_LIMIT + 1)
+                )
+            )
+
+        assert exc_info.value.status == 400
+        assert "shorter file" in str(exc_info.value)
+
+    async def test_oversized_transcode_result_is_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A FLAC conversion that outgrows the limit is caught before the Converse call."""
+
+        async def _fat_encode(
+            stream: AsyncGenerator[bytes],  # noqa: ARG001
+            output_format: str,  # noqa: ARG001
+        ) -> AsyncGenerator[bytes]:
+            yield b"\0" * (BEDROCK_BODY_SIZE_LIMIT + 1)
+
+        monkeypatch.setattr(_default, "encode_audio_stream", _fat_encode)
+
+        with pytest.raises(ApiError, match="too large") as exc_info:
+            await AudioModel(_MODEL_ID)._audio_content_block(  # noqa: SLF001
+                _FakeAudioContent("audio", "amr")  # type: ignore[arg-type]
+            )
+
+        assert exc_info.value.status == 400
+        assert "FLAC" in str(exc_info.value)
+
+    async def test_oversized_payload_reporting_no_size_is_rejected(self) -> None:
+        """A source that under-reports its size is caught on the bytes read.
+
+        An HTTP source answering with ``Transfer-Encoding: chunked`` and an
+        upload without a declared length both report zero, so the pre-read
+        check alone would hand Bedrock a body it refuses.
+        """
+        with pytest.raises(ApiError, match="too large") as exc_info:
+            await AudioModel(_MODEL_ID)._audio_content_block(  # noqa: SLF001
+                _FakeAudioContent(  # type: ignore[arg-type]
+                    "audio",
+                    "mp3",
+                    b"\0" * (BEDROCK_BODY_SIZE_LIMIT + 1),
+                    reported_size=0,
+                )
+            )
+
+        assert exc_info.value.status == 400
+
+    async def test_transcode_stops_once_the_result_cannot_fit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The encode is abandoned at the limit rather than buffered whole.
+
+        A long audio track transcodes to far more FLAC than Converse accepts,
+        so consuming the whole stream to then reject it would let an upload
+        choose how much memory the server spends.
+        """
+        chunks_yielded = 0
+        closed = False
+        chunk = b"\0" * (BEDROCK_BODY_SIZE_LIMIT // 4)
+
+        async def _endless_encode(
+            stream: AsyncGenerator[bytes],  # noqa: ARG001
+            output_format: str,  # noqa: ARG001
+        ) -> AsyncGenerator[bytes]:
+            nonlocal chunks_yielded, closed
+            try:
+                # Bounded so a lost abort fails this test instead of hanging it.
+                for _ in range(_ABORT_CHUNK_BUDGET):
+                    chunks_yielded += 1
+                    yield chunk
+            finally:
+                closed = True
+
+        monkeypatch.setattr(_default, "encode_audio_stream", _endless_encode)
+
+        with pytest.raises(ApiError, match="too large"):
+            await AudioModel(_MODEL_ID)._audio_content_block(  # noqa: SLF001
+                _FakeAudioContent("audio", "amr")  # type: ignore[arg-type]
+            )
+
+        assert chunks_yielded == 5, "the encode ran past the first oversized chunk"
+        assert closed, "the ffmpeg pipeline was left running"
+
+    async def test_payload_at_the_limit_is_accepted(self) -> None:
+        """The limit itself is inclusive: only what exceeds it is refused."""
+        block = await AudioModel(_MODEL_ID)._audio_content_block(  # noqa: SLF001
+            _FakeAudioContent(  # type: ignore[arg-type]
+                "audio", "mp3", b"\0" * BEDROCK_BODY_SIZE_LIMIT
+            )
+        )
+
+        assert len(block["audio"]["source"]["bytes"]) == BEDROCK_BODY_SIZE_LIMIT  # type: ignore[typeddict-item]
 
 
 class TestTranslatePromptPath:
