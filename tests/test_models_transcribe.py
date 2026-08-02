@@ -30,7 +30,9 @@ from stdapi.models.audio.amazon_transcribe import (
     AudioModel,
     _build_transcription_job_params,
     _build_transcription_segment,
+    _dominant_language_code,
     _get_audio_duration,
+    _speaker_label,
     _start_transcription_with_failover,
     _text_compression_ratio,
     _TranscribeContentRedaction,
@@ -92,6 +94,63 @@ class TestGetAudioDuration:
         assert _get_audio_duration(data) == 0.0  # type: ignore[arg-type]
         assert request_log["level"] == "warning"
         assert any("15-second minimum" in str(d) for d in request_log["error_detail"])
+
+
+class TestDominantLanguageCode:
+    """_dominant_language_code: source language, with the multi-language fallback.
+
+    ``IdentifyMultipleLanguages`` results carry a ``language_codes`` list instead
+    of the singular ``language_code`` that single-language jobs report, so
+    ``verbose_json``/translation source-language reads must fall back to it
+    instead of a bare ``KeyError``-prone index.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_StartTranscriptionJob.html
+         stdapi/models/audio/amazon_transcribe.py:_dominant_language_code
+    """
+
+    def test_singular_language_code_is_returned_directly(self) -> None:
+        """A single-language job's ``language_code`` is returned as-is."""
+        data: dict[str, Any] = {"language_code": "fr-FR"}
+        assert _dominant_language_code(data) == "fr-FR"  # type: ignore[arg-type]
+
+    def test_multi_language_result_picks_the_longest_duration_entry(self) -> None:
+        """IdentifyMultipleLanguages results fall back to the dominant ``language_codes`` entry."""
+        data: dict[str, Any] = {
+            "language_codes": [
+                {"language_code": "fr-FR", "duration_in_seconds": 2.0},
+                {"language_code": "en-US", "duration_in_seconds": 8.0},
+            ]
+        }
+        assert _dominant_language_code(data) == "en-US"  # type: ignore[arg-type]
+
+    def test_no_language_data_falls_back_to_undetermined(self) -> None:
+        """Neither field present returns the undetermined-language code, not a KeyError."""
+        assert _dominant_language_code({}) == "und"
+
+
+class TestSpeakerLabel:
+    """_speaker_label: sequential letters, wrapping past 26 distinct speakers.
+
+    ``MaxSpeakerLabels`` can be raised up to AWS's cap of 30, so diarized_json's
+    speaker labels must not overflow past single capital letters (``chr(...)``
+    beyond ``Z`` would emit backslash and other non-letter punctuation).
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_StartTranscriptionJob.html
+         stdapi/models/audio/amazon_transcribe.py:_format_diarized_json_response
+    """
+
+    def test_first_26_speakers_are_single_letters(self) -> None:
+        """The first 26 speakers get plain ``A``-``Z`` labels."""
+        assert [_speaker_label(i) for i in range(26)] == [
+            chr(ord("A") + i) for i in range(26)
+        ]
+
+    def test_27th_speaker_wraps_to_a_two_letter_label(self) -> None:
+        """Past 26 speakers, labels wrap to two letters instead of overflowing ``Z``."""
+        assert _speaker_label(26) == "AA"
+        assert _speaker_label(27) == "AB"
+        assert _speaker_label(51) == "AZ"
+        assert _speaker_label(52) == "BA"
 
 
 class TestTranscribeJobCandidates:
@@ -348,13 +407,14 @@ class TestStartTranscriptionWithFailover:
         assert copies == [("us-bucket", "eu-bucket", "eu-west-1")]
 
     async def test_botocore_param_validation_error_becomes_a_caller_error(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
     ) -> None:
         """A client-side botocore rejection (e.g. MaxAlternatives<2) surfaces as ApiError, not a 500.
 
         botocore, not Transcribe, rejects an out-of-range ``Settings`` value, so the
-        request never reaches AWS; the botocore report is kept verbatim as the
-        message of a plain 400 (no error ``code``).
+        request never reaches AWS. The caller gets a generic message (mirroring the
+        AWS Translate twin); the raw botocore report is logged server-side only, not
+        forwarded (AGENTS.md "Never leak internals").
 
         Ref: botocore/data/transcribe/2017-10-26/service-2.json
              stdapi/models/audio/amazon_transcribe.py:_handle_transcription_error
@@ -375,9 +435,13 @@ class TestStartTranscriptionWithFailover:
 
         assert excinfo.value.status == 400, "a client-side rejection must not be a 500"
         assert excinfo.value.code is None
-        assert "Settings.MaxAlternatives" in str(excinfo.value), (
-            "the botocore validation report must reach the caller"
+        assert str(excinfo.value) == "Invalid transcription settings.", (
+            "the raw botocore report must not reach the caller"
         )
+        assert any(
+            "Settings.MaxAlternatives" in str(detail)
+            for detail in request_log["error_detail"]
+        ), "the botocore validation report must still be logged server-side"
 
     async def test_failed_region_job_is_deleted(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1163,12 +1227,34 @@ class TestBuildTranscriptionJobParamsExtra:
         assert params["ToxicityDetection"] == [{"ToxicityCategories": ["ALL"]}]
         assert params["ModelSettings"] == {"LanguageModelName": "my-clm"}
 
-    def test_identify_multiple_languages_supersedes_language_code(self) -> None:
-        """IdentifyMultipleLanguages wins over an explicit language, per AWS's mutual exclusion."""
+    def test_identify_multiple_languages_conflicts_with_explicit_language(self) -> None:
+        """An explicit ``language`` with IdentifyMultipleLanguages is rejected with 400.
+
+        AWS treats ``LanguageCode`` and ``IdentifyMultipleLanguages`` as mutually
+        exclusive; picking one silently would drop whichever knob the caller
+        actually meant to use, so the conflict is rejected instead (AGENTS.md).
+
+        Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_StartTranscriptionJob.html
+             stdapi/models/audio/amazon_transcribe.py:_apply_language_params
+        """
         extra = _TranscribeExtraParams(
             IdentifyMultipleLanguages=True, LanguageOptions=["en-US", "fr-FR"]
         )
-        params = _build_transcription_job_params("job1", "bucket", "en", "json", extra)
+        with pytest.raises(UnsupportedParameterError) as excinfo:
+            _build_transcription_job_params("job1", "bucket", "en", "json", extra)
+
+        assert excinfo.value.status == 400
+        assert excinfo.value.code == "unsupported_parameter"
+        assert excinfo.value.param == "language"
+
+    def test_identify_multiple_languages_without_explicit_language_is_accepted(
+        self,
+    ) -> None:
+        """IdentifyMultipleLanguages alone (no explicit ``language``) is accepted."""
+        extra = _TranscribeExtraParams(
+            IdentifyMultipleLanguages=True, LanguageOptions=["en-US", "fr-FR"]
+        )
+        params = _build_transcription_job_params("job1", "bucket", None, "json", extra)
         assert params["IdentifyMultipleLanguages"] is True
         assert params["LanguageOptions"] == ["en-US", "fr-FR"]
         assert "LanguageCode" not in params
@@ -1206,6 +1292,33 @@ class TestBuildTranscriptionJobParamsExtra:
         extra = _TranscribeExtraParams(ChannelIdentification=True)
         params = _build_transcription_job_params("job1", "bucket", "en", "json", extra)
         assert params["Settings"] == {"ChannelIdentification": True}
+
+    def test_show_speaker_labels_false_conflicts_with_diarized_json(self) -> None:
+        """ShowSpeakerLabels=false with diarized_json is rejected with a clean 400.
+
+        diarized_json seeds ``ShowSpeakerLabels: True`` so it can read
+        ``speaker_label`` off every audio segment; letting a caller override it to
+        ``False`` would otherwise reach AWS and come back with no speaker labels,
+        crashing the diarized formatter with a ``KeyError``.
+
+        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/diarization.html
+             stdapi/models/audio/amazon_transcribe.py:_format_diarized_json_response
+        """
+        extra = _TranscribeExtraParams(ShowSpeakerLabels=False)
+        with pytest.raises(UnsupportedParameterError) as excinfo:
+            _build_transcription_job_params(
+                "job1", "bucket", "en", "diarized_json", extra
+            )
+
+        assert excinfo.value.status == 400
+        assert excinfo.value.code == "unsupported_parameter"
+        assert excinfo.value.param == "ShowSpeakerLabels"
+
+    def test_show_speaker_labels_false_without_diarized_json_is_accepted(self) -> None:
+        """ShowSpeakerLabels=false is accepted normally outside diarized_json."""
+        extra = _TranscribeExtraParams(ShowSpeakerLabels=False)
+        params = _build_transcription_job_params("job1", "bucket", "en", "json", extra)
+        assert params["Settings"] == {"ShowSpeakerLabels": False}
 
     def test_no_extra_params_matches_prior_behavior(self) -> None:
         """Without extra_params, the job params are unchanged from before #82."""

@@ -16,12 +16,12 @@ AudioResponseFormat = Literal[
 ]
 TranslateAudioResponseFormat = Literal["json", "text", "srt", "verbose_json", "vtt"]
 
-#: Subtitle formats for transcription/translation responses
+#: Subtitle format literal for transcription/translation responses
 AudioSubtitleFormat = Literal["srt", "vtt"]
+#: Subtitle formats for transcription/translation responses
 SUBTITLE_FORMATS: set[AudioSubtitleFormat] = {"srt", "vtt"}
 
-#: Formats a streamed transcription cannot express: it carries text deltas only,
-#: so cues, speaker labels and segment timings would all be dropped in silence.
+#: Formats a streamed transcription cannot express (deltas only, no cues/timings)
 UNSTREAMABLE_FORMATS: set[str] = {*SUBTITLE_FORMATS, "diarized_json"}
 
 #: OpenAI voices and matching gender (True for Female, False elsewhere)

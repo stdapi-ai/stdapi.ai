@@ -161,13 +161,11 @@ class TranscribeJobSpeakerLabelItem(TypedDict):
     content: str
 
 
-class TranscribeJobSpeakerSegment(TypedDict):
-    """AWS Transcribe speaker segment structure."""
+class TranscribeJobLanguageCode(TypedDict):
+    """One entry of AWS Transcribe's multi-language identification result."""
 
-    speaker_label: str
-    start_time: str
-    end_time: str
-    items: list[TranscribeJobSpeakerLabelItem]
+    language_code: str
+    duration_in_seconds: float
 
 
 class TranscribeJobData(TypedDict, total=False):
@@ -177,6 +175,7 @@ class TranscribeJobData(TypedDict, total=False):
     audio_segments: list[TranscribeJobAudioSegment]
     items: list[TranscribeJobItem]
     language_code: str
+    language_codes: list[TranscribeJobLanguageCode]
     subtitle_content: NotRequired[str]
 
 
@@ -338,6 +337,33 @@ def _get_audio_duration(transcript_data: TranscribeJobData) -> float:
         return 0.0
 
 
+#: ISO-639 code reported when the transcript carries no identifiable language
+_UNDETERMINED_LANGUAGE_CODE = "und"
+
+
+def _dominant_language_code(transcript_data: TranscribeJobData) -> str:
+    """Return the transcript's source language code.
+
+    ``IdentifyMultipleLanguages`` results carry a ``language_codes`` list
+    instead of the singular ``language_code``; the entry with the longest
+    reported duration is used as the transcript's dominant language.
+
+    Args:
+        transcript_data: Parsed transcription results from AWS Transcribe.
+
+    Returns:
+        The language code, or the undetermined-language code when the
+        transcript reports none.
+    """
+    if language_code := transcript_data.get("language_code"):
+        return language_code
+    if language_codes := transcript_data.get("language_codes"):
+        return max(language_codes, key=lambda entry: entry["duration_in_seconds"])[
+            "language_code"
+        ]
+    return _UNDETERMINED_LANGUAGE_CODE
+
+
 #: Default speaker cap for diarized_json output, overridable via extra_params.MaxSpeakerLabels
 _DEFAULT_MAX_SPEAKER_LABELS = 10
 
@@ -354,6 +380,10 @@ _SETTINGS_FIELDS: set[str] = {
 }
 
 
+#: Parameter name reported when an explicit language conflicts with IdentifyMultipleLanguages
+_LANGUAGE_PARAM = "language"
+
+
 def _apply_language_params(
     job_params: StartTranscriptionJobRequestTypeDef,
     language: str | None,
@@ -365,8 +395,15 @@ def _apply_language_params(
         job_params: Job parameters to update in place.
         language: Optional explicit language code.
         extra: Optional extra StartTranscriptionJob parameters.
+
+    Raises:
+        UnsupportedParameterError: If ``language`` is combined with
+            ``extra.IdentifyMultipleLanguages`` (AWS treats them as mutually
+            exclusive; picking one would silently ignore the other).
     """
     if extra is not None and extra.IdentifyMultipleLanguages:
+        if language:
+            raise UnsupportedParameterError(_LANGUAGE_PARAM)
         job_params["IdentifyMultipleLanguages"] = True
         if extra.LanguageOptions:
             job_params["LanguageOptions"] = extra.LanguageOptions  # type: ignore[typeddict-item]
@@ -380,6 +417,9 @@ def _apply_language_params(
 
 #: Parameter name reported when ChannelIdentification conflicts with diarized_json
 _CHANNEL_IDENTIFICATION_PARAM = "ChannelIdentification"
+
+#: Parameter name reported when ShowSpeakerLabels=false conflicts with diarized_json
+_SHOW_SPEAKER_LABELS_PARAM = "ShowSpeakerLabels"
 
 
 def _apply_extra_settings(
@@ -397,7 +437,9 @@ def _apply_extra_settings(
     Raises:
         UnsupportedParameterError: If ``extra.ChannelIdentification`` is combined
             with ``diarized_json`` output (AWS rejects that combination; Transcribe
-            already forces ``ShowSpeakerLabels`` for diarization).
+            already forces ``ShowSpeakerLabels`` for diarization), or if
+            ``extra.ShowSpeakerLabels`` is explicitly disabled with ``diarized_json``
+            (the speaker segments diarized_json requires would then be missing).
     """
     settings: dict[str, object] = (
         {"ShowSpeakerLabels": True, "MaxSpeakerLabels": _DEFAULT_MAX_SPEAKER_LABELS}
@@ -407,6 +449,8 @@ def _apply_extra_settings(
     if extra is not None:
         if extra.ChannelIdentification and response_format == "diarized_json":
             raise UnsupportedParameterError(_CHANNEL_IDENTIFICATION_PARAM)
+        if extra.ShowSpeakerLabels is False and response_format == "diarized_json":
+            raise UnsupportedParameterError(_SHOW_SPEAKER_LABELS_PARAM)
         settings.update(extra.model_dump(include=_SETTINGS_FIELDS, exclude_none=True))
         if extra.ContentRedaction is not None:
             job_params["ContentRedaction"] = extra.ContentRedaction.model_dump()  # type: ignore[typeddict-item]
@@ -441,9 +485,12 @@ def _build_transcription_job_params(
         Job parameters for AWS Transcribe
 
     Raises:
-        UnsupportedParameterError: If ``extra.ChannelIdentification`` is combined
-            with ``diarized_json`` output (AWS rejects that combination; Transcribe
-            already forces ``ShowSpeakerLabels`` for diarization).
+        UnsupportedParameterError: If ``language`` is combined with
+            ``extra.IdentifyMultipleLanguages``; if ``extra.ChannelIdentification``
+            is combined with ``diarized_json`` output (AWS rejects that
+            combination; Transcribe already forces ``ShowSpeakerLabels`` for
+            diarization); or if ``extra.ShowSpeakerLabels`` is explicitly
+            disabled with ``diarized_json``.
     """
     s3_prefix = SETTINGS.aws_s3_tmp_prefix
     job_params: StartTranscriptionJobRequestTypeDef = {
@@ -499,7 +546,9 @@ def _handle_transcription_error(language: str | None) -> Generator[None]:
         # botocore validates some Settings/ContentRedaction/ToxicityDetection
         # fields client-side (e.g. MaxAlternatives below its minimum); surface
         # it as a caller 400 instead of an unhandled 500.
-        raise ApiError(str(error)) from error
+        log_error_details(str(error))
+        msg = "Invalid transcription settings."
+        raise ApiError(msg) from error
 
 
 def _s3_key_from_uri(uri: str, s3_bucket: str) -> str:
@@ -614,6 +663,26 @@ async def _delete_transcription_job(
         raise
 
 
+def _speaker_label(index: int) -> str:
+    """Return the speaker label for the *index*-th distinct speaker (0-based).
+
+    Sequential capital letters (``A``-``Z``), then bijective base-26 letter
+    pairs (``AA``, ``AB``, ...) once ``MaxSpeakerLabels`` exceeds 26.
+
+    Args:
+        index: Zero-based speaker position.
+
+    Returns:
+        The speaker label.
+    """
+    label = ""
+    index += 1
+    while index > 0:
+        index, remainder = divmod(index - 1, 26)
+        label = chr(_A_ORDINAL_VALUE + remainder) + label
+    return label
+
+
 def _format_diarized_json_response(
     transcript_data: TranscribeJobData,
     text: str,
@@ -644,7 +713,7 @@ def _format_diarized_json_response(
                     start=float(segment["start_time"]),
                     end=float(segment["end_time"]),
                     speaker=speakers.setdefault(
-                        segment["speaker_label"], chr(_A_ORDINAL_VALUE + len(speakers))
+                        segment["speaker_label"], _speaker_label(len(speakers))
                     ),
                     text=segment["transcript"],
                     type="transcript.text.segment",
@@ -761,7 +830,7 @@ def _format_json_response(
     return log_response_params(
         TranscriptionVerbose(
             duration=duration,
-            language=language_code_to_name(transcript_data["language_code"]),
+            language=language_code_to_name(_dominant_language_code(transcript_data)),
             text=text,
             segments=segments,
             words=words,
@@ -1005,7 +1074,7 @@ class AudioModel(AudioModelBase[None, None]):
                 *(
                     translate(
                         segment["transcript"],
-                        transcript_data["language_code"],
+                        _dominant_language_code(transcript_data),
                         settings=settings,
                         terminology_names=terminology_names,
                     )
@@ -1168,7 +1237,7 @@ class AudioModel(AudioModelBase[None, None]):
         record_transcribe_usage(
             _get_audio_duration(transcript_data), region=_SERVED_REGION.get()
         )
-        language = transcript_data["language_code"]
+        language = _dominant_language_code(transcript_data)
         if "subtitle_content" in transcript_data:
             translated_content = await translate_subtitle(
                 transcript_data["subtitle_content"],

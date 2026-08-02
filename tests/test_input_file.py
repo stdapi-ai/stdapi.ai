@@ -81,6 +81,19 @@ async def test_to_bytes_unlimited_when_disabled(
     assert await InputFile(b64encode(data).decode()).to_bytes() == data
 
 
+async def test_invalid_base64_input_returns_a_fixed_message() -> None:
+    """Malformed base64 input is rejected with a fixed message, not the raw decoder error.
+
+    The ``binascii``/``pybase64`` error text names internal decoding details; per
+    AGENTS.md ("Never leak internals") the caller gets a fixed message instead.
+
+    Ref: stdapi/input_file.py:_Base64Source._read
+    """
+    with pytest.raises(ApiError, match=r"^Invalid base64 data\.$") as exc:
+        await InputFile("not-valid-base64!!!").to_bytes()
+    assert exc.value.status == 400
+
+
 def test_max_concurrent_input_downloads_default() -> None:
     """The per-request input-download concurrency limit defaults to 8.
 

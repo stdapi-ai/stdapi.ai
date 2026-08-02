@@ -4,7 +4,7 @@ from asyncio import gather
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
-from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import BotoCoreError, ClientError, ParamValidationError
 
 from stdapi.api_errors import ApiError, UnsupportedModelError
 from stdapi.aws import call_with_region_failover, get_client, service_regions
@@ -17,7 +17,12 @@ from stdapi.models import (
     ModelDetails,
 )
 from stdapi.models.audio import AudioModelBase, TTSResponse
-from stdapi.monitoring import REQUEST_LOG, EventLog, add_server_warning
+from stdapi.monitoring import (
+    REQUEST_LOG,
+    EventLog,
+    add_server_warning,
+    log_error_details,
+)
 from stdapi.types import BaseModelResponse, JsonMapping
 from stdapi.types.openai_audio import OPENAI_VOICES_FEMALE
 from stdapi.usage import record_comprehend_usage, record_polly_usage
@@ -394,6 +399,12 @@ def _handle_polly_error(
         if error.response["Error"]["Code"] in _CLIENT_VALIDATION_ERRORS:
             raise ApiError(error.response["Error"]["Message"]) from error
         raise  # pragma: no cover
+    except ParamValidationError as error:
+        # botocore validates some request fields client-side (e.g. SampleRate's
+        # type); surface it as a caller 400 instead of an unhandled 500.
+        log_error_details(str(error))
+        msg = "Invalid speech synthesis settings."
+        raise ApiError(msg) from error
 
 
 class AudioModel(AudioModelBase[None, None]):
@@ -488,7 +499,7 @@ class AudioModel(AudioModelBase[None, None]):
             request.update(  # type: ignore[call-arg]
                 **extra.model_dump(exclude_none=True)
             )
-            if extra.SampleRate:
+            if extra.SampleRate is not None:
                 sample_rate = extra.SampleRate
                 request["SampleRate"] = str(extra.SampleRate)
                 if encoding and sample_rate not in _PCM_SAMPLE_RATES:
@@ -512,12 +523,15 @@ class AudioModel(AudioModelBase[None, None]):
 
         body = stream_body(response["AudioStream"])
         if encoding:
+            # channels/sample_rate only apply to the raw-pcm source: _ffmpeg_args
+            # ignores both when input_format is unset (encoded source, autodetected).
+            is_pcm_source = output_format == "pcm"
             audio_stream = encode_audio_stream(
                 body,
                 resp_format,
-                input_format="s16le" if output_format == "pcm" else None,
-                channels=1,
-                sample_rate=sample_rate,
+                input_format="s16le" if is_pcm_source else None,
+                channels=1 if is_pcm_source else None,
+                sample_rate=sample_rate if is_pcm_source else None,
                 output_sample_rate=output_sample_rate,
             )
         else:

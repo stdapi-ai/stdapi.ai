@@ -10,6 +10,7 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from starlette.responses import Response
 
 from stdapi.models import InvokeResult
 from stdapi.models.audio import mistral_voxtral
@@ -202,6 +203,37 @@ class TestSttAcceptsLogprobs:
         assert isinstance(usage, UsageTokens)
         assert usage.input_tokens == 10
         assert usage.input_token_details is None
+
+
+class TestSttTextFormat:
+    """``stt()``/``stt_translate()`` with ``response_format=text``: raw ``text/plain``.
+
+    A bare ``Response`` must be returned for this format so FastAPI does not
+    JSON-encode the transcript as a quoted string; a prior regression
+    (``return content``) still passed the existing word-match assertion because
+    FastAPI's default JSON encoding of a bare ``str`` also contains the words,
+    quotes and all.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/models/audio/mistral_voxtral.py:AudioModel.stt
+    """
+
+    async def test_transcription_text_format_is_a_raw_plain_text_response(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``stt()`` returns a ``Response`` with the exact, unquoted transcript body."""
+
+        async def _fake_invoke(self: AudioModel, _request: object) -> InvokeResult[Any]:  # noqa: ARG001
+            return InvokeResult(response=_fake_response())
+
+        monkeypatch.setattr(mistral_voxtral.AudioModel, "invoke", _fake_invoke)
+
+        model = AudioModel(_MODEL_ID)
+        response = await model.stt(_FakeAudioContent(), "text", logprobs=False)  # type: ignore[arg-type]
+
+        assert isinstance(response, Response)
+        assert response.media_type == "text/plain; charset=utf-8"
+        assert response.body == b"hello world"
 
 
 class TestSttStreamAcceptsLogprobs:

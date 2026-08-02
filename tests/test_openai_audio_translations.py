@@ -75,7 +75,7 @@ class TestAudioTranslations:
         rejects both with a 400 rather than ignoring them, so a default request is
         the only shape valid for every model this fixture can resolve to.
 
-        Ref: https://stdapi.ai/api_openai_audio_transcriptions/
+        Ref: https://stdapi.ai/api_openai_audio_translations/
              stdapi/models/audio/__init__.py:AudioModelBase._validate_no_prompt
         """
         response = openai_client.audio.translations.create(
@@ -102,7 +102,6 @@ class TestAudioTranslations:
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/types/openai_audio.py:TranslationVerbose
         """
-        # Test TEXT format for translation (efficient single call)
         text_response = openai_client.audio.translations.create(
             file=("test.wav", io.BytesIO(sample_audio_file)),
             model=transcription_model,
@@ -115,7 +114,6 @@ class TestAudioTranslations:
         )
         assert "test" in text_response.lower()
 
-        # Test VERBOSE_JSON for translation-specific metadata
         verbose_response = openai_client.audio.translations.create(
             file=("test.wav", io.BytesIO(sample_audio_file)),
             model=transcription_model,
@@ -234,7 +232,6 @@ class TestAudioTranslations:
         Ref: https://docs.aws.amazon.com/transcribe/latest/dg/subtitles.html
              stdapi/aws_translate.py:translate_subtitle
         """
-        # Test SRT format translation
         srt_response = openai_client.audio.translations.create(
             file=("test.wav", io.BytesIO(sample_audio_file)),
             model=transcription_model,
@@ -249,7 +246,6 @@ class TestAudioTranslations:
         )
         assert "test" in srt_response.lower()
 
-        # Test VTT format translation
         vtt_response = openai_client.audio.translations.create(
             file=("test.wav", io.BytesIO(sample_audio_file)),
             model=transcription_model,

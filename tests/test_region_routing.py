@@ -2517,11 +2517,12 @@ class TestBase64Source:
         assert result.endswith(b64)
 
     async def test_read_value_error_on_invalid_base64(self) -> None:
-        """Invalid base64 surfaces as a 400 ApiError quoting the binascii reason.
+        """Invalid base64 surfaces as a 400 ApiError with a fixed, generic message.
 
         ``b64decode(validate=True)`` rejects the out-of-alphabet characters instead of
         silently discarding them, and the resulting ``ValueError`` is re-raised as a
-        client error rather than a 500.
+        client error rather than a 500. The raw ``binascii`` wording is not forwarded
+        to the caller (AGENTS.md "Never leak internals").
         """
         from stdapi.api_errors import ApiError  # noqa: PLC0415
         from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
@@ -2538,10 +2539,7 @@ class TestBase64Source:
             _CURRENT_INPUT_FILES.reset(token)
 
         assert excinfo.value.status == 400
-        message = str(excinfo.value)
-        # Gateway-owned prefix; the tail is binascii's own wording.
-        assert message.startswith("Invalid base64 data: ")
-        assert "Non-base64 digit found" in message
+        assert str(excinfo.value) == "Invalid base64 data."
 
 
 # ---------------------------------------------------------------------------

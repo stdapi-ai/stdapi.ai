@@ -806,8 +806,9 @@ class _Base64Source(_FileSource):
         """
         try:
             data = await b64decode(self._value, validate=True)
-        except ValueError as error:
-            raise ApiError(str(error)) from None
+        except ValueError:
+            msg = "Invalid base64 data."
+            raise ApiError(msg) from None
         finally:
             del self._value
         self._metadata_from_bytes(data)
@@ -1371,14 +1372,6 @@ class InputFileUrl(InputFile):
             _FileOrigin.HTTP_URL,
             _FileOrigin.S3_URI,
         }
-    )
-
-
-class InputFileBase64(InputFile):
-    """``InputFile`` variant that accepts raw base64 or data URIs."""
-
-    ALLOWED_ORIGINS: frozenset[_FileOrigin] = frozenset(
-        {_FileOrigin.BASE64, _FileOrigin.DATA_URI}
     )
 
 

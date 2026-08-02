@@ -9,10 +9,11 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ParamValidationError
 
 import stdapi.aws
 from stdapi import usage
+from stdapi.api_errors import ApiError
 from stdapi.config import SETTINGS
 from stdapi.models import EXTRA_MODELS
 from stdapi.models.audio import amazon_polly, get_audio_model
@@ -25,7 +26,7 @@ from stdapi.models.audio.amazon_polly import (
 from stdapi.monitoring import REQUEST_LOG, EventLog
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator, Mapping
+    from collections.abc import AsyncGenerator, Callable, Generator, Mapping
 
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_polly.literals import EngineType, VoiceIdType
@@ -424,20 +425,30 @@ class TestSelectVoiceDeterminism:
     async def test_detected_language_wins_over_en_us_fallback(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A detected non-English language is never overridden by en-US, every run."""
+        """A detected non-English language is never overridden by the en-US fallback.
+
+        ``dict.fromkeys`` preserves the detected language's insertion order ahead of
+        the ``en-US`` fallback, so the outcome does not depend on set iteration order.
+
+        Ref: https://docs.python.org/3/library/stdtypes.html#dict
+             stdapi/models/audio/amazon_polly.py:_select_voice
+        """
 
         async def _detect(_text: str) -> str:
             return "fr-FR"
 
         monkeypatch.setattr(amazon_polly, "_detect_language", _detect)
 
-        for _ in range(20):
-            assert await _select_voice("Bonjour", "alloy", "neural") == ("Lea", "fr-FR")
+        assert await _select_voice("Bonjour", "alloy", "neural") == ("Lea", "fr-FR")
 
     async def test_english_detection_still_selects_en_us(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A detected en-US language (matching the fallback) still selects it."""
+        """A detected en-US language (matching the fallback) still selects it.
+
+        Ref: https://docs.python.org/3/library/stdtypes.html#dict
+             stdapi/models/audio/amazon_polly.py:_select_voice
+        """
 
         async def _detect(_text: str) -> str:
             return "en-US"
@@ -455,7 +466,10 @@ class TestPollyExtraParamsLexiconNames:
     """
 
     def test_list_value_is_accepted_and_dumps_as_a_list(self) -> None:
-        """The documented ``["MyLexicon"]`` list form validates and round-trips."""
+        """The documented ``["MyLexicon"]`` list form validates and round-trips.
+
+        Ref: https://docs.aws.amazon.com/polly/latest/APIReference/API_SynthesizeSpeech.html
+        """
         extra = _PollyExtraParams(LexiconNames=["MyCustomLexicon"])
         assert extra.model_dump(exclude_none=True) == {
             "LexiconNames": ["MyCustomLexicon"]
@@ -682,6 +696,49 @@ class TestSynthesizeSpeechFailover:
         )
 
 
+@pytest.mark.usefixtures("_request_context")
+class TestSynthesizeSpeechParamValidationError:
+    """AudioModel.tts: a client-side botocore rejection surfaces as a caller 400.
+
+    Mirrors the Transcribe/Translate twins: a request field botocore itself
+    rejects before reaching Polly (e.g. a malformed SampleRate) must not surface
+    as an unhandled 500, and the caller gets a generic message rather than the
+    raw botocore report (AGENTS.md "Never leak internals").
+
+    Ref: botocore/data/polly/2016-06-10/service-2.json
+         stdapi/models/audio/amazon_polly.py:_handle_polly_error
+    """
+
+    async def test_param_validation_error_becomes_a_caller_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ParamValidationError is mapped to a 400 with a fixed, generic message."""
+        _patch_voices(monkeypatch, {("neural", "us-east-1"): {"Joanna"}})
+        await initialize_polly_models()
+        amazon_polly._VOICES_BY_NAME_LOWER["joanna"] = "Joanna"  # noqa: SLF001
+
+        client = _StubPollyClient(
+            ParamValidationError(report="Invalid type for parameter SampleRate")
+        )
+        monkeypatch.setattr(
+            stdapi.aws, "get_client", lambda _service, _region=None: client
+        )
+
+        with pytest.raises(ApiError) as excinfo:
+            await get_audio_model("amazon.polly-neural").tts(
+                text="Hello", voice="Joanna", resp_format="mp3"
+            )
+
+        assert excinfo.value.status == 400
+        assert str(excinfo.value) == "Invalid speech synthesis settings.", (
+            "the raw botocore report must not reach the caller"
+        )
+        log = REQUEST_LOG.get()
+        assert any("SampleRate" in str(detail) for detail in log["error_detail"]), (
+            "the botocore validation report must still be logged server-side"
+        )
+
+
 class TestSynthesizeSpeechEncodedFormats:
     """AudioModel.tts: wav/flac/aac are transcoded from lossless PCM, not Vorbis.
 
@@ -722,7 +779,10 @@ class TestSynthesizeSpeechEncodedFormats:
         sample_rate: int,
         expected_output_format: str,
     ) -> None:
-        """A caller SampleRate is forwarded; above Polly's pcm cap the source is Vorbis."""
+        """A caller SampleRate is forwarded; above Polly's pcm cap the source is Vorbis.
+
+        Ref: https://docs.aws.amazon.com/polly/latest/APIReference/API_SynthesizeSpeech.html
+        """
         client = stub_polly(b"\x00\x00" * 4000)
 
         await get_audio_model("amazon.polly-neural").tts(
@@ -735,6 +795,47 @@ class TestSynthesizeSpeechEncodedFormats:
         (request,) = client.requests
         assert request["OutputFormat"] == expected_output_format
         assert request["SampleRate"] == str(sample_rate)
+
+    async def test_vorbis_fallback_omits_pcm_only_encode_kwargs(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        stub_polly: Callable[[bytes], _StubPollyClient],
+    ) -> None:
+        """Above the pcm cap, channels/sample_rate are not passed to the Vorbis source.
+
+        ``_ffmpeg_args`` only applies ``channels``/``sample_rate`` when
+        ``input_format`` is set (the raw-pcm path); passing them alongside an
+        autodetected Ogg Vorbis source (``input_format=None``) is misleading,
+        even though ``_ffmpeg_args`` silently ignores them.
+
+        Ref: stdapi/media.py:_ffmpeg_args
+             stdapi/models/audio/amazon_polly.py:AudioModel.tts
+        """
+        stub_polly(b"vorbis-bytes")
+        captured: dict[str, object] = {}
+
+        async def _fake_encode_audio_stream(
+            _stream: object, _output_format: str, **kwargs: object
+        ) -> AsyncGenerator[bytes]:
+            captured.update(kwargs)
+            yield b""
+
+        monkeypatch.setattr(
+            amazon_polly, "encode_audio_stream", _fake_encode_audio_stream
+        )
+
+        response = await get_audio_model("amazon.polly-neural").tts(
+            text="Hello",
+            voice="Joanna",
+            resp_format="flac",
+            extra_params={"SampleRate": 24000},
+        )
+        async for _chunk in response["audio_stream"]:
+            pass
+
+        assert captured["input_format"] is None
+        assert captured["channels"] is None
+        assert captured["sample_rate"] is None
 
 
 class TestSynthesizeSpeechPcmSampleRate:
@@ -783,6 +884,31 @@ class TestSynthesizeSpeechPcmSampleRate:
         assert request["SampleRate"] == "8000"
         # No ffmpeg pass: the raw Polly bytes are streamed through verbatim.
         assert audio == raw_audio
+
+    async def test_zero_sample_rate_is_forwarded_as_a_string(
+        self, stub_polly: Callable[[bytes], _StubPollyClient]
+    ) -> None:
+        """SampleRate=0 is converted to the string ``"0"``, not left as an int.
+
+        ``extra.SampleRate`` is falsy for ``0``, so a truthy check on it would skip
+        the ``str()`` conversion and leave the model-dumped ``int`` in the request;
+        botocore's client-side type validation rejects a non-``str`` SampleRate with
+        a ``ParamValidationError`` (500 unless caught).
+
+        Ref: https://docs.aws.amazon.com/polly/latest/APIReference/API_SynthesizeSpeech.html
+        """
+        client = stub_polly(b"\x00\x00" * 4000)
+
+        response = await get_audio_model("amazon.polly-neural").tts(
+            text="Hello",
+            voice="Joanna",
+            resp_format="pcm",
+            extra_params={"SampleRate": 0},
+        )
+        await response["audio_stream"].aclose()
+
+        (request,) = client.requests
+        assert request["SampleRate"] == "0"
 
 
 class TestSynthesizeSpeechMarks:

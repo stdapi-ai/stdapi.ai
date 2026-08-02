@@ -273,7 +273,7 @@ async def create_transcription(
             description=(
                 "Speaker names corresponding to the samples in `known_speaker_references[]` "
                 "(e.g. `customer`, `agent`).\n"
-                "UNSUPPORTED on this implementation."
+                "Accepted but ignored: diarization degrades to generic speaker labels."
             )
         ),
     ] = None,
@@ -282,7 +282,8 @@ async def create_transcription(
         Form(
             alias="known_speaker_names[]",
             description="Same as `known_speaker_names`, as repeated form fields "
-            "(official SDKs' wire format). UNSUPPORTED on this implementation.",
+            "(official SDKs' wire format). Accepted but ignored: diarization "
+            "degrades to generic speaker labels.",
         ),
     ] = None,
     known_speaker_references: Annotated[
@@ -291,7 +292,7 @@ async def create_transcription(
             description=(
                 "Audio samples (as data URLs, 2-10 seconds each, same formats as `file`) "
                 "for known-speaker diarization, matching `known_speaker_names[]`.\n"
-                "UNSUPPORTED on this implementation."
+                "Accepted but ignored: diarization degrades to generic speaker labels."
             )
         ),
     ] = None,
@@ -300,7 +301,8 @@ async def create_transcription(
         Form(
             alias="known_speaker_references[]",
             description="Same as `known_speaker_references`, as repeated form fields "
-            "(official SDKs' wire format). UNSUPPORTED on this implementation.",
+            "(official SDKs' wire format). Accepted but ignored: diarization "
+            "degrades to generic speaker labels.",
         ),
     ] = None,
     _: Annotated[None, Depends(authenticate)] = None,
@@ -333,9 +335,9 @@ async def create_transcription(
         temperature: Sampling temperature. Supported by Bedrock models
             (e.g. Mistral Voxtral); rejected by ``amazon.transcribe``.
         stream: Whether to stream partial results via Server-Sent Events.
-        known_speaker_names: Optional list of known speaker names. UNSUPPORTED on this implementation.
+        known_speaker_names: Optional list of known speaker names. Accepted but ignored: diarization degrades to generic speaker labels.
         known_speaker_names_bracket: Same values as `known_speaker_names`, as repeated `known_speaker_names[]` form fields.
-        known_speaker_references: Optional list of audio references for known speakers. UNSUPPORTED on this implementation.
+        known_speaker_references: Optional list of audio references for known speakers. Accepted but ignored: diarization degrades to generic speaker labels.
         known_speaker_references_bracket: Same values as `known_speaker_references`, as repeated `known_speaker_references[]` form fields.
 
     Returns:

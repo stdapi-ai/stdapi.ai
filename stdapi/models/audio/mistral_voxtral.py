@@ -155,7 +155,7 @@ class AudioModel(AudioModelBase[_Request, _Response]):
         temperature: float | None = None,
         extra_params: JsonMapping | None = None,  # noqa: ARG002
         *,
-        logprobs: bool,
+        logprobs: bool,  # noqa: ARG002
     ) -> str | TranscriptionCreateResponse | TranscriptionDiarized | Response:
         """Transcribe audio to text.
 
@@ -170,7 +170,8 @@ class AudioModel(AudioModelBase[_Request, _Response]):
             prompt: Optional prompt for transcription.
             temperature: Optional temperature for transcription.
             extra_params: Unused; not supported by this model.
-            logprobs: If true, return log probabilities.
+            logprobs: Accepted but ignored; Bedrock reports no log probabilities
+                for this model.
 
         Returns:
             Formatted transcription response with text and token usage
@@ -205,7 +206,9 @@ class AudioModel(AudioModelBase[_Request, _Response]):
                 )
         return Transcription(
             text=content,
-            logprobs=choice.get("logprobs") if logprobs else None,
+            # choice["logprobs"] is always null (TypedDict declares it None):
+            # Bedrock reports no log probabilities for this model.
+            logprobs=None,
             usage=UsageTokens(
                 input_tokens=usage["prompt_tokens"],
                 output_tokens=usage["completion_tokens"],
@@ -223,7 +226,7 @@ class AudioModel(AudioModelBase[_Request, _Response]):
         temperature: float | None = None,
         extra_params: JsonMapping | None = None,  # noqa: ARG002
         *,
-        logprobs: bool,
+        logprobs: bool,  # noqa: ARG002
     ) -> AsyncGenerator[TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent]:
         """Transcribe audio to text with streaming response.
 
@@ -234,7 +237,8 @@ class AudioModel(AudioModelBase[_Request, _Response]):
             prompt: Optional prompt for transcription.
             temperature: Optional temperature for transcription.
             extra_params: Unused; not supported by this model.
-            logprobs: If true, return log probabilities.
+            logprobs: Accepted but ignored; Bedrock reports no log probabilities
+                for this model.
 
         Yields:
             TranscriptionTextDeltaEvent or TranscriptionTextDoneEvent objects
@@ -258,7 +262,9 @@ class AudioModel(AudioModelBase[_Request, _Response]):
                     yield TranscriptionTextDeltaEvent(
                         delta=content,
                         type="transcript.text.delta",
-                        logprobs=choice.get("logprobs") if logprobs else None,
+                        # choice["logprobs"] is always null (TypedDict declares it
+                        # None): Bedrock reports no log probabilities for this model.
+                        logprobs=None,
                     )
 
             if (
