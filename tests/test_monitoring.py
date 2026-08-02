@@ -651,13 +651,15 @@ class TestStreamClientDisconnect:
 
         return generate()
 
-    async def test_disconnect_mid_stream_writes_stream_log_without_usage(
+    async def test_disconnect_mid_stream_logs_the_usage_it_drained(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Closing after the stream log scope opened still writes that log, without usage.
+        """Closing after the stream log scope opened bills what the drain recovered.
 
-        The metadata event never arrived, so nothing was billed — but the timing
-        entry is still emitted and the source generator's ``finally`` runs.
+        The consumer left before the metadata event, but Bedrock had already
+        produced and billed it, so the wrapper drains it on close. That only
+        reaches the client's accounting if the source is closed before the log
+        entry is finalised, and the source generator's ``finally`` still runs.
         """
         written = _capture_costed_logs(monkeypatch)
         usage_token = usage.init_usage()
@@ -677,8 +679,8 @@ class TestStreamClientDisconnect:
             await stream.aclose()
 
             (stream_log,) = [w for w in written if w["type"] == "request_stream"]
-            assert "usage" not in stream_log
-            assert "cost" not in stream_log
+            (entry,) = stream_log["usage"]
+            assert entry["input_tokens"] == 1000
             assert stream_log["level"] == "info"
             await _wait_for_flag(finalized)
             assert finalized == [True]

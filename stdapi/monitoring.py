@@ -133,9 +133,8 @@ class EventLog(TypedDict):
     # AWS-side request IDs of downstream AWS API calls (capped, oldest dropped)
     aws_requests: NotRequired[list[AwsApiCallLog]]
 
-    # Request params (Body, form, query, ...); a bare BaseModel is serialized
-    # natively by stdout_write's to_json when no exclude/exclude_unset filtering
-    # applied at logging time.
+    # Request params (Body, form, query, ...); an unfiltered BaseModel is
+    # serialized natively by stdout_write's to_json.
     request_params: NotRequired[JsonMappingOrList | BaseModel]
     request_response: NotRequired[JsonMappingOrList | BaseModel]  # Request response
 
@@ -252,10 +251,9 @@ def _finalize_usage(log: EventLog) -> None:
                 log["cost"] = {c: format_cost(s) for c, s in cost_by_currency.items()}
         emit_usage_metrics()
     finally:
-        # Drain synchronously (atomic on the event loop), even on failure so
-        # a later stream finalize can't re-log the same records: tasks
-        # spawned before a stream's log scope keep recording into this same
-        # dict, so the stream finalize picks up exactly the later records.
+        # Drain synchronously (atomic on the event loop), even on failure, so a
+        # later stream finalize can't re-log the same records: tasks spawned
+        # before a stream's log scope keep recording into this same dict.
         if (records := USAGE.get(None)) is not None:
             records.clear()
 
@@ -324,9 +322,6 @@ def add_server_warning(start_event: EventLog, warning: JsonValue) -> None:
 
 def write_log_event(log: EventLog) -> None:
     """Writes a log event to the standard output in JSON format.
-
-    This function converts the given log event to a JSON representation, encodes it,
-    and writes the resulting data to the standard output with a newline appended.
 
     Args:
         log: The log event to be written, represented as an `EventLog` object.
@@ -420,9 +415,7 @@ def log_request_event(request: Request) -> Generator[EventLog]:
 
     Reuses the parent request ID for internal MCP → API calls (identified by
     ``MCP_USER_AGENT`` + ``INTERNAL_REQUEST_ID_HEADER``) so both legs share
-    the same correlation ID in structured output.  All ``ContextVar`` tokens
-    are reset in the ``finally`` block so nested calls restore the parent
-    context correctly on exit.
+    the same correlation ID in structured output.
 
     Args:
         request: Incoming HTTP request.
@@ -623,8 +616,7 @@ def _format_params(
                 exclude=exclude,
             )
         # Else: keep the model as-is -- stdout_write's to_json serializes it
-        # natively (same exclude_none/field-name output) at write time,
-        # skipping this eager dict-tree pass.
+        # natively at write time, skipping this eager dict-tree pass.
     elif exclude and isinstance(value, dict):
         value = value.copy()
         for name in exclude:
@@ -732,13 +724,10 @@ async def _rebuild_and_log_stream[T](
 ) -> AsyncGenerator[T]:
     """Log a "request_stream" event for streamed response portions.
 
-    Yields ``first_chunk`` immediately (before any logging setup runs),
-    then logs the remaining stream's performance and usage as its own
-    separate log entry.  The ``USAGE`` accumulator is shared with the
-    request scope: the request finalize drains what it logged, and tasks
-    spawned before this point (which captured the request context) keep
-    recording into the same dict, so their usage lands here instead of
-    being lost.
+    Yields ``first_chunk`` immediately, before any logging setup runs, then logs
+    the remaining stream as its own entry. The ``USAGE`` accumulator is shared
+    with the request scope, so usage recorded by tasks spawned earlier in that
+    scope lands here instead of being lost.
 
     Args:
         first_chunk: Initial chunk to be yielded before consuming the stream.
@@ -786,11 +775,17 @@ async def _rebuild_and_log_stream[T](
             log.setdefault("error_detail", []).append("\n".join(format_exception(exc)))
             raise
         finally:
+            # Closed before the usage is drained: a disconnect lets the wrapped
+            # stream record the trailing usage AWS already billed, and it can
+            # only reach this log entry if it is written first.
+            await stream.aclose()
             log["execution_time_ms"] = (perf_counter_ns() - start) // 1000000
             _finalize_usage_safely(log)
             _attach_aws_api_calls(log)
             write_log_event(log)
     finally:
+        # Closes a stream abandoned before the log entry above exists; already
+        # closed once it does.
         await stream.aclose()
 
 
@@ -814,14 +809,11 @@ async def log_request_sse_stream_event(
 ) -> AsyncGenerator[ServerSentEvent]:
     """Log, monitor, and error-guard an SSE stream for use with ``EventSourceResponse``.
 
-    Combines :func:`log_request_stream_event` and an SSE error boundary into a
-    single step.  After the HTTP response headers are sent, any exception that
-    escapes the underlying generator cannot be turned into an HTTP error response
-    (Starlette raises ``RuntimeError: Caught handled exception, but response
-    already started``).  This wrapper catches such exceptions, logs them via
-    :func:`log_error_details`, and yields a terminal ``error`` SSE event
-    formatted for the matched API provider so that ``EventSourceResponse`` can
-    close the connection cleanly.
+    Once the response headers are sent, an exception escaping the underlying
+    generator can no longer become an HTTP error response (Starlette raises
+    ``RuntimeError: Caught handled exception, but response already started``), so
+    it is logged and turned into a terminal provider-formatted ``error`` SSE
+    event that lets ``EventSourceResponse`` close the connection cleanly.
 
     Args:
         stream: Raw SSE async generator (e.g. from an adapter's ``format_stream``).
