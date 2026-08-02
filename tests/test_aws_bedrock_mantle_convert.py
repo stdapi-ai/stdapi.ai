@@ -1414,7 +1414,7 @@ class TestNonStreamResponseConversions:
         }
         assert out["usage"] == {
             "input_tokens": 10,
-            "input_tokens_details": {"cached_tokens": 2},
+            "input_tokens_details": {"cached_tokens": 2, "cache_write_tokens": 0},
             "output_tokens": 5,
             "output_tokens_details": {"reasoning_tokens": 0},
             "total_tokens": 15,
@@ -1442,7 +1442,7 @@ class TestNonStreamResponseConversions:
             "prompt_tokens": 10,
             "completion_tokens": 5,
             "total_tokens": 15,
-            "prompt_tokens_details": {"cached_tokens": 0},
+            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
             "completion_tokens_details": {"reasoning_tokens": 4},
         }
 
@@ -1534,7 +1534,7 @@ class TestNonStreamResponseConversions:
             "prompt_tokens": 13,
             "completion_tokens": 3,
             "total_tokens": 16,
-            "prompt_tokens_details": {"cached_tokens": 4},
+            "prompt_tokens_details": {"cached_tokens": 4, "cache_write_tokens": 1},
         }
 
     def test_messages_to_chat_response_stop_reason_mapped_without_tool_use(
@@ -2354,7 +2354,7 @@ class TestMessagesToChatStream:
             "prompt_tokens": 10,
             "completion_tokens": 5,
             "total_tokens": 15,
-            "prompt_tokens_details": {"cached_tokens": 0},
+            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
         }
 
     async def test_unnamed_error_type_payload_raises_mantle_error(self) -> None:
@@ -2452,7 +2452,7 @@ class TestResponsesToChatStreamExtension:
             "prompt_tokens": 1,
             "completion_tokens": 1,
             "total_tokens": 2,
-            "prompt_tokens_details": {"cached_tokens": 0},
+            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
             "completion_tokens_details": {"reasoning_tokens": 0},
         }
 
@@ -4073,3 +4073,346 @@ class TestChatReasoningToResponsesStream:
         assert output[0]["id"] == "resp_route1-rs-0"
         assert output[0]["content"] == [{"type": "reasoning_text", "text": "Let T=x."}]
         assert output[0]["status"] == "completed"
+
+
+class TestRefusalResponseConversions:
+    """A model refusal survives every non-streaming response conversion.
+
+    An OpenAI-compatible upstream reports a structured-output refusal in
+    ``message.refusal`` (Chat Completions) or in a ``refusal`` output content
+    part (Responses). Anthropic has no refusal content block, so the text
+    becomes a text block and the ``refusal`` stop reason carries the signal.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+         https://developers.openai.com/api/reference/resources/responses/methods/create
+         https://platform.claude.com/docs/en/api/messages
+         stdapi/models/chat/_mantle/_convert.py:_chat_to_responses_response
+         stdapi/models/chat/_mantle/_convert.py:_chat_to_messages_response
+         stdapi/models/chat/_mantle/_convert.py:_responses_to_chat_response
+    """
+
+    #: Refusal text shared by the conversions under test.
+    REFUSAL = "I'm sorry, I can't help with that."
+
+    def _chat_refusal(self) -> dict[str, Any]:
+        """Build a Chat Completions response whose only content is a refusal."""
+        return {
+            "id": "chatcmpl-abc123",
+            "created": 1000,
+            "model": "m",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "refusal": self.REFUSAL,
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+
+    def test_chat_refusal_becomes_a_responses_refusal_part(self) -> None:
+        """The Responses message item carries a ``refusal`` content part."""
+        out = mantle_convert.convert_response(
+            "chat_completions", "responses", self._chat_refusal()
+        )
+        assert out["output"] == [
+            {
+                "type": "message",
+                "id": "resp_abc123-msg-0",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "refusal", "refusal": self.REFUSAL}],
+            }
+        ]
+        assert out["status"] == "completed"
+
+    def test_chat_text_and_refusal_share_one_message_item(self) -> None:
+        """Text and refusal parts are both emitted, text first."""
+        raw = self._chat_refusal()
+        raw["choices"][0]["message"]["content"] = "Here is what I can say."
+        out = mantle_convert.convert_response("chat_completions", "responses", raw)
+        assert [part["type"] for part in out["output"][0]["content"]] == [
+            "output_text",
+            "refusal",
+        ]
+
+    def test_chat_refusal_becomes_an_anthropic_text_block_and_stop_reason(self) -> None:
+        """The Anthropic content is non-empty and the stop reason is ``refusal``."""
+        out = mantle_convert.convert_response(
+            "chat_completions", "messages", self._chat_refusal()
+        )
+        assert out["content"] == [{"type": "text", "text": self.REFUSAL}]
+        assert out["stop_reason"] == "refusal"
+
+    def test_responses_refusal_part_becomes_the_chat_refusal_field(self) -> None:
+        """A Responses refusal part lands in ``message.refusal``, not in the content."""
+        raw = {
+            "id": "resp_abc123",
+            "created_at": 1000,
+            "model": "m",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "refusal", "refusal": self.REFUSAL}],
+                }
+            ],
+        }
+        out = mantle_convert.convert_response("responses", "chat_completions", raw)
+        message = out["choices"][0]["message"]
+        assert message["refusal"] == self.REFUSAL
+        assert message["content"] is None
+
+    def test_responses_refusal_round_trips_through_the_chat_pivot(self) -> None:
+        """Responses to Anthropic composes both halves without losing the refusal."""
+        raw = {
+            "id": "resp_abc123",
+            "model": "m",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "refusal", "refusal": self.REFUSAL}],
+                }
+            ],
+        }
+        out = mantle_convert.convert_response("responses", "messages", raw)
+        assert out["content"] == [{"type": "text", "text": self.REFUSAL}]
+        assert out["stop_reason"] == "refusal"
+
+
+class TestRefusalStreamConversions:
+    """A model refusal survives every streaming response conversion.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+         https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
+         stdapi/models/chat/_mantle/_convert.py:_responses_refusal_delta
+         stdapi/models/chat/_mantle/_convert.py:_close_responses_refusal
+         stdapi/models/chat/_mantle/_convert.py:_messages_chunk_events
+         stdapi/models/chat/_mantle/_convert.py:_responses_stream_to_chat
+    """
+
+    def _chunks(self) -> list[SseEvent]:
+        """Build CC chunks streaming a refusal in two deltas then a finish chunk."""
+        return [
+            (
+                None,
+                dumps(
+                    {
+                        "id": "chatcmpl-1",
+                        "created": 100,
+                        "model": "m",
+                        "choices": [{"index": 0, "delta": {"refusal": "I'm sorry, "}}],
+                    }
+                ),
+            ),
+            (
+                None,
+                dumps({"choices": [{"index": 0, "delta": {"refusal": "I can't."}}]}),
+            ),
+            (
+                None,
+                dumps(
+                    {
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                    }
+                ),
+            ),
+        ]
+
+    async def test_refusal_deltas_become_responses_refusal_events(self) -> None:
+        """The message item opens with a refusal part and streams refusal deltas."""
+        events = await _collect(
+            mantle_convert.convert_stream(
+                "chat_completions", "responses", _agen(self._chunks()), "resp_route1"
+            )
+        )
+        names = _names(events)
+        assert "response.refusal.delta" in names
+        assert names.index("response.refusal.done") < names.index("response.completed")
+        deltas = [
+            loads(data)["delta"]
+            for name, data in events
+            if name == "response.refusal.delta"
+        ]
+        assert deltas == ["I'm sorry, ", "I can't."]
+        added = next(
+            loads(data)
+            for name, data in events
+            if name == "response.content_part.added"
+        )
+        assert added["part"] == {"type": "refusal", "refusal": ""}
+
+    async def test_completed_response_carries_the_refusal_part(self) -> None:
+        """The terminal event's output lists the message item with its refusal part."""
+        events = await _collect(
+            mantle_convert.convert_stream(
+                "chat_completions", "responses", _agen(self._chunks()), "resp_route1"
+            )
+        )
+        completed = next(
+            loads(data) for name, data in events if name == "response.completed"
+        )
+        assert completed["response"]["output"] == [
+            {
+                "type": "message",
+                "id": "resp_route1-msg-0",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "refusal", "refusal": "I'm sorry, I can't."}],
+            }
+        ]
+
+    async def test_refusal_deltas_become_anthropic_text_and_refusal_stop(self) -> None:
+        """The Anthropic stream emits a text block and stops with ``refusal``."""
+        events = await _collect(
+            mantle_convert.convert_stream(
+                "chat_completions", "messages", _agen(self._chunks())
+            )
+        )
+        texts = [
+            payload["delta"]["text"]
+            for name, payload in zip(_names(events), _payloads(events), strict=True)
+            if name == "content_block_delta"
+        ]
+        assert texts == ["I'm sorry, ", "I can't."]
+        message_delta = _payloads(events)[-2]
+        assert message_delta["delta"]["stop_reason"] == "refusal"
+
+    async def test_responses_refusal_deltas_become_chat_refusal_deltas(self) -> None:
+        """``response.refusal.delta`` events convert to ``delta.refusal`` chunks."""
+        events: list[SseEvent] = [
+            (
+                "response.created",
+                dumps(
+                    {
+                        "type": "response.created",
+                        "response": {"id": "resp_1", "created_at": 100, "model": "m"},
+                    }
+                ),
+            ),
+            (
+                "response.refusal.delta",
+                dumps({"type": "response.refusal.delta", "delta": "I can't."}),
+            ),
+            (
+                "response.completed",
+                dumps(
+                    {
+                        "type": "response.completed",
+                        "response": {"status": "completed", "output": [], "usage": {}},
+                    }
+                ),
+            ),
+        ]
+        chunks = _payloads(
+            await _collect(
+                mantle_convert.convert_stream(
+                    "responses", "chat_completions", _agen(events)
+                )
+            )
+        )
+        assert chunks[1]["choices"][0]["delta"] == {"refusal": "I can't."}
+
+
+class TestCacheWriteTokenUsage:
+    """Cache-write tokens survive every usage conversion direction.
+
+    The Converse path always reports ``input_tokens_details.cache_write_tokens``,
+    so the Mantle path must report the same field rather than leaving a client
+    reading two different usage shapes depending on the backend.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+         stdapi/models/chat/_adapters/_openai_responses.py:InputTokensDetails
+         stdapi/models/chat/_mantle/_convert.py:_responses_usage_from_chat
+         stdapi/models/chat/_mantle/_convert.py:_messages_usage_from_chat
+    """
+
+    def test_chat_cache_write_tokens_reach_the_responses_usage(self) -> None:
+        """``prompt_tokens_details`` cache writes become ``input_tokens_details`` ones."""
+        raw = {
+            "id": "chatcmpl-abc123",
+            "model": "m",
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "hi"}}
+            ],
+            "usage": {
+                "prompt_tokens": 13,
+                "completion_tokens": 3,
+                "total_tokens": 16,
+                "prompt_tokens_details": {"cached_tokens": 4, "cache_write_tokens": 1},
+            },
+        }
+        out = mantle_convert.convert_response("chat_completions", "responses", raw)
+        assert out["usage"]["input_tokens_details"] == {
+            "cached_tokens": 4,
+            "cache_write_tokens": 1,
+        }
+
+    async def test_streamed_responses_usage_reports_cache_write_tokens(self) -> None:
+        """The terminal streaming event carries the same ``cache_write_tokens``."""
+        chunks: list[SseEvent] = [
+            (
+                None,
+                dumps(
+                    {
+                        "id": "chatcmpl-1",
+                        "created": 100,
+                        "model": "m",
+                        "choices": [{"index": 0, "delta": {"content": "hi"}}],
+                    }
+                ),
+            ),
+            (
+                None,
+                dumps(
+                    {
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                        "usage": {
+                            "prompt_tokens": 13,
+                            "completion_tokens": 3,
+                            "prompt_tokens_details": {
+                                "cached_tokens": 4,
+                                "cache_write_tokens": 1,
+                            },
+                        },
+                    }
+                ),
+            ),
+        ]
+        events = await _collect(
+            mantle_convert.convert_stream(
+                "chat_completions", "responses", _agen(chunks), "resp_route1"
+            )
+        )
+        completed = next(
+            loads(data) for name, data in events if name == "response.completed"
+        )
+        assert completed["response"]["usage"]["input_tokens_details"] == {
+            "cached_tokens": 4,
+            "cache_write_tokens": 1,
+        }
+
+    def test_anthropic_cache_creation_survives_the_chat_pivot(self) -> None:
+        """``cache_creation_input_tokens`` round-trips through ``cache_write_tokens``."""
+        anthropic_usage = {
+            "input_tokens": 8,
+            "output_tokens": 3,
+            "cache_read_input_tokens": 4,
+            "cache_creation_input_tokens": 1,
+        }
+        chat_usage = mantle_convert._chat_usage_from_messages(anthropic_usage)  # noqa: SLF001
+        assert chat_usage["prompt_tokens_details"]["cache_write_tokens"] == 1
+        assert mantle_convert._messages_usage_from_chat(chat_usage) == anthropic_usage  # noqa: SLF001

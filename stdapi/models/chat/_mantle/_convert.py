@@ -319,11 +319,9 @@ def rename_reasoning_field(
     Covers the non-streaming ``choices[].message`` and the streaming
     ``choices[].delta``. A payload already carrying *field* is left untouched.
 
-    Only a string value is renamed. Anything else stays under its original name
-    and is pruned as an unknown field, as it was before this rename existed:
-    ``reasoning_content`` is declared as text, so promoting an unexpected shape
-    into it would turn a harmless extra field into a validation failure — and,
-    mid-stream, into a broken response.
+    Only a string value is renamed: ``reasoning_content`` is declared as text,
+    so promoting an unexpected shape into it would turn a harmless extra field
+    into a validation failure — and, mid-stream, into a broken response.
 
     Args:
         payload: Chat Completions response or chunk dict, modified in place.
@@ -392,13 +390,16 @@ def _chat_usage_from_responses(usage: dict[str, Any]) -> dict[str, Any]:
     """
     input_tokens = usage.get("input_tokens") or 0
     output_tokens = usage.get("output_tokens") or 0
-    cached = (usage.get("input_tokens_details") or {}).get("cached_tokens") or 0
+    input_details = usage.get("input_tokens_details") or {}
     reasoning = (usage.get("output_tokens_details") or {}).get("reasoning_tokens") or 0
     return {
         "prompt_tokens": input_tokens,
         "completion_tokens": output_tokens,
         "total_tokens": usage.get("total_tokens") or input_tokens + output_tokens,
-        "prompt_tokens_details": {"cached_tokens": cached},
+        "prompt_tokens_details": {
+            "cached_tokens": input_details.get("cached_tokens") or 0,
+            "cache_write_tokens": input_details.get("cache_write_tokens") or 0,
+        },
         "completion_tokens_details": {"reasoning_tokens": reasoning},
     }
 
@@ -406,8 +407,8 @@ def _chat_usage_from_responses(usage: dict[str, Any]) -> dict[str, Any]:
 def _chat_usage_from_messages(usage: dict[str, Any]) -> dict[str, Any]:
     """Convert an Anthropic usage block to the Chat Completions shape.
 
-    Cache write tokens are folded into ``prompt_tokens`` (the Chat
-    Completions shape has no separate cache-write bucket).
+    Cache reads and writes are counted outside the Anthropic ``input_tokens``,
+    so both are added back into ``prompt_tokens``.
 
     Args:
         usage: Anthropic Messages usage object.
@@ -423,7 +424,10 @@ def _chat_usage_from_messages(usage: dict[str, Any]) -> dict[str, Any]:
         "prompt_tokens": prompt,
         "completion_tokens": completion,
         "total_tokens": prompt + completion,
-        "prompt_tokens_details": {"cached_tokens": cached},
+        "prompt_tokens_details": {
+            "cached_tokens": cached,
+            "cache_write_tokens": cache_write,
+        },
     }
 
 
@@ -438,13 +442,16 @@ def _responses_usage_from_chat(usage: dict[str, Any]) -> dict[str, Any]:
     """
     prompt = usage.get("prompt_tokens") or 0
     completion = usage.get("completion_tokens") or 0
-    cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
+    prompt_details = usage.get("prompt_tokens_details") or {}
     reasoning = (usage.get("completion_tokens_details") or {}).get(
         "reasoning_tokens"
     ) or 0
     return {
         "input_tokens": prompt,
-        "input_tokens_details": {"cached_tokens": cached},
+        "input_tokens_details": {
+            "cached_tokens": prompt_details.get("cached_tokens") or 0,
+            "cache_write_tokens": prompt_details.get("cache_write_tokens") or 0,
+        },
         "output_tokens": completion,
         "output_tokens_details": {"reasoning_tokens": reasoning},
         "total_tokens": usage.get("total_tokens") or prompt + completion,
@@ -454,19 +461,24 @@ def _responses_usage_from_chat(usage: dict[str, Any]) -> dict[str, Any]:
 def _messages_usage_from_chat(usage: dict[str, Any]) -> dict[str, Any]:
     """Convert a Chat Completions usage block to the Anthropic shape.
 
+    Cache reads and writes are counted outside the Anthropic ``input_tokens``,
+    so both are subtracted from ``prompt_tokens``.
+
     Args:
         usage: Chat Completions usage object.
 
     Returns:
         Anthropic Messages usage object.
     """
-    cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
+    prompt_details = usage.get("prompt_tokens_details") or {}
+    cached = prompt_details.get("cached_tokens") or 0
+    cache_write = prompt_details.get("cache_write_tokens") or 0
     prompt = usage.get("prompt_tokens") or 0
     return {
-        "input_tokens": max(prompt - cached, 0),
+        "input_tokens": max(prompt - cached - cache_write, 0),
         "output_tokens": usage.get("completion_tokens") or 0,
         "cache_read_input_tokens": cached,
-        "cache_creation_input_tokens": 0,
+        "cache_creation_input_tokens": cache_write,
     }
 
 
@@ -517,10 +529,9 @@ async def chat_completions_payload(
 def _restore_reasoning_field(payload: dict[str, Any]) -> None:
     """Send thinking text back under the name the upstream gave it.
 
-    Mirror of :func:`rename_reasoning_field`. A client replaying an assistant
-    turn sends back the message it was handed -- the OpenAI SDK idiom is to
-    append the whole message object -- so the field has to travel under the
-    upstream's own name, not the one this surface exposes.
+    A client replaying an assistant turn sends back the message it was handed,
+    so the field has to travel under the upstream's own name, not the one this
+    surface exposes (mirror of :func:`rename_reasoning_field`).
 
     Args:
         payload: Outgoing Chat Completions payload, modified in place.
@@ -2000,7 +2011,8 @@ def convert_payload(
 def _responses_to_chat_response(raw: dict[str, Any]) -> dict[str, Any]:
     """Convert a Responses API response to the Chat Completions shape.
 
-    Reasoning output items are dropped.
+    Reasoning output items are dropped; ``refusal`` content parts become the
+    message's ``refusal`` field.
 
     Args:
         raw: Responses API response dict.
@@ -2009,15 +2021,19 @@ def _responses_to_chat_response(raw: dict[str, Any]) -> dict[str, Any]:
         Chat Completions response dict.
     """
     texts: list[str] = []
+    refusals: list[str] = []
     tool_calls: list[dict[str, Any]] = []
     for item in raw.get("output") or []:
         match item.get("type"):
             case "message":
-                texts += [
-                    part.get("text") or ""
-                    for part in item.get("content") or []
-                    if part.get("type") == "output_text"
-                ]
+                for part in item.get("content") or []:
+                    match part.get("type"):
+                        case "output_text":
+                            texts.append(part.get("text") or "")
+                        case "refusal":
+                            refusals.append(part.get("refusal") or "")
+                        case _:
+                            pass
             case "function_call":
                 tool_calls.append(
                     {
@@ -2032,6 +2048,8 @@ def _responses_to_chat_response(raw: dict[str, Any]) -> dict[str, Any]:
             case _:
                 pass
     message: dict[str, Any] = {"role": "assistant", "content": "".join(texts) or None}
+    if refusals:
+        message["refusal"] = "".join(refusals)
     if tool_calls:
         message["tool_calls"] = tool_calls
     return {
@@ -2108,7 +2126,8 @@ def _chat_to_responses_response(raw: dict[str, Any]) -> dict[str, Any]:
     """Convert a Chat Completions response to the Responses API shape.
 
     Reasoning text becomes a ``reasoning`` output item preceding the message,
-    as on the Converse path.
+    as on the Converse path; a refusal becomes a ``refusal`` content part on
+    the message item.
 
     Args:
         raw: Chat Completions response dict.
@@ -2132,16 +2151,19 @@ def _chat_to_responses_response(raw: dict[str, Any]) -> dict[str, Any]:
                 "status": "completed",
             }
         )
+    parts: list[dict[str, Any]] = []
     if content := message.get("content"):
+        parts.append({"type": "output_text", "text": content, "annotations": []})
+    if refusal := message.get("refusal"):
+        parts.append({"type": "refusal", "refusal": refusal})
+    if parts:
         output.append(
             {
                 "type": "message",
                 "id": f"{response_id}-msg-0",
                 "status": "completed",
                 "role": "assistant",
-                "content": [
-                    {"type": "output_text", "text": content, "annotations": []}
-                ],
+                "content": parts,
             }
         )
     for index, call in enumerate(message.get("tool_calls") or []):
@@ -2179,6 +2201,9 @@ def _chat_to_responses_response(raw: dict[str, Any]) -> dict[str, Any]:
 def _chat_to_messages_response(raw: dict[str, Any]) -> dict[str, Any]:
     """Convert a Chat Completions response to the Anthropic Messages shape.
 
+    A refusal becomes a text block, the only shape Anthropic content blocks
+    offer for it, and forces the ``refusal`` stop reason.
+
     Args:
         raw: Chat Completions response dict.
 
@@ -2190,6 +2215,8 @@ def _chat_to_messages_response(raw: dict[str, Any]) -> dict[str, Any]:
     content: list[dict[str, Any]] = []
     if text := message.get("content"):
         content.append({"type": "text", "text": text})
+    if refusal := message.get("refusal"):
+        content.append({"type": "text", "text": refusal})
     for call in message.get("tool_calls") or []:
         function = call.get("function") or {}
         content.append(
@@ -2207,7 +2234,9 @@ def _chat_to_messages_response(raw: dict[str, Any]) -> dict[str, Any]:
         "role": "assistant",
         "model": raw.get("model") or "",
         "content": content,
-        "stop_reason": _FINISH_TO_STOP.get(finish, "end_turn"),
+        "stop_reason": "refusal"
+        if refusal
+        else _FINISH_TO_STOP.get(finish, "end_turn"),
         "stop_sequence": None,
         "usage": _messages_usage_from_chat(raw.get("usage") or {}),
     }
@@ -2362,11 +2391,9 @@ async def _responses_stream_to_chat(
 ) -> AsyncGenerator[SseEvent]:
     """Convert a Responses SSE stream to Chat Completions chunks.
 
-    Reasoning events are dropped. A final usage chunk is always emitted from
-    ``response.completed``/``response.incomplete``. Event payloads are only
-    parsed once per event, and only for the event names that contribute
-    chunks; a malformed data payload is skipped rather than aborting the
-    stream (mirroring the passthrough path's tolerance).
+    Reasoning events are dropped, refusal deltas become ``delta.refusal``
+    chunks. A final usage chunk is always emitted from
+    ``response.completed``/``response.incomplete``.
 
     Args:
         events: Upstream Responses SSE events.
@@ -2393,6 +2420,10 @@ async def _responses_stream_to_chat(
             case "response.output_text.delta":
                 yield _chat_chunk(
                     template, delta={"content": (parsed or {}).get("delta") or ""}
+                )
+            case "response.refusal.delta":
+                yield _chat_chunk(
+                    template, delta={"refusal": (parsed or {}).get("delta") or ""}
                 )
             case "response.output_item.added" if (
                 item := (parsed or {}).get("item") or {}
@@ -2457,9 +2488,6 @@ async def _messages_stream_to_chat(
 
     Thinking deltas are dropped. A final usage chunk is always emitted,
     combining ``message_start`` input usage with ``message_delta`` usage.
-    Event payloads are only parsed once per event, and only for the event
-    names that contribute chunks; a malformed data payload is skipped rather
-    than aborting the stream (mirroring the passthrough path's tolerance).
 
     Args:
         events: Upstream Anthropic SSE events.
@@ -2674,6 +2702,8 @@ def _responses_chunk_events(
             events += _responses_reasoning_delta(state, reasoning)
         if content := delta.get("content"):
             events += _responses_text_delta(state, content)
+        if refusal := delta.get("refusal"):
+            events += _responses_refusal_delta(state, refusal)
         for tool_delta in delta.get("tool_calls") or []:
             events += _responses_tool_delta(state, tool_delta)
         if finish := choice.get("finish_reason"):
@@ -2808,6 +2838,67 @@ def _responses_text_delta(state: _ResponsesStreamState, content: str) -> list[Ss
     return events
 
 
+def _responses_refusal_delta(
+    state: _ResponsesStreamState, refusal: str
+) -> list[SseEvent]:
+    """Emit the events for one refusal delta, opening a message item if needed.
+
+    Args:
+        state: Mutable stream state.
+        refusal: Refusal text delta.
+
+    Returns:
+        Responses SSE events.
+    """
+    events: list[SseEvent] = []
+    if state.kind != "refusal":
+        events += _close_responses_item(state)
+        state.output_index += 1
+        state.kind = "refusal"
+        state.item_id = f"{state.response['id']}-msg-{state.output_index}"
+        state.text_parts = []
+        item = {
+            "type": "message",
+            "id": state.item_id,
+            "role": "assistant",
+            "status": "in_progress",
+            "content": [],
+        }
+        events.append(
+            _responses_event(
+                state,
+                "response.output_item.added",
+                {"item": item, "output_index": state.output_index},
+            )
+        )
+        events.append(
+            _responses_event(
+                state,
+                "response.content_part.added",
+                {
+                    "item_id": state.item_id,
+                    "output_index": state.output_index,
+                    "content_index": 0,
+                    "part": {"type": "refusal", "refusal": ""},
+                },
+            )
+        )
+    state.text_parts.append(refusal)
+    events.append(
+        _responses_event(
+            state,
+            "response.refusal.delta",
+            {
+                "item_id": state.item_id,
+                "output_index": state.output_index,
+                "content_index": 0,
+                "delta": refusal,
+            },
+        )
+    )
+    return events
+
+
 def _responses_tool_delta(
     state: _ResponsesStreamState, tool_delta: dict[str, Any]
 ) -> list[SseEvent]:
@@ -2874,6 +2965,8 @@ def _close_responses_item(state: _ResponsesStreamState) -> list[SseEvent]:
         events = _close_responses_reasoning(state)
     elif state.kind == "text":
         events = _close_responses_text(state)
+    elif state.kind == "refusal":
+        events = _close_responses_refusal(state)
     elif state.kind == "tool":
         events = _close_responses_tool(state)
     else:
@@ -2946,6 +3039,43 @@ def _close_responses_text(state: _ResponsesStreamState) -> list[SseEvent]:
     return [
         _responses_event(
             state, "response.output_text.done", {**common, "text": text, "logprobs": []}
+        ),
+        _responses_event(state, "response.content_part.done", {**common, "part": part}),
+        _responses_event(
+            state,
+            "response.output_item.done",
+            {"item": item, "output_index": state.output_index},
+        ),
+    ]
+
+
+def _close_responses_refusal(state: _ResponsesStreamState) -> list[SseEvent]:
+    """Close the open refusal message item.
+
+    Args:
+        state: Mutable stream state.
+
+    Returns:
+        Responses SSE events closing the message item.
+    """
+    refusal = "".join(state.text_parts)
+    part = {"type": "refusal", "refusal": refusal}
+    item = {
+        "type": "message",
+        "id": state.item_id,
+        "role": "assistant",
+        "status": "completed",
+        "content": [part],
+    }
+    state.output.append(item)
+    common = {
+        "item_id": state.item_id,
+        "output_index": state.output_index,
+        "content_index": 0,
+    }
+    return [
+        _responses_event(
+            state, "response.refusal.done", {**common, "refusal": refusal}
         ),
         _responses_event(state, "response.content_part.done", {**common, "part": part}),
         _responses_event(
@@ -3050,6 +3180,7 @@ class _MessagesStreamState:
     kind: str = ""
     stop_reason: str | None = None
     usage: dict[str, Any] | None = None
+    refused: bool = False
 
 
 def _messages_event(name: str, payload: dict[str, Any]) -> SseEvent:
@@ -3099,6 +3230,9 @@ def _messages_chunk_events(
 ) -> list[SseEvent]:
     """Emit the Anthropic events produced by one Chat Completions chunk.
 
+    A refusal delta becomes a text block, the only shape Anthropic content
+    blocks offer for it.
+
     Args:
         state: Mutable stream state.
         chunk: Parsed Chat Completions chunk.
@@ -3126,6 +3260,9 @@ def _messages_chunk_events(
         delta = choice.get("delta") or {}
         if content := delta.get("content"):
             events += _messages_text_delta(state, content)
+        if refusal := delta.get("refusal"):
+            state.refused = True
+            events += _messages_text_delta(state, refusal)
         for tool_delta in delta.get("tool_calls") or []:
             events += _messages_tool_delta(state, tool_delta)
         if finish := choice.get("finish_reason"):
@@ -3242,14 +3379,12 @@ def _messages_stream_tail(state: _MessagesStreamState) -> list[SseEvent]:
     if not state.started:
         return []
     events = _close_messages_block(state)
+    stop_reason = "refusal" if state.refused else state.stop_reason or "end_turn"
     events.append(
         _messages_event(
             "message_delta",
             {
-                "delta": {
-                    "stop_reason": state.stop_reason or "end_turn",
-                    "stop_sequence": None,
-                },
+                "delta": {"stop_reason": stop_reason, "stop_sequence": None},
                 "usage": _messages_usage_from_chat(state.usage or {}),
             },
         )
@@ -3281,9 +3416,9 @@ def convert_stream(
     Conversion composes through the Chat Completions chunk shape. Chat
     Completions reasoning deltas become Responses ``reasoning_text`` content
     events on a reasoning output item; Anthropic thinking deltas and Responses
-    reasoning events are dropped in the other direction. Chat Completions output always ends with a usage
-    chunk (the caller strips it when the client did not opt in) and never
-    includes a ``[DONE]`` sentinel.
+    reasoning events are dropped in the other direction. Chat Completions
+    output always ends with a usage chunk (the caller strips it when the client
+    did not opt in) and never includes a ``[DONE]`` sentinel.
 
     Args:
         upstream: Wire format of *events*.
