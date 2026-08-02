@@ -1,15 +1,8 @@
 """Image generation models base classes and dynamic registry.
 
-This package exposes the base interfaces for image generation models and provides a
-minimal plugin/registry system that auto-loads model implementations located in
-this package directory and resolves them by matching the OpenAI/Bedrock model
-identifier.
-
-Design:
-- Model modules expose a class named `ImageGenerationModel` with a class variable
-  `MATCHER` containing a string prefix or compiled regex matching model
-  identifiers.
-- The package auto-loads and registers these classes once on import.
+Modules of this package define an ``ImageGenerationModel`` class with a
+``MATCHER`` (string prefix or compiled regex) matching the OpenAI/Bedrock model
+identifier, and are auto-loaded once on import.
 """
 
 from asyncio import Lock, as_completed, ensure_future, gather
@@ -318,10 +311,10 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
             partial_images: Number of partial images to generate during streaming.
 
         Yields:
-            Images.
+            Images, already in the requested output format.
         """
         async for result in self._generate_images_stream(partial_images):
-            yield await self._ensure_image_output_format(result)
+            yield result
 
     async def edit_images_stream(
         self,
@@ -337,10 +330,10 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
             partial_images: Number of partial images to generate during streaming.
 
         Yields:
-            Images.
+            Images, already in the requested output format.
         """
         async for result in self._edit_images_stream(images, mask, partial_images):
-            yield await self._ensure_image_output_format(result)
+            yield result
 
     async def _generate_images_from_text(
         self,
@@ -426,7 +419,8 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
             partial_images: Number of partial images to generate during streaming.
 
         Yields:
-            Streamed images.
+            Streamed images, converted by ``_stream_completed_images``; an
+            override owns that conversion itself.
         """
         async for image in self._stream_completed_images(
             await self._generate_images_from_text()
@@ -447,7 +441,8 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
             partial_images: Number of partial images to generate during streaming.
 
         Yields:
-            Streamed images.
+            Streamed images, converted by ``_stream_completed_images``; an
+            override owns that conversion itself.
         """
         async for image in self._stream_completed_images(
             await self._edit_image(images, mask)
@@ -525,10 +520,8 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
                     ) = await get_base64_image_size(image.image)
 
         if self._is_url:
-            # Drop this object's own reference to the base64 string before
-            # awaiting the upload: _get_image_url() releases its copy right
-            # after decoding, so only the coroutine's argument binding below
-            # keeps the (large) string alive during the long S3 upload.
+            # Drop this object's reference to the (large) base64 string before
+            # awaiting: _get_image_url() releases its own copy after decoding.
             url_coro = self._get_image_url(
                 image.image, index=image.index, output_format=self.output_format
             )
