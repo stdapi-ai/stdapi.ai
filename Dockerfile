@@ -28,7 +28,9 @@ RUN apk add --no-cache build-base nasm curl && \
         --enable-muxer=wav,flac,adts \
         --enable-filter=aresample,aformat,anull \
         --enable-parser=mpegaudio,flac,aac && \
-    make -j"$(nproc)" && make install
+    make -j"$(nproc)" && make install && \
+    printf 'P:ffmpeg\nV:%s-r0\nA:x86_64\nT:Custom audio-only LGPL ffmpeg build (Polly PCM to wav/flac/aac)\nU:https://ffmpeg.org\nL:LGPL-2.1-or-later\no:ffmpeg\n\n' \
+        "${ffmpeg_version}" > /ffmpeg-out/apk-entry
 
 FROM python:3-alpine AS builder
 
@@ -40,7 +42,7 @@ RUN apk add --no-cache tzdata libmagic && \
 WORKDIR /opt
 COPY pyproject.toml uv.lock ./
 RUN mkdir -p build && \
-    uv export --quiet --frozen --output-file requirements.txt --format requirements.txt --no-dev --extra uvicorn --extra granian --extra opentelemetry --extra mcp && \
+    uv export --quiet --frozen --output-file requirements.txt --format requirements.txt --no-dev --extra granian --extra opentelemetry --extra mcp && \
     uv pip sync --prefix /opt/build pyproject.toml requirements.txt && \
     mkdir -p app && \
     mv build/lib/python*/site-packages/* app/
@@ -52,10 +54,18 @@ COPY stdapi /opt/app/stdapi
 # Optimize Python code
 # Can't remove "annotated-doc" .dist-info - needed at runtime
 # Can't remove "mcp" .dist-info - fastapi_mcp uses importlib.metadata.version("mcp")
-RUN find . -type d -name __pycache__ -a -prune -exec rm -rf {} \; && \
+# botocore/data is pruned to the services the server constructs clients for;
+# the smoke test below instantiates every allowlisted client to catch a miss.
+RUN find botocore/data -mindepth 1 -maxdepth 1 -type d \
+        | grep -vE '/(bedrock|bedrock-agent|bedrock-agent-runtime|bedrock-runtime|comprehend|meteringmarketplace|polly|pricing|s3|secretsmanager|ssm|sso|sso-oidc|sts|transcribe|translate)$' \
+        | xargs rm -rf && \
+    find . -type d -name __pycache__ -a -prune -exec rm -rf {} \; && \
     mv annotated_doc-*.dist-info /tmp/ && \
     mv mcp-*.dist-info /tmp/ && \
-    rm -rf *.virtualenv _virtualenv.pth _virtualenv.py _stdapi.pth *.dist-info  && \
+    # Keep each package's METADATA so scanners inventory the Python deps.
+    find . -maxdepth 1 -name '*.dist-info' -type d \
+        -exec sh -c 'find "$1" -type f ! -name METADATA -delete' _ {} \; && \
+    rm -rf *.virtualenv _virtualenv.pth _virtualenv.py _stdapi.pth && \
     mv /tmp/annotated_doc-*.dist-info . && \
     mv /tmp/mcp-*.dist-info . && \
     python -m compileall . -q -b -j0 -o2 && \
@@ -63,7 +73,9 @@ RUN find . -type d -name __pycache__ -a -prune -exec rm -rf {} \; && \
     find /opt/app/stdapi -type f -exec chmod 644 {} + && \
     find /opt/app/stdapi -type d -exec chmod 755 {} +
 
-RUN AWS_DEFAULT_REGION=eu-west-3 python -c "import stdapi.main"
+RUN AWS_DEFAULT_REGION=eu-west-3 python -c "import stdapi.main" && \
+    python -c "from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware" && \
+    python -c "from botocore.session import Session; s = Session(); [s.create_client(n, region_name='us-east-1', aws_access_key_id='x', aws_secret_access_key='x') for n in ('bedrock', 'bedrock-agent', 'bedrock-agent-runtime', 'bedrock-runtime', 'comprehend', 'meteringmarketplace', 'polly', 'pricing', 's3', 'secretsmanager', 'ssm', 'sso', 'sso-oidc', 'sts', 'transcribe', 'translate')]"
 
 FROM python:3-alpine
 
@@ -73,6 +85,10 @@ RUN apk add --no-cache tzdata libmagic && \
 
 COPY --from=ffmpeg-builder /ffmpeg-out/bin/ffmpeg /usr/bin/ffmpeg
 COPY --from=builder /opt/app /opt/app
+
+# Register the self-built ffmpeg in the APK inventory so scanners see it.
+COPY --from=ffmpeg-builder /ffmpeg-out/apk-entry /tmp/ffmpeg-apk-entry
+RUN cat /tmp/ffmpeg-apk-entry >> /lib/apk/db/installed && rm /tmp/ffmpeg-apk-entry
 
 USER nonroot
 WORKDIR /opt/app

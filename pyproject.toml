@@ -11,7 +11,7 @@ dependencies = [
     "pydantic>=2",
     "pydantic-settings>=2",
     "sse-starlette",
-    "langcodes[data]",
+    "langcodes",
     "python-multipart",
     "aiohttp",
     "aiodns",
@@ -76,7 +76,15 @@ dev = [
 # API (InvokeGuardrailChecks added in botocore 1.43.30). aiobotocore only wraps
 # HTTP transport/credentials/loaders, not the generated service clients, so
 # newer botocore releases work in practice despite the declared ceiling.
-override-dependencies = ["botocore>=1.43.30,<1.44"]
+override-dependencies = [
+    "botocore>=1.43.30,<1.44",
+    # Strip pyjwt[crypto]: gateway MCP uses API-key auth, no JWT verification.
+    "pyjwt>=2.10.1",
+    # Declared by fastapi-mcp but never imported by any shipped code path.
+    "rich; sys_platform == 'never'",
+    "typer; sys_platform == 'never'",
+    "tomli; sys_platform == 'never'",
+]
 
 [tool.hatch.build.targets.sdist]
 include = ["stdapi"]

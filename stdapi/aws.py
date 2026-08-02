@@ -177,6 +177,8 @@ class AWSConnectionManager:
             results = await gather(
                 *(
                     self._exit_stack.enter_async_context(
+                        # New service names must join the botocore/data allowlist
+                        # pruned in the Dockerfile, or the image fails at runtime.
                         AWS_SESSION.create_client(  # type: ignore[call-overload]
                             service.split(".", 1)[0],
                             region_name=region,
