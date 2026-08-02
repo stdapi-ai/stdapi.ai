@@ -3246,7 +3246,7 @@ export COST_TRACKING=true
 
 ## :material-shield-check: Bedrock Guardrails
 
-Amazon Bedrock Guardrails add content filtering and safety controls to model inputs and outputs. The configured guardrail also powers the [OpenAI-compatible Moderations API](api_openai_moderations.md) (`POST /v1/moderations`).
+Amazon Bedrock Guardrails add content filtering and safety controls to model inputs and outputs. The configured guardrail also powers the [OpenAI-compatible Moderations API](api_openai_moderations.md) (`POST /v1/moderations`); without one, that API falls back to [inline guardrail checks](api_openai_moderations.md#model-support) in supported regions, then Amazon Comprehend.
 
 !!! info "Configuration Options"
     Guardrails can be configured in three ways:
@@ -3254,6 +3254,25 @@ Amazon Bedrock Guardrails add content filtering and safety controls to model inp
     1. :material-cog: **Global** - Via environment variables
     2. :material-web: **Per-request** - Via HTTP headers
     3. :material-code-json: **Request body** - Via `amazon-bedrock-guardrailConfig` object
+
+### Route Coverage
+
+The configured guardrail applies to every route. Chat routes use the native Bedrock integration; routes whose AWS backend has no guardrail mechanism enforce it through the [ApplyGuardrail API](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html): client-supplied text is checked as `INPUT` before the backend call and generated text as `OUTPUT` after it. ApplyGuardrail calls are billed per text unit like moderation requests.
+
+| Routes                                                     | Mechanism                            | Checked content                                        |
+|------------------------------------------------------------|--------------------------------------|--------------------------------------------------------|
+| Chat Completions, Responses, Completions, Anthropic Messages | :material-link: Native (Converse `guardrailConfig` / InvokeModel) | Model input and output                 |
+| Moderations                                                | :material-shield-search: ApplyGuardrail (classification) | Submitted text and images                 |
+| Embeddings (OpenAI and Cohere v1/v2)                       | :material-shield-check: ApplyGuardrail | `INPUT` — each text input                             |
+| Rerank (Cohere v1/v2)                                      | :material-shield-check: ApplyGuardrail | `INPUT` — query and each document text                |
+| Images Generations / Edits                                 | :material-shield-check: ApplyGuardrail | `INPUT` — prompt (Variations has no text to check)    |
+| Videos                                                     | :material-shield-check: ApplyGuardrail | `INPUT` — prompt                                      |
+| Audio Speech                                               | :material-shield-check: ApplyGuardrail | `INPUT` — text to synthesize                          |
+| Audio Transcriptions (including streaming)                 | :material-shield-check: ApplyGuardrail | `OUTPUT` — transcript                                 |
+| Audio Translations                                         | :material-shield-check: ApplyGuardrail | `OUTPUT` — translated text                            |
+
+!!! info "Intervention Behavior"
+    On ApplyGuardrail-enforced routes, a blocking intervention fails the request with HTTP 400 and error code `content_filter` (the same code chat routes report as their finish reason), carrying the guardrail's configured blocked messaging. A masking-only intervention (sensitive-information anonymization) substitutes the masked text — input masking reaches the backend model, and a masked transcript or translation is returned on the plain `json`/`text` formats. Response formats that cannot carry masked text (`srt`, `vtt`, `verbose_json`, `diarized_json`) fail with the same `content_filter` error instead of leaking the unmasked content.
 
 ### Global Configuration
 

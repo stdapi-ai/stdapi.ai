@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, TypedDict
 
 from fastapi import Response
 
-from stdapi.aws_bedrock import MIME_TYPES_TO_AUDIO_TYPE
+from stdapi.aws_bedrock import MIME_TYPES_TO_AUDIO_TYPE, apply_guardrail_to_text
 from stdapi.models.audio import AudioModelBase
 from stdapi.types.openai_audio import (
     Transcription,
@@ -187,7 +187,9 @@ class AudioModel(AudioModelBase[_Request, _Response]):
         )
         response = result.response
         choice = response["choices"][0]
-        content = choice["message"]["content"]
+        content = await apply_guardrail_to_text(
+            choice["message"]["content"], source="OUTPUT"
+        )
 
         if response_format == "text":
             return Response(content=content, media_type="text/plain; charset=utf-8")
@@ -323,7 +325,9 @@ class AudioModel(AudioModelBase[_Request, _Response]):
                 audio_content, prompt, temperature, translate=True
             )
         )
-        content = result.response["choices"][0]["message"]["content"]
+        content = await apply_guardrail_to_text(
+            result.response["choices"][0]["message"]["content"], source="OUTPUT"
+        )
 
         if response_format == "text":
             return Response(content=content, media_type="text/plain; charset=utf-8")

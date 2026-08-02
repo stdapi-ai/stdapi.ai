@@ -9,7 +9,7 @@ from sse_starlette import EventSourceResponse, JSONServerSentEvent
 from stdapi.api_errors import ApiError
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
-from stdapi.aws_bedrock import get_extra_model_parameters
+from stdapi.aws_bedrock import apply_guardrail_to_text, get_extra_model_parameters
 from stdapi.config import SETTINGS
 from stdapi.mcp import is_mcp
 from stdapi.models import validate_model
@@ -184,7 +184,7 @@ async def create_speech(
     ).id
 
     tts_response = await get_audio_model(model_id).tts(
-        text=request.input,
+        text=await apply_guardrail_to_text(request.input, source="INPUT"),
         voice=request.voice,
         resp_format=request.response_format,
         speed=request.speed,

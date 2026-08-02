@@ -13,7 +13,7 @@ Design:
 """
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydantic import BaseModel
 
@@ -64,6 +64,9 @@ class EmbeddingResponse(BaseModel):
 
 class EmbeddingModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
     """Base class for provider-specific embedding models."""
+
+    #: InvokeModel rejects native guardrail kwargs; ApplyGuardrail covers the route.
+    NATIVE_GUARDRAIL_SUPPORTED: ClassVar[bool] = False
 
     @abstractmethod
     async def embed_text(

@@ -17,6 +17,7 @@ from stdapi.api_errors import (
     UnsupportedParameterError,
 )
 from stdapi.aws import call_with_region_failover, get_client
+from stdapi.aws_bedrock import apply_guardrail_to_text
 from stdapi.aws_s3 import copy_s3_object, get_text_from_s3, track_temporary_s3_objects
 from stdapi.aws_translate import translate, translate_subtitle
 from stdapi.cleanup import schedule_cleanup
@@ -1011,12 +1012,18 @@ class AudioModel(AudioModelBase[None, None]):
         Returns:
             Formatted response in the requested format
         """
+        # Guardrail the raw transcript; masked text is only representable in
+        # the plain json/text formats.
+        text = await apply_guardrail_to_text(
+            _get_transcript_text(transcript_data),
+            source="OUTPUT",
+            maskable=response_format in {"json", "text"},
+        )
+
         if response_format in SUBTITLE_FORMATS:
             return await cls._format_subtitle_response(
                 response_format, transcript_data["subtitle_content"], filename
             )
-
-        text = _get_transcript_text(transcript_data)
 
         if response_format == "text":
             return Response(content=text, media_type="text/plain; charset=utf-8")
@@ -1252,6 +1259,15 @@ class AudioModel(AudioModelBase[None, None]):
                 settings=settings,
                 terminology_names=terminology_names,
             )
+
+        # Guardrail the translated output; masked text is only representable
+        # in the plain json/text formats.
+        translated_content = await apply_guardrail_to_text(
+            translated_content,
+            source="OUTPUT",
+            maskable="subtitle_content" not in transcript_data
+            and response_format in {"json", "text"},
+        )
 
         return await self._format_translation_response(
             transcript_data,

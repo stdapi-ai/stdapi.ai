@@ -13,7 +13,11 @@ from fastapi import APIRouter, Depends
 from stdapi.api_errors import ApiError
 from stdapi.api_providers.cohere import TAG_COHERE
 from stdapi.auth import authenticate
-from stdapi.aws_bedrock import get_extra_model_parameters
+from stdapi.aws_bedrock import (
+    apply_guardrail_to_text,
+    apply_guardrail_to_texts,
+    get_extra_model_parameters,
+)
 from stdapi.config import SETTINGS
 from stdapi.models import RERANKING_MODALITY, validate_model
 from stdapi.models.capabilities import Capability, register_route_capability
@@ -160,12 +164,15 @@ async def rerank_v1(
         msg = "'max_chunks_per_doc' is not supported on this implementation."
         raise ApiError(msg)
     model_id = (await validate_model(request.model, RERANKING_MODALITY)).id
-    documents = [
-        _project_document(document, request.rank_fields)
-        for document in request.documents
-    ]
+    documents = await apply_guardrail_to_texts(
+        [
+            _project_document(document, request.rank_fields)
+            for document in request.documents
+        ],
+        source="INPUT",
+    )
     response = await get_rerank_model(model_id).rerank(
-        request.query,
+        await apply_guardrail_to_text(request.query, source="INPUT"),
         documents,
         top_n=request.top_n,
         extra_params=get_extra_model_parameters(model_id, request),

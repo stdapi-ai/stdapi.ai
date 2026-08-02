@@ -7,7 +7,11 @@ from sse_starlette import EventSourceResponse, JSONServerSentEvent
 
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
-from stdapi.aws_bedrock import get_extra_model_parameters
+from stdapi.aws_bedrock import (
+    GUARDRAIL_CONFIG_VAR,
+    apply_guardrail_to_text,
+    get_extra_model_parameters,
+)
 from stdapi.config import SETTINGS
 from stdapi.input_file import InputFile
 from stdapi.models import validate_model
@@ -61,6 +65,40 @@ def _merge_form_list[T: str](
     """
     merged = [*(bare or []), *(bracketed or [])]
     return merged or None
+
+
+async def _guarded_transcript_events(
+    event_stream: AsyncGenerator[
+        TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent
+    ],
+) -> AsyncGenerator[TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent]:
+    """Buffer a transcription stream and guardrail the final transcript.
+
+    Events are withheld until the terminal done event so a blocking guardrail
+    intervention surfaces as a regular HTTP error before the SSE response
+    starts. When the guardrail only masks content, the buffered deltas are
+    replaced by a single delta carrying the masked transcript.
+
+    Args:
+        event_stream: Generator yielding transcription delta and done events.
+
+    Yields:
+        The buffered events, with text replaced when the guardrail masked it.
+
+    Raises:
+        GuardrailInterventionError: When the guardrail blocks the transcript.
+    """
+    events = [event async for event in event_stream]
+    if events and isinstance(done := events[-1], TranscriptionTextDoneEvent):
+        guarded = await apply_guardrail_to_text(done.text, source="OUTPUT")
+        if guarded != done.text:
+            yield TranscriptionTextDeltaEvent(
+                delta=guarded, type="transcript.text.delta"
+            )
+            yield done.model_copy(update={"text": guarded})
+            return
+    for event in events:
+        yield event
 
 
 async def _transcript_audio_sse(
@@ -393,20 +431,19 @@ async def create_transcription(
     extra_params = get_extra_model_parameters(model, request)
 
     if request.stream:
+        events = get_audio_model(model).stt_stream(
+            audio_content=audio_content,
+            response_format=request.response_format,
+            language=request.language,
+            temperature=request.temperature,
+            prompt=request.prompt,
+            extra_params=extra_params,
+            logprobs="logprobs" in (request.include or []),
+        )
+        if GUARDRAIL_CONFIG_VAR.get(None) is not None:
+            events = _guarded_transcript_events(events)
         return EventSourceResponse(
-            await log_request_stream_event(
-                _transcript_audio_sse(
-                    get_audio_model(model).stt_stream(
-                        audio_content=audio_content,
-                        response_format=request.response_format,
-                        language=request.language,
-                        temperature=request.temperature,
-                        prompt=request.prompt,
-                        extra_params=extra_params,
-                        logprobs="logprobs" in (request.include or []),
-                    )
-                )
-            )
+            await log_request_stream_event(_transcript_audio_sse(events))
         )
 
     return await get_audio_model(model).stt(

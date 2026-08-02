@@ -12,7 +12,7 @@ Design:
 """
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, NotRequired, TypedDict
 
 from fastapi import Response
 
@@ -60,6 +60,9 @@ class TTSResponse(TypedDict):
 
 class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
     """Base class for provider-specific audio models supporting TTS and/or transcription."""
+
+    #: InvokeModel rejects native guardrail kwargs; ApplyGuardrail covers the route.
+    NATIVE_GUARDRAIL_SUPPORTED: ClassVar[bool] = False
 
     #: Set of supported response formats. Used with _validate_response_formats
     SUPPORTED_RESPONSES_FORMATS: frozenset[AudioResponseFormat] = frozenset()

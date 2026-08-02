@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends
 
 from stdapi.api_providers.cohere import TAG_COHERE
 from stdapi.auth import authenticate
-from stdapi.aws_bedrock import get_extra_model_parameters
+from stdapi.aws_bedrock import apply_guardrail_to_texts, get_extra_model_parameters
 from stdapi.config import SETTINGS
 from stdapi.models import validate_model
 from stdapi.models.capabilities import register_route_capability
@@ -111,7 +111,10 @@ async def embed(
     ):
         extra_params["embeddingTypes"] = list(native_embedding_types)
     response = await get_embedding_model(model_id).embed_text(
-        [*(request.texts or ()), *(request.images or ())],
+        [
+            *await apply_guardrail_to_texts(request.texts or (), source="INPUT"),
+            *(request.images or ()),
+        ],
         dimensions=request.output_dimension,
         extra_params=extra_params,
     )

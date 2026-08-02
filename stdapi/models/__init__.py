@@ -499,6 +499,9 @@ class ModelBase[RequestT, ResponseT]:
     #: Whether the model supports ``s3Location`` for document content blocks in the Bedrock Converse API.
     S3_LOCATION_DOCUMENT_SUPPORTED: ClassVar[bool] = True
 
+    #: Whether InvokeModel natively accepts the guardrail configuration kwargs.
+    NATIVE_GUARDRAIL_SUPPORTED: ClassVar[bool] = True
+
     @classmethod
     def get_supported_operations(cls) -> Capability:
         """Return capability flags for route-based model matching.
@@ -603,7 +606,8 @@ class ModelBase[RequestT, ResponseT]:
             service_tier: Service tier configuration. When provided, takes precedence
                 over context variable and settings. Defaults to None (uses fallback).
             guardrail: Guardrail configuration. When provided, takes precedence
-                over context variable. Defaults to None (uses fallback).
+                over context variable. Defaults to None (uses the context var only
+                when the model class supports native InvokeModel guardrails).
 
         Returns:
             InvokeResult containing the parsed JSON response body and token counts.
@@ -621,7 +625,12 @@ class ModelBase[RequestT, ResponseT]:
                 inference_profile=inference_profile,
                 single_region=len(candidates) == 1,
                 service_tier=service_tier,
-                guardrail=guardrail,
+                guardrail=guardrail
+                or (
+                    GUARDRAIL_CONFIG_VAR.get(None)
+                    if self.NATIVE_GUARDRAIL_SUPPORTED
+                    else None
+                ),
             ),
         )
         self._record_invoke_usage(
@@ -657,7 +666,8 @@ class ModelBase[RequestT, ResponseT]:
             service_tier: Service tier configuration. When provided, takes precedence
                 over context variable and settings. Defaults to None (uses fallback).
             guardrail: Guardrail configuration. When provided, takes precedence
-                over context variable. Defaults to None (uses fallback).
+                over context variable. Defaults to None (uses the context var only
+                when the model class supports native InvokeModel guardrails).
 
         Yields:
             Parsed JSON chunks from the streaming response.
@@ -675,7 +685,12 @@ class ModelBase[RequestT, ResponseT]:
                 inference_profile=inference_profile,
                 single_region=len(candidates) == 1,
                 service_tier=service_tier,
-                guardrail=guardrail,
+                guardrail=guardrail
+                or (
+                    GUARDRAIL_CONFIG_VAR.get(None)
+                    if self.NATIVE_GUARDRAIL_SUPPORTED
+                    else None
+                ),
                 record_usage_callback=self._record_invocation_metrics_usage,
             ),
         ):
@@ -2534,7 +2549,8 @@ async def _build_invoke_kwargs(
 ) -> InvokeModelRequestTypeDef:
     """Build the kwargs dict for ``InvokeModel`` / ``InvokeModelWithResponseStream``.
 
-    Folds in guardrail and performance context-var values when present.
+    Folds in the performance context-var values when present; the guardrail
+    configuration is applied only when explicitly provided.
 
     Args:
         model_id: Bedrock model identifier.
@@ -2544,8 +2560,7 @@ async def _build_invoke_kwargs(
         service_tier: Service tier configuration. When provided, takes precedence
             over context variable and settings. When None, falls back to
             PERFORMANCE_CONFIG_VAR and SETTINGS.default_model_service_tiers.
-        guardrail: Guardrail configuration. When provided, takes precedence
-            over GUARDRAIL_CONFIG_VAR context variable.
+        guardrail: Guardrail configuration, already resolved by the caller.
 
     Returns:
         Fully populated request kwargs dict.
@@ -2564,7 +2579,7 @@ async def _build_invoke_kwargs(
         "requestMetadata": to_json(build_metadata()).decode(),
     }
 
-    if (guardrail := guardrail or GUARDRAIL_CONFIG_VAR.get(None)) is not None:
+    if guardrail is not None:
         kwargs["guardrailIdentifier"] = guardrail["guardrailIdentifier"]
         kwargs["guardrailVersion"] = guardrail["guardrailVersion"]
         if trace := guardrail.get("trace"):
@@ -2600,7 +2615,7 @@ async def _invoke(
         inference_profile: Use cross-region inference profile ID when available.
         single_region: Selects the botocore client (see :func:`bedrock_client`).
         service_tier: Service tier configuration (takes precedence over context var).
-        guardrail: Guardrail configuration (takes precedence over context var).
+        guardrail: Guardrail configuration, already resolved by the caller.
 
     Returns:
         InvokeResult containing the response body and token counts.
@@ -2686,7 +2701,7 @@ async def _open_invoke_stream(
         inference_profile: Use cross-region inference profile ID when available.
         single_region: Selects the botocore client (see :func:`bedrock_client`).
         service_tier: Service tier configuration (takes precedence over context var).
-        guardrail: Guardrail configuration (takes precedence over context var).
+        guardrail: Guardrail configuration, already resolved by the caller.
         record_usage_callback: Optional callback to record usage from streaming events.
 
     Returns:

@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends
 
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
-from stdapi.aws_bedrock import get_extra_model_parameters
+from stdapi.aws_bedrock import apply_guardrail_to_texts, get_extra_model_parameters
 from stdapi.config import SETTINGS
 from stdapi.models import validate_model
 from stdapi.models.capabilities import register_route_capability
@@ -112,7 +112,7 @@ async def create_embeddings(
     # so every element here is already one of the two.
     inputs: list[InputFileUrl | str] = raw_inputs  # type: ignore[assignment]
     response = await get_embedding_model(model_id).embed_text(
-        inputs,
+        await apply_guardrail_to_texts(inputs, source="INPUT"),
         dimensions=request.dimensions,
         extra_params=get_extra_model_parameters(model_id, request),
     )

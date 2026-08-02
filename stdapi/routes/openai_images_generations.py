@@ -12,7 +12,7 @@ from sse_starlette import EventSourceResponse, JSONServerSentEvent
 
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
-from stdapi.aws_bedrock import get_extra_model_parameters
+from stdapi.aws_bedrock import apply_guardrail_to_text, get_extra_model_parameters
 from stdapi.config import SETTINGS
 from stdapi.models import validate_model
 from stdapi.models.capabilities import Capability, register_route_capability
@@ -251,7 +251,7 @@ async def create_images(
 
     width, height = map(int, request.size.split("x"))
     job = get_image_model(model_id).get_image_generation_job(
-        prompt=request.prompt,
+        prompt=await apply_guardrail_to_text(request.prompt, source="INPUT"),
         count=request.n,
         width=width,
         height=height,

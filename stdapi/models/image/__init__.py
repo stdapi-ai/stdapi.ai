@@ -13,7 +13,7 @@ Design:
 """
 
 from asyncio import Lock, as_completed, ensure_future, gather
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydantic import BaseModel
 
@@ -562,6 +562,9 @@ class ImageModelBase[
     ImageGenerationJobT: ImageGenerationJobBase[Any],
 ](ModelBase[RequestT, ResponseT]):
     """Base class for provider-specific image models."""
+
+    #: InvokeModel rejects native guardrail kwargs; ApplyGuardrail covers the route.
+    NATIVE_GUARDRAIL_SUPPORTED: ClassVar[bool] = False
 
     IMAGE_GENERATION_JOB_CLASS: type[ImageGenerationJobT]
 
