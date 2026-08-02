@@ -6,6 +6,7 @@ and AWS service integrations for providing OpenAI-compatible endpoints.
 
 from asyncio import gather
 from contextlib import asynccontextmanager
+from re import compile as compile_regex
 from time import time_ns
 from traceback import format_exception
 from typing import TYPE_CHECKING
@@ -71,7 +72,7 @@ from stdapi.server import SERVER_VERSION
 from stdapi.utils import JSONResponse, hide_security_details
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Callable
+    from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
     from typing import Any
 
     from types_aiobotocore_bedrock.literals import RegionName
@@ -399,6 +400,30 @@ async def handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
     )
 
 
+#: Pydantic's own container and union tags in an error location, e.g. ``list[union[A,B]]``.
+_PYDANTIC_TYPE_TAG = compile_regex(r"[a-z-]+\[.+\]")
+
+
+def _validation_error_path(loc: Iterable[Any]) -> str:
+    """Join a Pydantic error location into a field path a client can act on.
+
+    The location also names the union and list wrappers Pydantic descended
+    through -- ``list[union[EasyInputMessage, InputMessage, ...]]`` -- which
+    buries the field that actually failed under the whole member list. Only
+    those carry a parameterized type name; a field the client itself sent, such
+    as the multipart ``image[]``, keeps its empty brackets.
+
+    Args:
+        loc: Location parts of one Pydantic error.
+
+    Returns:
+        The dotted field path, empty when nothing addressable remains.
+    """
+    return ".".join(
+        part for part in map(str, loc) if not _PYDANTIC_TYPE_TAG.fullmatch(part)
+    )
+
+
 @app.exception_handler(RequestValidationError)
 async def handle_validation_exception(
     request: Request, exc: RequestValidationError
@@ -420,8 +445,8 @@ async def handle_validation_exception(
     # should be a string, when the real fault is one item inside the list the
     # client did send. The longest path is the specific one.
     match max(errors, key=lambda error: len(error.get("loc", ())), default=None):
-        case {"loc": loc, "msg": msg} if loc:
-            message = f"Validation error at {'.'.join(str(x) for x in loc)}: {msg}"
+        case {"loc": loc, "msg": msg} if path := _validation_error_path(loc):
+            message = f"Validation error at {path}: {msg}"
         case {"msg": msg}:
             message = f"Validation error: {msg}"
         case _:
