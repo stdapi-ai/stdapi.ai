@@ -12,10 +12,15 @@ from typing import TYPE_CHECKING, Any
 
 from sse_starlette import JSONServerSentEvent, ServerSentEvent
 
+from stdapi.aws import raise_first_exception
 from stdapi.aws_bedrock import set_inference_configuration
 from stdapi.input_file import InputFileUrl
 from stdapi.models.chat._adapters import _openai_common
-from stdapi.types.openai_chat_completions import CompletionUsage, ServiceTiers
+from stdapi.types.openai_chat_completions import (
+    CompletionUsage,
+    PromptTokensDetails,
+    ServiceTiers,
+)
 from stdapi.types.openai_completions import (
     Completion,
     CompletionChoice,
@@ -187,11 +192,17 @@ def format_response(
     """
     choices: list[CompletionChoice] = []
     usage = CompletionUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+    cached_tokens = 0
+    cache_write_tokens = 0
     for index, response in enumerate(responses):
         response_usage = response["usage"]
-        usage.prompt_tokens += response_usage["inputTokens"]
+        # OpenAI semantics: prompt_tokens covers the full prompt, cache buckets included.
+        cache_read = response_usage.get("cacheReadInputTokens", 0)
+        cache_write = response_usage.get("cacheWriteInputTokens", 0)
+        usage.prompt_tokens += response_usage["inputTokens"] + cache_read + cache_write
         usage.completion_tokens += response_usage["outputTokens"]
-        usage.total_tokens += response_usage["totalTokens"]
+        cached_tokens += cache_read
+        cache_write_tokens += cache_write
         choices.append(
             CompletionChoice(
                 text="".join(
@@ -202,6 +213,11 @@ def format_response(
                 index=index,
                 finish_reason=_map_finish_reason(response.get("stopReason")),
             )
+        )
+    usage.total_tokens = usage.prompt_tokens + usage.completion_tokens
+    if cached_tokens or cache_write_tokens:
+        usage.prompt_tokens_details = PromptTokensDetails(
+            cached_tokens=cached_tokens, cache_write_tokens=cache_write_tokens or None
         )
     return Completion(
         id=completion_id,
@@ -295,6 +311,10 @@ async def format_stream(
     aggregated ``usage`` attached to the last one when ``include_usage`` is
     ``True``.  The stream ends with a ``[DONE]`` sentinel.
 
+    If any underlying stream fails (e.g. a mid-stream Bedrock error), the
+    first such exception is re-raised once all streams have drained, so the
+    caller's monitoring wrapper can log it and emit an error SSE event.
+
     Args:
         completion_id: Stable identifier for the completion.
         created: Unix timestamp (seconds).
@@ -305,6 +325,10 @@ async def format_stream(
 
     Yields:
         ``JSONServerSentEvent`` chunks, terminated by the ``[DONE]`` sentinel.
+
+    Raises:
+        BaseException: The first exception raised by any of the underlying
+            streams, if any.
     """
     prompt_count = len(streams)
     finish_reasons: list[CompletionFinishReasonLiteral | None] = [None] * prompt_count
@@ -345,7 +369,10 @@ async def format_stream(
         for task in tasks:
             task.cancel()
         with suppress(CancelledError):
-            await gather(*tasks, return_exceptions=True)
+            results = await gather(*tasks, return_exceptions=True)
+            raise_first_exception(
+                [exc for exc in results if not isinstance(exc, CancelledError)]
+            )
     for index in range(prompt_count):
         yield _chunk(
             completion_id,

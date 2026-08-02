@@ -18,6 +18,7 @@ import json
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+from botocore.exceptions import ClientError
 from openai import BadRequestError, NotFoundError, OpenAI
 from pybase64 import b64encode
 from starlette.requests import Request
@@ -29,6 +30,7 @@ from stdapi.models.chat._adapters._openai_completion import (
 from stdapi.models.chat._adapters._openai_completion import (
     _map_finish_reason,
     build_user_messages,
+    format_response,
     format_stream,
     translate_request,
 )
@@ -411,9 +413,8 @@ class TestCompletions:
     ) -> None:
         """Reference an uploaded file via the ``file-id:`` URI scheme.
 
-        Uploads a small text file via the Files API, then references it using
-        ``file-id:<file-id>`` as the prompt.  stdapi forwards the file to the
-        model as a ``document`` block (its detected modality).  The default
+        stdapi forwards the referenced file to the model as a ``document``
+        block (its detected modality).  The default
         completion model does not support document inputs, so the upstream
         model rejects the request with ``ValidationException``, mapped to a 400
         ``invalid_request_error`` — proving the file-id resolver and the adapter
@@ -1013,6 +1014,102 @@ class TestLegacyPromptCaching:
         ]
 
 
+class TestFormatResponseCacheTokens:
+    """Cache-read/write tokens fold into ``prompt_tokens`` on the legacy surface too.
+
+    Bedrock reports ``cacheReadInputTokens``/``cacheWriteInputTokens`` outside
+    ``inputTokens``, while OpenAI's ``prompt_tokens`` includes both buckets,
+    matching the ``/v1/chat/completions`` twin's ``format_response``.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html
+         https://developers.openai.com/api/reference/resources/completions/methods/create
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:format_response
+         stdapi/models/chat/_adapters/_openai_completion.py:format_response
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    def _response(cache_read: int, cache_write: int) -> dict[str, Any]:
+        """Build a minimal Converse response with the given cache token counts.
+
+        Args:
+            cache_read: ``cacheReadInputTokens`` value.
+            cache_write: ``cacheWriteInputTokens`` value.
+
+        Returns:
+            A Converse response payload.
+        """
+        return {
+            "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+            "stopReason": "end_turn",
+            "usage": {
+                "inputTokens": 10,
+                "outputTokens": 5,
+                "cacheReadInputTokens": cache_read,
+                "cacheWriteInputTokens": cache_write,
+            },
+        }
+
+    def test_cache_write_tokens_are_reported(self) -> None:
+        """A positive cacheWriteInputTokens is folded into prompt_tokens and reported."""
+        completion = format_response(
+            "cmpl-1",
+            0,
+            "model",
+            [self._response(cache_read=0, cache_write=7)],  # type: ignore[list-item]
+            None,
+        )
+        usage = completion.usage
+        assert usage is not None
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cache_write_tokens == 7
+        assert usage.prompt_tokens_details.cached_tokens == 0
+        assert usage.prompt_tokens == 17, (
+            "prompt_tokens must include the cache-write bucket Bedrock reports apart"
+        )
+        assert usage.completion_tokens == 5
+        assert usage.total_tokens == 22
+
+    def test_cache_read_and_write_tokens_sum_across_a_fanned_out_batch(self) -> None:
+        """Both cache buckets are summed across every prompt of the batch."""
+        completion = format_response(
+            "cmpl-1",
+            0,
+            "model",
+            [
+                self._response(cache_read=3, cache_write=7),  # type: ignore[list-item]
+                self._response(cache_read=2, cache_write=0),  # type: ignore[list-item]
+            ],
+            None,
+        )
+        usage = completion.usage
+        assert usage is not None
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cached_tokens == 5
+        assert usage.prompt_tokens_details.cache_write_tokens == 7
+        assert usage.prompt_tokens == 32, (
+            "prompt_tokens must include both cache buckets, unlike Bedrock inputTokens"
+        )
+        assert usage.completion_tokens == 10
+        assert usage.total_tokens == 42
+
+    def test_details_omitted_without_cache_usage(self) -> None:
+        """No cache usage leaves prompt_tokens_details unset."""
+        completion = format_response(
+            "cmpl-1",
+            0,
+            "model",
+            [self._response(cache_read=0, cache_write=0)],  # type: ignore[list-item]
+            None,
+        )
+        usage = completion.usage
+        assert usage is not None
+        assert usage.prompt_tokens_details is None
+        assert usage.prompt_tokens == 10
+        assert usage.total_tokens == 15
+
+
 async def _stub_stream(events: list[dict[str, Any]]) -> AsyncIterator[dict[str, Any]]:
     """Yield the given Bedrock Converse stream event dicts one by one.
 
@@ -1024,6 +1121,87 @@ async def _stub_stream(events: list[dict[str, Any]]) -> AsyncIterator[dict[str, 
     """
     for event in events:
         yield event
+
+
+async def _stub_stream_then_raise(
+    events: list[dict[str, Any]], error: BaseException
+) -> AsyncIterator[dict[str, Any]]:
+    """Yield the given events then raise, mimicking a mid-stream Bedrock failure.
+
+    Args:
+        events: Converse stream event dicts to replay before the failure.
+        error: Exception raised right after the last event.
+
+    Yields:
+        Each event dict, in order, before raising *error*.
+    """
+    for event in events:
+        yield event
+    raise error
+
+
+class TestLegacyStreamMidStreamError:
+    """A mid-stream Bedrock error surfaces instead of looking like a clean stop.
+
+    ``_drain`` always emits its completion sentinel from a ``finally`` block so
+    the queue consumer can count finished streams even on failure; without
+    re-raising the underlying task's exception afterward, a throttling or
+    guardrail error partway through a stream would be indistinguishable from a
+    normal end of generation, and the monitoring wrapper that turns exceptions
+    into a logged error SSE event would never see it.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStream.html
+         stdapi/monitoring.py:log_request_sse_stream_event
+         stdapi/models/chat/_adapters/_openai_completion.py:format_stream
+    """
+
+    pytestmark = pytest.mark.local
+
+    async def test_single_stream_error_propagates_out_of_format_stream(self) -> None:
+        """The lone stream's exception is re-raised instead of ending the SSE cleanly."""
+        error = ClientError(
+            {"Error": {"Code": "ThrottlingException", "Message": "boom"}},
+            "ConverseStream",
+        )
+        stream = _stub_stream_then_raise(
+            [{"contentBlockDelta": {"delta": {"text": "hi"}}}], error
+        )
+        with pytest.raises(ClientError):
+            async for _ in format_stream(
+                "cmpl-1",
+                0,
+                "model",
+                [stream],  # type: ignore[list-item]
+                None,
+                include_usage=False,
+            ):
+                pass
+
+    async def test_one_erroring_stream_surfaces_even_if_its_sibling_finishes(
+        self,
+    ) -> None:
+        """With ``n>1``, one throttled prompt still raises although another completes."""
+        error = ClientError(
+            {"Error": {"Code": "ThrottlingException", "Message": "boom"}},
+            "ConverseStream",
+        )
+        erroring_stream = _stub_stream_then_raise([], error)
+        finishing_stream = _stub_stream(
+            [
+                {"contentBlockDelta": {"delta": {"text": "hi"}}},
+                {"messageStop": {"stopReason": "end_turn"}},
+            ]
+        )
+        with pytest.raises(ClientError):
+            async for _ in format_stream(
+                "cmpl-1",
+                0,
+                "model",
+                [erroring_stream, finishing_stream],  # type: ignore[list-item]
+                None,
+                include_usage=False,
+            ):
+                pass
 
 
 class TestLegacyStreamChunks:

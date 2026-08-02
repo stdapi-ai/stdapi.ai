@@ -47,6 +47,7 @@ from stdapi.types.openai_chat_completions import ChatCompletion
 from stdapi.types.openai_chat_completions import (
     CompletionCreateParams as ChatCompletionCreateParams,
 )
+from stdapi.types.openai_completions import Completion, CompletionCreateParams
 from stdapi.types.openai_responses import Response, ResponseCreateParams
 from stdapi.usage import compute_costs
 from tests.conftest import set_test_price
@@ -810,21 +811,18 @@ def _sse_json_data(event: ServerSentEvent) -> str | None:
 
 @pytest.mark.usefixtures("request_log")
 class TestChatModelReportsInvokedModel:
-    """ChatModel.create_completion / create_response: ``model`` reflects the router's pick.
+    """ChatModel create_completion/create_text_completion/create_response: ``model`` reflects the router's pick.
 
     OpenAI's contract is that ``model`` names the model that actually produced
-    the completion. A prompt router resolves to a concrete target model per
-    request (reported via ``trace.promptRouter.invokedModelId``), so the
-    response must name that model rather than the router's own (configured)
-    ID -- mirroring the usage-attribution fix already covered by
-    ``TestRecordConverseUsagePromptRouterAttribution``. Streaming responses
-    cannot do this: the invoked-model trace only arrives in the terminal
-    stream event, well after the first chunk (carrying ``model``) has already
-    been sent to the client, so streaming keeps reporting the router's
-    configured ID on every chunk instead of mixing IDs mid-stream.
+    the completion, and a prompt router resolves to a concrete target per
+    request (reported via ``trace.promptRouter.invokedModelId``). Streaming
+    cannot honour it: that trace only arrives in the terminal stream event,
+    well after the first chunk carried ``model``, so every chunk keeps the
+    router's configured ID rather than mixing IDs mid-stream.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
          stdapi/models/chat/_default.py:ChatModel.create_completion
+         stdapi/models/chat/_default.py:ChatModel.create_text_completion
          stdapi/models/chat/_default.py:ChatModel.create_response
     """
 
@@ -939,6 +937,51 @@ class TestChatModelReportsInvokedModel:
             if (data := _sse_json_data(event)) is not None
         }
         assert models_seen == {"my-router"}
+
+    async def test_legacy_completion_reports_the_router_invoked_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A router request's legacy Completion.model is the invoked model, not the router ID."""
+        monkeypatch.setitem(
+            stdapi.models._ALL_MODELS,  # noqa: SLF001
+            self._INVOKED_MODEL_ID,
+            cast("Any", object()),
+        )
+
+        async def fake_converse(
+            _self: ChatModel, _request: dict[str, Any]
+        ) -> dict[str, Any]:
+            return _routed_converse_response(self._INVOKED_ARN)
+
+        monkeypatch.setattr(ChatModel, "converse", fake_converse)
+        request = CompletionCreateParams.model_validate(
+            {"model": "my-router", "prompt": "hi"}
+        )
+        response = await ChatModel("my-router").create_text_completion(
+            request, "cmpl-1", 0
+        )
+        assert isinstance(response, Completion)
+        assert response.model == self._INVOKED_MODEL_ID
+
+    async def test_legacy_completion_keeps_the_configured_model_without_a_router(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A plain (non-router) request's legacy Completion.model is the requested model, unchanged."""
+
+        async def fake_converse(
+            _self: ChatModel, _request: dict[str, Any]
+        ) -> dict[str, Any]:
+            return _routed_converse_response(None)
+
+        monkeypatch.setattr(ChatModel, "converse", fake_converse)
+        request = CompletionCreateParams.model_validate(
+            {"model": "plain-model", "prompt": "hi"}
+        )
+        response = await ChatModel("plain-model").create_text_completion(
+            request, "cmpl-2", 0
+        )
+        assert isinstance(response, Completion)
+        assert response.model == "plain-model"
 
     async def test_response_reports_the_router_invoked_model(
         self, monkeypatch: pytest.MonkeyPatch
