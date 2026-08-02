@@ -380,7 +380,6 @@ class TestAudioSpeech:
         assert len(audio_data) > 0
         assert response.response.headers.get("content-type") == content_type
 
-        # Validate audio format signature when available
         if signature_check:
             magic_result = magic.from_buffer(audio_data)
             assert signature_check in str(magic_result)
@@ -402,7 +401,6 @@ class TestAudioSpeech:
         Ref: https://docs.aws.amazon.com/polly/latest/dg/limits.html
              stdapi/types/openai_audio.py:SpeechCreateParams
         """
-        # Test minimum length (1 character)
         response = openai_client.audio.speech.create(
             model=speech_standard_model, voice="alloy", input="A"
         )
@@ -411,7 +409,6 @@ class TestAudioSpeech:
         shortest = response.content
         _assert_is_mp3(shortest)
 
-        # Test longer length
         response = openai_client.audio.speech.create(
             model=speech_standard_model,
             voice="alloy",
@@ -450,7 +447,6 @@ class TestAudioSpeech:
         assert isinstance(error_body, dict)
         assert error_body["type"] == "invalid_request_error"
         assert error_body["code"] is None
-        # Validate error message mentions input validation
         error_message = str(error).lower()
         assert any(
             word in error_message
@@ -610,7 +606,6 @@ class TestAudioSpeech:
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/main.py:handle_validation_exception
         """
-        # Test missing model
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.speech.create(
                 voice="alloy",
@@ -623,7 +618,6 @@ class TestAudioSpeech:
         assert error_body["type"] == "invalid_request_error"
         assert "model" in str(error_body["message"]).lower()
 
-        # Test missing voice
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.speech.create(
                 model=speech_standard_model,
@@ -636,7 +630,6 @@ class TestAudioSpeech:
         assert error_body["type"] == "invalid_request_error"
         assert "voice" in str(error_body["message"]).lower()
 
-        # Test missing input
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.speech.create(
                 model=speech_standard_model,
@@ -666,7 +659,6 @@ class TestAudioSpeech:
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/routes/openai_audio_speech.py:_speech_audio_sse
         """
-        # Test default "audio" stream format
         response_audio = openai_client.audio.speech.create(
             model=speech_standard_model,
             voice="alloy",
@@ -679,7 +671,6 @@ class TestAudioSpeech:
         assert response_audio.response.headers.get("content-type") == "audio/mpeg"
         _assert_is_mp3(response_audio.content)
 
-        # Test "sse" stream format for Server-Sent Events
         response_sse = openai_client.audio.speech.create(
             model=speech_standard_model,
             voice="alloy",
@@ -795,7 +786,6 @@ class TestAudioSpeechMCP:
         assert init_response.status_code == 200
         mcp_session_id = init_response.headers["mcp-session-id"]
 
-        # Call the speech tool with default parameters
         response = test_client.post(
             "/mcp",
             json={
@@ -845,52 +835,54 @@ class _StubSpeechModel:
         return self._response
 
 
+@pytest.fixture
+def _speech_request_context() -> Generator[None]:
+    """Provide the request-scoped context vars the route logs into."""
+    log_token = REQUEST_LOG.set(make_event_log(type="start"))
+    id_token = REQUEST_ID.set("test-request")
+    request_token = REQUEST.set(
+        Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/audio/speech",
+                "headers": [],
+            }
+        )
+    )
+    try:
+        yield
+    finally:
+        REQUEST.reset(request_token)
+        REQUEST_ID.reset(id_token)
+        REQUEST_LOG.reset(log_token)
+
+
+def _patch_speech_model(
+    monkeypatch: pytest.MonkeyPatch, tts_response: TTSResponse
+) -> None:
+    """Route model resolution to a stub returning ``tts_response``."""
+
+    async def _validate_model(model: str, **_kwargs: object) -> object:
+        """Accept any model ID without calling AWS."""
+        return type("_Model", (), {"id": model})
+
+    monkeypatch.setattr(openai_audio_speech, "validate_model", _validate_model)
+    monkeypatch.setattr(
+        openai_audio_speech,
+        "get_audio_model",
+        lambda _model_id: _StubSpeechModel(tts_response),
+    )
+
+
 @pytest.mark.local
+@pytest.mark.usefixtures("_speech_request_context")
 class TestAudioSpeechContentType:
     """create_speech: the model's content type override wins over response_format.
 
     Ref: https://stdapi.ai/api_openai_audio_speech/
          stdapi/routes/openai_audio_speech.py:create_speech
     """
-
-    @pytest.fixture(autouse=True)
-    def _request_context(self) -> Generator[None]:
-        """Provide the request-scoped context vars the route logs into."""
-        log_token = REQUEST_LOG.set(make_event_log(type="start"))
-        id_token = REQUEST_ID.set("test-request")
-        request_token = REQUEST.set(
-            Request(
-                {
-                    "type": "http",
-                    "method": "POST",
-                    "path": "/v1/audio/speech",
-                    "headers": [],
-                }
-            )
-        )
-        try:
-            yield
-        finally:
-            REQUEST.reset(request_token)
-            REQUEST_ID.reset(id_token)
-            REQUEST_LOG.reset(log_token)
-
-    @staticmethod
-    def _patch_model(
-        monkeypatch: pytest.MonkeyPatch, tts_response: TTSResponse
-    ) -> None:
-        """Route model resolution to a stub returning ``tts_response``."""
-
-        async def _validate_model(model: str, **_kwargs: object) -> object:
-            """Accept any model ID without calling AWS."""
-            return type("_Model", (), {"id": model})
-
-        monkeypatch.setattr(openai_audio_speech, "validate_model", _validate_model)
-        monkeypatch.setattr(
-            openai_audio_speech,
-            "get_audio_model",
-            lambda _model_id: _StubSpeechModel(tts_response),
-        )
 
     async def test_content_type_override_labels_the_stream(
         self, monkeypatch: pytest.MonkeyPatch
@@ -904,7 +896,7 @@ class TestAudioSpeechContentType:
              stdapi/routes/openai_audio_speech.py:create_speech
         """
         marks = b'{"time":0,"type":"word","value":"Hello"}\n'
-        self._patch_model(
+        _patch_speech_model(
             monkeypatch,
             TTSResponse(
                 audio_stream=_byte_stream(marks),
@@ -940,7 +932,7 @@ class TestAudioSpeechContentType:
              stdapi/routes/openai_audio_speech.py:create_speech
         """
         stream = _byte_stream(b"{}\n")
-        self._patch_model(
+        _patch_speech_model(
             monkeypatch,
             TTSResponse(
                 audio_stream=stream,
@@ -976,7 +968,7 @@ class TestAudioSpeechContentType:
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/routes/openai_audio_speech.py:create_speech
         """
-        self._patch_model(
+        _patch_speech_model(
             monkeypatch,
             TTSResponse(
                 audio_stream=_byte_stream(b"audio"), input_tokens=5, output_tokens=0
@@ -998,6 +990,84 @@ class TestAudioSpeechContentType:
             "attachment; filename=speech.mp3"
         )
         assert body == b"audio"
+
+
+#: Message of the mid-stream failure raised by the ffmpeg encoder
+_ENCODE_ERROR = "Failed to encode the audio to 'mp3'."
+
+
+@pytest.mark.local
+@pytest.mark.usefixtures("_speech_request_context")
+class TestAudioSpeechSseTermination:
+    """``speech.audio.done`` terminates a completed SSE stream, and nothing else.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/routes/openai_audio_speech.py:_speech_audio_sse
+    """
+
+    async def test_broken_stream_ends_on_an_error_not_on_done(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A stream failing mid-audio emits an error event and no done event.
+
+        The encoder raises once ffmpeg fails or stalls; a client that stops
+        reading on ``speech.audio.done`` would otherwise take the truncated
+        audio for a complete one and record its usage.
+
+        Ref: https://developers.openai.com/api/docs/guides/error-codes
+             stdapi/media.py:encode_audio_stream
+        """
+
+        async def _failing_stream() -> AsyncGenerator[bytes]:
+            """Yield one chunk, then fail like a broken ffmpeg encode."""
+            yield b"audio"
+            raise ApiError(_ENCODE_ERROR, status=500)
+
+        _patch_speech_model(
+            monkeypatch,
+            TTSResponse(
+                audio_stream=_failing_stream(), input_tokens=5, output_tokens=0
+            ),
+        )
+
+        response = await openai_audio_speech.create_speech(
+            SpeechCreateParams(
+                model="amazon.polly-neural",
+                voice="Joanna",
+                input="Hello",
+                stream_format="sse",
+            )
+        )
+        events = [event async for event in response.body_iterator]  # type: ignore[attr-defined]
+
+        assert json.loads(events[0].data)["type"] == "speech.audio.delta"
+        assert not [
+            event for event in events if "speech.audio.done" in str(event.data)
+        ], "a truncated stream must not be reported as done"
+        assert events[-1].event == "error"
+        assert "Failed to encode the audio" in str(events[-1].data)
+
+    async def test_disconnect_closes_the_stream_without_a_done_event(self) -> None:
+        """Closing the event generator mid-audio must not raise.
+
+        ``aclose`` throws ``GeneratorExit`` into the generator, and yielding
+        while it is in flight makes Python raise ``RuntimeError: async
+        generator ignored GeneratorExit`` on every client disconnect.
+
+        Ref: https://docs.python.org/3/reference/expressions.html#asynchronous-generator-functions
+             stdapi/routes/openai_audio_speech.py:create_speech
+        """
+        audio_stream = _byte_stream(b"audio", b"more")
+        events = openai_audio_speech._speech_audio_sse(audio_stream, 5, 0)  # noqa: SLF001
+
+        first = await anext(events)
+        await events.aclose()
+
+        assert json.loads(str(first.data))["type"] == "speech.audio.delta"
+        assert getasyncgenstate(events) == AGEN_CLOSED
+        assert getasyncgenstate(audio_stream) == AGEN_CLOSED, (
+            "the backend stream must be closed with the client connection"
+        )
 
 
 @pytest.mark.local

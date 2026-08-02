@@ -17,6 +17,7 @@ from stdapi.models.audio import get_audio_model
 from stdapi.models.capabilities import Capability, register_route_capability
 from stdapi.monitoring import (
     log_request_params,
+    log_request_sse_stream_event,
     log_request_stream_event,
     log_response_params,
 )
@@ -76,7 +77,8 @@ async def _speech_audio_sse(
         output_tokens: Output token count for usage tracking.
 
     Yields:
-        JSONServerSentEvent with speech.audio.delta and speech.audio.done events.
+        JSONServerSentEvent with speech.audio.delta events, terminated by a
+        speech.audio.done event only once the audio stream completed.
     """
     try:
         async for chunk in stream:
@@ -87,17 +89,19 @@ async def _speech_audio_sse(
             )
     finally:
         await stream.aclose()
-        yield JSONServerSentEvent(
-            data=log_response_params(
-                SpeechAudioDoneEvent(
-                    usage=SpeechUsage(
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens,
-                        total_tokens=input_tokens + output_tokens,
-                    )
-                ).model_dump(mode="json", exclude_none=True)
-            )
+    # Outside the "finally": a truncated stream must not be reported as done,
+    # and yielding while closing would break "aclose".
+    yield JSONServerSentEvent(
+        data=log_response_params(
+            SpeechAudioDoneEvent(
+                usage=SpeechUsage(
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=input_tokens + output_tokens,
+                )
+            ).model_dump(mode="json", exclude_none=True)
         )
+    )
 
 
 @router.post(
@@ -205,20 +209,25 @@ async def create_speech(
             media_type=content_type,
         )
 
-    audio_stream = await log_request_stream_event(tts_response["audio_stream"])
     if request.stream_format == "sse" or (
         is_mcp() and "stream_format" not in request.model_fields_set
     ):
+        # The SSE boundary turns a mid-stream failure into a terminal error
+        # event, the only error a client can still be told about.
         return EventSourceResponse(
-            _speech_audio_sse(
-                audio_stream,
-                tts_response["input_tokens"],
-                tts_response["output_tokens"],
+            log_request_sse_stream_event(
+                _speech_audio_sse(
+                    tts_response["audio_stream"],
+                    tts_response["input_tokens"],
+                    tts_response["output_tokens"],
+                )
             )
         )
 
     return StreamingResponse(
-        content=_speech_audio_bytestream(audio_stream),
+        content=_speech_audio_bytestream(
+            await log_request_stream_event(tts_response["audio_stream"])
+        ),
         media_type=f"audio/{_FORMAT_CONTENT_TYPE.get(fmt := request.response_format, fmt)}",
         headers={"Content-Disposition": f"attachment; filename=speech.{fmt}"},
     )
