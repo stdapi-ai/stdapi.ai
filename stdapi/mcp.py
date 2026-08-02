@@ -5,14 +5,17 @@ and request-ID propagation so that internal MCP → API calls share the same log
 """
 
 from contextlib import suppress
+from json import JSONDecodeError
 from logging import ERROR, Handler, LogRecord, getLogger
 from traceback import format_exception
 from typing import TYPE_CHECKING
 
+import fastapi_mcp.server  # type: ignore[import-untyped]
 from fastapi import Depends
-from fastapi_mcp import AuthConfig, FastApiMCP  # type: ignore[import-untyped]
+from fastapi_mcp import AuthConfig, FastApiMCP
 from httpx import ASGITransport, AsyncClient
 from httpx import Request as HttpxRequest
+from pydantic_core import to_json
 
 from stdapi import server
 from stdapi.auth import authenticate
@@ -27,6 +30,119 @@ if TYPE_CHECKING:
 
 #: Marker fastapi_mcp always prepends to the auto-generated response/example block.
 _RESPONSES_MARKER = "\n\n### Responses:"
+
+#: Request parameters an MCP client cannot use: streaming modes (tool results are
+#: single messages), token-level tuning, and caller-identity/routing identifiers.
+_HIDDEN_TOOL_PARAMS: frozenset[str] = frozenset(
+    {
+        "stream",
+        "stream_options",
+        "user",
+        "safety_identifier",
+        "prompt_cache_key",
+        "logit_bias",
+        "logprobs",
+        "top_logprobs",
+    }
+)
+
+
+class _CompactJson:
+    """``json`` façade for ``fastapi_mcp.server`` rendering tool results compactly.
+
+    ``fastapi_mcp`` re-serializes every tool result with ``indent=2``, inflating
+    the payload the MCP client feeds to its LLM by roughly a third. Swapping the
+    module's ``json`` attribute for this façade keeps the parse-failure handling
+    (``JSONDecodeError``) while rendering with the native serializer instead.
+    """
+
+    #: Exception ``fastapi_mcp`` catches when a response body is not JSON.
+    JSONDecodeError = JSONDecodeError
+
+    @staticmethod
+    def dumps(obj: object, **_kwargs: object) -> str:
+        """Serialize *obj* compactly, ignoring formatting keyword arguments.
+
+        Args:
+            obj: Parsed tool result to serialize.
+            _kwargs: Formatting options from the caller, all ignored.
+
+        Returns:
+            Compact JSON text.
+        """
+        return to_json(obj).decode()
+
+
+def _collect_refs(node: object, refs: set[str]) -> None:
+    """Accumulate every ``$ref`` target name reachable from *node*.
+
+    Args:
+        node: JSON schema fragment to walk.
+        refs: Output set receiving ``$defs`` entry names.
+    """
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "$ref" and isinstance(value, str):
+                refs.add(value.rpartition("/")[2])
+            else:
+                _collect_refs(value, refs)
+    elif isinstance(node, list):
+        for item in node:
+            _collect_refs(item, refs)
+
+
+def _prune_hidden_params(tools: list[Tool]) -> None:
+    """Drop LLM-unusable parameters and newly unreferenced ``$defs`` from tool schemas.
+
+    Hidden parameters remain accepted by the API routes; they are only removed
+    from the advertised input schemas so they stop costing MCP client context.
+
+    Args:
+        tools: MCP tools to mutate in place.
+    """
+    for tool in tools:
+        schema = tool.inputSchema
+        properties = schema.get("properties")
+        if not properties or not _HIDDEN_TOOL_PARAMS.intersection(properties):
+            continue
+        for name in _HIDDEN_TOOL_PARAMS.intersection(properties):
+            del properties[name]
+        if required := schema.get("required"):
+            schema["required"] = [
+                name for name in required if name not in _HIDDEN_TOOL_PARAMS
+            ]
+        if defs := schema.get("$defs"):
+            reachable: set[str] = set()
+            _collect_refs(
+                {key: schema[key] for key in schema if key != "$defs"}, reachable
+            )
+            frontier = set(reachable)
+            while frontier:
+                previous = set(reachable)
+                for name in frontier:
+                    _collect_refs(defs.get(name), reachable)
+                frontier = reachable - previous
+            for name in set(defs) - reachable:
+                del defs[name]
+
+
+def _fix_union_param_types(tools: list[Tool]) -> None:
+    """Drop the contradictory ``type`` key fastapi_mcp adds beside ``anyOf``.
+
+    ``fastapi_mcp`` stamps every tool parameter with a single ``type`` picked
+    from an unordered set of the union's member types, so a ``str | list``
+    parameter randomly advertises ``"type": "array"`` depending on the process
+    hash seed — and the MCP SDK's server-side schema validation then rejects
+    perfectly valid string arguments. The ``anyOf`` already constrains the
+    parameter fully, so the sibling ``type`` is removed.
+
+    Args:
+        tools: MCP tools to mutate in place.
+    """
+    for tool in tools:
+        for prop in (tool.inputSchema.get("properties") or {}).values():
+            if isinstance(prop, dict) and "anyOf" in prop and "type" in prop:
+                del prop["type"]
 
 
 def _strip_response_docs(tools: list[Tool]) -> None:
@@ -43,9 +159,8 @@ def _strip_response_docs(tools: list[Tool]) -> None:
 def is_mcp() -> bool:
     """Check if the current request originates from an MCP client.
 
-    Detects MCP calls by checking both the User-Agent header and the presence
-    of the internal request ID header (to avoid spoofing). Uses the cached
-    REQUEST ContextVar from stdapi.monitoring for header access.
+    Requires both the User-Agent header and the internal request ID header, so
+    a client cannot claim to be MCP on its own.
 
     Returns:
         True if the current request is from an MCP client, False otherwise.
@@ -117,16 +232,11 @@ def _make_stateless(mcp: FastApiMCP) -> None:
 def mount_mcp(app: FastAPI) -> None:
     """Attach FastApiMCP to *app* and mount the enabled transports.
 
-    Installs :class:`_McpLogHandler` on the ``fastapi_mcp.server`` logger so
-    tool errors appear in the structured JSON log rather than as stderr tracebacks.
-    The internal HTTP client uses the ASGI transport (no TCP) with
-    ``MCP_USER_AGENT`` and injects the parent request ID for log correlation.
-    Populates ``MCP_SERVER_CARD["tools"]`` in :mod:`stdapi.routes.core_root` with
-    the discovered tool list so the server card reflects real tools at startup.
-    Strips the auto-generated response/example section from each tool description
-    (see :func:`_strip_response_docs`) to reduce MCP context cost.
-    With ``mcp_stateless_http`` the Streamable HTTP transport is switched to
-    stateless mode (see :func:`_make_stateless`).
+    Tool errors are routed to the structured JSON log instead of stderr, and the
+    internal HTTP client reaches the API over the ASGI transport (no TCP) while
+    injecting the parent request ID for log correlation. The discovered tools are
+    trimmed and repaired for MCP clients, then published in
+    ``MCP_SERVER_CARD["tools"]`` so the server card reflects them at startup.
 
     Args:
         app: FastAPI application to attach MCP to.
@@ -134,6 +244,7 @@ def mount_mcp(app: FastAPI) -> None:
     _mcp_logger = getLogger("fastapi_mcp.server")
     _mcp_logger.addHandler(_McpLogHandler())
     _mcp_logger.propagate = False
+    fastapi_mcp.server.json = _CompactJson
 
     mcp = FastApiMCP(
         app,
@@ -151,6 +262,8 @@ def mount_mcp(app: FastAPI) -> None:
         ),
     )
     _strip_response_docs(mcp.tools)
+    _prune_hidden_params(mcp.tools)
+    _fix_union_param_types(mcp.tools)
 
     if SETTINGS.enable_mcp_streamable_http:
         mcp.mount_http()

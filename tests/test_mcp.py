@@ -441,6 +441,67 @@ class TestMCPIntegration:
         assert response.status_code == 200
         assert "x-request-id" in response.headers
 
+    def test_tool_schemas_are_curated(
+        self, local_test_client: TestClient, api_key: str, mcp_session_id: str
+    ) -> None:
+        """Served tool schemas carry no hidden params and no union/type conflicts.
+
+        Ref: stdapi/mcp.py:_prune_hidden_params
+             stdapi/mcp.py:_fix_union_param_types
+        """
+        from stdapi.mcp import _HIDDEN_TOOL_PARAMS  # noqa: PLC0415
+
+        response = _mcp_post(
+            local_test_client,
+            api_key,
+            "tools/list",
+            {},
+            request_id=41,
+            session_id=mcp_session_id,
+        )
+        assert response.status_code == 200
+        tools = response.json()["result"]["tools"]
+        assert tools
+        for tool in tools:
+            properties = tool["inputSchema"].get("properties") or {}
+            assert not _HIDDEN_TOOL_PARAMS.intersection(properties), tool["name"]
+            for name, prop in properties.items():
+                if isinstance(prop, dict) and "anyOf" in prop:
+                    assert "type" not in prop, (tool["name"], name)
+
+    def test_tool_result_is_compact_json(
+        self, local_test_client: TestClient, api_key: str, mcp_session_id: str
+    ) -> None:
+        """A JSON tool result is rendered compactly, not with indent=2.
+
+        Re-encoding the parsed payload with compact separators must reproduce
+        the served text exactly, proving no indentation whitespace was added.
+
+        Ref: stdapi/mcp.py:_CompactJson
+        """
+        import json  # noqa: PLC0415
+
+        response = _mcp_post(
+            local_test_client,
+            api_key,
+            "tools/call",
+            {"name": "openai_model_list", "arguments": {}},
+            request_id=42,
+            session_id=mcp_session_id,
+        )
+        assert response.status_code == 200
+        for line in response.text.splitlines():
+            if line.startswith("data: "):
+                payload = json.loads(line[len("data: ") :])
+                break
+        else:
+            payload = response.json()
+        text = payload["result"]["content"][0]["text"]
+        compact = json.dumps(
+            json.loads(text), separators=(",", ":"), ensure_ascii=False
+        )
+        assert text == compact
+
 
 def _mcp_only_app(*, stateless: bool) -> FastAPI:
     """Build a throwaway app exposing one tool over the streamable-HTTP transport.
@@ -543,3 +604,159 @@ class TestStatelessStreamableHttp:
         """
         response = _tools_list(_mcp_only_app(stateless=False), session_id=session_id)
         assert response.status_code == expected_status
+
+
+# ---------------------------------------------------------------------------
+# Tool schema curation: hidden params, union type repair, compact results
+# ---------------------------------------------------------------------------
+
+
+def _make_tool(schema: dict[str, Any]) -> Any:  # noqa: ANN401
+    """Build a minimal MCP Tool carrying *schema* as its input schema."""
+    from mcp.types import Tool  # noqa: PLC0415
+
+    return Tool(name="tool", inputSchema=schema)
+
+
+class TestPruneHiddenParams:
+    """_prune_hidden_params drops LLM-unusable params and orphaned $defs.
+
+    The parameters stay accepted by the API routes; only their advertisement in
+    the tool input schemas is removed, so they stop costing MCP client context.
+
+    Ref: stdapi/mcp.py:_prune_hidden_params
+    """
+
+    def test_hidden_params_and_unreachable_defs_removed(self) -> None:
+        """Hidden properties, their required entries, and now-orphaned $defs go away.
+
+        ``Nested`` stays because the surviving ``prompt`` still reaches it;
+        ``StreamOptions`` was only reachable through the removed ``stream``.
+        """
+        from stdapi.mcp import _prune_hidden_params  # noqa: PLC0415
+
+        tool = _make_tool(
+            {
+                "type": "object",
+                "properties": {
+                    "stream": {"$ref": "#/$defs/StreamOptions"},
+                    "prompt": {
+                        "anyOf": [{"type": "string"}, {"$ref": "#/$defs/Nested"}]
+                    },
+                },
+                "required": ["prompt", "stream"],
+                "$defs": {
+                    "StreamOptions": {"type": "object"},
+                    "Nested": {"items": {"type": "string"}, "type": "array"},
+                },
+            }
+        )
+        _prune_hidden_params([tool])
+        assert "stream" not in tool.inputSchema["properties"]
+        assert tool.inputSchema["required"] == ["prompt"]
+        assert "StreamOptions" not in tool.inputSchema["$defs"]
+        assert "Nested" in tool.inputSchema["$defs"]
+
+    def test_tool_without_hidden_params_untouched(self) -> None:
+        """A schema with no hidden parameter is left byte-identical."""
+        from copy import deepcopy  # noqa: PLC0415
+
+        from stdapi.mcp import _prune_hidden_params  # noqa: PLC0415
+
+        schema = {
+            "type": "object",
+            "properties": {"model": {"type": "string"}},
+            "required": ["model"],
+        }
+        tool = _make_tool(deepcopy(schema))
+        _prune_hidden_params([tool])
+        assert tool.inputSchema == schema
+
+
+class TestFixUnionParamTypes:
+    """_fix_union_param_types removes the random ``type`` beside ``anyOf``.
+
+    ``fastapi_mcp`` derives that sibling ``type`` from an unordered set of the
+    union member types, so a ``str | list`` parameter can advertise
+    ``"type": "array"`` in one process and ``"string"`` in the next — and the
+    MCP SDK's server-side jsonschema validation then rejects valid arguments.
+
+    Ref: stdapi/mcp.py:_fix_union_param_types
+         fastapi_mcp.openapi.utils.get_single_param_type_from_schema
+    """
+
+    def test_type_beside_anyof_is_removed(self) -> None:
+        """The contradictory sibling ``type`` disappears; the anyOf stays."""
+        from stdapi.mcp import _fix_union_param_types  # noqa: PLC0415
+
+        tool = _make_tool(
+            {
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "anyOf": [{"type": "string"}, {"type": "array"}],
+                        "type": "array",
+                    }
+                },
+            }
+        )
+        _fix_union_param_types([tool])
+        prompt = tool.inputSchema["properties"]["prompt"]
+        assert "type" not in prompt
+        assert prompt["anyOf"]
+
+    def test_plain_typed_param_keeps_its_type(self) -> None:
+        """A non-union parameter keeps its legitimate ``type``."""
+        from stdapi.mcp import _fix_union_param_types  # noqa: PLC0415
+
+        tool = _make_tool(
+            {"type": "object", "properties": {"model": {"type": "string"}}}
+        )
+        _fix_union_param_types([tool])
+        assert tool.inputSchema["properties"]["model"]["type"] == "string"
+
+    def test_fastapi_mcp_still_injects_the_sibling_type(self) -> None:
+        """The upstream helper still returns a single type for unions.
+
+        If this fails after a ``fastapi_mcp`` upgrade, the union repair may have
+        become unnecessary — re-evaluate :func:`_fix_union_param_types`.
+        """
+        from fastapi_mcp.openapi.utils import (  # type: ignore[import-untyped]  # noqa: PLC0415
+            get_single_param_type_from_schema,
+        )
+
+        union = {"anyOf": [{"type": "string"}, {"type": "array"}]}
+        assert get_single_param_type_from_schema(union) in {"string", "array"}
+
+
+class TestCompactJson:
+    """_CompactJson renders tool results compactly in place of stdlib indent=2.
+
+    Ref: stdapi/mcp.py:_CompactJson
+    """
+
+    def test_dumps_is_compact_and_ignores_formatting_kwargs(self) -> None:
+        """The indent/ensure_ascii kwargs fastapi_mcp passes are ignored."""
+        from stdapi.mcp import _CompactJson  # noqa: PLC0415
+
+        rendered = _CompactJson.dumps({"a": [1, 2], "é": "ü"}, indent=2)
+        assert rendered == '{"a":[1,2],"é":"ü"}'
+
+    def test_decode_error_is_the_stdlib_exception(self) -> None:
+        """The façade exposes the exact exception class fastapi_mcp catches."""
+        import json  # noqa: PLC0415
+
+        from stdapi.mcp import _CompactJson  # noqa: PLC0415
+
+        assert _CompactJson.JSONDecodeError is json.JSONDecodeError
+
+    @pytest.mark.local
+    @pytest.mark.skipif(not _MCP_ENABLED, reason="MCP is not enabled")
+    @pytest.mark.usefixtures("test_client")
+    def test_facade_installed_on_fastapi_mcp(self) -> None:
+        """Mounting MCP swaps fastapi_mcp.server's ``json`` for the façade."""
+        import fastapi_mcp.server  # type: ignore[import-untyped]  # noqa: PLC0415
+
+        from stdapi.mcp import _CompactJson  # noqa: PLC0415
+
+        assert fastapi_mcp.server.json is _CompactJson

@@ -461,6 +461,7 @@ stdapi.ai exposes its full API surface as MCP tools, letting AI agents and orche
 - **SSE transport** — Available at `/sse` for backwards compatibility with older MCP clients
 - **All endpoints as tools** — Every API operation (chat, images, audio, files, models) is surfaced as a named MCP tool with generated documentation
 - **Selective exposure** — Include or exclude tools by name to limit scope and reduce agent confusion
+- **Context-optimized tools** — Tool schemas hide parameters MCP clients cannot use (streaming modes, token-level tuning, caller identifiers), and tool results are returned as compact JSON, cutting the tokens each call costs the calling agent
 - **Automatic timeout alignment** — MCP calls respect the global `AI_RESPONSE_TIMEOUT` setting
 
 ```bash
