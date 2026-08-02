@@ -255,10 +255,15 @@ class TestAudioFormatMapping:
         assert block["audio"]["format"] == expected  # type: ignore[typeddict-item]
         assert block["audio"]["source"] == {"bytes": b"fake"}  # type: ignore[typeddict-item]
 
-    async def test_unsupported_audio_format_is_normalized_to_mp3(
+    async def test_unsupported_audio_format_is_normalized_to_flac(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Audio outside the enum goes through the ffmpeg pipeline to MP3."""
+        """Audio outside the enum goes through the ffmpeg pipeline to FLAC.
+
+        FLAC is lossless and its encoder/muxer are part of the minimal ffmpeg
+        build shipped in the container image, unlike MP3 which would require
+        linking LAME.
+        """
         captured: dict[str, Any] = {}
 
         async def _fake_encode(
@@ -274,8 +279,8 @@ class TestAudioFormatMapping:
             _FakeAudioContent("audio", "amr")  # type: ignore[arg-type]
         )
 
-        assert captured == {"input": b"fake", "output_format": "mp3"}
-        assert block["audio"]["format"] == "mp3"  # type: ignore[typeddict-item]
+        assert captured == {"input": b"fake", "output_format": "flac"}
+        assert block["audio"]["format"] == "flac"  # type: ignore[typeddict-item]
         assert block["audio"]["source"] == {"bytes": b"transcoded"}  # type: ignore[typeddict-item]
 
     async def test_non_audio_upload_is_rejected_with_the_accepted_list(self) -> None:

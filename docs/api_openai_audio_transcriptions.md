@@ -113,7 +113,7 @@ Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable 
 Any Amazon Bedrock model that accepts the `SPEECH` input modality through the Converse API can transcribe out of the box: the gateway sends the audio together with a transcription prompt and returns the model's text output. Models whose speech input is only served by a bidirectional streaming API (e.g. `amazon.nova-2-sonic`) are not available on this route.
 
 !!! tip "Audio Input Formats on Bedrock Models"
-    Bedrock models natively accept `aac`, `flac`, `m4a`, `mka`, `mkv`, `mp3`, `mp4`, `ogg`, `opus`, `pcm`, `wav`, and `webm` uploads. Audio in any other format is automatically converted to MP3 before transcription (requires FFmpeg on the server); non-audio uploads are rejected with the accepted format list.
+    Bedrock models natively accept `aac`, `flac`, `m4a`, `mka`, `mkv`, `mp3`, `mp4`, `ogg`, `opus`, `pcm`, `wav`, and `webm` uploads. Audio in any other format is automatically converted to FLAC before transcription (requires FFmpeg on the server); non-audio uploads are rejected with the accepted format list.
 
 ## Advanced Features
 

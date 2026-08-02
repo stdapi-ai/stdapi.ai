@@ -316,8 +316,9 @@ class AudioModel(AudioModelBase[Any, Any]):
         """Build the Converse audio content block, transcoding when needed.
 
         Audio whose format is outside the Converse ``AudioFormat`` enum is
-        normalized to MP3 through the bounded ffmpeg pipeline; non-audio
-        uploads are rejected with the accepted format list.
+        normalized to FLAC (lossless, and encodable by minimal ffmpeg builds)
+        through the bounded ffmpeg pipeline; non-audio uploads are rejected
+        with the accepted format list.
 
         Args:
             audio_content: The audio file to embed as inline bytes.
@@ -344,12 +345,12 @@ class AudioModel(AudioModelBase[Any, Any]):
             raise ApiError(msg)
         buf = bytearray()
         async for chunk in encode_audio_stream(
-            _single_chunk_stream(await audio_content.to_bytes()), "mp3"
+            _single_chunk_stream(await audio_content.to_bytes()), "flac"
         ):
             buf.extend(chunk)
         data = bytes(buf)
         transcoded_block: AudioBlockTypeDef = {
-            "format": "mp3",
+            "format": "flac",
             "source": {"bytes": data},
         }
         return {"audio": transcoded_block}
