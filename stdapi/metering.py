@@ -49,7 +49,6 @@ async def register(start_event: EventLog) -> None:
     """
     if PRODUCT_CODE:
         product_public_key_version = 1
-        product_url = ""
         async with AWS_SESSION.create_client(
             "meteringmarketplace", config=CONFIG, region_name=AWS_REGION
         ) as metering:
@@ -64,10 +63,9 @@ async def register(start_event: EventLog) -> None:
                     "CustomerNotEntitledException": (
                         NotEntitledError,
                         (
-                            "No entitlement found for this AWS Marketplace product."
-                            f" Please subscribe to the product: {product_url}"
-                            if product_url
-                            else ""
+                            f"No entitlement found for the '{PRODUCT_CODE}' AWS "
+                            "Marketplace product. Subscribe to it with the account "
+                            "running this server, then start it again."
                         ),
                     ),
                     "PlatformNotSupportedException": (
