@@ -583,13 +583,18 @@ def log_error_details(
 ) -> None:
     """Logs error details into the current request context.
 
+    No-op outside a request-log context: log-exempt paths (``/health``,
+    ``/favicon.ico``, ...) run without one, and an error handler must still be
+    able to answer them.
+
     Args:
         *error_detail: Variable length argument list of error details to be
             logged. Each item should be a JSON-compatible value.
         level: Optional. Logging level to specify the severity of the error.
         status: Optional. HTTP status code associated with the error.
     """
-    _add_warnings(REQUEST_LOG.get(), error_detail, level=_error_level(level, status))
+    if (log := REQUEST_LOG.get(None)) is not None:
+        _add_warnings(log, error_detail, level=_error_level(level, status))
 
 
 def _format_params(

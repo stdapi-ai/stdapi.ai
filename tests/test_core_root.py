@@ -284,3 +284,36 @@ class TestRobotsTxt:
             if line is not None
         ]
         assert test_client.get("/robots.txt").text.splitlines() == expected
+
+
+class TestErrorsOnLogExemptPaths:
+    """HTTP errors on log-exempt paths are answered cleanly, not crashed on.
+
+    Paths in ``LOGGING_PATHS_IGNORE`` run without a request-log context, and
+    the error handlers call :func:`~stdapi.monitoring.log_error_details`; the
+    logger must therefore tolerate the missing context. Browsers trigger this
+    daily: loading ``/`` auto-requests ``/favicon.ico``, which has no route.
+
+    Ref: stdapi/monitoring.py:log_error_details
+         stdapi/main.py:handle_http_exception
+    """
+
+    def test_favicon_404_is_a_clean_error_envelope(
+        self, test_client: TestClient
+    ) -> None:
+        """GET /favicon.ico returns the JSON 404 envelope, not a 500.
+
+        ``TestClient`` re-raises server exceptions, so a ``LookupError`` in the
+        exception handler would fail this test rather than surface as a 500.
+        """
+        response = test_client.get("/favicon.ico")
+        assert response.status_code == 404
+        assert response.json()["error"] == "Not Found"
+
+    def test_method_not_allowed_on_exempt_path_is_clean(
+        self, test_client: TestClient
+    ) -> None:
+        """DELETE /health returns the 405 envelope through the same handler."""
+        response = test_client.delete("/health")
+        assert response.status_code == 405
+        assert response.json()["error"]

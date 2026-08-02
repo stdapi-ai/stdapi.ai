@@ -287,12 +287,14 @@ class TestMcpLogHandler:
         assert "Underlying API returned 400" in combined
 
     def test_emit_is_safe_outside_request_context(self) -> None:
-        """Outside a request context the record is dropped instead of raising LookupError.
+        """Outside a request context the record is dropped without raising.
 
         ``fastapi_mcp`` also logs during session setup and teardown, where no
-        request log exists. Both calls run in a fresh, empty
-        ``contextvars.Context`` so no ambient request log can hide the missing
-        context, and the first one shows the error ``emit`` has to swallow.
+        request log exists — as do the app's error handlers on log-exempt
+        paths. Both calls run in a fresh, empty ``contextvars.Context`` so no
+        ambient request log can hide the missing context.
+
+        Ref: stdapi/monitoring.py:log_error_details
         """
         handler = self._get_handler()
         record = logging.LogRecord(
@@ -304,8 +306,7 @@ class TestMcpLogHandler:
             args=(),
             exc_info=None,
         )
-        with pytest.raises(LookupError):
-            Context().run(log_error_details, "Unexpected error")
+        assert Context().run(log_error_details, "Unexpected error") is None
         assert Context().run(handler.emit, record) is None
 
 
