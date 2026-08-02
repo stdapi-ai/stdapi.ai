@@ -280,6 +280,11 @@ def _record_from_head(payload: str, head: HeadObjectOutputTypeDef) -> FileRecord
     )
 
 
+def _is_expired(record: FileRecord) -> bool:
+    """Return whether *record* has reached its expiry."""
+    return record.expires_at is not None and now_utc_timestamp() >= record.expires_at
+
+
 async def _force_s3_metadata(
     s3: S3Client,
     bucket: str,
@@ -364,8 +369,8 @@ async def upload_file(
 
     Metadata is encoded in native S3 object attributes — no database needed.
     When *expires_after* is set, an S3 object tag ``expires=true`` is added
-    for Lifecycle rule cleanup; code-level expiry is enforced in
-    :func:`get_file`.
+    for Lifecycle rule cleanup; code-level expiry is enforced by both
+    :func:`get_file` and :func:`list_files`.
 
     Args:
         file: Input file with content and optional filename / content type.
@@ -451,7 +456,7 @@ async def _get_file_impl(payload: str) -> tuple[FileRecord, str, S3Client]:
             msg = f"File '{payload}' not found."
             raise _FileNotFoundError(msg) from exc
         raise  # pragma: no cover
-    if record.expires_at is not None and now_utc_timestamp() >= record.expires_at:
+    if _is_expired(record):
         track_temporary_s3_objects(bucket, key)
         msg = f"File '{payload}' has expired."
         raise _FileNotFoundError(msg)
@@ -495,14 +500,21 @@ async def get_file_content(payload: str) -> tuple[AsyncIterator[bytes], str]:
 
 
 async def _head_record(s3: S3Client, bucket: str, key: str) -> FileRecord | None:
-    """``HeadObject`` *key* and return a ``FileRecord``, or ``None`` if absent."""
+    """``HeadObject`` *key* and return a ``FileRecord``, or ``None`` if absent or expired.
+
+    An expired object is scheduled for deletion, as on the retrieve path.
+    """
     try:
         head = await s3.head_object(Bucket=bucket, Key=key)
     except ClientError as exc:
         if exc.response["Error"]["Code"] in ("404", "NoSuchKey"):
             return None
         raise  # pragma: no cover
-    return _record_from_head(key.removeprefix(SETTINGS.aws_s3_files_prefix), head)
+    record = _record_from_head(key.removeprefix(SETTINGS.aws_s3_files_prefix), head)
+    if _is_expired(record):
+        track_temporary_s3_objects(bucket, key)
+        return None
+    return record
 
 
 async def _scan_bucket_page(
@@ -576,7 +588,8 @@ async def list_files(
     S3 ``ListObjectsV2`` returns keys in ascending lexicographic order; because
     file keys use UUIDv7 (timestamp-ordered), ascending key order equals
     ascending creation-time order.  Keys from multiple buckets are merged and
-    sorted globally before paging.
+    sorted globally before paging.  Expired files are left out of the page and
+    scheduled for deletion, so a page may hold fewer records than *limit*.
 
     Args:
         after: Return files created strictly after this bare payload (exclusive).

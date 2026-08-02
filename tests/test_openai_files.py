@@ -2048,9 +2048,15 @@ class _StubListS3Client:
     scan every key before slicing in Python.
     """
 
-    def __init__(self, keys: list[str], purposes: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        keys: list[str],
+        purposes: dict[str, str] | None = None,
+        expiries: dict[str, str] | None = None,
+    ) -> None:
         self.keys = sorted(keys)
         self.purposes = purposes or {}
+        self.expiries = expiries or {}
 
     async def list_objects_v2(self, **kwargs: object) -> dict[str, Any]:
         start_after = cast("str | None", kwargs.get("StartAfter"))
@@ -2070,7 +2076,7 @@ class _StubListS3Client:
             "LastModified": datetime.now(UTC),
             "Metadata": {
                 "purpose": self.purposes.get(key, "user_data"),
-                "expires-at": "",
+                "expires-at": self.expiries.get(key, ""),
             },
             "ContentDisposition": 'attachment; filename="f.txt"',
             "ContentType": "text/plain",
@@ -2166,6 +2172,105 @@ class TestListFilesDescendingCursorUnit:
         )
 
         assert [r.file_id for r in records] == [payloads[0]]
+
+
+@pytest.mark.local
+class TestListFilesExpiryUnit:
+    """Expired files are kept out of every listing path (unit, stubbed S3).
+
+    An expired file already 404s on retrieve, so listing it advertises metadata for
+    an object nothing can read, and skips the background deletion the retrieve path
+    schedules — leaving the object to the day-granular Lifecycle rule instead.
+
+    Ref: https://stdapi.ai/api_openai_files/
+         stdapi/files/_core.py:_head_record
+    """
+
+    @pytest.fixture
+    def stored(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[list[tuple[str, str]], list[str]]:
+        """Store two files, the older of which expired ten seconds ago.
+
+        Returns:
+            The list the scheduled deletions are recorded into, and the two bare
+            payloads in creation order.
+        """
+        payloads = sorted(_core.encode_id_payload("bucket") for _ in range(2))
+        stub = _StubListS3Client(
+            [_core.file_id_s3_key(p) for p in payloads],
+            expiries={_core.file_id_s3_key(payloads[0]): str(int(time.time()) - 10)},
+        )
+        scheduled: list[tuple[str, str]] = []
+        monkeypatch.setattr(_core, "get_client", lambda *_: stub)
+        monkeypatch.setattr(_core, "_require_bucket", lambda: "bucket")
+        monkeypatch.setattr(_core, "BUCKET_TO_REGION", {"bucket": "us-east-1"})
+        monkeypatch.setattr(
+            _core,
+            "track_temporary_s3_objects",
+            lambda bucket, key: scheduled.append((bucket, key)),
+        )
+        return scheduled, payloads
+
+    async def test_descending_page_drops_it_and_schedules_its_deletion(
+        self, stored: tuple[list[tuple[str, str]], list[str]]
+    ) -> None:
+        """The default page returns only the live file and queues the expired one.
+
+        The listing already holds the ``HeadObject`` response carrying the expiry,
+        so the same cleanup the retrieve path performs costs it no extra call.
+
+        Ref: stdapi/files/_core.py:list_files
+        """
+        scheduled, payloads = stored
+
+        records, _has_more = await _core.list_files(None, None, 100, "desc", None)
+
+        assert [r.file_id for r in records] == [payloads[1]]
+        assert scheduled == [("bucket", _core.file_id_s3_key(payloads[0]))]
+
+    async def test_ascending_page_drops_it(
+        self, stored: tuple[list[tuple[str, str]], list[str]]
+    ) -> None:
+        """The cursor-less ascending page takes its own scan branch and drops it too.
+
+        Ref: stdapi/files/_core.py:list_files
+        """
+        _scheduled, payloads = stored
+
+        records, _has_more = await _core.list_files(None, None, 100, "asc", None)
+
+        assert [r.file_id for r in records] == [payloads[1]]
+
+    async def test_purpose_filtered_page_drops_it(
+        self, stored: tuple[list[tuple[str, str]], list[str]]
+    ) -> None:
+        """A filter on the purpose both files share still surfaces only the live one.
+
+        Ref: stdapi/files/_core.py:list_files
+        """
+        _scheduled, payloads = stored
+
+        records, _has_more = await _core.list_files(
+            None, None, 100, "desc", "user_data"
+        )
+
+        assert [r.file_id for r in records] == [payloads[1]]
+
+    async def test_retrieving_the_same_file_agrees_with_the_listing(
+        self, stored: tuple[list[tuple[str, str]], list[str]]
+    ) -> None:
+        """The dropped file is exactly the one retrieval reports as expired.
+
+        Ref: stdapi/files/_core.py:get_file
+        """
+        _scheduled, payloads = stored
+
+        with pytest.raises(ApiError) as exc_info:
+            await _core.get_file(payloads[0])
+
+        assert exc_info.value.status == 404
+        assert "expired" in str(exc_info.value)
 
 
 @pytest.mark.local

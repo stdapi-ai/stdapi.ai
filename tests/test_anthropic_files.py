@@ -7,8 +7,9 @@ implements ``/v1/files`` itself on S3. Only the payload field names
 including files being downloadable, which upstream refuses for uploaded files — are
 gateway behavior.
 
-File expiry has no coverage here: Anthropic's upload accepts no ``expires_after``,
-so the shared enforcement is exercised through
+Anthropic's upload accepts no ``expires_after``, so expiry is covered here only
+for the listing, which shares its namespace — and its storage layer — with the
+OpenAI route that does set expiries; expired retrieval is exercised through
 ``TestOpenAIFiles.test_expired_file_returns_404`` instead.
 
 Ref: https://platform.claude.com/docs/en/build-with-claude/files
@@ -19,7 +20,7 @@ Ref: https://platform.claude.com/docs/en/build-with-claude/files
 import io
 from contextlib import suppress
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from anthropic import Anthropic
@@ -27,7 +28,7 @@ from anthropic import NotFoundError as AnthropicNotFoundError
 
 from stdapi import input_file as input_file_mod
 from stdapi.aws_s3 import BUCKET_TO_REGION
-from stdapi.files import FileRecord
+from stdapi.files import FileRecord, _core
 from stdapi.routes import anthropic_files
 
 if TYPE_CHECKING:
@@ -624,3 +625,71 @@ class TestAnthropicFileContentDownloadHardening:
         assert response.headers["content-type"].startswith("text/html")
         assert response.headers["content-disposition"] == "attachment"
         assert response.headers["x-content-type-options"] == "nosniff"
+
+
+class _StubListS3Client:
+    """Stub S3 client serving one live and one expired object to the listing scan."""
+
+    def __init__(self, keys: list[str], expired_key: str) -> None:
+        self.keys = sorted(keys)
+        self.expired_key = expired_key
+
+    async def list_objects_v2(self, **_kwargs: object) -> dict[str, Any]:
+        return {"Contents": [{"Key": key} for key in self.keys], "IsTruncated": False}
+
+    async def head_object(self, **kwargs: object) -> dict[str, Any]:
+        expired = str(int(datetime.now(UTC).timestamp()) - 10)
+        return {
+            "ContentLength": 3,
+            "LastModified": datetime.now(UTC),
+            "Metadata": {
+                "purpose": "user_data",
+                "expires-at": expired if kwargs["Key"] == self.expired_key else "",
+            },
+            "ContentDisposition": 'attachment; filename="f.txt"',
+            "ContentType": "text/plain",
+        }
+
+
+class TestAnthropicListExpiredFilesUnit:
+    """Expired files stay out of the Anthropic listing (unit, stubbed S3).
+
+    The Anthropic and OpenAI listings share one storage layer and one namespace,
+    so a file given an expiry through the OpenAI upload must disappear from both
+    once it passes — otherwise this route advertises an object its own retrieve
+    route reports as gone.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/files
+         stdapi/routes/anthropic_files.py:list_files_endpoint
+         stdapi/files/_core.py:_head_record
+    """
+
+    pytestmark = pytest.mark.local
+
+    def test_an_expired_file_is_absent_from_the_listing(
+        self, anthropic_app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only the live file is listed, and its deletion is scheduled in passing.
+
+        Ref: stdapi/files/_core.py:list_files
+        """
+        payloads = sorted(_core.encode_id_payload("bucket") for _ in range(2))
+        expired_key = _core.file_id_s3_key(payloads[0])
+        stub = _StubListS3Client(
+            [_core.file_id_s3_key(p) for p in payloads], expired_key
+        )
+        scheduled: list[tuple[str, str]] = []
+        monkeypatch.setattr(_core, "get_client", lambda *_: stub)
+        monkeypatch.setattr(_core, "_require_bucket", lambda: "bucket")
+        monkeypatch.setattr(_core, "BUCKET_TO_REGION", {"bucket": "us-east-1"})
+        monkeypatch.setattr(
+            _core,
+            "track_temporary_s3_objects",
+            lambda bucket, key: scheduled.append((bucket, key)),
+        )
+
+        response = anthropic_app_client.get("/anthropic/v1/files")
+
+        assert response.status_code == 200, response.text
+        assert [f["id"] for f in response.json()["data"]] == [f"file_{payloads[1]}"]
+        assert scheduled == [("bucket", expired_key)]

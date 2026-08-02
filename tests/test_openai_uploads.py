@@ -3,9 +3,9 @@
 Broader ``/v1/uploads`` state-machine coverage (create -> add part ->
 complete/cancel against S3) lives in ``tests/test_openai_files.py::TestOpenAIUploads``,
 which shares the ``openai_files``-namespace fixtures with the ``/v1/files``
-tests. This module covers the ``purpose=batch`` default-expiry resolution and
-the JSON-body part route's remote-source handling, offline (no AWS
-credentials, no S3 calls, no network).
+tests. This module covers the ``purpose=batch`` default-expiry resolution, the
+bounded per-process session cache, and the JSON-body part route's remote-source
+handling, offline (no AWS credentials, no S3 calls, no network).
 
 Ref: stdapi/routes/openai_uploads.py:create_upload_endpoint
      stdapi/routes/openai_uploads.py:add_upload_part
@@ -18,7 +18,7 @@ import pytest
 
 from stdapi import input_file
 from stdapi.config import SETTINGS
-from stdapi.files import MultipartSession
+from stdapi.files import MultipartSession, _multipart
 from stdapi.routes import openai_files as openai_files_routes
 from stdapi.routes import openai_uploads as openai_uploads_routes
 
@@ -155,6 +155,95 @@ class TestCreateUploadBatchDefaultExpiry:
         )
         assert response.status_code == 200, response.text
         assert captured["expires_after"] is None
+
+
+class _StubCreateMultipartS3Client:
+    """Minimal S3 client stand-in for ``create_multipart_session``."""
+
+    def __init__(self) -> None:
+        self.created = 0
+
+    async def create_multipart_upload(self, **_kwargs: object) -> dict[str, Any]:
+        self.created += 1
+        return {"UploadId": f"s3-upload-id-{self.created}"}
+
+    async def put_object(self, **_kwargs: object) -> dict[str, Any]:
+        return {}
+
+
+class TestMultipartSessionCacheBound:
+    """The per-process multipart session cache stays bounded (unit, stubbed S3).
+
+    ``POST /v1/uploads`` costs the caller a JSON body and no bytes, and a session
+    abandoned without a completion or cancellation is by definition never looked
+    up again — so an unbounded cache would retain its entry, S3 upload ID
+    included, for the whole life of the process.
+
+    Ref: https://developers.openai.com/api/reference/resources/uploads
+         stdapi/files/_multipart.py:_cache_set
+    """
+
+    @pytest.fixture
+    def cache(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, tuple[str, float]]:
+        """Isolate the session cache, shrink its bound, and stub S3 away.
+
+        Returns:
+            The cache dict the multipart module reads and writes.
+        """
+        cache: dict[str, tuple[str, float]] = {}
+        stub = _StubCreateMultipartS3Client()
+        monkeypatch.setattr(_multipart, "_cache", cache)
+        monkeypatch.setattr(_multipart, "_CACHE_MAX", 4)
+        monkeypatch.setattr(_multipart, "get_client", lambda *_: stub)
+        monkeypatch.setattr(_multipart, "_require_bucket", lambda: "bucket")
+        return cache
+
+    @staticmethod
+    async def _create() -> str:
+        """Create a session and return its upload ID.
+
+        Returns:
+            The new session's upload ID.
+        """
+        session = await _multipart.create_multipart_session(
+            "f.bin", "text/plain", "assistants", 1
+        )
+        return session.upload_id
+
+    async def test_abandoned_sessions_never_grow_the_cache(
+        self, cache: dict[str, tuple[str, float]]
+    ) -> None:
+        """Sessions created and left pending stop accumulating at the bound.
+
+        Ref: stdapi/files/_multipart.py:_cache_set
+        """
+        upload_ids = [await self._create() for _ in range(12)]
+
+        assert len(cache) == 4
+        assert len(set(upload_ids)) == 12, "each session must get its own upload ID"
+
+    async def test_a_reused_session_outlives_the_idle_ones(
+        self, cache: dict[str, tuple[str, float]]
+    ) -> None:
+        """Eviction drops the least recently used entry, not the oldest still in use.
+
+        A session whose parts are still arriving would otherwise be evicted by
+        newer idle sessions, costing every remaining part a ``ListMultipartUploads``
+        call to rebuild what the cache already held.
+
+        Ref: stdapi/files/_multipart.py:_cache_get
+        """
+        upload_ids = [await self._create() for _ in range(4)]
+        assert _multipart._cache_get(upload_ids[0]) is not None  # noqa: SLF001
+
+        for _ in range(3):
+            await self._create()
+
+        assert _multipart._cache_get(upload_ids[0]) is not None, (  # noqa: SLF001
+            "the session used most recently must survive the eviction pressure"
+        )
+        assert _multipart._cache_get(upload_ids[1]) is None  # noqa: SLF001
+        assert len(cache) == 4
 
 
 class _StubHttpResponse:

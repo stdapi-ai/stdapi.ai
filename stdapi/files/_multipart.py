@@ -8,7 +8,7 @@ does not expose ``ContentType``, ``ContentDisposition``, or ``Metadata``).
 ``upload_id``; ``expires_at`` reflects the S3 lifecycle cleanup window (1 day).
 The marker is deleted in the background on completion or cancellation.
 
-The S3 multipart upload ID is resolved via a per-process cache
+The S3 multipart upload ID is resolved via a bounded per-process LRU cache
 (``upload_id → (s3_upload_id, expiry)``), sparing :func:`add_part` a
 ``list_multipart_uploads`` call; ALB sticky sessions maximise cache hits across
 sequential parts.  Concurrent calls from different pods may race on the part
@@ -62,22 +62,31 @@ _MIN_PART_SIZE: int = 5 * 1024 * 1024
 #: S3 tagging query string marking an object for Lifecycle expiry cleanup.
 _EXPIRING_S3_TAGGING: str = f"{S3_TAGGING}&stdapi-ai.expires=true"
 
-#: Per-process cache: upload_id → (s3_upload_id, expires_monotonic).
+#: Per-process cache: upload_id → (s3_upload_id, expires_monotonic) (bounded LRU).
 _cache: dict[str, tuple[str, float]] = {}
+
+#: Maximum entries retained in the multipart session cache.
+_CACHE_MAX: int = 4096
 
 
 def _cache_get(upload_id: str) -> str | None:
     """Return the cached ``s3_upload_id`` for *upload_id*, or ``None`` if absent/expired."""
-    if entry := _cache.get(upload_id):
+    if entry := _cache.pop(upload_id, None):
         s3_upload_id, expires = entry
         if monotonic() < expires:
+            _cache[upload_id] = entry
             return s3_upload_id
-        del _cache[upload_id]
     return None
 
 
 def _cache_set(upload_id: str, s3_upload_id: str) -> None:
-    """Store *s3_upload_id* in the per-process cache for the session TTL."""
+    """Store *s3_upload_id* in the per-process cache for the session TTL.
+
+    Sessions abandoned without a completion or cancellation are never looked up
+    again, so the least recently used entry is dropped once the cache is full.
+    """
+    if upload_id not in _cache and len(_cache) >= _CACHE_MAX:
+        del _cache[next(iter(_cache))]
     _cache[upload_id] = (s3_upload_id, monotonic() + _MULTIPART_EXPIRY_SECONDS)
 
 
