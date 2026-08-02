@@ -1,0 +1,6 @@
+# Build context: only the files the image copies (both editions copy the same).
+*
+!pyproject.toml
+!uv.lock
+!stdapi
+stdapi/**/__pycache__
