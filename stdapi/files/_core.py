@@ -502,7 +502,9 @@ async def get_file_content(payload: str) -> tuple[AsyncIterator[bytes], str]:
 async def _head_record(s3: S3Client, bucket: str, key: str) -> FileRecord | None:
     """``HeadObject`` *key* and return a ``FileRecord``, or ``None`` if absent or expired.
 
-    An expired object is scheduled for deletion, as on the retrieve path.
+    Deletion of an expired object is left to the retrieve path and to the
+    bucket's lifecycle rule: a listing sees as many objects as it scans, and
+    scheduling one delete per expired key would fan out with the bucket.
     """
     try:
         head = await s3.head_object(Bucket=bucket, Key=key)
@@ -511,10 +513,7 @@ async def _head_record(s3: S3Client, bucket: str, key: str) -> FileRecord | None
             return None
         raise  # pragma: no cover
     record = _record_from_head(key.removeprefix(SETTINGS.aws_s3_files_prefix), head)
-    if _is_expired(record):
-        track_temporary_s3_objects(bucket, key)
-        return None
-    return record
+    return None if _is_expired(record) else record
 
 
 async def _scan_bucket_page(
@@ -580,6 +579,29 @@ async def _records_for_keys(keys: list[str]) -> list[FileRecord]:
     return [r for r in await gather(*(_head_key(k) for k in keys)) if r is not None]
 
 
+async def _fill_page(keys: list[str], limit: int) -> tuple[list[FileRecord], bool]:
+    """Load *keys* in order until *limit* records exist, reporting whether more follow.
+
+    Deleted and expired keys resolve to no record, so loading only the first
+    *limit* of them could answer a short -- or empty -- page while live files
+    remain behind them. An empty page with more to come stalls the SDK pagers,
+    which stop there and have no cursor to resume from.
+
+    Args:
+        keys: Candidate keys, already in the answer's order.
+        limit: Maximum records the page holds.
+
+    Returns:
+        ``(records, has_more)`` tuple.
+    """
+    records: list[FileRecord] = []
+    for start in range(0, len(keys), limit + 1):
+        records.extend(await _records_for_keys(keys[start : start + limit + 1]))
+        if len(records) > limit:
+            return records[:limit], True
+    return records[:limit], False
+
+
 async def list_files(
     after: str | None, before: str | None, limit: int, order: str, purpose: str | None
 ) -> tuple[list[FileRecord], bool]:
@@ -612,15 +634,23 @@ async def list_files(
     # Efficient path: ascending without purpose filter or before cursor
     if order == "asc" and before is None and purpose is None:
         start_after = file_id_s3_key(after) if after else None
-        per_bucket = await gather(
-            *[_scan_bucket_page(b, prefix, start_after, limit + 1) for b in buckets]
-        )
-        keys = [
-            k
-            for k in sorted(chain.from_iterable(per_bucket))
-            if len(k) - prefix_len == 32
-        ][: limit + 1]
-        return await _records_for_keys(keys[:limit]), len(keys) > limit
+        records: list[FileRecord] = []
+        while len(records) <= limit:
+            per_bucket = await gather(
+                *[_scan_bucket_page(b, prefix, start_after, limit + 1) for b in buckets]
+            )
+            keys = [
+                k
+                for k in sorted(chain.from_iterable(per_bucket))
+                if len(k) - prefix_len == 32
+            ][: limit + 1]
+            if not keys or keys[-1] == start_after:
+                break
+            # Keys that resolve to no record (deleted or expired) are skipped, so
+            # the scan continues from the last one seen until the page is full.
+            start_after = keys[-1]
+            records.extend(await _records_for_keys(keys))
+        return records[:limit], len(records) > limit
 
     # Slow path: full scan needed for desc order, before cursor, or purpose filter
     start_after = file_id_s3_key(after) if order == "asc" and after else None
@@ -662,7 +692,8 @@ async def list_files(
         ), len(filtered) > limit
 
     if order == "desc":
-        return await _records_for_keys(all_keys[-limit:][::-1]), len(all_keys) > limit
+        return await _fill_page(all_keys[::-1], limit)
 
     # asc + before_id: ascending slice ending just before the cursor
-    return await _records_for_keys(all_keys[-limit:]), len(all_keys) > limit
+    page, has_more = await _fill_page(all_keys[::-1], limit)
+    return page[::-1], has_more

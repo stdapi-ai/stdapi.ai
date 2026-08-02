@@ -669,7 +669,7 @@ class TestAnthropicListExpiredFilesUnit:
     def test_an_expired_file_is_absent_from_the_listing(
         self, anthropic_app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Only the live file is listed, and its deletion is scheduled in passing.
+        """Only the live file is listed.
 
         Ref: stdapi/files/_core.py:list_files
         """
@@ -692,4 +692,4 @@ class TestAnthropicListExpiredFilesUnit:
 
         assert response.status_code == 200, response.text
         assert [f["id"] for f in response.json()["data"]] == [f"file_{payloads[1]}"]
-        assert scheduled == [("bucket", expired_key)]
+        assert scheduled == [], "the listing leaves deletion to the retrieve path"

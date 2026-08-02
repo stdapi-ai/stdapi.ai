@@ -2212,13 +2212,14 @@ class TestListFilesExpiryUnit:
         )
         return scheduled, payloads
 
-    async def test_descending_page_drops_it_and_schedules_its_deletion(
+    async def test_descending_page_drops_it_without_deleting_it(
         self, stored: tuple[list[tuple[str, str]], list[str]]
     ) -> None:
-        """The default page returns only the live file and queues the expired one.
+        """The default page returns only the live file, and deletes nothing.
 
-        The listing already holds the ``HeadObject`` response carrying the expiry,
-        so the same cleanup the retrieve path performs costs it no extra call.
+        A listing sees as many objects as it scans, so scheduling a delete per
+        expired key would fan out with the bucket; the retrieve path and the
+        bucket lifecycle rule own that cleanup.
 
         Ref: stdapi/files/_core.py:list_files
         """
@@ -2227,7 +2228,38 @@ class TestListFilesExpiryUnit:
         records, _has_more = await _core.list_files(None, None, 100, "desc", None)
 
         assert [r.file_id for r in records] == [payloads[1]]
-        assert scheduled == [("bucket", _core.file_id_s3_key(payloads[0]))]
+        assert scheduled == []
+
+    @pytest.mark.parametrize("order", ["asc", "desc"])
+    async def test_a_page_of_expired_files_still_reaches_the_live_ones(
+        self, monkeypatch: pytest.MonkeyPatch, order: str
+    ) -> None:
+        """A full page of expired files does not end the listing.
+
+        Dropping them from a page sliced beforehand answers an empty page with
+        ``has_more`` set and no cursor, which is where the SDK pagers stop --
+        the live files behind them become unreachable.
+
+        Ref: stdapi/files/_core.py:_fill_page
+        """
+        payloads = sorted(_core.encode_id_payload("bucket") for _ in range(4))
+        now = int(time.time())
+        stub = _StubListS3Client(
+            [_core.file_id_s3_key(p) for p in payloads],
+            expiries={
+                _core.file_id_s3_key(p): str(now - 10)
+                for p in (payloads if order == "asc" else payloads[2:])
+            }
+            | ({_core.file_id_s3_key(payloads[0]): ""} if order == "asc" else {}),
+        )
+        monkeypatch.setattr(_core, "get_client", lambda *_: stub)
+        monkeypatch.setattr(_core, "_require_bucket", lambda: "bucket")
+        monkeypatch.setattr(_core, "BUCKET_TO_REGION", {"bucket": "us-east-1"})
+
+        records, has_more = await _core.list_files(None, None, 2, order, None)
+
+        assert records, "an empty page with live files left strands the pager"
+        assert has_more is False
 
     async def test_ascending_page_drops_it(
         self, stored: tuple[list[tuple[str, str]], list[str]]
