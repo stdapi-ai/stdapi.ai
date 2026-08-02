@@ -2710,8 +2710,8 @@ class TestAnthropicMessages:
         Converse has no equivalent ``toolChoice``, so the gateway drops the whole
         tool config instead; the model layer restores a permissive one when the
         history still carries ``toolUse``/``toolResult`` blocks, which is what
-        makes dropping it safe. No skip here: this used to be a gateway-only 400,
-        and the test now holds on the official API too.
+        makes dropping it safe. The behavior is shared with the official API, so
+        no lane is skipped.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools#forcing-tool-use
              https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
@@ -3219,9 +3219,10 @@ class TestAnthropicCountTokens:
     ) -> None:
         """A ``web_search`` server tool is rejected with HTTP 400 on count_tokens.
 
-        Server tools are not available on Bedrock; the gateway therefore validates
-        the tool list on this route as well instead of silently counting a request
-        that could never be generated.
+        The official Anthropic API's own ``count_tokens`` endpoint does not
+        support server tools either, regardless of backend; the gateway mirrors
+        that contract here instead of silently counting a request that could
+        never be generated.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
              https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html

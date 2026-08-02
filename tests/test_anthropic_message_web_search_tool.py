@@ -167,14 +167,14 @@ class TestTextEditorToolNames:
     """
 
     @pytest.mark.parametrize(
-        ("tool_type", "tool_name"),
+        ("tool_type", "tool_name", "expected_bedrock_name"),
         [
-            ("text_editor_20250124", "str_replace_editor"),
-            ("text_editor_20250728", "str_replace_based_edit_tool"),
+            ("text_editor_20250124", "str_replace_editor", "nova_str_replace_editor"),
+            ("text_editor_20250728", "str_replace_based_edit_tool", "nova_edit_tool"),
         ],
     )
     def test_editor_name_is_translated_through_the_model_name_map(
-        self, tool_type: str, tool_name: str
+        self, tool_type: str, tool_name: str, expected_bedrock_name: str
     ) -> None:
         """Each editor name resolves through the map to the model's Bedrock tool name."""
         tool = ToolTextEditorParam(type=tool_type, name=tool_name)  # type: ignore[arg-type]
@@ -188,7 +188,7 @@ class TestTextEditorToolNames:
         )
         assert tool_config is not None
         (spec,) = tool_config["tools"]
-        assert spec["toolSpec"]["name"] in {"nova_str_replace_editor", "nova_edit_tool"}
+        assert spec["toolSpec"]["name"] == expected_bedrock_name
 
     def test_legacy_editor_name_is_rejected_by_a_model_that_only_knows_the_modern_one(
         self,

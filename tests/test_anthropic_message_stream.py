@@ -196,11 +196,11 @@ async def test_redacted_thinking_delta_is_not_dropped() -> None:
     """A ``reasoningContent.redactedContent`` delta yields a ``redacted_thinking`` block.
 
     Bedrock delivers redacted reasoning as raw bytes with no textual delta, so the
-    payload must be base64-encoded into the synthesized start block rather than
+    payload must be base64-encoded into the emitted start block rather than
     surfacing as an empty ``thinking`` block.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ReasoningContentBlock.html
-         stdapi/models/chat/_adapters/_anthropic_message.py:_synthesize_block_from_delta
+         stdapi/models/chat/_adapters/_anthropic_message.py:_process_content_block_stop
     """
     pairs = await _collect(
         [
@@ -221,3 +221,83 @@ async def test_redacted_thinking_delta_is_not_dropped() -> None:
     assert not any(event == "content_block_delta" for event, _data in pairs), (
         "redacted reasoning carries no delta; the payload lives in the start block"
     )
+
+
+async def test_redacted_thinking_spanning_several_deltas_keeps_every_chunk() -> None:
+    """``redactedContent`` split across deltas is emitted as one complete block.
+
+    Anthropic streaming has no ``redacted_thinking`` delta type: the whole
+    payload lives in a single ``content_block_start``.  Bedrock may chunk the
+    bytes over several deltas of the same block, so every chunk must be
+    buffered until ``contentBlockStop`` — emitting only the first one would
+    corrupt the payload Anthropic expects replayed verbatim on the next turn.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ReasoningContentBlockDelta.html
+         stdapi/models/chat/_adapters/_anthropic_message.py:_process_content_block_stop
+    """
+    pairs = await _collect(
+        [
+            {
+                "contentBlockDelta": {
+                    "contentBlockIndex": 0,
+                    "delta": {"reasoningContent": {"redactedContent": b"sec"}},
+                }
+            },
+            {
+                "contentBlockDelta": {
+                    "contentBlockIndex": 0,
+                    "delta": {"reasoningContent": {"redactedContent": b"ret"}},
+                }
+            },
+            {"contentBlockStop": {"contentBlockIndex": 0}},
+            {"contentBlockDelta": {"contentBlockIndex": 1, "delta": {"text": "hi"}}},
+            {"contentBlockStop": {"contentBlockIndex": 1}},
+            {"messageStop": {"stopReason": "end_turn"}},
+        ]
+    )
+    starts = [data for event, data in pairs if event == "content_block_start"]
+    assert [start["content_block"]["type"] for start in starts] == [
+        "redacted_thinking",
+        "text",
+    ]
+    assert starts[0]["content_block"]["data"] == "c2VjcmV0", (
+        "both chunks must be concatenated before base64 encoding"
+    )
+    assert starts[0]["index"] == 0
+    assert starts[1]["index"] == 1, "the following text block must get the next index"
+
+
+async def test_message_delta_usage_reads_bedrock_cache_token_keys() -> None:
+    """Streaming usage maps Bedrock's ``cacheRead/WriteInputTokens`` counters.
+
+    Bedrock's ``TokenUsage`` has no ``cacheCreationInputTokens`` key: cache
+    writes arrive as ``cacheWriteInputTokens`` in the ``metadata`` event and
+    must surface as ``cache_creation_input_tokens`` in the final
+    ``message_delta`` usage instead of being omitted.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html
+         https://platform.claude.com/docs/en/build-with-claude/streaming
+         stdapi/models/chat/_adapters/_anthropic_message.py:_make_message_delta_event
+    """
+    pairs = await _collect(
+        [
+            *_text_stream_events(),
+            {
+                "metadata": {
+                    "usage": {
+                        "inputTokens": 10,
+                        "outputTokens": 5,
+                        "cacheReadInputTokens": 3,
+                        "cacheWriteInputTokens": 7,
+                    }
+                }
+            },
+        ]
+    )
+    (delta_data,) = [data for event, data in pairs if event == "message_delta"]
+    usage = delta_data["usage"]
+    assert usage["input_tokens"] == 10
+    assert usage["output_tokens"] == 5
+    assert usage["cache_read_input_tokens"] == 3
+    assert usage["cache_creation_input_tokens"] == 7

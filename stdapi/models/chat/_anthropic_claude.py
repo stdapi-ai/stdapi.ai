@@ -47,12 +47,6 @@ _SERVER_TOOL_SERIALIZE_EXCLUDE: frozenset[str] = frozenset(
 _SERVER_TOOL_KEYS = frozenset({"name", "type"})
 
 #: JSON Schema keywords marking a real function schema rather than a server-tool stub.
-#:
-#: A server tool is declared by name with no parameters, optionally carrying
-#: configuration such as ``display_width_px``.  A client is free to declare its own
-#: function that happens to share the name, and pi's ``bash`` tool does exactly
-#: that; promoting it would replace its schema with a typed server tool and forward
-#: the schema keys as tool configuration, which Anthropic rejects outright.
 _JSON_SCHEMA_KEYWORDS = frozenset(
     {
         "$defs",
@@ -296,7 +290,10 @@ class AnthropicClaudeChatModel(_BaseChatModel):
 
         The schema check is what keeps a client's own function safe: a tool
         declaring ``properties``/``required`` is that client's function, not
-        Anthropic's server tool, however it happens to be named.
+        Anthropic's server tool, however it happens to be named -- pi's own
+        ``bash`` tool does exactly that. Promoting it regardless would replace
+        its schema with the typed server tool and forward the schema keys as
+        tool configuration, which Anthropic rejects outright.
 
         Args:
             tool_config: Bedrock tool configuration before system tool promotion.

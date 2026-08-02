@@ -185,25 +185,25 @@ def _synthesize_tool_config_from_history(
 ) -> ToolConfigurationTypeDef | None:
     """Synthesize a permissive tool config from ``toolUse`` blocks in history.
 
-    Mirrors ``stdapi.models.chat._default._synthesize_tool_config_from_history``
-    for the CountTokens path: Bedrock's CountTokens API wraps the same
-    Converse-shaped payload, which rejects a request carrying
-    ``toolUse``/``toolResult`` content blocks without a ``toolConfig``. A
-    client (or ``_req_configure_tools``'s own server-tool promotion) can leave
-    a later turn with no ``toolConfig`` even though history still references a
-    tool, so a minimal one is built here: one ``toolSpec`` per distinct tool
-    name found in history, each with a permissive ``{"type": "object"}`` input
-    schema.
+    Bedrock's Converse-shaped payloads (Converse itself and the CountTokens
+    wrapper) reject a request carrying ``toolUse``/``toolResult`` content
+    blocks without a ``toolConfig``.  Clients routinely omit ``tools`` on the
+    final round-trip turn (and ``tool_choice='none'`` or server-tool promotion
+    can drop the config entirely), so when no config is otherwise present a
+    minimal one is built: one ``toolSpec`` per distinct tool name found in
+    history, each with a permissive ``{"type": "object"}`` input schema and no
+    ``toolChoice``.
 
     Args:
         messages: Converted Bedrock message history.
-        exclude: Tool names already covered elsewhere (natively promoted to
-            ``additionalModelRequestFields``), skipped so the synthesized stub
-            never duplicates one of them.
+        exclude: Tool names already sent through another channel (declared
+            natively in ``additionalModelRequestFields``), skipped so the
+            synthesized stub never duplicates one of them — Anthropic rejects
+            duplicate tool names outright.
 
     Returns:
         A synthesized tool configuration, or ``None`` if history contains no
-        eligible ``toolUse`` block.
+        ``toolUse`` blocks other than the excluded ones.
     """
     names = sorted(
         {
@@ -330,7 +330,10 @@ async def _map_tool_result_part_to_bedrock(
         case SearchResultBlockParam():
             return _map_search_result_to_bedrock(part)
         case _:  # ToolReferenceBlockParam has no Bedrock equivalent.
-            msg = f"Unsupported tool_result content part type: {type(part)}"
+            msg = (
+                f"tool_result content of type '{part.type}' is not supported. "
+                "Use text, image, document, or search_result content instead."
+            )
             raise ApiError(msg)
 
 
@@ -1170,6 +1173,35 @@ async def _map_content_block_from_bedrock(  # noqa: PLR0911
             return None
 
 
+def _merge_into_previous_web_search_result(
+    content_blocks: list[ContentBlock], block: ContentBlock
+) -> bool:
+    """Fold a web search wrapper into the previous one for the same tool use.
+
+    Bedrock emits one ``searchResult`` block per result, while Anthropic
+    aggregates all results of a search into a single ``web_search_tool_result``
+    block, so consecutive wrappers sharing a ``tool_use_id`` are merged.
+
+    Args:
+        content_blocks: Anthropic content blocks emitted so far.
+        block: Candidate content block about to be appended.
+
+    Returns:
+        ``True`` when *block* was merged into the previous wrapper.
+    """
+    if not (
+        isinstance(block, WebSearchToolResultBlock)
+        and content_blocks
+        and isinstance(previous := content_blocks[-1], WebSearchToolResultBlock)
+        and previous.tool_use_id == block.tool_use_id
+        and isinstance(previous.content, list)
+        and isinstance(block.content, list)
+    ):
+        return False
+    previous.content.extend(block.content)
+    return True
+
+
 async def format_response(
     contents: list[ContentBlockOutputTypeDef],
     stop_reason: StopReasonType | None,
@@ -1241,7 +1273,9 @@ async def format_response(
                     mapped := await _map_content_block_from_bedrock(
                         block, last_tool_use_id
                     )
-                ) is not None:
+                ) is not None and not _merge_into_previous_web_search_result(
+                    content_blocks, mapped
+                ):
                     content_blocks.append(mapped)
 
     if forced_tool is not None:
@@ -1253,7 +1287,7 @@ async def format_response(
         input_tokens=usage.get("inputTokens", 0),
         output_tokens=usage.get("outputTokens", 0),
         cache_read_input_tokens=usage.get("cacheReadInputTokens"),
-        cache_creation_input_tokens=usage.get("cacheCreationInputTokens"),
+        cache_creation_input_tokens=usage.get("cacheWriteInputTokens"),
     )
 
     return Message(
@@ -1325,8 +1359,11 @@ def _resolve_start_block(start: ContentBlockStartTypeDef) -> ContentBlock:
             return TextBlock(type="text", text="")
 
 
-async def _synthesize_block_from_delta(delta: ContentBlockDeltaTypeDef) -> ContentBlock:
+def _synthesize_block_from_delta(delta: ContentBlockDeltaTypeDef) -> ContentBlock:
     """Infer a synthetic start block from a delta payload.
+
+    ``redactedContent`` deltas never reach this point: they are buffered by
+    ``_process_content_block_delta`` and emitted at ``contentBlockStop``.
 
     Args:
         delta: Bedrock content block delta dict.
@@ -1335,10 +1372,6 @@ async def _synthesize_block_from_delta(delta: ContentBlockDeltaTypeDef) -> Conte
         Anthropic content block matching the delta type.
     """
     match delta:
-        case {"reasoningContent": {"redactedContent": bytes() as data}}:
-            return RedactedThinkingBlock(
-                type="redacted_thinking", data=await b64encode(data)
-            )
         case {"reasoningContent": _}:
             return ThinkingBlock(type="thinking", thinking="", signature="")
         case {"toolUse": _}:
@@ -1446,7 +1479,7 @@ def _make_message_delta_event(
             output_tokens=usage_data.get("outputTokens", 0),
             input_tokens=usage_data.get("inputTokens", 0),
             cache_read_input_tokens=usage_data.get("cacheReadInputTokens"),
-            cache_creation_input_tokens=usage_data.get("cacheCreationInputTokens"),
+            cache_creation_input_tokens=usage_data.get("cacheWriteInputTokens"),
         ),
     ).model_dump(mode="json", exclude_none=True)
     # Anthropic always includes `stop_sequence` (null when unmatched); exclude_none drops it.
@@ -1518,6 +1551,9 @@ class _StreamState:
         pending_results: Buffered ``toolResult`` data keyed by Bedrock block
             index; filled from ``contentBlockDelta`` events and consumed on
             ``contentBlockStop``.
+        redacted_buffer: Accumulated ``redactedContent`` bytes of the block in
+            progress, emitted as one ``redacted_thinking`` block on
+            ``contentBlockStop``; ``None`` when no redacted block is open.
     """
 
     next_index: int = 0
@@ -1526,6 +1562,7 @@ class _StreamState:
     current_tool_use: bool = False
     current_tool_input_seen: bool = False
     pending_results: dict[int, dict[str, Any]] = field(default_factory=dict)
+    redacted_buffer: bytearray | None = None
 
 
 def _process_content_block_start(
@@ -1574,26 +1611,27 @@ def _process_content_block_start(
     return []
 
 
-async def _emit_synthesized_block(
+def _emit_synthesized_block(
     index: int, delta: ContentBlockDeltaTypeDef
 ) -> list[JSONServerSentEvent]:
     """Synthesize a ``content_block_start`` + optional delta event for *index*."""
     events: list[JSONServerSentEvent] = [
-        _make_block_start_event(index, await _synthesize_block_from_delta(delta))
+        _make_block_start_event(index, _synthesize_block_from_delta(delta))
     ]
     if delta_event := _map_delta(index, delta):
         events.append(delta_event)
     return events
 
 
-async def _process_content_block_delta(
+def _process_content_block_delta(
     delta_block: ContentBlockDeltaEventTypeDef, state: _StreamState
 ) -> list[JSONServerSentEvent]:
     """Handle a ``contentBlockDelta`` event, updating *state* in place.
 
     Accumulates payload into the pending buffer when the delta belongs to a
-    buffered ``toolResult`` block.  For regular blocks, emits a delta SSE event,
-    or synthesises a ``content_block_start`` when there was no prior start event.
+    buffered ``toolResult`` or ``redactedContent`` block.  For regular blocks,
+    emits a delta SSE event, or synthesises a ``content_block_start`` when
+    there was no prior start event.
 
     Args:
         delta_block: The ``contentBlockDelta`` value from the Bedrock stream event.
@@ -1609,6 +1647,16 @@ async def _process_content_block_delta(
             state.pending_results[bedrock_index]["content_items"].extend(
                 delta["toolResult"]
             )
+        return []
+    # Anthropic has no redacted_thinking delta: the payload may span several
+    # Bedrock deltas, so it is buffered and emitted whole at contentBlockStop.
+    if (
+        "reasoningContent" in delta
+        and (redacted := delta["reasoningContent"].get("redactedContent")) is not None
+    ):
+        if state.redacted_buffer is None:
+            state.redacted_buffer = bytearray()
+        state.redacted_buffer.extend(redacted)
         return []
     if state.current_index is not None:
         if delta_event := _map_delta(state.current_index, delta):
@@ -1629,13 +1677,13 @@ async def _process_content_block_delta(
         state.current_suppressed = False
     state.current_index = state.next_index
     state.next_index += 1
-    events = await _emit_synthesized_block(state.current_index, delta)
+    events = _emit_synthesized_block(state.current_index, delta)
     state.current_tool_use = "toolUse" in delta
     state.current_tool_input_seen = state.current_tool_use and len(events) > 1
     return events
 
 
-def _process_content_block_stop(
+async def _process_content_block_stop(
     stop_block: ContentBlockStopEventTypeDef,
     state: _StreamState,
     resp_stream_map_tool_result: Callable[[str, str, list[Any]], ContentBlock | None]
@@ -1645,7 +1693,9 @@ def _process_content_block_stop(
 
     For pending ``toolResult`` blocks, translates and emits the complete block via
     *resp_stream_map_tool_result* (if set) and discards it silently otherwise.
-    For regular blocks, closes the open Anthropic block or clears the suppression flag.
+    A buffered ``redactedContent`` payload is emitted as one complete
+    ``redacted_thinking`` block.  For regular blocks, closes the open Anthropic
+    block or clears the suppression flag.
 
     Args:
         stop_block: The ``contentBlockStop`` value from the Bedrock stream event.
@@ -1674,6 +1724,18 @@ def _process_content_block_stop(
                 _make_block_stop_event(anthropic_index),
             ]
         return []
+    if state.redacted_buffer is not None:
+        data = await b64encode(bytes(state.redacted_buffer))
+        state.redacted_buffer = None
+        state.current_suppressed = False
+        index = state.next_index
+        state.next_index += 1
+        return [
+            _make_block_start_event(
+                index, RedactedThinkingBlock(type="redacted_thinking", data=data)
+            ),
+            _make_block_stop_event(index),
+        ]
     if state.current_suppressed:
         state.current_suppressed = False
         return []
@@ -1790,10 +1852,10 @@ async def _process_stream_events(
                 ):
                     yield sse
             case {"contentBlockDelta": delta_block}:
-                for sse in await _process_content_block_delta(delta_block, state):
+                for sse in _process_content_block_delta(delta_block, state):
                     yield sse
             case {"contentBlockStop": stop_block}:
-                for sse in _process_content_block_stop(
+                for sse in await _process_content_block_stop(
                     stop_block, state, resp_stream_map_tool_result
                 ):
                     yield sse

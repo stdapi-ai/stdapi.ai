@@ -171,9 +171,8 @@ async def test_count_tokens_claude_server_tool_with_custom_tool_history_no_dupli
     and the two must never end up naming the same tool.
 
     A server-tool-*only* turn-2 conversation (no custom tool anywhere in
-    history) is covered separately by
-    ``test_count_tokens_server_tool_only_history_sends_no_toolconfig``, which
-    documents the still-open question this leaves (see its docstring).
+    history) takes the other branch and is covered by
+    ``test_count_tokens_server_tool_only_history_keeps_the_stub``.
 
     Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
          stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
@@ -286,6 +285,12 @@ async def test_count_tokens_server_tool_only_history_keeps_the_stub(
     assert config_names == {"bash"}, (
         "the stub must stay so Bedrock sees a toolConfig for the tool in history"
     )
+    (stub,) = converse["toolConfig"]["tools"]
+    schema = stub["toolSpec"]["inputSchema"]["json"]
+    assert set(schema.get("properties", {})) == {"command", "restart"}, (
+        "the retained stub must carry the documented bash input schema, exactly "
+        "as create_message sends it, so the count matches the created request"
+    )
 
 
 async def test_count_tokens_omitted_tools_synthesizes_config_from_history(
@@ -301,7 +306,7 @@ async def test_count_tokens_omitted_tools_synthesizes_config_from_history(
     -- otherwise the count would silently omit tokens Bedrock actually charges
     for the missing ``toolConfig``, or Bedrock could reject the request outright.
 
-    Ref: stdapi/models/chat/_default.py:_synthesize_tool_config_from_history
+    Ref: stdapi/models/chat/_adapters/_anthropic_message.py:_synthesize_tool_config_from_history
          stdapi/models/chat/_adapters/_anthropic_message.py:count_tokens_via_bedrock
     """
     request = MessageCountTokensParams(

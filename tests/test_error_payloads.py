@@ -178,7 +178,7 @@ class TestFormatErrorFunctions:
         ("status", "expected_type", "expected_status"),
         [
             (402, "billing_error", 402),
-            (409, "conflict_error", 409),
+            (409, "invalid_request_error", 409),
             (413, "request_too_large", 413),
             (500, "api_error", 500),
             (502, "api_error", 502),
@@ -195,7 +195,9 @@ class TestFormatErrorFunctions:
         Anthropic's documented table has no 503 entry: the gateway rewrites an
         upstream 503 to ``overloaded_error`` with HTTP 529, the status the
         Anthropic SDKs treat as retryable overload. 502 likewise collapses to
-        ``api_error``. Neither remap is documented upstream.
+        ``api_error``. Neither remap is documented upstream. 409 has no
+        Anthropic error type at all (the SDK union has no ``conflict_error``),
+        so it degrades to the default ``invalid_request_error``.
 
         Ref: https://platform.claude.com/docs/en/api/errors
         """
@@ -544,9 +546,9 @@ class TestCrossRouteConsistency:
 class TestRoutingErrorPayloads:
     """Starlette-level routing failures (404/405) are rendered as an error envelope.
 
-    Regression coverage for BUG-1: the base ``starlette.exceptions.HTTPException``
-    raised by the router for no-route/method-not-allowed must not bypass the
-    custom exception handler and fall back to Starlette's default ``{"detail": ...}``.
+    The base ``starlette.exceptions.HTTPException`` the router raises for
+    no-route/method-not-allowed must not bypass the custom exception handler and
+    fall back to Starlette's default ``{"detail": ...}``.
 
     Ref: stdapi/main.py:handle_http_exception
          stdapi/api_providers/__init__.py:format_http_error
@@ -609,11 +611,9 @@ def _openai_request(
 class TestBotocoreClientErrorEnvelope:
     """``handle_botocore_client_error`` maps an AWS error code onto the OpenAI envelope.
 
-    Regression coverage for BUG-2 (bogus ``param``) and BUG-3 (S3 multipart
-    errors falling through to 502). The raw AWS error code is never surfaced
-    to the client, neither as ``param`` (which OpenAI clients read as a
-    request-field name) nor as ``code`` (an AWS-internal identifier upstream
-    never emits there); ``code`` stays null.
+    The raw AWS error code is never surfaced to the client, neither as ``param``
+    (which OpenAI clients read as a request-field name) nor as ``code`` (an
+    AWS-internal identifier upstream never emits there); ``code`` stays null.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
          stdapi/main.py:handle_botocore_client_error

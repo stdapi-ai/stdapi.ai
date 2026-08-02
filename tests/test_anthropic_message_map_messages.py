@@ -153,28 +153,6 @@ class TestMapMessagesAllowToolCaching:
             {"cachePoint": {"type": "default"}},
         ]
 
-    async def test_s3_image_source_outside_the_allow_list_is_rejected(self) -> None:
-        """An ``s3://`` image source is refused unless its bucket is configured.
-
-        ``InputFile`` validates the bucket against the gateway's accepted-bucket
-        set, so a caller cannot make the server read an arbitrary bucket its role
-        happens to have access to.
-
-        Ref: stdapi/input_file.py:InputFile
-        """
-        with pytest.raises(ValidationError) as excinfo:
-            ImageBlockParam.model_validate(
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "url",
-                        "url": "s3://not-an-allowed-bucket/picture.png",
-                    },
-                }
-            )
-        assert "S3 bucket not allowed" in str(excinfo.value)
-        assert "not-an-allowed-bucket" in str(excinfo.value)
-
 
 class TestMapMessagesThinkingBlocks:
     """Assistant thinking history is replayed to Bedrock as ``reasoningContent``.

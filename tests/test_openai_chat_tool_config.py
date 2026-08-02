@@ -6,7 +6,7 @@ final turn omits ``tools`` but still contains ``toolUse``/``toolResult`` blocks.
 Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
      https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
      stdapi/models/chat/_adapters/_openai_chat_completion.py:build_tool_config
-     stdapi/models/chat/_default.py:_synthesize_tool_config_from_history
+     stdapi/models/chat/_adapters/_anthropic_message.py:_synthesize_tool_config_from_history
 """
 
 from __future__ import annotations
@@ -228,8 +228,7 @@ class TestAnthropicToolChoiceNone:
         """Dropping the config leaves Converse a synthesized one for the history.
 
         Converse rejects ``toolUse``/``toolResult`` blocks without a
-        ``toolConfig``. This is the case the audit judged unfixable; it is safe
-        because the synthesis is shared by every route.
+        ``toolConfig``; the synthesis that supplies one is shared by every route.
         """
         tool_config = _build_tool_config(
             [ToolParam.model_validate(_ANTHROPIC_WEATHER_TOOL)],

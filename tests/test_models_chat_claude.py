@@ -376,7 +376,7 @@ class TestServerToolRePromotion:
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview#tool-use-examples
              stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
-             stdapi/models/chat/_default.py:_synthesize_tool_config_from_history
+             stdapi/models/chat/_adapters/_anthropic_message.py:_synthesize_tool_config_from_history
         """
         model = _claude_model("anthropic.claude-haiku-4-5-20251001-v1:0")
         tool_config: JsonMapping = {
@@ -464,7 +464,7 @@ class TestServerToolRePromotion:
         moves to ``additionalModelRequestFields``.
 
         Ref: stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
-             stdapi/models/chat/_default.py:_synthesize_tool_config_from_history
+             stdapi/models/chat/_adapters/_anthropic_message.py:_synthesize_tool_config_from_history
         """
         model = _claude_model("anthropic.claude-haiku-4-5-20251001-v1:0")
         tool_config: JsonMapping = {
@@ -698,14 +698,14 @@ class TestServerToolRePromotion:
 
         A server-tool-*only* turn-2 conversation (no custom tool anywhere in
         history) is not covered here: closing that gap requires
-        ``_synthesize_tool_config_from_history`` in ``_default.py`` — outside
+        ``_synthesize_tool_config_from_history`` in ``_anthropic_message.py`` — outside
         this module — to skip names already present in
         ``additionalModelRequestFields["tools"]``, since it unconditionally
         resynthesizes a stub for every ``toolUse`` name it finds once
         ``tool_config`` is left empty.
 
         Ref: stdapi/models/chat/_default.py:ChatModel._prepare_converse_request
-             stdapi/models/chat/_default.py:_synthesize_tool_config_from_history
+             stdapi/models/chat/_adapters/_anthropic_message.py:_synthesize_tool_config_from_history
         """
         model = _claude_model("anthropic.claude-haiku-4-5-20251001-v1:0")
         tool_config: JsonMapping = {

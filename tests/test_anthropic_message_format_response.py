@@ -236,6 +236,78 @@ async def test_search_result_correlates_to_mapped_server_tool_use_id() -> None:
     assert web_result.tool_use_id == "srvtoolu_t1"
 
 
+async def test_consecutive_search_results_aggregate_into_one_wrapper() -> None:
+    """Consecutive ``searchResult`` blocks fold into a single ``web_search_tool_result``.
+
+    Bedrock emits one ``searchResult`` block per result, while Anthropic returns
+    exactly one ``web_search_tool_result`` block per search whose ``content``
+    lists every result; emitting one wrapper per result would hand SDK clients
+    several blocks sharing the same ``tool_use_id``.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
+         stdapi/models/chat/_adapters/_anthropic_message.py:_merge_into_previous_web_search_result
+    """
+    contents = _search_result_contents()
+    contents.append(
+        cast(
+            "ContentBlockOutputTypeDef",
+            {"searchResult": {"source": "https://example.org", "title": "Other"}},
+        )
+    )
+    message = await format_response(
+        contents=contents,
+        stop_reason="end_turn",
+        usage={},
+        message_id="msg_1",
+        model_id="model-x",
+        forced_tool=None,
+        resp_map_tool_result=lambda *_args: None,
+    )
+    assert [block.type for block in message.content] == [
+        "tool_use",
+        "web_search_tool_result",
+    ], "both results must share one wrapper block"
+    wrapper = next(
+        b for b in message.content if isinstance(b, WebSearchToolResultBlock)
+    )
+    assert isinstance(wrapper.content, list)
+    assert [result.url for result in wrapper.content] == [
+        "https://example.com",
+        "https://example.org",
+    ]
+
+
+async def test_usage_cache_tokens_read_from_bedrock_keys() -> None:
+    """``usage`` cache counters come from Bedrock's ``cacheRead/WriteInputTokens``.
+
+    Bedrock's ``TokenUsage`` has no ``cacheCreationInputTokens`` key: cache
+    writes are reported as ``cacheWriteInputTokens``, which must surface as
+    Anthropic's ``cache_creation_input_tokens`` instead of staying ``None``.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html
+         https://platform.claude.com/docs/en/api/messages
+         stdapi/models/chat/_adapters/_anthropic_message.py:format_response
+    """
+    message = await format_response(
+        contents=cast("list[ContentBlockOutputTypeDef]", [{"text": "hi"}]),
+        stop_reason="end_turn",
+        usage={
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "cacheReadInputTokens": 3,
+            "cacheWriteInputTokens": 7,
+        },
+        message_id="msg_1",
+        model_id="model-x",
+        forced_tool=None,
+        resp_map_tool_result=lambda *_args: None,
+    )
+    assert message.usage.input_tokens == 10
+    assert message.usage.output_tokens == 5
+    assert message.usage.cache_read_input_tokens == 3
+    assert message.usage.cache_creation_input_tokens == 7
+
+
 async def _citation_block(location: dict[str, Any]) -> TextBlock:
     """Run ``format_response`` over one Bedrock ``citationsContent`` block."""
     contents = cast(

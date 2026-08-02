@@ -24,6 +24,9 @@ from stdapi.models.chat._adapters import _openai_chat_completion as openai_adapt
 from stdapi.models.chat._adapters import _openai_common
 from stdapi.models.chat._adapters import _openai_completion as text_completion_adapter
 from stdapi.models.chat._adapters import _openai_responses as responses_adapter
+from stdapi.models.chat._adapters._anthropic_message import (
+    _synthesize_tool_config_from_history,
+)
 from stdapi.monitoring import REQUEST, log_request_sse_stream_event, log_response_params
 from stdapi.types.anthropic_messages import (
     ServerToolUseBlock,
@@ -78,7 +81,7 @@ if TYPE_CHECKING:
     from stdapi.types.openai_responses import Response, ResponseCreateParams
 
 
-def _native_tool_names(additional_request_fields: JsonMapping) -> set[str]:
+def _native_tool_names(additional_request_fields: JsonMapping) -> frozenset[str]:
     """Return the tool names already declared in the model's native tool list.
 
     Args:
@@ -89,54 +92,12 @@ def _native_tool_names(additional_request_fields: JsonMapping) -> set[str]:
     """
     tools = additional_request_fields.get("tools")
     if not isinstance(tools, list):
-        return set()
-    return {
+        return frozenset()
+    return frozenset(
         name
         for tool in tools
         if isinstance(tool, dict) and isinstance(name := tool.get("name"), str)
-    }
-
-
-def _synthesize_tool_config_from_history(
-    messages: list[MessageTypeDef],
-    exclude: set[str] = frozenset(),  # type: ignore[assignment]
-) -> ToolConfigurationTypeDef | None:
-    """Synthesize a permissive tool config from ``toolUse`` blocks in history.
-
-    Bedrock Converse rejects a request that carries ``toolUse``/``toolResult``
-    content blocks without a ``toolConfig``.  OpenAI clients routinely omit
-    ``tools`` on the final round-trip turn (and ``tool_choice='none'`` drops the
-    config entirely), so when no config is otherwise present a minimal one is
-    built: one ``toolSpec`` per distinct tool name found in history, each with a
-    permissive ``{"type": "object"}`` input schema and no ``toolChoice``.
-
-    Args:
-        messages: Converted Bedrock message history.
-        exclude: Tool names the model already declares natively.  Synthesizing a
-            stub for one of these would send the same name twice, which Anthropic
-            rejects outright with "Tool names must be unique".
-
-    Returns:
-        A synthesized tool configuration, or ``None`` if history contains no
-        ``toolUse`` blocks other than the excluded ones.
-    """
-    names = sorted(
-        {
-            block["toolUse"]["name"]
-            for message in messages
-            for block in message.get("content", ())
-            if "toolUse" in block
-        }
-        - exclude
     )
-    if not names:
-        return None
-    return {
-        "tools": [
-            {"toolSpec": {"name": name, "inputSchema": {"json": {"type": "object"}}}}
-            for name in names
-        ]
-    }
 
 
 class ChatModel(ChatModelBase[Any, Any]):
@@ -258,9 +219,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             request_metadata=request_metadata,
         )
         if request.stream:
-            # The prompt router's invoked-model trace only arrives in the terminal
-            # stream event, after the first chunk (which carries `model`) is already
-            # sent, so streaming keeps reporting the configured (router) model ID.
+            # The invoked-model trace only arrives at stream end: report the router ID.
             return EventSourceResponse(
                 log_request_sse_stream_event(
                     openai_adapter.format_stream(
@@ -612,9 +571,7 @@ class ChatModel(ChatModelBase[Any, Any]):
                     fallback_model=SETTINGS.image_generation_model,
                 )
 
-            # The prompt router's invoked-model trace only arrives in the terminal
-            # stream event, after the first chunk (which carries `model`) is already
-            # sent, so streaming keeps reporting the configured (router) model ID.
+            # The invoked-model trace only arrives at stream end: report the router ID.
             return EventSourceResponse(
                 log_request_sse_stream_event(
                     responses_adapter.format_stream(
@@ -692,9 +649,7 @@ class ChatModel(ChatModelBase[Any, Any]):
 
         suppress_names = self.SUPPORTED_SYSTEM_TOOLS or None
         if request.stream:
-            # The prompt router's invoked-model trace only arrives in the terminal
-            # stream event, after the first chunk (which carries `model`) is already
-            # sent, so streaming keeps reporting the configured (router) model ID.
+            # The invoked-model trace only arrives at stream end: report the router ID.
             return EventSourceResponse(
                 log_request_sse_stream_event(
                     responses_adapter.format_stream(
@@ -770,10 +725,10 @@ class ChatModel(ChatModelBase[Any, Any]):
             request["system"] = system_blocks
         if tool_config:
             request["toolConfig"] = tool_config
-        elif synthesized_tool_config := _synthesize_tool_config_from_history(
-            bedrock_messages, _native_tool_names(additional_request_fields)
+        elif synthesized := _synthesize_tool_config_from_history(
+            bedrock_messages, exclude=_native_tool_names(additional_request_fields)
         ):
-            request["toolConfig"] = synthesized_tool_config
+            request["toolConfig"] = synthesized
         if additional_request_fields := self._prepare_additional_request_fields(
             additional_request_fields
         ):

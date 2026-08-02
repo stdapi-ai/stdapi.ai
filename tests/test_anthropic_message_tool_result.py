@@ -131,8 +131,9 @@ async def test_map_tool_result_to_bedrock_rejects_tool_reference_block() -> None
     """A ``tool_reference`` block has no Bedrock equivalent.
 
     Bedrock's ``ToolResultContentBlock`` union has no reference member, so the part
-    must raise a 400-class ``ApiError`` naming the offending part type instead of
-    crashing with an ``AttributeError`` deeper in the mapper.
+    must raise a 400-class ``ApiError`` naming the offending part by its wire
+    ``type`` value — never by the internal Python class — and pointing at the
+    accepted alternatives.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlock.html
          stdapi/models/chat/_adapters/_anthropic_message.py:_map_tool_result_part_to_bedrock
@@ -145,5 +146,8 @@ async def test_map_tool_result_to_bedrock_rejects_tool_reference_block() -> None
     with pytest.raises(ApiError) as excinfo:
         await _map_tool_result_to_bedrock(block)
     assert excinfo.value.status == 400
-    assert "Unsupported tool_result content part type" in str(excinfo.value)
-    assert "ToolReferenceBlockParam" in str(excinfo.value)
+    message = str(excinfo.value)
+    assert "'tool_reference' is not supported" in message
+    assert "ToolReferenceBlockParam" not in message, (
+        "the internal class name must not leak into the client-facing error"
+    )
