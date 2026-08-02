@@ -1,7 +1,8 @@
 """Models."""
 
-from asyncio import CancelledError, Lock, gather, sleep
+from asyncio import CancelledError, Lock, create_task, gather, sleep
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import timedelta
 from functools import partial
@@ -299,6 +300,24 @@ EXTRA_MODELS_INPUT_MODALITY: dict[str, set[str]] = {}
 #: All models by input modality
 _ALL_MODELS_INPUT_MODALITY: dict[str, set[str]] = {}
 
+#: All models by supported route path or MCP tool name (search_models filter index)
+_ALL_MODELS_BY_ROUTE_OR_TOOL: dict[str, set[str]] = {}
+
+#: All models by AWS region (search_models filter index)
+_ALL_MODELS_BY_REGION: dict[str, set[str]] = {}
+
+#: Model IDs with response_streaming is True (search_models filter index)
+_ALL_MODELS_STREAMING: set[str] = set()
+
+#: Model IDs with response_streaming is False (search_models filter index)
+_ALL_MODELS_NON_STREAMING: set[str] = set()
+
+#: Model IDs with legacy is True (search_models filter index)
+_ALL_MODELS_LEGACY: set[str] = set()
+
+#: Model IDs with legacy is not True (search_models filter index)
+_ALL_MODELS_NON_LEGACY: set[str] = set()
+
 #: Model cache state
 _CACHE: _ModelCache = {
     "update_next": None,
@@ -592,7 +611,7 @@ class ModelBase[RequestT, ResponseT]:
 
     async def invoke(
         self,
-        body: RequestT,
+        body: RequestT | bytes,
         *,
         inference_profile: bool = True,
         region: RegionName | None = None,
@@ -603,7 +622,9 @@ class ModelBase[RequestT, ResponseT]:
         """Invoke the model via ``InvokeModel``.
 
         Args:
-            body: JSON request payload.
+            body: JSON request payload, or an already JSON-encoded body (e.g.
+                to reuse one serialization across a fan-out of identical
+                invokes) -- skips re-serializing it for every call.
             inference_profile: Use the cross-region inference profile ID when available.
             region: Pin the retry loop to this region. Use with :meth:`select_region`
                 when S3 inputs have already been placed in a specific region. When
@@ -1213,6 +1234,31 @@ async def get_all_models_details_and_modalities() -> tuple[
         return _ALL_MODELS, _ALL_MODELS_OUTPUT_MODALITY, _ALL_MODELS_INPUT_MODALITY
 
 
+async def get_all_models_search_indexes() -> tuple[
+    dict[str, set[str]], dict[str, set[str]], set[str], set[str], set[str], set[str]
+]:
+    """Return inverted indexes over the catalogue used by the search_models filters.
+
+    Rebuilt alongside the catalogue in :func:`update_unified_models_collections`,
+    so filtering by route/MCP tool, region, streaming, or legacy status is a
+    O(1) set lookup instead of a full-catalog scan.
+
+    Returns:
+        Tuple of (route path/MCP tool name to model IDs, AWS region to model
+        IDs, streaming model IDs, non-streaming model IDs, legacy model IDs,
+        non-legacy model IDs).
+    """
+    async with _CACHE["access_lock"]:
+        return (
+            _ALL_MODELS_BY_ROUTE_OR_TOOL,
+            _ALL_MODELS_BY_REGION,
+            _ALL_MODELS_STREAMING,
+            _ALL_MODELS_NON_STREAMING,
+            _ALL_MODELS_LEGACY,
+            _ALL_MODELS_NON_LEGACY,
+        )
+
+
 def resolve_model_alias(model_id: str) -> str:
     """Resolve a model alias to its canonical model ID, or return *model_id* unchanged.
 
@@ -1328,7 +1374,8 @@ def update_unified_models_collections() -> None:
     """Merge Bedrock and extra-service model collections into the unified ``_ALL_*`` dicts.
 
     Rebuilds ``_ALL_MODELS``, ``_ALL_MODELS_OUTPUT_MODALITY``,
-    ``_ALL_MODELS_INPUT_MODALITY``, and the model-alias index.
+    ``_ALL_MODELS_INPUT_MODALITY``, the model-alias index, and the
+    search_models inverted indexes (route/MCP tool, region, streaming, legacy).
     """
     _ALL_MODELS.clear()
     _ALL_MODELS.update(_MODELS | EXTRA_MODELS)
@@ -1349,10 +1396,28 @@ def update_unified_models_collections() -> None:
 
     _populate_model_aliases(_ALL_MODELS)
 
+    _ALL_MODELS_BY_ROUTE_OR_TOOL.clear()
+    _ALL_MODELS_BY_REGION.clear()
+    _ALL_MODELS_STREAMING.clear()
+    _ALL_MODELS_NON_STREAMING.clear()
+    _ALL_MODELS_LEGACY.clear()
+    _ALL_MODELS_NON_LEGACY.clear()
     for model_id, model in _ALL_MODELS.items():
         model.supported_routes, model.supported_mcp_tools = _compute_model_capabilities(
             model_id, model
         )
+        for route_or_tool in (*model.supported_routes, *model.supported_mcp_tools):
+            _ALL_MODELS_BY_ROUTE_OR_TOOL.setdefault(route_or_tool, set()).add(model_id)
+        for region in model.regions:
+            _ALL_MODELS_BY_REGION.setdefault(region, set()).add(model_id)
+        if model.response_streaming is True:
+            _ALL_MODELS_STREAMING.add(model_id)
+        elif model.response_streaming is False:
+            _ALL_MODELS_NON_STREAMING.add(model_id)
+        if model.legacy is True:
+            _ALL_MODELS_LEGACY.add(model_id)
+        else:
+            _ALL_MODELS_NON_LEGACY.add(model_id)
 
 
 async def _get_provisioned_models(bedrock_client: BedrockClient) -> set[str]:
@@ -1684,21 +1749,18 @@ async def _collect_mantle_models(
     return models
 
 
-async def _merge_mantle_models(
-    all_models: dict[str, ModelDetails], failed_regions: dict[str, str]
+def _merge_mantle_models(
+    all_models: dict[str, ModelDetails], mantle_models: dict[str, ModelDetails]
 ) -> None:
-    """Discover Mantle models and merge them into *all_models*.
+    """Merge previously-collected Mantle models into *all_models*.
 
     bedrock-runtime keeps priority for dual-homed models unless the model is
-    explicitly preferred on Mantle. No-op when Mantle support is disabled.
+    explicitly preferred on Mantle.
 
     Args:
         all_models: Resolved bedrock-runtime models, updated in-place.
-        failed_regions: Accumulator mapping unreachable regions to the error.
+        mantle_models: Mantle models collected by :func:`_collect_mantle_models`.
     """
-    if not SETTINGS.aws_bedrock_mantle_enabled:
-        return
-    mantle_models = await _collect_mantle_models(failed_regions)
     MANTLE_MODELS.clear()
     MANTLE_MODELS.update(mantle_models)
     for model_id, mantle_model in mantle_models.items():
@@ -1818,6 +1880,51 @@ async def _check_candidates(
     return all_models
 
 
+async def _collect_all_models(
+    failed_regions: dict[str, str], unavailable_models: dict[str, dict[str, list[str]]]
+) -> tuple[dict[str, ModelDetails], dict[str, str]]:
+    """Collect bedrock-runtime and Mantle models concurrently and merge them.
+
+    Mantle is a separate endpoint from bedrock-runtime, so its discovery is
+    started immediately and runs alongside the bedrock-runtime region-candidate
+    collection and availability checks instead of after them. If the
+    bedrock-runtime path raises first, or the caller is cancelled, the
+    still-running Mantle task is cancelled and awaited so its outcome is
+    always retrieved (never left as an un-retrieved task warning) before the
+    error propagates.
+
+    Args:
+        failed_regions: Accumulator mapping unreachable regions to the error.
+        unavailable_models: Accumulator for failed availability checks.
+
+    Returns:
+        Tuple of (bedrock-runtime models merged with Mantle models, invalid
+        ARN mappings from :func:`_apply_user_profiles`).
+
+    Raises:
+        BotoCoreError: When every configured region fails (first error).
+        ClientError: When every configured region fails (first error).
+    """
+    mantle_task = (
+        create_task(_collect_mantle_models(failed_regions))
+        if SETTINGS.aws_bedrock_mantle_enabled
+        else None
+    )
+    try:
+        candidates = await _collect_region_candidates(failed_regions)
+        all_models = await _check_candidates(candidates, unavailable_models)
+        invalid_arn_mappings = _apply_user_profiles(all_models)
+        if mantle_task is not None:
+            _merge_mantle_models(all_models, await mantle_task)
+    except BaseException:
+        if mantle_task is not None:
+            mantle_task.cancel()
+            with suppress(BaseException):
+                await mantle_task
+        raise
+    return all_models, invalid_arn_mappings
+
+
 async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool:
     """Refresh the Bedrock model cache from all configured regions if stale.
 
@@ -1847,12 +1954,9 @@ async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool
 
     async with _CACHE["update_lock"]:
         if _CACHE["update_next"] is None or _CACHE["update_next"] <= SETTINGS.now():
-            candidates = await _collect_region_candidates(failed_regions)
-            all_models = await _check_candidates(candidates, unavailable_models)
-
-            invalid_arn_mappings = _apply_user_profiles(all_models)
-
-            await _merge_mantle_models(all_models, failed_regions)
+            all_models, invalid_arn_mappings = await _collect_all_models(
+                failed_regions, unavailable_models
+            )
 
             mantle_guardrail_models = (
                 sum(1 for m in all_models.values() if m.service == MANTLE_SERVICE)
@@ -2557,7 +2661,7 @@ async def resolve_routed_model_id(
 
 async def _build_invoke_kwargs(
     model_id: str,
-    body: Mapping[str, Any],
+    body: Mapping[str, Any] | bytes,
     region: RegionName,
     *,
     inference_profile: bool,
@@ -2571,7 +2675,8 @@ async def _build_invoke_kwargs(
 
     Args:
         model_id: Bedrock model identifier.
-        body: JSON request payload.
+        body: JSON request payload, or an already JSON-encoded body (skips
+            re-serializing it).
         region: Target AWS region (used to resolve the model/profile ID).
         inference_profile: Use cross-region inference profile ID when available.
         service_tier: Service tier configuration. When provided, takes precedence
@@ -2590,7 +2695,7 @@ async def _build_invoke_kwargs(
         "modelId": resolved_model_id,
         "contentType": "application/json",
         "accept": "application/json",
-        "body": to_json(body),
+        "body": body if isinstance(body, bytes) else to_json(body),
         # InvokeModel carries the metadata as a JSON string header, unlike
         # Converse which takes a map.
         "requestMetadata": to_json(build_metadata()).decode(),
@@ -2615,7 +2720,7 @@ async def _build_invoke_kwargs(
 
 async def _invoke(
     model_id: str,
-    body: Mapping[str, Any],
+    body: Mapping[str, Any] | bytes,
     region: RegionName,
     *,
     inference_profile: bool,
@@ -2627,7 +2732,8 @@ async def _invoke(
 
     Args:
         model_id: Bedrock model identifier.
-        body: JSON request payload.
+        body: JSON request payload, or an already JSON-encoded body (skips
+            re-serializing it).
         region: AWS region to target.
         inference_profile: Use cross-region inference profile ID when available.
         single_region: Selects the botocore client (see :func:`bedrock_client`).
@@ -3095,10 +3201,24 @@ async def resolve_bedrock_prompt(prompt_id: str, version: str | None) -> Bedrock
     )
 
 
+#: Initial delay between ``GetAsyncInvoke`` polls.
+_ASYNC_INVOKE_POLL_INITIAL_DELAY: Final[float] = 0.5
+
+#: Multiplier applied to the poll delay after each unfinished check.
+_ASYNC_INVOKE_POLL_BACKOFF: Final[float] = 2.0
+
+#: Maximum delay between ``GetAsyncInvoke`` polls.
+_ASYNC_INVOKE_POLL_MAX_DELAY: Final[float] = 2.0
+
+
 async def _wait_for_async_invocation_completion(
     bedrock_client: BedrockRuntimeClient, invocation_arn: str
 ) -> str:
     """Poll ``GetAsyncInvoke`` until the job completes and return the S3 output key.
+
+    Poll delay backs off exponentially from :data:`_ASYNC_INVOKE_POLL_INITIAL_DELAY`
+    to :data:`_ASYNC_INVOKE_POLL_MAX_DELAY`, easing load for jobs that take longer
+    than a couple seconds to complete.
 
     Args:
         bedrock_client: Bedrock runtime client for the job's region.
@@ -3110,6 +3230,7 @@ async def _wait_for_async_invocation_completion(
     Raises:
         ApiError: If the invocation status is ``Failed``.
     """
+    delay = _ASYNC_INVOKE_POLL_INITIAL_DELAY
     while True:
         response = await bedrock_client.get_async_invoke(invocationArn=invocation_arn)
         match response["status"]:
@@ -3123,4 +3244,5 @@ async def _wait_for_async_invocation_completion(
                 log_error_details(response["failureMessage"], status=502)
                 msg = "The request could not be completed. Retry the request."
                 raise ApiError(msg, status=502)
-        await sleep(0.5)
+        await sleep(delay)
+        delay = min(delay * _ASYNC_INVOKE_POLL_BACKOFF, _ASYNC_INVOKE_POLL_MAX_DELAY)

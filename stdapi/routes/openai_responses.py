@@ -34,6 +34,7 @@ from stdapi.aws_bedrock_mantle import (
     request_json,
     validate_pruning_extras,
 )
+from stdapi.cleanup import schedule_cleanup
 from stdapi.config import SETTINGS
 from stdapi.models import resolve_bedrock_prompt, validate_model
 from stdapi.models.capabilities import Capability, register_route_capability
@@ -254,6 +255,12 @@ async def _apply_previous_response(
     return request
 
 
+#: Adapter validating stored conversation entries against the ResponseInputItem union.
+_INPUT_HISTORY_ADAPTER: TypeAdapter[list[ResponseInputItem]] = TypeAdapter(
+    list[ResponseInputItem]
+)
+
+
 async def _merge_previous_response(
     request: ResponseCreateParams, previous_response_id: str
 ) -> ResponseCreateParams:
@@ -279,21 +286,18 @@ async def _merge_previous_response(
         if error.status != 404:
             raise
         _previous_response_not_found(previous_response_id)
-    data = request.model_dump(mode="json", exclude_unset=True, by_alias=True)
-    data.pop("previous_response_id", None)
-    new_input = data.get("input") or []
-    if isinstance(new_input, str):
-        new_input = [{"role": "user", "content": new_input}]
     stored_input = stored.get("input") or []
     if isinstance(stored_input, str):
         stored_input = [{"role": "user", "content": stored_input}]
-    data["input"] = [
-        *stored_input,
-        *stored.get("response", {}).get("output", []),
-        *new_input,
-    ]
+    stored_history = [*stored_input, *stored.get("response", {}).get("output", [])]
     with validation_error_handler():
-        return ResponseCreateParams.model_validate(data)
+        history = _INPUT_HISTORY_ADAPTER.validate_python(stored_history)
+    new_input = request.input or []
+    if isinstance(new_input, str):
+        new_input = [EasyInputMessage(role="user", content=new_input)]
+    return request.model_copy(
+        update={"input": [*history, *new_input], "previous_response_id": None}
+    )
 
 
 def _malformed_stored_document(response_id: str, detail: str) -> Never:
@@ -616,7 +620,7 @@ async def create_response(
             _failed_response_error(result)
     except BaseException:
         if store:
-            await discard_stored_response_session(response_id, "response")
+            schedule_cleanup(discard_stored_response_session(response_id, "response"))
         raise
     if isinstance(result, Response):
         if previous_response_id:
@@ -639,7 +643,9 @@ async def create_response(
                     },
                 )
             except BaseException:
-                await discard_stored_response_session(response_id, "response")
+                schedule_cleanup(
+                    discard_stored_response_session(response_id, "response")
+                )
                 raise
     return result
 

@@ -1,7 +1,7 @@
 """AWS Bedrock guardrail checks (InvokeGuardrailChecks) moderation model."""
 
 from math import ceil
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from botocore.exceptions import ClientError
 
@@ -50,6 +50,20 @@ _CONTENT_FILTER_CATEGORIES: dict[str, str] = {
 
 #: Severity score at or above which guardrail checks results are flagged.
 _SEVERITY_THRESHOLD: float = 0.5
+
+#: Static InvokeGuardrailChecks content filter categories request payload (same on every call).
+_CONTENT_FILTER_CHECKS: dict[str, Any] = {
+    "contentFilter": {
+        "categories": [
+            {"category": category} for category in _CONTENT_FILTER_CATEGORIES
+        ]
+    }
+}
+
+#: Per-category score template (zeroed), copied per call instead of rebuilt via dict.fromkeys().
+_SCORE_TEMPLATE: dict[str, float] = dict.fromkeys(
+    _CONTENT_FILTER_CATEGORIES.values(), 0.0
+)
 
 
 class ModerationModel(ModerationModelBase):
@@ -121,14 +135,7 @@ class ModerationModel(ModerationModelBase):
             """Start the guardrail checks call on one region's client."""
             return client.invoke_guardrail_checks(
                 messages=[{"role": "user", "content": [{"text": text}]}],
-                checks={
-                    "contentFilter": {
-                        "categories": [
-                            {"category": category}  # type: ignore[typeddict-item]
-                            for category in _CONTENT_FILTER_CATEGORIES
-                        ]
-                    }
-                },
+                checks=_CONTENT_FILTER_CHECKS,  # type: ignore[arg-type]
             )
 
         try:
@@ -156,7 +163,7 @@ class ModerationModel(ModerationModelBase):
             text_units=usage["textUnits"] if usage else ceil(len(text) / 1000),
             region=region,
         )
-        scores = dict.fromkeys(_CONTENT_FILTER_CATEGORIES.values(), 0.0)
+        scores = _SCORE_TEMPLATE.copy()
         content_filter = response["results"].get("contentFilter")
         for entry in content_filter["results"] if content_filter else ():
             if category := _CONTENT_FILTER_CATEGORIES.get(entry["category"]):

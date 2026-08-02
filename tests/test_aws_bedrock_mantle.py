@@ -16,6 +16,7 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
 
 from __future__ import annotations
 
+from asyncio import CancelledError, Event, create_task, wait_for
 from base64 import b32encode, b64decode, urlsafe_b64encode
 from binascii import crc32
 from contextlib import contextmanager
@@ -2390,13 +2391,12 @@ class TestServesViaMantleHeaderDispatch:
 class TestParallelToolCallsFalseAccepted:
     """``parallel_tool_calls: false`` is accepted for every model.
 
-    Upstream never rejects the flag, and the Responses API on this gateway has
-    always accepted it, so rejecting it on Chat Completions alone broke requests
-    that are valid upstream and split the two sibling surfaces. Mantle honors it
-    by mapping the flag onto Anthropic's ``disable_parallel_tool_use``
-    (covered in ``tests/test_aws_bedrock_mantle_convert.py``); models that cannot
-    constrain tool use ignore it, and the client still sees which tool calls were
-    actually made.
+    Upstream never rejects the flag and the Responses API accepts it, so
+    rejecting it on Chat Completions alone would refuse requests that are valid
+    upstream and split the two sibling surfaces. Mantle honors it by mapping the
+    flag onto Anthropic's ``disable_parallel_tool_use`` (covered in
+    ``tests/test_aws_bedrock_mantle_convert.py``); models that cannot constrain
+    tool use ignore it, and the client still sees which tool calls were made.
 
     Ref: https://developers.openai.com/api/docs/guides/function-calling#parallel-function-calling
          stdapi/types/openai_chat_completions.py:CompletionCreateParams
@@ -2552,7 +2552,12 @@ class TestMantleDisabled:
     async def test_merge_skips_catalog_fetch_when_disabled(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``_merge_mantle_models`` no-ops without fetching when Mantle is disabled."""
+        """Model collection never starts Mantle discovery when Mantle is disabled.
+
+        ``_collect_all_models`` is the seam that decides whether the Mantle
+        discovery task is created at all; with the setting off, the collector
+        must never be called.
+        """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_enabled", False)
 
         async def fail_if_called(
@@ -2561,9 +2566,21 @@ class TestMantleDisabled:
             msg = "must not be called when Mantle is disabled"
             raise AssertionError(msg)
 
+        async def no_candidates(
+            failed_regions: dict[str, str],  # noqa: ARG001
+        ) -> dict[str, Any]:
+            return {}
+
+        async def no_models(
+            candidates: dict[str, Any],  # noqa: ARG001
+            unavailable_models: dict[str, dict[str, list[str]]],  # noqa: ARG001
+        ) -> dict[str, ModelDetails]:
+            return {}
+
         monkeypatch.setattr(stdapi_models, "_collect_mantle_models", fail_if_called)
-        all_models: dict[str, ModelDetails] = {}
-        await stdapi_models._merge_mantle_models(all_models, {})  # noqa: SLF001
+        monkeypatch.setattr(stdapi_models, "_collect_region_candidates", no_candidates)
+        monkeypatch.setattr(stdapi_models, "_check_candidates", no_models)
+        all_models, _ = await stdapi_models._collect_all_models({}, {})  # noqa: SLF001
         assert all_models == {}
 
     def test_serves_via_mantle_false_when_disabled_and_catalog_empty(
@@ -2579,6 +2596,60 @@ class TestMantleDisabled:
         monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_service_header", False)
         monkeypatch.setattr(stdapi_models, "MANTLE_MODELS", {})
         assert serves_via_mantle("test.anything-model") is False
+
+
+class TestCollectAllModelsCancellation:
+    """Cancelling model collection also cancels the in-flight Mantle task.
+
+    Ref: stdapi/models/__init__.py:_collect_all_models
+    """
+
+    async def test_cancelled_collection_cancels_the_mantle_task(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cancel while awaiting the Mantle catalog stops the fetch task too.
+
+        Awaiting a task never forwards cancellation into it, so without the
+        explicit cancel-and-await cleanup the Mantle catalog fetch would keep
+        running detached after the caller (e.g. a shutting-down lifespan) is
+        cancelled, ending as an un-retrieved task warning.
+        """
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_enabled", True)
+        fetch_started = Event()
+        fetch_cancelled = Event()
+
+        async def blocking_mantle(
+            failed_regions: dict[str, str],  # noqa: ARG001
+        ) -> dict[str, ModelDetails]:
+            fetch_started.set()
+            try:
+                await Event().wait()
+            except CancelledError:
+                fetch_cancelled.set()
+                raise
+            return {}
+
+        async def no_candidates(
+            failed_regions: dict[str, str],  # noqa: ARG001
+        ) -> dict[str, Any]:
+            return {}
+
+        async def no_models(
+            candidates: dict[str, Any],  # noqa: ARG001
+            unavailable_models: dict[str, dict[str, list[str]]],  # noqa: ARG001
+        ) -> dict[str, ModelDetails]:
+            return {}
+
+        monkeypatch.setattr(stdapi_models, "_collect_mantle_models", blocking_mantle)
+        monkeypatch.setattr(stdapi_models, "_collect_region_candidates", no_candidates)
+        monkeypatch.setattr(stdapi_models, "_check_candidates", no_models)
+
+        collection = create_task(stdapi_models._collect_all_models({}, {}))  # noqa: SLF001
+        await wait_for(fetch_started.wait(), timeout=5)
+        collection.cancel()
+        with pytest.raises(CancelledError):
+            await collection
+        await wait_for(fetch_cancelled.wait(), timeout=5)
 
 
 class TestMantleRegionsPinning:
@@ -2711,9 +2782,8 @@ class TestInvokeApiSurfaceLearningWritePath:
         assert calls == ["/openai/v1/chat/completions", "/v1/chat/completions"]
         assert mantle_default._LEARNED_SURFACE[model_id] == "/v1"  # noqa: SLF001
 
-        # The learned surface is tried first on the next call and succeeds
-        # immediately: the previously-failing surface is skipped rather than
-        # probed again.
+        # The learned surface is tried first on the next call and succeeds at once:
+        # the rejected surface is skipped rather than probed again.
         calls.clear()
         await model._invoke_api(  # noqa: SLF001
             "chat_completions", {"model": model_id, "messages": []}, stream=False
@@ -4488,3 +4558,32 @@ class TestMantleProject:
         assert exc.value.status == 400
         assert "Invalid Bedrock Mantle project identifier" in str(exc.value)
         assert MANTLE_PROJECT_VAR.get() == ""
+
+
+class TestMantleHttpSessionOwnership:
+    """Only the first ``mantle_http_session`` opener owns the shared session.
+
+    ``AWSConnectionManager.__aenter__`` warms the Mantle session in the same
+    wave as the AWS clients, so a warmup that fails on a client (or any
+    secondary manager, as unit tests create) enters and exits the context
+    while the server's session is live — its exit must not close or clear the
+    session it did not create, or every later Mantle call answers 503
+    "not initialized".
+
+    Ref: stdapi/aws_bedrock_mantle.py:mantle_http_session
+         stdapi/aws.py:AWSConnectionManager.__aenter__
+    """
+
+    @pytest.mark.local
+    async def test_secondary_open_reuses_and_preserves_the_owner_session(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A nested open yields the live session and leaves it live on exit."""
+        monkeypatch.setattr(aws_bedrock_mantle, "_SESSION", None)
+        async with aws_bedrock_mantle.mantle_http_session() as owner:
+            async with aws_bedrock_mantle.mantle_http_session() as inner:
+                assert inner is owner
+            assert aws_bedrock_mantle._SESSION is owner  # noqa: SLF001
+            assert not owner.closed
+        assert aws_bedrock_mantle._SESSION is None  # noqa: SLF001
+        assert owner.closed

@@ -1,6 +1,6 @@
 """Monitoring."""
 
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager, nullcontext, suppress
 from contextvars import ContextVar
 from re import compile as re_compile
 from time import perf_counter_ns
@@ -61,6 +61,14 @@ else:
     from stdapi.monitoring_otel import OpenTelemetryManager
 
 otel_manager = OpenTelemetryManager()
+
+#: Snapshot of SETTINGS.otel_enabled, fixed at process startup like the import above;
+#: skips building span names/attributes when tracing is off.
+_OTEL_ENABLED = SETTINGS.otel_enabled
+
+#: Shared no-op context manager for the disabled-tracing path, avoiding a
+#: per-request generator-based contextmanager allocation.
+_NULL_SPAN_CONTEXT = nullcontext()
 
 #: Per-region latency stat keys reported in the "start" event's region_latencies.
 RegionLatenciesStatsKeys = Literal["latency_ms", "stddev_ms"]
@@ -125,10 +133,11 @@ class EventLog(TypedDict):
     # AWS-side request IDs of downstream AWS API calls (capped, oldest dropped)
     aws_requests: NotRequired[list[AwsApiCallLog]]
 
-    request_params: NotRequired[
-        JsonMappingOrList
-    ]  # Request params (Body, form, query, ...)
-    request_response: NotRequired[JsonMappingOrList]  # Request response
+    # Request params (Body, form, query, ...); a bare BaseModel is serialized
+    # natively by stdout_write's to_json when no exclude/exclude_unset filtering
+    # applied at logging time.
+    request_params: NotRequired[JsonMappingOrList | BaseModel]
+    request_response: NotRequired[JsonMappingOrList | BaseModel]  # Request response
 
     # Usage metrics (real AWS-billed usage, per service+model+operation)
     usage: NotRequired[list[UsageLogEntry]]
@@ -375,7 +384,9 @@ def _edge_header_value(request: Request, header: str) -> str:
         The sanitized value, or "" when the header is absent or empty.
     """
     if value := request.headers.get(header, ""):
-        value = _EDGE_HEADER_STRIP_RE.sub("", value)[:_EDGE_HEADER_MAX_LENGTH]
+        if not (value.isascii() and value.isprintable()):
+            value = _EDGE_HEADER_STRIP_RE.sub("", value)
+        value = value[:_EDGE_HEADER_MAX_LENGTH]
     return value
 
 
@@ -446,17 +457,21 @@ def log_request_event(request: Request) -> Generator[EventLog]:
     aws_api_calls_token = _AWS_API_CALLS.set([])
     operation_token = OPERATION.set(request.url.path)
     request_token = REQUEST.set(request)
-    span_context = otel_manager.start_span(
-        f"{request.method} {request.url.path}",
-        attributes={
-            "http.method": request.method,
-            "http.url": str(request.url),
-            "http.scheme": request.url.scheme,
-            "http.host": request.url.hostname or "localhost",
-            "http.target": request.url.path,
-            "request.id": request_id,
-            "server.id": server.SERVER_NAME,
-        },
+    span_context = (
+        otel_manager.start_span(
+            f"{request.method} {request.url.path}",
+            attributes={
+                "http.method": request.method,
+                "http.url": str(request.url),
+                "http.scheme": request.url.scheme,
+                "http.host": request.url.hostname or "localhost",
+                "http.target": request.url.path,
+                "request.id": request_id,
+                "server.id": server.SERVER_NAME,
+            },
+        )
+        if _OTEL_ENABLED
+        else None
     )
     with suppress(KeyError):
         log["client_user_agent"] = request.headers["User-Agent"]
@@ -472,7 +487,11 @@ def log_request_event(request: Request) -> Generator[EventLog]:
     start = perf_counter_ns()
 
     try:
-        with otel_manager.use_span(span_context):
+        with (
+            otel_manager.use_span(span_context)  # type: ignore[arg-type]
+            if _OTEL_ENABLED
+            else _NULL_SPAN_CONTEXT
+        ):
             yield log
     except Exception as exc:
         log["level"] = "critical"
@@ -591,9 +610,16 @@ def _format_params(
         exclude_unset: Exclude unset keys.
     """
     if isinstance(value, BaseModel):
-        value = value.model_dump(
-            mode="json", exclude_none=True, exclude_unset=exclude_unset, exclude=exclude
-        )
+        if exclude or exclude_unset:
+            value = value.model_dump(
+                mode="json",
+                exclude_none=True,
+                exclude_unset=exclude_unset,
+                exclude=exclude,
+            )
+        # Else: keep the model as-is -- stdout_write's to_json serializes it
+        # natively (same exclude_none/field-name output) at write time,
+        # skipping this eager dict-tree pass.
     elif exclude and isinstance(value, dict):
         value = value.copy()
         for name in exclude:
@@ -613,9 +639,13 @@ def log_background_event(event: str, request_id: str) -> Generator[EventLog]:
     Yields:
         Mutable event log dict populated during execution.
     """
-    span_context = otel_manager.start_span(
-        "background",
-        attributes={"request.id": request_id, "server.id": server.SERVER_NAME},
+    span_context = (
+        otel_manager.start_span(
+            "background",
+            attributes={"request.id": request_id, "server.id": server.SERVER_NAME},
+        )
+        if _OTEL_ENABLED
+        else None
     )
     log = EventLog(
         type="background",
@@ -628,7 +658,11 @@ def log_background_event(event: str, request_id: str) -> Generator[EventLog]:
     )
     start = perf_counter_ns()
     try:
-        with otel_manager.use_span(span_context):
+        with (
+            otel_manager.use_span(span_context)  # type: ignore[arg-type]
+            if _OTEL_ENABLED
+            else _NULL_SPAN_CONTEXT
+        ):
             yield log
     except Exception as exc:
         log["level"] = "critical"
@@ -712,9 +746,13 @@ async def _rebuild_and_log_stream[T](
         request_id = REQUEST_ID.get()
         yield first_chunk
 
-        span_context = otel_manager.start_span(
-            "request_stream",
-            attributes={"request.id": request_id, "server.id": server.SERVER_NAME},
+        span_context = (
+            otel_manager.start_span(
+                "request_stream",
+                attributes={"request.id": request_id, "server.id": server.SERVER_NAME},
+            )
+            if _OTEL_ENABLED
+            else None
         )
         log = EventLog(
             type="request_stream",
@@ -726,7 +764,11 @@ async def _rebuild_and_log_stream[T](
         )
         start = perf_counter_ns()
         try:
-            with otel_manager.use_span(span_context):
+            with (
+                otel_manager.use_span(span_context)  # type: ignore[arg-type]
+                if _OTEL_ENABLED
+                else _NULL_SPAN_CONTEXT
+            ):
                 async for chunk in stream:
                     yield chunk
 

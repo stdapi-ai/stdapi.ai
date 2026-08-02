@@ -77,10 +77,9 @@ getLogger("aiobotocore").setLevel("CRITICAL")
 class PydanticRestJSONSerializer(botocore_serialize.RestJSONSerializer):
     """botocore rest-json serializer encoding request bodies with pydantic_core.
 
-    3.5x faster than the stdlib encoder on large Bedrock ``Converse`` bodies;
-    output is semantically identical JSON (compact separators, raw UTF-8
-    instead of ASCII escapes). The stdlib encoder remains as fallback for
-    input pydantic_core rejects, such as strings carrying lone surrogates.
+    3.5x faster than the stdlib encoder on large Bedrock ``Converse`` bodies,
+    for semantically identical JSON. The stdlib encoder stays as the fallback
+    for input pydantic_core rejects, such as strings carrying lone surrogates.
     """
 
     def _serialize_body_params(self, params: Any, shape: Any) -> bytes:  # noqa: ANN401
@@ -92,8 +91,7 @@ class PydanticRestJSONSerializer(botocore_serialize.RestJSONSerializer):
             return _std_dumps(serialized_body).encode(self.DEFAULT_ENCODING)
 
 
-# Registry-level install: every rest-json client created afterwards (all pooled
-# Bedrock/Polly/S3-control clients and ad-hoc ones) gets the fast serializer.
+# Registry-level install: every rest-json client created afterwards gets it.
 botocore_serialize.SERIALIZERS["rest-json"] = PydanticRestJSONSerializer  # type: ignore[assignment]
 
 
@@ -191,8 +189,7 @@ AWS_SESSION.register("after-call", _record_after_call, unique_id="stdapi-request
 AWS_SESSION.register(
     "after-call-error", _record_after_call_error, unique_id="stdapi-request-id-error"
 )
-# Session-level install: every client created from the shared session parses
-# response timestamps through the fromisoformat fast path.
+# Likewise, every client created from the session gets the fast timestamp parser.
 AWS_SESSION.get_component("response_parser_factory").set_parser_defaults(
     timestamp_parser=parse_aws_timestamp
 )
@@ -231,8 +228,7 @@ class AWSConnectionManager:
         """Initialize AWS connection manager with client specifications.
 
         Args:
-            *clients: Variable number of tuples containing service name and optional region.
-                Each tuple contains (service_name, region_name or None).
+            *clients: ``(service_name, region_name or None)`` tuples.
         """
         self._exit_stack: AsyncExitStack = AsyncExitStack()
         self._client_specs = clients
@@ -304,27 +300,13 @@ class AWSConnectionManager:
                     for service, region in self._client_specs
                 }
             ]
-            results = await gather(
-                *(
-                    self._exit_stack.enter_async_context(
-                        # New service names must join the botocore/data allowlist
-                        # pruned in the Dockerfile, or the image fails at runtime.
-                        AWS_SESSION.create_client(  # type: ignore[call-overload]
-                            service.split(".", 1)[0],
-                            region_name=region,
-                            config=services_configs.get(service, CONFIG),
-                        )
-                    )
-                    for service, region in specs
-                ),
-                return_exceptions=True,
-            )
-            raise_first_exception(results)
-            for (service, region), client in zip(specs, results, strict=True):
-                _CLIENTS.setdefault(service, {})[region] = client
 
+            # Region-rotated services also get a single-attempt ".no-retry" pool
+            # per region, so routed calls fail over without sitting through
+            # botocore's own retries first.
+            no_retry_specs: list[tuple[str, RegionName]] = []
             if SETTINGS.aws_bedrock_region_routing != "disabled":
-                no_retry = AioConfig(
+                no_retry_config = AioConfig(
                     user_agent=server.USER_AGENT,
                     retries={
                         "max_attempts": 1,
@@ -337,32 +319,56 @@ class AWSConnectionManager:
                     connect_timeout=SETTINGS.aws_connect_timeout,
                     read_timeout=SETTINGS.ai_response_timeout,
                 )
-                for service in _NO_RETRY_SERVICES:
-                    if service not in _CLIENTS:
-                        continue
-                    regions = [*_CLIENTS[service]]
-                    no_retry_results = await gather(
-                        *(
-                            self._exit_stack.enter_async_context(
-                                AWS_SESSION.create_client(  # type: ignore[call-overload]
-                                    service, region_name=region, config=no_retry
-                                )
-                            )
-                            for region in regions
-                        ),
-                        return_exceptions=True,
-                    )
-                    raise_first_exception(no_retry_results)
-                    _CLIENTS[f"{service}.no-retry"] = dict(
-                        zip(regions, no_retry_results, strict=True)
-                    )
+                no_retry_specs = [
+                    (service, region)
+                    for service in _NO_RETRY_SERVICES
+                    for svc, region in specs
+                    if svc == service
+                ]
 
+            # Every client pool (base, no-retry, and the Mantle HTTP session) is
+            # warmed in a single wave, so startup latency is bounded by the
+            # slowest client rather than by the sum of every batch.
+            client_cms = [
+                # New service names must join the botocore/data allowlist
+                # pruned in the Dockerfile, or the image fails at runtime.
+                self._exit_stack.enter_async_context(
+                    AWS_SESSION.create_client(  # type: ignore[call-overload]
+                        service.split(".", 1)[0],
+                        region_name=region,
+                        config=services_configs.get(service, CONFIG),
+                    )
+                )
+                for service, region in specs
+            ] + [
+                self._exit_stack.enter_async_context(
+                    AWS_SESSION.create_client(  # type: ignore[call-overload]
+                        service, region_name=region, config=no_retry_config
+                    )
+                )
+                for service, region in no_retry_specs
+            ]
             if SETTINGS.aws_bedrock_mantle_enabled:
-                await self._exit_stack.enter_async_context(mantle_http_session())
+                client_cms.append(
+                    self._exit_stack.enter_async_context(mantle_http_session())
+                )
+
+            results = await gather(*client_cms, return_exceptions=True)
+            raise_first_exception(results)
+
+            for (service, region), client in zip(
+                specs, results[: len(specs)], strict=True
+            ):
+                _CLIENTS.setdefault(service, {})[region] = client
+            no_retry_results = results[len(specs) : len(specs) + len(no_retry_specs)]
+            for (service, region), client in zip(
+                no_retry_specs, no_retry_results, strict=True
+            ):
+                _CLIENTS.setdefault(f"{service}.no-retry", {})[region] = client
         except BaseException as exception:
             # __aenter__ raising skips __aexit__ under the context-manager
             # protocol: close whatever this attempt already entered so no
-            # client leaks, then let the caller see the original error.
+            # client leaks.
             try:
                 await self._exit_stack.aclose()
             except Exception as cleanup_error:  # noqa: BLE001

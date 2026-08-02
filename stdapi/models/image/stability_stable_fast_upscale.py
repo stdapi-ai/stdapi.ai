@@ -29,16 +29,16 @@ class _FastUpscaleJob(StabilityImageGenerationJobBase):
     ) -> Iterable[Awaitable[ImageGenerationResponse]]:
         """Upscale images with fast 4x upscaling.
 
-        Do not check if there is no prompt.
-        This is not used here, but is required for the OpenAI API.
+        The prompt is unused by this model, but the OpenAI API requires one, so
+        its absence is not checked.
         """
         self._drop_unsupported_quality()
         self._validate_no_mask(mask)
         request: FastUpscaleRequest = {"image": self._get_one_image_from_list(images)}
         self._finalize_request(request)
+        body = self._encode_request(request)
         return tuple(
-            self._get_image_from_response(request, index)
-            for index in range(self._count)
+            self._get_image_from_response(body, index) for index in range(self._count)
         )
 
 

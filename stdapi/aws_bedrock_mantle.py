@@ -264,10 +264,18 @@ async def bearer_token(region: RegionName) -> str:
 async def mantle_http_session() -> AsyncGenerator[ClientSession]:
     """Open the shared Mantle HTTP session for the server's lifetime.
 
+    Only the first opener owns the module-level session: when one is already
+    live (a secondary connection manager, or a warmup attempt cleaned up after
+    a concurrent client failure), it is reused and left untouched on exit, so
+    the server's session is never closed from under it.
+
     Yields:
         The shared :class:`aiohttp.ClientSession`.
     """
     global _SESSION  # noqa: PLW0603
+    if _SESSION is not None:
+        yield _SESSION
+        return
     session = ClientSession(
         headers=server.HTTP_CLIENT_HEADERS,
         timeout=ClientTimeout(
@@ -322,14 +330,12 @@ def _map_error(status: int, body: str, region: RegionName) -> MantleError:
     elif status == 429 or status >= 500:
         error = MantleError(message, status=status, failover=True)
     elif status in (401, 403):
-        # Server-side credential/permission issue: never the caller's fault.
-        # Evict the cached bearer token so a rotated/expired credential
-        # self-heals on the next request instead of failing for up to
-        # _TOKEN_TTL seconds; the raw upstream message may disclose IAM
-        # ARNs/permission details, so log it and forward a generic message.
+        # Server-side credential/permission issue: evict the cached bearer token
+        # so a rotated credential self-heals on the next request instead of
+        # failing for up to _TOKEN_TTL seconds. The upstream message may
+        # disclose IAM ARNs/permissions, so log it and forward a generic one.
         _TOKENS.pop(region, None)
-        # Imported here: stdapi.monitoring imports stdapi.aws_bedrock, which
-        # imports stdapi.aws, which imports this module (import cycle).
+        # Imported here: stdapi.monitoring transitively imports this module.
         from stdapi.monitoring import log_error_details  # noqa: PLC0415
 
         log_error_details(message, level="warning")
@@ -384,18 +390,15 @@ async def _request(
             },
         )
     except SocketTimeoutError as error:
-        # Imported here: stdapi.monitoring imports stdapi.aws_bedrock, which
-        # imports stdapi.aws, which imports this module (import cycle).
+        # Imported here: stdapi.monitoring transitively imports this module.
         from stdapi.monitoring import log_error_details  # noqa: PLC0415
 
         log_error_details(f"Timed out reading the Bedrock Mantle response in {region}.")
-        # The request already reached Mantle and is billed regardless of this
-        # client-side read timeout, so failing over would double-bill it.
+        # No failover: the invocation reached Mantle and is billed regardless.
         msg = "The service is temporarily unavailable. Retry the request."
         raise MantleError(msg, status=503) from error
     except (AiohttpClientError, TimeoutError) as error:
-        # Imported here: stdapi.monitoring imports stdapi.aws_bedrock, which
-        # imports stdapi.aws, which imports this module (import cycle).
+        # Imported here: stdapi.monitoring transitively imports this module.
         from stdapi.monitoring import log_error_details  # noqa: PLC0415
 
         log_error_details(f"Unable to reach the Bedrock Mantle endpoint in {region}.")
@@ -549,11 +552,10 @@ async def invoke_stream(
 
     Returns:
         Async generator of ``(event name or None, raw data)`` tuples,
-        terminating before any ``[DONE]`` sentinel. A generator that is
-        garbage-collected without ever being iterated (e.g. an immediate
-        client disconnect) still releases the upstream connection: the
-        ``async with`` inside the generator body only runs once iteration
-        starts, so a GC-tied fallback closes the response directly.
+        terminating before any ``[DONE]`` sentinel. Its ``async with`` only
+        runs once iteration starts, so a GC-tied fallback closes the response
+        for a generator dropped without ever being iterated (e.g. an immediate
+        client disconnect).
 
     Raises:
         MantleError: On upstream errors before the stream opens.
@@ -602,9 +604,9 @@ async def _iter_sse(response: ClientResponse) -> AsyncGenerator[SseEvent]:
         HttpProcessingError,
         UnicodeDecodeError,
     ) as error:
-        # HttpProcessingError covers LineTooLong, which aiohttp raises
-        # outside its ClientError hierarchy for oversized SSE lines.
-        # UnicodeDecodeError covers a non-UTF-8 line mid-stream.
+        # HttpProcessingError covers LineTooLong, which aiohttp raises outside
+        # its ClientError hierarchy for oversized SSE lines; UnicodeDecodeError
+        # covers a non-UTF-8 line mid-stream.
         msg = "The Bedrock Mantle response stream was interrupted."
         raise MantleError(msg, status=502) from error
 
@@ -690,9 +692,8 @@ def encode_mantle_response_id(region: RegionName, native_id: str) -> str:
     """Tag a native Mantle response ID with its serving region.
 
     Mantle stored responses are region-local: the public ID embeds a CRC32
-    fingerprint of the region (like Files API IDs embed their bucket) so
-    chained requests can be pinned back to the right region. The resulting
-    ID is intentionally not reusable against the Mantle API directly.
+    fingerprint of the region so chained requests can be pinned back to it.
+    The resulting ID is not reusable against the Mantle API directly.
 
     Args:
         region: Region that stores the response.
@@ -703,6 +704,35 @@ def encode_mantle_response_id(region: RegionName, native_id: str) -> str:
     """
     payload = crc32(region.encode()).to_bytes(4, "big") + native_id.encode()
     return "resp_" + b32encode(payload).decode("ascii").lower().rstrip("=")
+
+
+#: Cached (regions object, fingerprint -> region mapping); rebuilt when the
+#: configured regions object changes (startup reconfiguration, or tests
+#: monkeypatching ``SETTINGS.aws_bedrock_mantle_regions``).
+_REGION_FINGERPRINTS_CACHE: tuple[Any, dict[int, RegionName]] | None = None
+
+
+def _region_fingerprints() -> dict[int, RegionName]:
+    """Return the crc32-fingerprint -> region mapping for the configured Mantle regions.
+
+    Lazily built and cached by the identity of
+    ``SETTINGS.aws_bedrock_mantle_regions`` so it stays in sync whenever that
+    setting is replaced (regions are otherwise final after config load).
+
+    Returns:
+        Mapping of each configured region's crc32 fingerprint to the region.
+    """
+    global _REGION_FINGERPRINTS_CACHE  # noqa: PLW0603
+    regions = SETTINGS.aws_bedrock_mantle_regions
+    if (
+        _REGION_FINGERPRINTS_CACHE is None
+        or _REGION_FINGERPRINTS_CACHE[0] is not regions
+    ):
+        _REGION_FINGERPRINTS_CACHE = (
+            regions,
+            {crc32(region.encode()): region for region in regions},
+        )
+    return _REGION_FINGERPRINTS_CACHE[1]
 
 
 def decode_mantle_response_id(public_id: str) -> tuple[RegionName, str] | None:
@@ -724,14 +754,7 @@ def decode_mantle_response_id(public_id: str) -> tuple[RegionName, str] | None:
     except Base32Error:
         return None
     fingerprint = int.from_bytes(raw[:4], "big")
-    region = next(
-        (
-            r
-            for r in SETTINGS.aws_bedrock_mantle_regions
-            if crc32(r.encode()) == fingerprint
-        ),
-        None,
-    )
+    region = _region_fingerprints().get(fingerprint)
     if region is None:
         return None
     try:

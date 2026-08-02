@@ -2,7 +2,8 @@
 
 from html import escape, unescape
 from io import StringIO
-from re import DOTALL, IGNORECASE, search
+from re import DOTALL, IGNORECASE
+from re import compile as compile_regex
 from typing import TYPE_CHECKING
 
 from botocore.exceptions import ClientError, ParamValidationError
@@ -32,7 +33,14 @@ class TranslationError(Exception):
 
 
 #: Region-qualified codes AWS Translate treats as distinct from their base language
-_TRANSLATE_DISTINCT_LANGUAGE_CODES = {"es-MX", "fa-AF", "fr-CA", "pt-PT", "zh-TW"}
+_TRANSLATE_DISTINCT_LANGUAGE_CODES: frozenset[str] = frozenset(
+    ("es-MX", "fa-AF", "fr-CA", "pt-PT", "zh-TW")
+)
+
+#: Matches a subtitle span tag, capturing its segment number and inner text.
+_SUBTITLE_SPAN_RE = compile_regex(
+    r'<span[^>]*id="seg(\d+)"[^>]*>(.*?)</span>', IGNORECASE | DOTALL
+)
 
 
 async def translate(
@@ -112,9 +120,8 @@ async def translate_subtitle(
 ) -> str:
     """Translate subtitle content while preserving timing and structure.
 
-    Uses AWS Translate with HTML span tags to efficiently translate all subtitle
-    segments in a single API call, then reconstructs the subtitle format with
-    translated text while preserving timing and structure.
+    Segments are wrapped in HTML span tags so a single AWS Translate call
+    covers them all, then reassembled into the original subtitle format.
 
     Args:
         subtitle_content: Original subtitle content in SRT or VTT format
@@ -181,7 +188,7 @@ def _subtitle_should_skip_webvtt_header(stripped: str) -> bool:
     Returns:
         True if the line is the first subtitle number (header done)
     """
-    return stripped.isdigit()  # Found first subtitle number, header done
+    return stripped.isdigit()
 
 
 def _subtitle_extract_text_segments(subtitle_content: str) -> list[str]:
@@ -202,12 +209,10 @@ def _subtitle_extract_text_segments(subtitle_content: str) -> list[str]:
 
     for line in lines:
         stripped = line.strip()
-        # Handle WebVTT header processing
         if not webvtt_header_done:
             webvtt_header_done = _subtitle_should_skip_webvtt_header(stripped)
             continue
 
-        # Process different line types
         if _subtitle_is_text_line(stripped):
             segment.append(line)
         elif not line.strip():  # Empty line indicates segment boundary
@@ -245,9 +250,8 @@ def _subtitle_reconstruct_with_translation(
 def _subtitle_create_html_for_translation(text_segments: list[str]) -> str:
     """Create HTML document with text segments wrapped in span tags for AWS Translate.
 
-    AWS Translate can process HTML documents and preserve the structure while translating
-    the text content. Each subtitle segment is wrapped in a span tag with a unique ID
-    to maintain the mapping between original and translated segments.
+    AWS Translate preserves HTML structure while translating text content, so the
+    unique span ID maps each translated segment back to its original.
 
     Args:
         text_segments: List of text segments to be translated
@@ -265,10 +269,7 @@ def _subtitle_create_html_for_translation(text_segments: list[str]) -> str:
 def _subtitle_parse_translated_html(
     translated_html: str, segment_count: int
 ) -> list[str]:
-    """Parse translated HTML response to extract translated text segments.
-
-    Extracts the translated text from each span tag in the HTML response,
-    maintaining the original order based on the span IDs.
+    """Extract the translated text of every span tag, ordered by span ID.
 
     Args:
         translated_html: HTML response from AWS Translate
@@ -280,16 +281,15 @@ def _subtitle_parse_translated_html(
     Raises:
         TranslationError: If a translated span tag cannot be parsed from the HTML response.
     """
+    segments_by_index: dict[int, str] = {}
+    for match in _SUBTITLE_SPAN_RE.finditer(translated_html):
+        # First occurrence wins on a duplicated segment ID.
+        segments_by_index.setdefault(int(match.group(1)), match.group(2))
+
     translated_segments = []
     for i in range(segment_count):
-        match = search(
-            rf'<span[^>]*id="seg{i}"[^>]*>(.*?)</span>',
-            translated_html,
-            IGNORECASE | DOTALL,
-        )
-        if match:
-            translated_segments.append(unescape(match.group(1)))
-            continue
-        msg = "Unable to parse translated HTML"
-        raise TranslationError(msg)  # pragma: no cover
+        if i not in segments_by_index:
+            msg = "Unable to parse translated HTML"
+            raise TranslationError(msg)  # pragma: no cover
+        translated_segments.append(unescape(segments_by_index[i]))
     return translated_segments

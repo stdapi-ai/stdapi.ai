@@ -487,7 +487,7 @@ async def _generate_image_b64(
         output_compression=tool.output_compression or 100,
         extra_params={},
     )
-    images = list(await job.generate_images())
+    images = await job.generate_images()
     return images[0].image if images else None
 
 
@@ -586,15 +586,10 @@ async def image_generation_stream_handler(
 ) -> AsyncGenerator[JSONServerSentEvent]:
     """Emit SSE events for suppressed ``image_generation`` tool calls post-stream.
 
-    Invoked after the main Bedrock stream completes. For each suppressed call,
-    yields ``response.output_item.added`` +
-    ``response.image_generation_call.in_progress`` +
-    ``response.image_generation_call.generating``, awaits generation, appends
-    the resulting ``ImageGenerationCall`` to ``state.output_items``, and yields
-    ``response.image_generation_call.completed`` (successful generations only)
-    + ``response.output_item.done``. Generation failures are logged and produce
-    a ``status="failed"`` item so a single failed image does not abort the
-    stream.
+    Invoked after the main Bedrock stream completes, it emits the per-item
+    lifecycle events and appends each ``ImageGenerationCall`` to
+    ``state.output_items``.  Generation failures are logged and produce a
+    ``status="failed"`` item so a single failed image does not abort the stream.
 
     All generations start eagerly and run concurrently (bounded by
     ``_IMAGE_GENERATION_CONCURRENCY``); events are still emitted strictly in
@@ -707,10 +702,9 @@ def _build_output_config(
         ``json_object`` formats.  For ``json_object`` no schema is applied here:
         Bedrock's structured output has no schema for "any JSON object" (an
         empty schema is rejected, and ``{"type": "object",
-        "additionalProperties": false}`` admits only ``{}``). JSON syntax is
-        instead enforced by a system-prompt instruction appended in
-        ``ChatModel.create_response`` (``_openai_common.enforce_json_object``),
-        which is a best-effort nudge rather than a decoding-level constraint.
+        "additionalProperties": false}`` admits only ``{}``).  JSON syntax is
+        instead nudged by a system-prompt instruction appended in
+        ``ChatModel.create_response`` (``_openai_common.enforce_json_object``).
     """
     if text is None or text.format is None:
         return None
@@ -2173,9 +2167,6 @@ def _handle_block_start(
 def _emit_text_block_start(state: _StreamState) -> Generator[JSONServerSentEvent]:
     """Yield the two SSE events that open a new text output block.
 
-    Emits ``response.output_item.added`` (for the assistant message) followed
-    by ``response.content_part.added`` (for the text content part).
-
     Args:
         state: Mutable stream state.
 
@@ -2321,10 +2312,9 @@ def _handle_reasoning_delta(
 def _close_reasoning_block(state: _StreamState) -> Generator[JSONServerSentEvent]:
     """Close an open reasoning block, if any.
 
-    Emits ``response.reasoning_text.done`` (when text was streamed) followed by
-    ``response.content_part.done`` for the reasoning-text part and
-    ``response.output_item.done`` with the completed reasoning item, records the
-    item, and resets the per-block state.  No-op outside a reasoning block.
+    Emits ``reasoning_text.done`` (only when text was streamed),
+    ``content_part.done`` and ``output_item.done``, records the completed item
+    and resets the per-block state.  No-op outside a reasoning block.
 
     Args:
         state: Mutable stream state.

@@ -22,7 +22,7 @@ class StabilityCoreTextToImageJob(TextToImageJob):
 
     __slots__ = ()
 
-    _OUTPUT_FORMATS: ClassVar[set[str]] = {"png", "jpeg"}
+    _OUTPUT_FORMATS: ClassVar[frozenset[str]] = frozenset({"png", "jpeg"})
 
     async def _generate_images_from_text(
         self,
@@ -30,9 +30,9 @@ class StabilityCoreTextToImageJob(TextToImageJob):
         """Generate images from text prompt."""
         request = self._build_text_to_image_base_request()
         request["aspect_ratio"] = self._get_aspect_ratio(self._width, self._height)
+        body = self._encode_request(request)
         return tuple(
-            self._get_image_from_response(request, index)
-            for index in range(self._count)
+            self._get_image_from_response(body, index) for index in range(self._count)
         )
 
 

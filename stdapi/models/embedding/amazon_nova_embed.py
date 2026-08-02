@@ -402,9 +402,9 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             base_params: The base embedding parameters used across all types of media.
             extra_params: Additional parameters specific to the media type.
                 These parameters are merged into the base settings.
-            region: When set, locks the Bedrock invocation to this region
-                (S3 inputs were already placed there).  When ``None``,
-                full multi-region retry applies.
+            region: When set, locks the Bedrock invocation to this region (S3
+                inputs were already placed there); ``None`` applies full
+                multi-region retry.
 
         Returns:
             InvokeResult wrapping the model response and token usage for this
@@ -484,8 +484,8 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             media segments (segmented calls report no token usage).
 
         Raises:
-            ApiError: If any part of the segmented embedding result indicates a
-            failure, an exception is raised detailing the error reason and message.
+            ApiError: When a segment of the embedding result reports a failure,
+                detailing its reason and message.
         """
         s3_source = _MediaSource(s3Location=_S3Location(uri=value.uri))
         match media_type:
@@ -639,9 +639,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
                 await (await s3_client.get_object(Bucket=bucket, Key=key))[
                     "Body"
                 ].read()
-            )
-            .strip()
-            .splitlines()
+            ).splitlines()
             if line
         )
 

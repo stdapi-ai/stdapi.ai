@@ -63,17 +63,17 @@ def _split_toxicity_segments(text: str) -> list[str]:
     Returns:
         Segments of at most ``_TOXICITY_SEGMENT_BYTES`` UTF-8 bytes each.
     """
+    raw = text.encode()
+    length = len(raw)
     segments: list[str] = []
-    current: list[str] = []
-    size = 0
-    for char in text:
-        char_size = len(char.encode())
-        if size + char_size > _TOXICITY_SEGMENT_BYTES:
-            segments.append("".join(current))
-            current, size = [], 0
-        current.append(char)
-        size += char_size
-    segments.append("".join(current))
+    start = 0
+    while start < length:
+        end = min(start + _TOXICITY_SEGMENT_BYTES, length)
+        # Back off out of a multi-byte UTF-8 sequence (continuation bytes are 10xxxxxx).
+        while end < length and raw[end] & 0xC0 == 0x80:
+            end -= 1
+        segments.append(raw[start:end].decode())
+        start = end
     return segments
 
 

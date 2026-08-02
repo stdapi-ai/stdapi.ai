@@ -20,9 +20,7 @@ from stdapi.types.openai import (
     ResponseModeration,
 )
 
-# ---------------------------------------------------------------------------
 # Literals / type aliases
-# ---------------------------------------------------------------------------
 
 #: Response status values.
 ResponseStatus = Literal[
@@ -70,9 +68,7 @@ ResponseIncludable = Literal[
 ]
 
 
-# ---------------------------------------------------------------------------
 # Filter types  (used in FileSearchTool)
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.shared.comparison_filter.ComparisonFilter
@@ -102,9 +98,7 @@ class CompoundFilter(BaseModelRequest):
 FileSearchFilters = ComparisonFilter | CompoundFilter | None
 
 
-# ---------------------------------------------------------------------------
 # Custom tool input format  (used in CustomTool)
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.shared.custom_tool_input_format.Text
@@ -132,9 +126,7 @@ CustomToolInputFormat = Annotated[
 ]
 
 
-# ---------------------------------------------------------------------------
 # Container / environment types  (used in tool definitions)
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.container_network_policy_disabled.ContainerNetworkPolicyDisabled
@@ -260,9 +252,7 @@ class LocalEnvironment(BaseModelRequest):
     skills: list[LocalSkill] | None = Field(default=None, description="List of skills.")
 
 
-# ---------------------------------------------------------------------------
 # Tool definitions
-# ---------------------------------------------------------------------------
 
 #: Which caller types may invoke a tool: a direct model call or a program call.
 ToolAllowedCallers = list[Literal["direct", "programmatic"]] | None
@@ -794,9 +784,7 @@ Tool = Annotated[
 ]
 
 
-# ---------------------------------------------------------------------------
 # Tool choice types
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.tool_choice_types.ToolChoiceTypes
@@ -892,9 +880,7 @@ ToolChoice = (
 )
 
 
-# ---------------------------------------------------------------------------
 # Reasoning configuration
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.shared.reasoning.Reasoning
@@ -924,9 +910,7 @@ class Reasoning(BaseModelRequest):
     )
 
 
-# ---------------------------------------------------------------------------
 # Input content types
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_input_text.PromptCacheBreakpoint
@@ -990,13 +974,11 @@ class ResponseInputFile(BaseModelRequest):
     )
 
 
-# NOTE: Not in the OpenAI spec's InputContent — this type handles a real-world behaviour
-# where Codex (codex-x86_64) sends EasyInputMessage with role="assistant" and content
-# blocks of type "output_text" when echoing back conversation history.  The spec-compliant
-# path is ResponseOutputMessage (added to ResponseInputItem), but EasyInputMessage matches
-# first in the union (both use type="message"), so the content list also needs this type.
-# BaseModelRequestWithExtra is used so that extra fields (annotations, logprobs) from the
-# original output are accepted without error.
+# Not in the OpenAI spec's InputContent: Codex echoes conversation history as an
+# EasyInputMessage with role="assistant" and "output_text" content blocks, and
+# EasyInputMessage matches the union before the spec-compliant
+# ResponseOutputMessage (both use type="message"). Extra fields (annotations,
+# logprobs) are accepted so the original output validates unchanged.
 class ResponseOutputTextContent(BaseModelRequestWithExtra):
     """An output_text content block echoed back in the input array (previous assistant response)."""
 
@@ -1017,9 +999,7 @@ ResponseInputContent = Annotated[
 ResponseInputMessageContentList = list[ResponseInputContent]
 
 
-# ---------------------------------------------------------------------------
 # Computer tool call output screenshot  (shared by input and output)
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_computer_tool_call_output_screenshot.ResponseComputerToolCallOutputScreenshot
@@ -1033,9 +1013,7 @@ class ResponseComputerToolCallOutputScreenshot(BaseModelRequest):
     image_url: str | None = Field(default=None, description="Screenshot URL.")
 
 
-# ---------------------------------------------------------------------------
 # Shell call output content  (used by ShellCall input item)
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_function_shell_call_output_content.OutcomeTimeout
@@ -1068,9 +1046,7 @@ class ShellCallOutputContent(BaseModelRequest):
     stdout: str = Field(description="Captured stdout.")
 
 
-# ---------------------------------------------------------------------------
 # Apply patch operations  (used by ApplyPatchCall input item)
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_input_item.ApplyPatchCallOperationCreateFile
@@ -1108,9 +1084,7 @@ ApplyPatchOperation = Annotated[
 ]
 
 
-# ---------------------------------------------------------------------------
 # Input items  (used in ResponseCreateParams.input)
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_function_tool_call.CallerDirect
@@ -1821,9 +1795,8 @@ class CompactionTrigger(BaseModelRequest):
 
 
 # Ref: openai.types.responses.response_input_item.ResponseInputItem
-#
-# Note: EasyInputMessage and InputMessage share type="message" so a Pydantic
-# discriminated union cannot be used here; plain Union is used instead.
+# EasyInputMessage and InputMessage share type="message", so a discriminated
+# union cannot be used here.
 ResponseInputItem = (
     EasyInputMessage
     | InputMessage
@@ -1858,14 +1831,11 @@ ResponseInputItem = (
 )
 
 #: The `input` parameter for a response creation request.
-# Note: ResponseInputItem is extended further below (after ResponseOutputMessage and
-# ResponseReasoningItem are defined) to include those types.
+# ResponseInputItem is extended below with the echoed output-item types.
 type ResponseInputParam = str | list[ResponseInputItem]
 
 
-# ---------------------------------------------------------------------------
 # Response output content  (model-generated text/refusal with annotations)
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_output_text.AnnotationFileCitation
@@ -1987,9 +1957,7 @@ class ResponseOutputMessage(BaseModelResponse):
     )
 
 
-# ---------------------------------------------------------------------------
 # Response function tool call
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_function_tool_call.ResponseFunctionToolCall
@@ -2012,9 +1980,7 @@ class ResponseFunctionToolCall(BaseModelResponse):
     )
 
 
-# ---------------------------------------------------------------------------
 # Response file search tool call
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_file_search_tool_call.Result
@@ -2045,9 +2011,7 @@ class ResponseFileSearchToolCall(BaseModelResponse):
     )
 
 
-# ---------------------------------------------------------------------------
 # Response web search tool call
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_function_web_search.ActionSearchSource
@@ -2106,9 +2070,7 @@ class ResponseFunctionWebSearch(BaseModelResponse):
     type: Literal["web_search_call"] = Field(description="Web search call type.")
 
 
-# ---------------------------------------------------------------------------
 # Response computer tool call  (with all actions)
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_computer_tool_call.PendingSafetyCheck
@@ -2289,9 +2251,7 @@ class ResponseComputerToolCallOutputItem(BaseModelResponse):
     created_by: str | None = Field(default=None, description="Item creator.")
 
 
-# ---------------------------------------------------------------------------
 # Response code interpreter tool call
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_code_interpreter_tool_call.OutputLogs
@@ -2334,9 +2294,7 @@ class ResponseCodeInterpreterToolCall(BaseModelResponse):
     )
 
 
-# ---------------------------------------------------------------------------
 # Response reasoning item
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_reasoning_item.Summary
@@ -2432,11 +2390,9 @@ class ResponseReasoningItemInput(ResponseReasoningItem):
     )
 
 
-# Extend ResponseInputItem with types defined after the initial alias.
-# ResponseOutputMessageInput (role=assistant, content=[output_text/refusal]) and
-# ResponseReasoningItemInput (type="reasoning") are valid input items per the SDK
-# (openai.types.responses.response_input_item.ResponseInputItem) and may appear
-# when a client echoes back a full previous response as conversation history.
+# Extend ResponseInputItem with the echoed output-item types defined above: both
+# are valid input items per the SDK
+# (openai.types.responses.response_input_item.ResponseInputItem).
 #
 # IMPORTANT: do NOT use the `type` statement here. `type X = X | ...` creates a
 # lazy TypeAliasType whose __value__ is evaluated after the name is rebound, so
@@ -2686,9 +2642,7 @@ class ResponseFunctionToolCallOutputItem(BaseModelResponse):
     )
 
 
-# ---------------------------------------------------------------------------
 # Shell / local shell output items  (response-side)
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_local_environment.ResponseLocalEnvironment
@@ -2826,9 +2780,7 @@ class ResponseFunctionShellToolCallOutput(BaseModelResponse):
     )
 
 
-# ---------------------------------------------------------------------------
 # Image generation, local shell, MCP output items
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_output_item.ImageGenerationCall
@@ -3035,9 +2987,7 @@ ResponseOutputItem = Annotated[
 ]
 
 
-# ---------------------------------------------------------------------------
 # Usage types
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_usage.InputTokensDetails
@@ -3068,9 +3018,7 @@ class ResponseUsage(BaseModelResponse):
     total_tokens: int = Field(description="Total token count.")
 
 
-# ---------------------------------------------------------------------------
 # Text format config types
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_format_text_json_schema_config.ResponseFormatTextJSONSchemaConfig
@@ -3120,9 +3068,7 @@ class ResponseTextConfig(BaseModelRequest):
     )
 
 
-# ---------------------------------------------------------------------------
 # Prompt types
-# ---------------------------------------------------------------------------
 
 #: Union of prompt variable value types.
 PromptVariables = str | ResponseInputText | ResponseInputImage | ResponseInputFile
@@ -3142,9 +3088,7 @@ class ResponsePrompt(BaseModelResponse):
     )
 
 
-# ---------------------------------------------------------------------------
 # Error / incomplete details
-# ---------------------------------------------------------------------------
 
 
 #: Valid error code values for a response error.
@@ -3189,9 +3133,7 @@ class IncompleteDetails(BaseModelResponse):
     )
 
 
-# ---------------------------------------------------------------------------
 # Conversation
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response.Conversation
@@ -3201,9 +3143,7 @@ class Conversation(BaseModelResponse):
     id: str = Field(description="Conversation ID.")
 
 
-# ---------------------------------------------------------------------------
 # Main Response object
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response.Response
@@ -3293,9 +3233,7 @@ class Response(BaseModelResponse):
     )
 
 
-# ---------------------------------------------------------------------------
 # Stream event helper types
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_content_part_added_event.PartReasoningText
@@ -3333,9 +3271,7 @@ class _StreamEventItemBase(BaseModelResponse):
     sequence_number: int = Field(description="The sequence number of this event.")
 
 
-# ---------------------------------------------------------------------------
 # Stream events — response lifecycle
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_queued_event.ResponseQueuedEvent
@@ -3415,9 +3351,7 @@ class ResponseErrorEvent(BaseModelResponse):
     param: str | None = Field(default=None, description="The error parameter.")
 
 
-# ---------------------------------------------------------------------------
 # Stream events — output items
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_output_item_added_event.ResponseOutputItemAddedEvent
@@ -3450,9 +3384,7 @@ class ResponseOutputItemDoneEvent(BaseModelResponse):
     )
 
 
-# ---------------------------------------------------------------------------
 # Stream events — content parts
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_content_part_added_event.ResponseContentPartAddedEvent
@@ -3481,9 +3413,7 @@ class ResponseContentPartDoneEvent(_StreamEventItemBase):
     )
 
 
-# ---------------------------------------------------------------------------
 # Stream events — text deltas
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_text_delta_event.ResponseTextDeltaEvent
@@ -3534,9 +3464,7 @@ class ResponseOutputTextAnnotationAddedEvent(_StreamEventItemBase):
     )
 
 
-# ---------------------------------------------------------------------------
 # Stream events — refusal
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_refusal_delta_event.ResponseRefusalDeltaEvent
@@ -3565,9 +3493,7 @@ class ResponseRefusalDoneEvent(_StreamEventItemBase):
     )
 
 
-# ---------------------------------------------------------------------------
 # Stream events — function call arguments
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_function_call_arguments_delta_event.ResponseFunctionCallArgumentsDeltaEvent
@@ -3591,9 +3517,7 @@ class ResponseFunctionCallArgumentsDoneEvent(_StreamEventItemBase):
     )
 
 
-# ---------------------------------------------------------------------------
 # Stream events — audio
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_audio_delta_event.ResponseAudioDeltaEvent
@@ -3640,9 +3564,7 @@ class ResponseAudioTranscriptDoneEvent(BaseModelResponse):
     )
 
 
-# ---------------------------------------------------------------------------
 # Stream events — web search
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_web_search_call_in_progress_event.ResponseWebSearchCallInProgressEvent
@@ -3672,9 +3594,7 @@ class ResponseWebSearchCallCompletedEvent(_StreamEventItemBase):
     )
 
 
-# ---------------------------------------------------------------------------
 # Stream events — file search
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_file_search_call_in_progress_event.ResponseFileSearchCallInProgressEvent
@@ -3704,9 +3624,7 @@ class ResponseFileSearchCallCompletedEvent(_StreamEventItemBase):
     )
 
 
-# ---------------------------------------------------------------------------
 # Stream events — code interpreter
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_code_interpreter_call_in_progress_event.ResponseCodeInterpreterCallInProgressEvent
@@ -3760,9 +3678,7 @@ class ResponseCodeInterpreterCallCodeDoneEvent(_StreamEventItemBase):
     )
 
 
-# ---------------------------------------------------------------------------
 # Stream events — reasoning
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_reasoning_text_delta_event.ResponseReasoningTextDeltaEvent
@@ -3843,9 +3759,7 @@ class ResponseReasoningSummaryTextDoneEvent(_StreamEventItemBase):
     )
 
 
-# ---------------------------------------------------------------------------
 # Stream events — image generation
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_image_gen_call_in_progress_event.ResponseImageGenCallInProgressEvent
@@ -3888,9 +3802,7 @@ class ResponseImageGenCallCompletedEvent(_StreamEventItemBase):
     )
 
 
-# ---------------------------------------------------------------------------
 # Stream events — MCP
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_mcp_call_in_progress_event.ResponseMcpCallInProgressEvent
@@ -3971,9 +3883,7 @@ class ResponseMcpListToolsFailedEvent(_StreamEventItemBase):
     )
 
 
-# ---------------------------------------------------------------------------
 # Stream events — custom tool call
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_custom_tool_call_input_delta_event.ResponseCustomToolCallInputDeltaEvent
@@ -3998,9 +3908,7 @@ class ResponseCustomToolCallInputDoneEvent(_StreamEventItemBase):
     )
 
 
-# ---------------------------------------------------------------------------
 # ResponseStreamEvent union
-# ---------------------------------------------------------------------------
 
 # Ref: openai.types.responses.response_stream_event.ResponseStreamEvent
 ResponseStreamEvent = Annotated[
@@ -4061,9 +3969,7 @@ ResponseStreamEvent = Annotated[
 ]
 
 
-# ---------------------------------------------------------------------------
 # ResponseInputMessageItem  (items API response)
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_input_message_item.ResponseInputMessageItem
@@ -4086,9 +3992,7 @@ class ResponseInputMessageItem(BaseModelResponse):
     )
 
 
-# ---------------------------------------------------------------------------
 # ResponseItem union  (items returned via /v1/responses/{id}/input_items)
-# ---------------------------------------------------------------------------
 
 # Ref: openai.types.responses.response_item.ResponseItem
 # NOTE: ResponseInputMessageItem and ResponseOutputMessage both carry type="message",
@@ -4125,9 +4029,7 @@ ResponseItem = (
 )
 
 
-# ---------------------------------------------------------------------------
 # ResponseItemList  (paginated list from /v1/responses/{id}/input_items)
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_item_list.ResponseItemList
@@ -4142,9 +4044,7 @@ class ResponseItemList(PaginatedListEnvelope):
     )
 
 
-# ---------------------------------------------------------------------------
 # ResponseCreateParams helpers
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_create_params.ContextManagement
@@ -4173,9 +4073,7 @@ class StreamOptions(BaseModelRequest):
     )
 
 
-# ---------------------------------------------------------------------------
 # ResponseCreateParams  (request body for POST /v1/responses)
-# ---------------------------------------------------------------------------
 
 
 # Ref: openai.types.responses.response_conversation_param_param.ResponseConversationParamParam
@@ -4337,27 +4235,31 @@ class ResponseCreateParams(BaseModelRequest):
     )
 
     # Extra validations
-    _UNSUPPORTED: ClassVar[set[str]] = {
-        # Ignored silently: "background", "safety_identifier", "stream_options"
-        "context_management",
-        "conversation",
-        "max_tool_calls",
-        "truncation",
-    }
+    _UNSUPPORTED: ClassVar[frozenset[str]] = frozenset(
+        {
+            # Ignored silently: "background", "safety_identifier", "stream_options"
+            "context_management",
+            "conversation",
+            "max_tool_calls",
+            "truncation",
+        }
+    )
 
     #: Parameters a managed prompt template carries itself, so a request cannot also set them
-    _PROMPT_INCOMPATIBLE: ClassVar[set[str]] = {
-        "input",
-        "instructions",
-        "max_output_tokens",
-        "previous_response_id",
-        "reasoning",
-        "temperature",
-        "text",
-        "tool_choice",
-        "tools",
-        "top_p",
-    }
+    _PROMPT_INCOMPATIBLE: ClassVar[frozenset[str]] = frozenset(
+        {
+            "input",
+            "instructions",
+            "max_output_tokens",
+            "previous_response_id",
+            "reasoning",
+            "temperature",
+            "text",
+            "tool_choice",
+            "tools",
+            "top_p",
+        }
+    )
 
     @model_validator(mode="after")
     def _unsupported(self) -> Self:
@@ -4439,12 +4341,9 @@ class InputTokenCountParams(BaseModelRequest):
     )
 
     # Extra validations
-    _UNSUPPORTED: ClassVar[set[str]] = {
-        "text",
-        "truncation",
-        "previous_response_id",
-        "conversation",
-    }
+    _UNSUPPORTED: ClassVar[frozenset[str]] = frozenset(
+        {"text", "truncation", "previous_response_id", "conversation"}
+    )
 
     @model_validator(mode="after")
     def _unsupported(self) -> Self:

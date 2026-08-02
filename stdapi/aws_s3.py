@@ -99,7 +99,7 @@ def track_temporary_s3_objects(bucket: str, *keys: str) -> None:
     schedule_cleanup(*(s3.delete_object(Bucket=bucket, Key=key) for key in keys))
 
 
-async def _get_tmp_key(content_type: str | None = None) -> str:
+def _get_tmp_key(content_type: str | None = None) -> str:
     """Generates a temporary key for an object in AWS S3.
 
     Args:
@@ -164,10 +164,7 @@ def require_s3_bucket_for_region(region: RegionName) -> str:
 async def put_object_and_get_url(body: bytes, content_type: str, filename: str) -> str:
     """Uploads an object to an AWS S3 bucket and retrieves the pre-signed URL to access it.
 
-    This function asynchronously uploads the provided object to the specified S3 bucket and
-    returns a pre-signed URL for accessing the uploaded object. The URL is valid for 3600 seconds.
-
-    S3 prefix is added automatically.
+    The URL is valid for 3600 seconds. The S3 prefix is added automatically.
 
     Args:
         body: The binary content of the object to be uploaded.
@@ -328,7 +325,7 @@ async def copy_s3_object(
     dest_bucket = dest_bucket or (
         require_s3_bucket_for_region(dest_region) if dest_region else source_bucket
     )
-    dest_key = dest_key or await _get_tmp_key(content_type)
+    dest_key = dest_key or _get_tmp_key(content_type)
     copy_source: CopySourceTypeDef = {"Bucket": source_bucket, "Key": source_key}
     if size <= _COPY_OBJECT_MAX_BYTES:
         await s3.copy_object(
@@ -418,7 +415,7 @@ async def put_s3_object(
     if not bucket:
         msg = "Either 'bucket' or 'region' must be specified"
         raise ValueError(msg)
-    key = key or await _get_tmp_key(content_type)
+    key = key or _get_tmp_key(content_type)
     s3: S3Client = get_client("s3", BUCKET_TO_REGION.get(bucket))
     kwargs: dict[str, str | dict[str, str]] = {"Tagging": S3_TAGGING}
     if content_type:
@@ -431,10 +428,16 @@ async def put_s3_object(
     if isinstance(data, bytes):
         if len(data) < _COPY_OBJECT_MAX_BYTES:
             await s3.put_object(Bucket=bucket, Key=key, Body=data, **kwargs)  # type: ignore[arg-type]
-            if temporary:
-                track_temporary_s3_objects(bucket, key)
-            return S3Object(bucket=bucket, key=key)
-        data = async_iter(data)
+        else:
+            # Slicing skips `buffered_chunks`' re-chunking copies, and parts stay
+            # real bytes -- the only buffer botocore's flexible-checksum body
+            # wrapper accepts.
+            await _multipart_upload(
+                s3, bucket, key, _bytes_chunks(data, UPLOAD_CHUNK_SIZE), **kwargs
+            )
+        if temporary:
+            track_temporary_s3_objects(bucket, key)
+        return S3Object(bucket=bucket, key=key)
 
     sized = buffered_chunks(data, UPLOAD_CHUNK_SIZE)
     first = await anext(sized, b"")
@@ -455,6 +458,20 @@ async def put_s3_object(
     return S3Object(bucket=bucket, key=key)
 
 
+async def _bytes_chunks(data: bytes, chunk_size: int) -> AsyncIterator[bytes]:
+    """Split *data* into slices, without ``buffered_chunks``' re-chunking.
+
+    Args:
+        data: Source bytes, already fully in memory.
+        chunk_size: Size in bytes of each yielded slice, except possibly the last.
+
+    Yields:
+        ``bytes`` slices of *data*.
+    """
+    for start in range(0, len(data), chunk_size):
+        yield data[start : start + chunk_size]
+
+
 async def _multipart_upload(
     s3: S3Client,
     bucket: str,
@@ -464,10 +481,11 @@ async def _multipart_upload(
 ) -> None:
     """Perform a multipart upload from an async chunk iterator.
 
-    Reading and uploading are pipelined: the next chunk is read from the
-    source while up to ``_UPLOAD_PARTS_IN_FLIGHT`` parts upload, bounding
-    the extra memory to ``_UPLOAD_PARTS_IN_FLIGHT * UPLOAD_CHUNK_SIZE``
-    bytes per upload. The completion list stays part-number ordered.
+    Reading and uploading are pipelined: the next chunk is read while up to
+    ``_UPLOAD_PARTS_IN_FLIGHT`` parts upload, bounding the extra memory to
+    ``_UPLOAD_PARTS_IN_FLIGHT * UPLOAD_CHUNK_SIZE`` bytes per upload. Parts are
+    collected in flight order, which keeps the completion list ordered by part
+    number as CompleteMultipartUpload requires.
 
     Args:
         s3: S3 client.

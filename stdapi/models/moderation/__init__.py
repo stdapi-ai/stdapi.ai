@@ -93,24 +93,33 @@ def guardrail_checks_regions() -> list[RegionName]:
     ]
 
 
+#: Precomputed applied input types for text inputs (every category applies to "text").
+_TEXT_APPLIED_INPUT_TYPES = ModerationCategoryAppliedInputTypes.model_validate(
+    {category: ["text"] for category in ALL_CATEGORIES}
+)
+
+#: Precomputed applied input types for image inputs (image-capable categories only).
+_IMAGE_APPLIED_INPUT_TYPES = ModerationCategoryAppliedInputTypes.model_validate(
+    {
+        category: (["image"] if category in IMAGE_CATEGORIES else [])
+        for category in ALL_CATEGORIES
+    }
+)
+
+
 def applied_input_types(*, image: bool) -> ModerationCategoryAppliedInputTypes:
-    """Build the per-category applied input types for one input element.
+    """Return the per-category applied input types for one input element.
 
     Args:
         image: Whether the classified input is an image.
 
     Returns:
-        Every category with ``["text"]`` for text inputs; for image inputs,
-        ``["image"]`` for image-capable categories and ``[]`` otherwise.
+        The shared, precomputed instance: every category set to ``["text"]``
+        for text inputs; for image inputs, ``["image"]`` for image-capable
+        categories and ``[]`` otherwise. Callers must not mutate the result
+        (it is a singleton reused across requests).
     """
-    return ModerationCategoryAppliedInputTypes.model_validate(
-        {
-            category: (["image"] if category in IMAGE_CATEGORIES else [])
-            if image
-            else ["text"]
-            for category in ALL_CATEGORIES
-        }
-    )
+    return _IMAGE_APPLIED_INPUT_TYPES if image else _TEXT_APPLIED_INPUT_TYPES
 
 
 def unflagged_moderation(*, image: bool = False) -> Moderation:

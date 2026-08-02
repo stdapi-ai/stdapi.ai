@@ -31,9 +31,9 @@ class TextToImageJob(StabilityImageGenerationJobBase):
         """Generate images from text prompt."""
         request = self._build_text_to_image_base_request()
         request["aspect_ratio"] = self._get_aspect_ratio(self._width, self._height)
+        body = self._encode_request(request)
         return tuple(
-            self._get_image_from_response(request, index)
-            for index in range(self._count)
+            self._get_image_from_response(body, index) for index in range(self._count)
         )
 
     async def _edit_image(
@@ -55,9 +55,9 @@ class TextToImageJob(StabilityImageGenerationJobBase):
         request["mode"] = "image-to-image"
         request["image"] = self._get_one_image_from_list(images)
         request.setdefault("strength", self._DEFAULT_STRENGTH)
+        body = self._encode_request(request)
         return tuple(
-            self._get_image_from_response(request, index)
-            for index in range(self._count)
+            self._get_image_from_response(body, index) for index in range(self._count)
         )
 
     async def _create_image_variations(
@@ -76,9 +76,9 @@ class TextToImageJob(StabilityImageGenerationJobBase):
         request["mode"] = "image-to-image"
         request["image"] = self._get_one_image_from_list(images)
         request.setdefault("strength", self._DEFAULT_STRENGTH)
+        body = self._encode_request(request)
         return tuple(
-            self._get_image_from_response(request, index)
-            for index in range(self._count)
+            self._get_image_from_response(body, index) for index in range(self._count)
         )
 
 

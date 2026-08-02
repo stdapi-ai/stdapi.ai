@@ -384,23 +384,44 @@ async def edit_images(
     ).id
 
     width, height = map(int, request.size.split("x"))
-    job = get_image_model(model_id).get_image_edit_job(
-        prompt=await apply_guardrail_to_text(request.prompt, source="INPUT"),
-        count=request.n,
-        width=width,
-        height=height,
-        output_format=request.output_format,
-        output_compression=request.output_compression,
-        is_url=request.response_format == "url" and not request.stream,
-        extra_params=get_extra_model_parameters(model_id, request),
-    )
+    has_mask = input_mask is not None
+    input_image_count = len(input_images) + (1 if has_mask else 0)
 
-    if input_mask:
-        *images_b64, mask_b64 = await gather(
-            *(img.to_base64() for img in [*input_images, input_mask])
+    # Base64 conversion is an independent AWS/network call from the prompt
+    # guardrail call below: start it now so both run concurrently. Dropping
+    # input_images/input_mask afterward leaves the base64 payloads as the
+    # only live copy of the image data across the following AWS edit call.
+    images_future = gather(
+        *(
+            img.to_base64()
+            for img in [*input_images, *([input_mask] if input_mask else [])]
         )
+    )
+    del input_images, input_mask
+
+    try:
+        job = get_image_model(model_id).get_image_edit_job(
+            prompt=await apply_guardrail_to_text(request.prompt, source="INPUT"),
+            count=request.n,
+            width=width,
+            height=height,
+            output_format=request.output_format,
+            output_compression=request.output_compression,
+            is_url=request.response_format == "url" and not request.stream,
+            extra_params=get_extra_model_parameters(model_id, request),
+        )
+    except BaseException:
+        # Consume the future's result/exception so a failed image fetch never
+        # logs as "exception was never retrieved" once this coroutine exits;
+        # BaseException so a request cancellation also stops the downloads.
+        images_future.cancel()
+        await gather(images_future, return_exceptions=True)
+        raise
+
+    if has_mask:
+        *images_b64, mask_b64 = await images_future
     else:
-        images_b64 = list(await gather(*(img.to_base64() for img in input_images)))
+        images_b64 = await images_future
         mask_b64 = None
 
     # Handle streaming requests
@@ -415,8 +436,7 @@ async def edit_images(
                     ),
                     job=job,
                     created=int(REQUEST_TIME.get().timestamp()),
-                    input_image_count=len(input_images)
-                    + (0 if input_mask is None else 1),
+                    input_image_count=input_image_count,
                     edit=True,
                 )
             )
@@ -428,5 +448,5 @@ async def edit_images(
         results=await job.edit_images(images=images_b64, mask=mask_b64),
         response_format=request.response_format,
         output_image_count=request.n,
-        input_image_count=len(input_images) + (0 if input_mask is None else 1),
+        input_image_count=input_image_count,
     )

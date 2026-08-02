@@ -13,6 +13,7 @@ from stdapi.models import (
     ModelDetails,
     get_all_models_details,
     get_all_models_details_and_modalities,
+    get_all_models_search_indexes,
     initialize_bedrock_models,
     resolve_model_alias,
 )
@@ -213,23 +214,27 @@ async def search_models(
         models_output_modalities,
         models_input_modalities,
     ) = await get_all_models_details_and_modalities()
+    (
+        models_by_route_or_tool,
+        models_by_region,
+        streaming_models,
+        non_streaming_models,
+        legacy_models,
+        non_legacy_models,
+    ) = await get_all_models_search_indexes()
     models_ids = set(models.keys())
     _filter_by_modality(input_modalities, models_ids, models_input_modalities, "input")
     _filter_by_modality(
         output_modalities, models_ids, models_output_modalities, "output"
     )
-    _filter_by_route_or_tool(route, models_ids, models)
+    _filter_by_route_or_tool(route, models_ids, models_by_route_or_tool)
     if region is not None:
-        _filter_by_region(region, models_ids, models)
+        _filter_by_region(region, models_ids, models_by_region)
     if streaming is not None:
-        models_ids &= {
-            mid for mid, m in models.items() if m.response_streaming is streaming
-        }
+        models_ids &= streaming_models if streaming else non_streaming_models
     # Legacy models are not guaranteed to stay invokable, so they are excluded by
     # default and only surfaced when explicitly requested with legacy=true.
-    models_ids &= {
-        mid for mid, m in models.items() if (m.legacy is True) is bool(legacy)
-    }
+    models_ids &= legacy_models if legacy else non_legacy_models
     return log_response_params([models[model_id] for model_id in sorted(models_ids)])
 
 
@@ -265,44 +270,40 @@ def _filter_by_modality(
 
 
 def _filter_by_route_or_tool(
-    value: str | None, models_ids: set[str], models: dict[str, ModelDetails]
+    value: str | None, models_ids: set[str], index: dict[str, set[str]]
 ) -> None:
     """Filter models to those supporting a specific route path or MCP tool name.
 
-    Checks both ``supported_routes`` and ``supported_mcp_tools`` and accepts either
-    format transparently (e.g. ``/v1/images/generations`` and ``openai_image_generation``
-    both match the same set of models).
+    ``index`` covers both ``supported_routes`` and ``supported_mcp_tools`` under
+    one key space, so a route path (e.g. ``/v1/images/generations``) and its MCP
+    tool name (e.g. ``openai_image_generation``) match the same models transparently.
 
     Args:
         value: Route path or MCP tool name to filter by. No-op when ``None``.
         models_ids: Set of model identifiers to filter in place.
-        models: All model details keyed by model ID.
+        index: Route path/MCP tool name to model IDs (see
+            :func:`stdapi.models.get_all_models_search_indexes`).
     """
     if not value:
         return
-    if not (
-        matched := {
-            mid
-            for mid, m in models.items()
-            if value in m.supported_routes or value in m.supported_mcp_tools
-        }
-    ):
+    if not (matched := index.get(value)):
         msg = f"No model supporting route or MCP tool: {value}."
         raise ApiError(msg)
     models_ids &= matched
 
 
 def _filter_by_region(
-    region: str, models_ids: set[str], models: dict[str, ModelDetails]
+    region: str, models_ids: set[str], index: dict[str, set[str]]
 ) -> None:
     """Filter models to those available in the specified AWS region.
 
     Args:
         region: AWS region name to filter by (e.g. ``us-east-1``).
         models_ids: Set of model identifiers to filter in place.
-        models: All model details keyed by model ID.
+        index: AWS region to model IDs (see
+            :func:`stdapi.models.get_all_models_search_indexes`).
     """
-    if not (matched := {mid for mid, m in models.items() if region in m.regions}):
+    if not (matched := index.get(region)):
         msg = f"No model available in region: {region}."
         raise ApiError(msg)
     models_ids &= matched
@@ -584,12 +585,12 @@ async def model_pricing(
     dimensions = _validated_dimensions(dimension)
 
     all_models = await get_all_models_details()
+    configured_regions = set(SETTINGS.aws_bedrock_regions)
     results = []
     for model_id in dict.fromkeys(model) if model else sorted(all_models):
-        details = all_models.get(resolve_model_alias(model_id))
-        default_tier, default_routings = _pricing_defaults(
-            resolve_model_alias(model_id), details
-        )
+        resolved_model_id = resolve_model_alias(model_id)
+        details = all_models.get(resolved_model_id)
+        default_tier, default_routings = _pricing_defaults(resolved_model_id, details)
         preferred_service = (
             Service.BEDROCK_MANTLE
             if details is not None and details.service == MANTLE_SERVICE
@@ -609,7 +610,7 @@ async def model_pricing(
         if not all_prices:
             rows = select_effective_rows(
                 rows,
-                regions=None if region else set(SETTINGS.aws_bedrock_regions),
+                regions=None if region else configured_regions,
                 tier=None if tier else default_tier,
                 routing=None
                 if routing

@@ -123,11 +123,9 @@ MIME_TYPES_TO_AUDIO_TYPE: dict[str, AudioFormatType] = {
 BEDROCK_BODY_SIZE_LIMIT = 24_990_000
 
 #: Bedrock error codes on model error
-_BEDROCK_MODEL_ERROR_CODES = {
-    "ModelErrorException",
-    "ModelStreamErrorException",
-    "ModelTimeoutException",
-}
+_BEDROCK_MODEL_ERROR_CODES: frozenset[str] = frozenset(
+    ("ModelErrorException", "ModelStreamErrorException", "ModelTimeoutException")
+)
 
 #: Guardrail configuration for the request.
 GUARDRAIL_CONFIG_VAR: ContextVar[GuardrailStreamConfigurationTypeDef] = ContextVar(
@@ -136,13 +134,15 @@ GUARDRAIL_CONFIG_VAR: ContextVar[GuardrailStreamConfigurationTypeDef] = ContextV
 _GUARDRAIL_IDENTIFIER_HEADER = "X-Amzn-Bedrock-GuardrailIdentifier"
 _GUARDRAIL_VERSION_HEADER = "X-Amzn-Bedrock-GuardrailVersion"
 _GUARDRAIL_TRACE_HEADER = "X-Amzn-Bedrock-Trace"
-_GUARDRAIL_TRACE_VALUES = {"disabled", "enabled", "enabled_full"}
+_GUARDRAIL_TRACE_VALUES: frozenset[str] = frozenset(
+    ("disabled", "enabled", "enabled_full")
+)
 #: Header selecting ConverseStream guardrail assessment timing (stream-only; stripped for Converse).
 _GUARDRAIL_STREAM_PROCESSING_MODE_HEADER = (
     "X-Amzn-Bedrock-GuardrailStreamProcessingMode"
 )
 #: Valid values for the guardrail stream-processing-mode header/field.
-_GUARDRAIL_STREAM_PROCESSING_MODE_VALUES = {"sync", "async"}
+_GUARDRAIL_STREAM_PROCESSING_MODE_VALUES: frozenset[str] = frozenset(("sync", "async"))
 
 #: Performance configuration for the request
 PERFORMANCE_CONFIG_VAR: ContextVar[
@@ -679,6 +679,41 @@ def set_performance_configuration(headers: Headers) -> None:
     PERFORMANCE_CONFIG_VAR.set((latency, service_tier))
 
 
+#: Per-model_id validated-defaults cache: model_id -> (settings sub-dict, validated instance).
+_DEFAULT_MODEL_PARAMETERS_CACHE: dict[
+    str, tuple[JsonMapping, _DefaultModelParameters]
+] = {}
+
+
+def _get_default_model_parameters(model_id: str) -> _DefaultModelParameters:
+    """Return the validated default parameters for *model_id*, cached by settings identity.
+
+    Settings are immutable after startup, so the cache entry is reused as long
+    as ``SETTINGS.default_model_params[model_id]`` is the same object; it is
+    keyed by that object's identity (rather than an unbounded pure function
+    cache) so tests that monkeypatch ``SETTINGS.default_model_params`` with a
+    new mapping transparently invalidate it.
+
+    Args:
+        model_id: Bedrock model identifier; used to look up
+            ``SETTINGS.default_model_params``.
+
+    Returns:
+        Validated default parameters for *model_id*.
+
+    Raises:
+        ApiError: When the configured defaults for *model_id* fail validation.
+    """
+    raw = SETTINGS.default_model_params.get(model_id, {})
+    cached = _DEFAULT_MODEL_PARAMETERS_CACHE.get(model_id)
+    if cached is not None and cached[0] is raw:
+        return cached[1]
+    with validation_error_handler():
+        parameters = _DefaultModelParameters(**raw)  # type: ignore[arg-type]
+    _DEFAULT_MODEL_PARAMETERS_CACHE[model_id] = (raw, parameters)
+    return parameters
+
+
 def set_inference_configuration(
     model_id: str,
     additional_request_fields: JsonMapping,
@@ -707,10 +742,7 @@ def set_inference_configuration(
         Populated ``InferenceConfigurationTypeDef`` dict.
     """
     config: InferenceConfigurationTypeDef = {}
-    with validation_error_handler():
-        default = _DefaultModelParameters(
-            **SETTINGS.default_model_params.get(model_id, {})  # type: ignore[arg-type]
-        )
+    default = _get_default_model_parameters(model_id)
 
     temperature = temperature if temperature is not None else default.temperature
     if temperature is not None:

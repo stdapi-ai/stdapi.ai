@@ -43,9 +43,9 @@ class _StyleTransferJob(StabilityImageGenerationJobBase):
             "style_image": mask,
         }
         self._finalize_request(request)
+        body = self._encode_request(request)
         return tuple(
-            self._get_image_from_response(request, index)
-            for index in range(self._count)
+            self._get_image_from_response(body, index) for index in range(self._count)
         )
 
 

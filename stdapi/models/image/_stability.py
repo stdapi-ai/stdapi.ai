@@ -1,11 +1,12 @@
 """Stability AI base classes and shared functionality.
 
-This module provides base classes and common utilities for all Stability AI models.
-Do not import ImageModel from here - each model type has its own file with a specific
-ImageModel and MATCHER.
+Do not import ImageModel from here - each model type has its own file with a
+specific ImageModel and MATCHER.
 """
 
 from typing import ClassVar, Literal, NotRequired, TypedDict
+
+from pydantic_core import to_json
 
 from stdapi.api_errors import ApiError
 from stdapi.models.image import (
@@ -209,7 +210,7 @@ class StabilityImageGenerationJobBase(
     __slots__ = ("_input_tokens", "_output_tokens", "_response_output_format")
 
     # Supported formats
-    _OUTPUT_FORMATS: ClassVar[set[str]] = {"png", "jpeg", "webp"}
+    _OUTPUT_FORMATS: ClassVar[frozenset[str]] = frozenset({"png", "jpeg", "webp"})
 
     @staticmethod
     def _accumulate_tokens(current: int | None, new: int | None) -> int | None:
@@ -229,17 +230,31 @@ class StabilityImageGenerationJobBase(
             return new
         return current + new
 
+    @staticmethod
+    def _encode_request(request: Request) -> bytes:
+        """Serialize a finalized request body once for reuse across its fan-out.
+
+        Args:
+            request: Finalized model request, identical for every image in
+                the fan-out.
+
+        Returns:
+            JSON-encoded request body.
+        """
+        return to_json(request)
+
     async def _get_image_from_response(
-        self, request: Request, index: int
+        self, body: bytes, index: int
     ) -> ImageGenerationResponse:
         """Invoke the model to generate an image.
 
         Stability jobs invoke the model once per image (fan-out), unlike
         single-invoke models, so token counts are accumulated across calls
-        instead of overwritten.
+        instead of overwritten. The request body is pre-encoded once (see
+        :meth:`_encode_request`) and reused for every call in the fan-out.
 
         Args:
-            request: Model request.
+            body: Pre-encoded JSON request body.
             index: Image index.
 
         Returns:
@@ -248,7 +263,7 @@ class StabilityImageGenerationJobBase(
         Raises:
             ApiError: If request was filtered.
         """
-        result = await self._model.invoke(request)
+        result = await self._model.invoke(body)
         self._input_tokens = self._accumulate_tokens(
             self._input_tokens, result.input_tokens
         )

@@ -1,6 +1,6 @@
 """Root endpoint for the API."""
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter
@@ -140,6 +140,17 @@ _ROBOTS_TXT = "\n".join(
 )
 
 
+#: Pre-rendered response for the root endpoint, identical on every request.
+_ROOT_RESPONSE = JSONResponse(_WELCOME)
+if _LINK_HEADER:
+    _ROOT_RESPONSE.headers["Link"] = _LINK_HEADER
+
+#: Pre-rendered response for the API catalog endpoint, identical on every request.
+_API_CATALOG_RESPONSE = JSONResponse(
+    _API_CATALOG, media_type="application/linkset+json"
+)
+
+
 @router.get("/")
 async def root() -> JSONResponse:
     """Return a welcome message for the API root endpoint.
@@ -147,10 +158,7 @@ async def root() -> JSONResponse:
     Returns:
         JSONResponse containing a welcome message with Link headers for agent discovery.
     """
-    response = JSONResponse(_WELCOME)
-    if _LINK_HEADER:
-        response.headers["Link"] = _LINK_HEADER
-    return response
+    return _ROOT_RESPONSE
 
 
 @router.get("/.well-known/api-catalog")
@@ -163,7 +171,7 @@ async def api_catalog() -> JSONResponse:
     Returns:
         Linkset document with Content-Type application/linkset+json.
     """
-    return JSONResponse(_API_CATALOG, media_type="application/linkset+json")
+    return _API_CATALOG_RESPONSE
 
 
 @router.get("/.well-known/mcp/server-card.json")
@@ -187,21 +195,28 @@ async def robots_txt() -> PlainTextResponse:
     return PlainTextResponse(_ROBOTS_TXT)
 
 
+#: Pre-rendered response for the health check endpoint, identical on every request.
+_HEALTH_RESPONSE = JSONResponse(asdict(HealthResponse()))
+
+#: Pre-rendered response for the readiness probe endpoint, identical on every request.
+_PING_RESPONSE = JSONResponse(asdict(PingResponse()))
+
+
 @router.get("/health")
-async def health_check() -> HealthResponse:
+async def health_check() -> JSONResponse:
     """Check if the service is healthy and operational.
 
     Returns:
-        HealthResponse with status "ok" when the service is operational
+        JSONResponse with status "ok" when the service is operational
     """
-    return HealthResponse()
+    return _HEALTH_RESPONSE
 
 
 @router.get("/ping")
-async def ping() -> PingResponse:
+async def ping() -> JSONResponse:
     """Report readiness in the shape Amazon Bedrock AgentCore Runtime expects.
 
     Returns:
-        PingResponse with status "Healthy" when the service is operational.
+        JSONResponse with status "Healthy" when the service is operational.
     """
-    return PingResponse()
+    return _PING_RESPONSE

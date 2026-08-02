@@ -1233,8 +1233,7 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     max_tokens: int | None = Field(
         default=None,
         ge=1,
-        # Aliases:
-        # - maxTokens: Bedrock Inference parameter name
+        # maxTokens: Bedrock Inference parameter name.
         validation_alias=AliasChoices("max_tokens", "maxTokens"),
         description="Deprecated. Use `max_completion_tokens` instead.",
         deprecated=True,
@@ -1310,9 +1309,7 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
     stop: str | list[str] | None = Field(
         default=None,
-        # Aliases:
-        # - stopSequences: Bedrock Inference parameter name
-        # - stop_sequences: Parameter name for various models
+        # Aliases: stopSequences (Bedrock Inference), stop_sequences (various models).
         validation_alias=AliasChoices("stop", "stop_sequences", "stopSequences"),
         description="Stop sequences. Generated text will not contain the stop sequence.",
     )
@@ -1349,8 +1346,7 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
     top_p: float | None = Field(
         default=None,
-        # Aliases:
-        # - topP: Bedrock Inference parameter name
+        # topP: Bedrock Inference parameter name.
         validation_alias=AliasChoices("top_p", "topP"),
         ge=0,
         description="Nucleus sampling: considers tokens comprising top_p probability mass. Use `temperature` or `top_p`, not both. "
@@ -1430,13 +1426,15 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
 
     # Extra validations
-    _UNSUPPORTED: ClassVar[set[str]] = {
-        "logprobs",
-        "prediction",
-        "verbosity",
-        "web_search_options",
-        "translation_options",
-    }
+    _UNSUPPORTED: ClassVar[frozenset[str]] = frozenset(
+        {
+            "logprobs",
+            "prediction",
+            "verbosity",
+            "web_search_options",
+            "translation_options",
+        }
+    )
 
     #: `reasoning` sub-field paired with the flat field carrying the same setting.
     _REASONING_EQUIVALENTS: ClassVar[tuple[tuple[str, str], ...]] = (

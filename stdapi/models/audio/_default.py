@@ -342,14 +342,12 @@ class AudioModel(AudioModelBase[Any, Any]):
                 f"{', '.join(sorted(CONVERSE_AUDIO_FORMATS))}."
             )
             raise ApiError(msg)
-        data = b"".join(
-            [
-                chunk
-                async for chunk in encode_audio_stream(
-                    _single_chunk_stream(await audio_content.to_bytes()), "mp3"
-                )
-            ]
-        )
+        buf = bytearray()
+        async for chunk in encode_audio_stream(
+            _single_chunk_stream(await audio_content.to_bytes()), "mp3"
+        ):
+            buf.extend(chunk)
+        data = bytes(buf)
         transcoded_block: AudioBlockTypeDef = {
             "format": "mp3",
             "source": {"bytes": data},

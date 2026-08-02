@@ -254,8 +254,10 @@ class TestStoreOnChatCreate:
         assert response.status_code == 200, response.text
         assert response.json()["id"] == "chatcmpl-sess-1"
         ((_, requested_id),) = backend.requests
-        assert requested_id == "chatcmpl-sess-1", (
-            "the backend is handed the session-derived ID even when it ignores it"
+        assert requested_id.startswith("chatcmpl-")
+        assert requested_id != "chatcmpl-sess-1", (
+            "generation overlaps session creation, so the backend sees a "
+            "request-scoped placeholder and the session ID is stamped afterward"
         )
         ((completion_id, document),) = store.saved
         assert completion_id == "chatcmpl-sess-1"

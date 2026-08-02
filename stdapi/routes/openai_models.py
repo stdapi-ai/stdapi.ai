@@ -22,10 +22,6 @@ router = APIRouter(
     prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=["Models", TAG_OPENAI]
 )
 
-#: /v1/models route response cache
-_ALL_MODELS: list[Model] = []
-_ALL_MODELS_LOCK = Lock()
-
 
 class ModelsResponse(BaseModel):
     """Response for the /v1/models endpoint following OpenAI API specification.
@@ -35,6 +31,13 @@ class ModelsResponse(BaseModel):
 
     object: str = "list"
     data: list[Model]
+
+
+#: /v1/models route response cache
+_ALL_MODELS: list[Model] = []
+#: Cached ModelsResponse, rebuilt alongside `_ALL_MODELS`.
+_MODELS_RESPONSE = ModelsResponse(data=[])
+_ALL_MODELS_LOCK = Lock()
 
 
 def format_bedrock_model_to_openai(model: ModelDetails) -> Model:
@@ -113,6 +116,7 @@ async def list_models(_: Annotated[None, Depends(authenticate)]) -> ModelsRespon
     Raises:
         ApiError: When unable to retrieve models from backend services (500)
     """
+    global _MODELS_RESPONSE  # noqa: PLW0603
     updated = await initialize_bedrock_models()
     async with _ALL_MODELS_LOCK:
         if updated or not _ALL_MODELS:
@@ -122,7 +126,8 @@ async def list_models(_: Annotated[None, Depends(authenticate)]) -> ModelsRespon
                 format_bedrock_model_to_openai(models[model_id])
                 for model_id in sorted(models)
             )
-    return log_response_params(ModelsResponse(data=_ALL_MODELS))
+            _MODELS_RESPONSE = ModelsResponse(data=list(_ALL_MODELS))
+    return log_response_params(_MODELS_RESPONSE)
 
 
 @router.get(

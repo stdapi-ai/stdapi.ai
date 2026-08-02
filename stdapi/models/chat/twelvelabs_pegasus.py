@@ -1,6 +1,5 @@
 """TwelveLabs Pegasus chat model (twelvelabs.pegasus-1-2-v1:0)."""
 
-from base64 import b64encode
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict
 
 from stdapi.api_errors import ApiError
@@ -8,6 +7,7 @@ from stdapi.aws import AWS_ENVIRONMENT
 from stdapi.aws_bedrock import usage_from_amazon_bedrock_invocation_metrics
 from stdapi.aws_s3 import put_s3_object
 from stdapi.models.chat._default import ChatModel as _BaseChatModel
+from stdapi.utils import b64encode
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -135,7 +135,7 @@ async def _video_to_media_source(
             )
         )
     if len(raw := source["bytes"]) <= _PEGASUS_INLINE_BYTES:
-        return _MediaSource(base64String=b64encode(raw).decode())
+        return _MediaSource(base64String=await b64encode(raw))
     return _MediaSource(
         s3Location=_S3Location(
             uri=(
@@ -181,9 +181,8 @@ class ChatModel(_BaseChatModel):
             region: AWS region for any needed S3 upload.
 
         Returns:
-            Tuple of (pegasus_body, service_tier, guardrail_config).
-                service_tier is the service tier string if present, None otherwise.
-                guardrail_config is the guardrail config dict if present, None otherwise.
+            Tuple of (pegasus_body, service_tier, guardrail_config), the last two
+            being ``None`` when the Converse request carries neither.
 
         Raises:
             ApiError: If no video is found in the conversation messages.

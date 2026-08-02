@@ -1,12 +1,4 @@
-"""Anthropic Models API endpoint implementation.
-
-This module implements Anthropic-compatible endpoints for the Models API,
-providing AWS Bedrock integration while maintaining API compatibility.
-
-Functions:
-    list_models: List available models.
-    retrieve_model: Retrieve a specific model by ID.
-"""
+"""Anthropic-compatible Models API endpoints using AWS Bedrock."""
 
 from asyncio import Lock
 from typing import Annotated
@@ -66,6 +58,8 @@ if SETTINGS.anthropic_routes_prefix != SETTINGS.openai_routes_prefix:
 
     #: /v1/models route response cache
     _ALL_MODELS: list[ModelInfo] = []
+    #: Cached response for the common unpaginated call, rebuilt alongside `_ALL_MODELS`.
+    _MODELS_RESPONSE = ModelListResponse(data=[])
     _ALL_MODELS_LOCK = Lock()
 
     def format_bedrock_model_to_anthropic(model: ModelDetails) -> ModelInfo:
@@ -158,6 +152,7 @@ if SETTINGS.anthropic_routes_prefix != SETTINGS.openai_routes_prefix:
         Raises:
             ApiError: When unable to retrieve models from backend services (500)
         """
+        global _MODELS_RESPONSE  # noqa: PLW0603
         updated = await initialize_bedrock_models()
         async with _ALL_MODELS_LOCK:
             if updated or not _ALL_MODELS:
@@ -169,6 +164,17 @@ if SETTINGS.anthropic_routes_prefix != SETTINGS.openai_routes_prefix:
                     if "TEXT" in models[model_id].input_modalities
                     and "TEXT" in models[model_id].output_modalities
                 )
+                _MODELS_RESPONSE = ModelListResponse(
+                    data=list(_ALL_MODELS),
+                    has_more=False,
+                    first_id=_ALL_MODELS[0].id if _ALL_MODELS else None,
+                    last_id=_ALL_MODELS[-1].id if _ALL_MODELS else None,
+                )
+
+        # The common unpaginated call (default limit, no cursors) is served from
+        # the cache above instead of re-slicing and re-validating every request.
+        if after_id is None and before_id is None and limit >= len(_ALL_MODELS):
+            return log_response_params(_MODELS_RESPONSE)
 
         data, has_more = paginate_models(_ALL_MODELS, limit, after_id, before_id)
 

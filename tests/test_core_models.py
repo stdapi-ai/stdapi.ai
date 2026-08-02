@@ -129,6 +129,42 @@ async def authenticated_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     return TestClient(app)
 
 
+#: Shape of the search_models inverted indexes returned by the registry.
+type _SearchIndexes = tuple[
+    dict[str, set[str]], dict[str, set[str]], set[str], set[str], set[str], set[str]
+]
+
+
+def _derive_search_indexes(models: dict[str, ModelDetails]) -> _SearchIndexes:
+    """Derive the search_models inverted indexes from a catalogue like the registry does.
+
+    Ref: stdapi/models/__init__.py:update_unified_models_collections
+    """
+    by_route_or_tool: dict[str, set[str]] = {}
+    by_region: dict[str, set[str]] = {}
+    streaming: set[str] = set()
+    non_streaming: set[str] = set()
+    legacy: set[str] = set()
+    non_legacy: set[str] = set()
+    for model_id, model in models.items():
+        for route_or_tool in (
+            *(model.supported_routes or ()),
+            *(model.supported_mcp_tools or ()),
+        ):
+            by_route_or_tool.setdefault(route_or_tool, set()).add(model_id)
+        for region in model.regions:
+            by_region.setdefault(region, set()).add(model_id)
+        if model.response_streaming is True:
+            streaming.add(model_id)
+        elif model.response_streaming is False:
+            non_streaming.add(model_id)
+        if model.legacy is True:
+            legacy.add(model_id)
+        else:
+            non_legacy.add(model_id)
+    return by_route_or_tool, by_region, streaming, non_streaming, legacy, non_legacy
+
+
 @pytest.fixture
 def fake_models(api_key: str) -> Generator[dict[str, str]]:
     """Serve the fake catalogue from /search_models and yield the auth headers.
@@ -145,6 +181,9 @@ def fake_models(api_key: str) -> Generator[dict[str, str]]:
     ]:
         return _FAKE_MODELS, _FAKE_OUTPUT_MODS, _FAKE_INPUT_MODS
 
+    async def _fake_get_indexes() -> _SearchIndexes:
+        return _derive_search_indexes(_FAKE_MODELS)
+
     with (
         patch(
             "stdapi.routes.core_models.initialize_bedrock_models",
@@ -153,6 +192,10 @@ def fake_models(api_key: str) -> Generator[dict[str, str]]:
         patch(
             "stdapi.routes.core_models.get_all_models_details_and_modalities",
             new=AsyncMock(side_effect=_fake_get_all),
+        ),
+        patch(
+            "stdapi.routes.core_models.get_all_models_search_indexes",
+            new=AsyncMock(side_effect=_fake_get_indexes),
         ),
     ):
         yield {"Authorization": f"Bearer {api_key}"}
@@ -660,9 +703,18 @@ class TestModelService:
         ]:
             return models, _FAKE_OUTPUT_MODS, _FAKE_INPUT_MODS
 
-        with patch(
-            "stdapi.routes.core_models.get_all_models_details_and_modalities",
-            new=AsyncMock(side_effect=_fake_get_all),
+        async def _fake_get_indexes() -> _SearchIndexes:
+            return _derive_search_indexes(models)
+
+        with (
+            patch(
+                "stdapi.routes.core_models.get_all_models_details_and_modalities",
+                new=AsyncMock(side_effect=_fake_get_all),
+            ),
+            patch(
+                "stdapi.routes.core_models.get_all_models_search_indexes",
+                new=AsyncMock(side_effect=_fake_get_indexes),
+            ),
         ):
             body = _get(client, {"route": "/v1/chat/completions"}, fake_models)
 

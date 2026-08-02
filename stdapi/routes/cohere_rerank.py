@@ -5,6 +5,7 @@ specification shape, calling AWS Bedrock rerank models (e.g., Amazon Rerank,
 Cohere Rerank) through the Bedrock Rerank API.
 """
 
+from asyncio import gather
 from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends
@@ -105,14 +106,14 @@ async def rerank(
         extra_params["max_tokens_per_doc"] = request.max_tokens_per_doc
     # A fresh list: `rerank` accepts a mix of str/mapping documents, but
     # `request.documents` is invariantly typed as `list[str]`.
-    documents: list[str | JsonMapping] = await apply_guardrail_to_texts(
-        list(request.documents), source="INPUT"
+    documents_texts: list[str | JsonMapping] = list(request.documents)
+    # The query and documents are independent AWS guardrail calls; run them concurrently.
+    documents, query = await gather(
+        apply_guardrail_to_texts(documents_texts, source="INPUT"),
+        apply_guardrail_to_text(request.query, source="INPUT"),
     )
     response = await get_rerank_model(model_id).rerank(
-        await apply_guardrail_to_text(request.query, source="INPUT"),
-        documents,
-        top_n=request.top_n,
-        extra_params=extra_params,
+        query, documents, top_n=request.top_n, extra_params=extra_params
     )
     return log_response_params(
         RerankResponse(

@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from openai import BadRequestError
 from PIL import Image
+from pydantic_core import from_json
 
 from stdapi.models.image import ImageGenerationResponse
 from stdapi.models.image._stability import StabilityImageGenerationJobBase
@@ -127,9 +128,9 @@ async def _build_request(
     captured: dict[str, Any] = {}
 
     async def _fake_get_image_from_response(
-        _self: object, request: dict[str, Any], index: int
+        _self: object, request: bytes, index: int
     ) -> ImageGenerationResponse:
-        captured.update(request)
+        captured.update(from_json(request))
         return ImageGenerationResponse(image="", index=index)
 
     monkeypatch.setattr(
@@ -312,7 +313,6 @@ class TestStabilityUpscaleModels:
 
         Ref: stdapi/models/image/stability_stable_image_edit.py:_SimpleEditJob
         """
-        # Load the upscale example image from AWS documentation
         test_dir = Path(__file__).parent
         samples_dir = test_dir / "samples"
         output_dir = test_dir / "output"
@@ -402,7 +402,6 @@ class TestStabilityEditModels:
 
         Ref: stdapi/models/image/stability_search_recolor.py:_SearchRecolorJob
         """
-        # Load the search and recolor example image from AWS documentation
         test_dir = Path(__file__).parent
         samples_dir = test_dir / "samples"
         output_dir = test_dir / "output"
@@ -493,7 +492,6 @@ class TestStabilityEditModels:
 
         Ref: stdapi/models/image/stability_search_replace.py:_SearchReplaceJob
         """
-        # Load the search and replace example image from AWS documentation
         test_dir = Path(__file__).parent
         samples_dir = test_dir / "samples"
         output_dir = test_dir / "output"
@@ -585,7 +583,6 @@ class TestStabilityEditModels:
         Ref: stdapi/models/image/stability_stable_image_inpaint.py:_InpaintJob
              stdapi/utils.py:alpha_mask_to_bw
         """
-        # Load the inpaint example images from AWS documentation
         test_dir = Path(__file__).parent
         samples_dir = test_dir / "samples"
         output_dir = test_dir / "output"
@@ -682,7 +679,6 @@ class TestStabilityEditModels:
 
         Ref: stdapi/models/image/stability_stable_image_erase_object.py:_EraseJob
         """
-        # Load the erase example images from AWS documentation
         test_dir = Path(__file__).parent
         samples_dir = test_dir / "samples"
         output_dir = test_dir / "output"
@@ -718,7 +714,6 @@ class TestStabilityEditModels:
 
         Ref: stdapi/models/image/stability_stable_image_remove_background.py:_RemoveBackgroundJob
         """
-        # Load the remove background example image from AWS documentation
         test_dir = Path(__file__).parent
         samples_dir = test_dir / "samples"
         output_dir = test_dir / "output"
@@ -790,7 +785,6 @@ class TestStabilityControlModels:
         self, openai_client: OpenAI, chat_vision_judge_model: str
     ) -> None:
         """Control-sketch turns a sketch into a rendered scene described by the prompt."""
-        # Load the control sketch example image from AWS documentation
         test_dir = Path(__file__).parent
         samples_dir = test_dir / "samples"
         output_dir = test_dir / "output"
@@ -854,7 +848,6 @@ class TestStabilityControlModels:
         self, openai_client: OpenAI, chat_vision_judge_model: str
     ) -> None:
         """Control-structure keeps the source composition while restyling it."""
-        # Load the control structure example image from AWS documentation
         test_dir = Path(__file__).parent
         samples_dir = test_dir / "samples"
         output_dir = test_dir / "output"
@@ -956,7 +949,6 @@ class TestStabilityStyleModels:
 
         Ref: stdapi/models/image/stability_stable_style_transfer.py:_StyleTransferJob
         """
-        # Load the style transfer example images from AWS documentation
         test_dir = Path(__file__).parent
         samples_dir = test_dir / "samples"
         output_dir = test_dir / "output"
@@ -1028,7 +1020,6 @@ class TestStabilityStyleModels:
 
         Ref: stdapi/models/image/stability_stable_style_transfer.py:_StyleTransferJob
         """
-        # Load the style transfer example images from AWS documentation
         test_dir = Path(__file__).parent
         samples_dir = test_dir / "samples"
         output_dir = test_dir / "output"

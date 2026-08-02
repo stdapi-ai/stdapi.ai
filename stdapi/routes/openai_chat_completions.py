@@ -21,6 +21,7 @@ from pydantic import ValidationError
 from stdapi.api_errors import ApiError
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
+from stdapi.cleanup import schedule_cleanup
 from stdapi.config import SETTINGS
 from stdapi.models import validate_model
 from stdapi.models.capabilities import register_route_capability
@@ -220,21 +221,37 @@ async def create_chat_completion(
             request.model, input_modality="TEXT", output_modality="TEXT"
         )
     ).id
-    session_id = (
-        await try_create_stored_response_session("chat_completion") if store else None
+    placeholder_id = f"chatcmpl-{REQUEST_ID.get()}"
+    created = int(REQUEST_TIME.get().timestamp())
+    generation = get_chat_model(model_id).create_completion(
+        request, placeholder_id, created
     )
-    store = session_id is not None
-    completion_id = (
-        f"chatcmpl-{session_id}" if store else f"chatcmpl-{REQUEST_ID.get()}"
-    )
-    try:
-        result = await get_chat_model(model_id).create_completion(
-            request, completion_id, int(REQUEST_TIME.get().timestamp())
+    session_id: str | None
+    if store:
+        # Overlaps session creation with generation: create_completion never
+        # sends completion_id upstream, so a placeholder is safe here and the
+        # real, session-derived ID is stamped onto the result afterward.
+        session_result, generation_result = await gather(
+            try_create_stored_response_session("chat_completion"),
+            generation,
+            return_exceptions=True,
         )
-    except BaseException:
-        if store:
-            await discard_stored_response_session(completion_id, "chat_completion")
-        raise
+        if isinstance(generation_result, BaseException):
+            if not isinstance(session_result, BaseException) and session_result:
+                schedule_cleanup(
+                    discard_stored_response_session(
+                        f"chatcmpl-{session_result}", "chat_completion"
+                    )
+                )
+            raise generation_result
+        if isinstance(session_result, BaseException):
+            raise session_result
+        session_id, result = session_result, generation_result
+    else:
+        session_id = None
+        result = await generation
+    store = session_id is not None
+    completion_id = f"chatcmpl-{session_id}" if store else placeholder_id
     if isinstance(result, ChatCompletion):
         result.moderation = build_chat_moderation(request.moderation)
         result.metadata = request.metadata
@@ -257,7 +274,9 @@ async def create_chat_completion(
                     },
                 )
             except BaseException:
-                await discard_stored_response_session(completion_id, "chat_completion")
+                schedule_cleanup(
+                    discard_stored_response_session(completion_id, "chat_completion")
+                )
                 raise
     return result
 

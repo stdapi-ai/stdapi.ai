@@ -448,10 +448,17 @@ def try_parse_json(text: str) -> JsonValue:
         return text
 
 
+#: Size below which base64 codec calls run inline instead of hopping to a thread.
+_B64_INLINE_MAX_BYTES = 256 * 1024
+
+
 async def b64decode(
     value: str | Buffer, *, altchars: str | Buffer | None = None, validate: bool = False
 ) -> bytes:
     """Decode a base64 encoded string or buffer into bytes using the base64 algorithm.
+
+    Small inputs are decoded inline: the executor round-trip costs more than
+    the decode itself below ``_B64_INLINE_MAX_BYTES``.
 
     Args:
         value: The base64 encoded string or buffer to decode.
@@ -464,6 +471,8 @@ async def b64decode(
         bytes: The decoded data in bytes.
     """
     try:
+        if len(value) <= _B64_INLINE_MAX_BYTES:  # type: ignore[arg-type]
+            return _b64decode(value, altchars=altchars, validate=validate)
         return await to_thread(_b64decode, value, altchars=altchars, validate=validate)
     except BinasciiError as error:
         msg = f"Invalid base64 data: {error}"
@@ -474,8 +483,10 @@ async def b64encode(value: Buffer, altchars: str | Buffer | None = None) -> str:
     """Encodes a given binary data into a base64 encoded string.
 
     This function operates asynchronously, allowing the calling code to run
-    other tasks while the encoding is handled in a separate thread. The function
-    takes an optional `altchars` argument to replace the default `+` and `/`
+    other tasks while the encoding is handled in a separate thread. Small
+    inputs are encoded inline: the executor round-trip costs more than the
+    encode itself below ``_B64_INLINE_MAX_BYTES``. The function takes an
+    optional `altchars` argument to replace the default `+` and `/`
     characters used in the base64 alphabet with user-specified characters.
 
     Args:
@@ -487,6 +498,8 @@ async def b64encode(value: Buffer, altchars: str | Buffer | None = None) -> str:
     Returns:
         The base64 encoded representation of the input binary data.
     """
+    if len(value) <= _B64_INLINE_MAX_BYTES:  # type: ignore[arg-type]
+        return _b64encode(value, altchars=altchars).decode()
     return (await to_thread(_b64encode, value, altchars=altchars)).decode()
 
 
@@ -719,10 +732,14 @@ def webuuid() -> str:
 def stdout_write(value: JsonValue) -> None:
     """Writes a JSON-encoded value to the standard output.
 
+    Any ``BaseModel`` nested in *value* is serialized natively by
+    ``pydantic_core``, dropping its ``None`` fields and using field names
+    (not aliases) -- matching ``model_dump(mode="json", exclude_none=True)``.
+
     Args:
         value: The value to be JSON-encoded and written to standard output.
     """
-    msg = f"{to_json(value).decode()}\n"
+    msg = f"{to_json(value, exclude_none=True, by_alias=False).decode()}\n"
     try:
         sys.stdout.write(msg)
         sys.stdout.flush()

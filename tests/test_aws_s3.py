@@ -319,3 +319,25 @@ class TestMultipartUploadPipelining:
         assert exc_info.value.response["Error"]["Code"] == "InternalError"
         assert stub.aborted is True
         assert stub.completed_parts is None
+
+
+class TestBytesChunks:
+    """``_bytes_chunks`` slices in-memory payloads into botocore-safe parts.
+
+    Ref: https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
+         stdapi/aws_s3.py:_bytes_chunks
+    """
+
+    async def test_yields_real_bytes_parts_losslessly(self) -> None:
+        """Every chunk is exact ``bytes`` and the parts reassemble the payload.
+
+        botocore's flexible-checksum body wrapper only accepts ``bytes`` or
+        ``bytearray`` part bodies (a ``memoryview`` crashes at send time with
+        ``AttributeError: 'memoryview' object has no attribute 'read'``), so
+        the chunk type is a hard contract, not an implementation detail.
+        """
+        data = bytes(range(256)) * 40
+        chunks = [chunk async for chunk in aws_s3._bytes_chunks(data, 4096)]  # noqa: SLF001
+        assert all(type(chunk) is bytes for chunk in chunks)
+        assert [len(chunk) for chunk in chunks] == [4096, 4096, 2048]
+        assert b"".join(chunks) == data

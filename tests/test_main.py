@@ -9,9 +9,10 @@ Ref: stdapi/main.py
 
 from __future__ import annotations
 
+from asyncio import CancelledError, Event, wait_for
 from io import BytesIO
 from json import loads
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from botocore.exceptions import ClientError
@@ -19,11 +20,16 @@ from httpx import ASGITransport, AsyncClient
 from starlette.datastructures import UploadFile
 from starlette.requests import Request
 
+from stdapi import main as stdapi_main
+from stdapi.cleanup import schedule_cleanup
 from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile
 from stdapi.main import handle_exception_group
 from stdapi.routes import openai_chat_completions
 from stdapi.types.openai_chat_completions import ChatCompletion
 from tests._helpers import make_model_details
+
+if TYPE_CHECKING:
+    from starlette.responses import Response
 
 #: All tests in this module exercise the local implementation in-process, and log
 #: outside request scope, so they need the shared request-log context.
@@ -266,3 +272,76 @@ class TestSharedPrefixRouterOptOut:
             reload(anthropic_models)
         assert anthropic_files.router is not None
         assert anthropic_models.router is not None
+
+
+class TestMiddlewareCleanupDrain:
+    """Scheduled cleanups still run when no response reaches the client.
+
+    Ref: stdapi/main.py:_middleware
+         stdapi/cleanup.py:run_cleanups_detached
+    """
+
+    async def test_unhandled_error_still_runs_scheduled_cleanups(self) -> None:
+        """An exception no handler converts must not drop the scheduled cleanups.
+
+        Handled exceptions become responses inside ``call_next`` and drain via
+        the post-response background task; an unhandled one escapes it, so
+        without the detached drain a store-enabled route's deferred discard
+        would leak its Bedrock stored session on every such 500.
+        """
+        ran = Event()
+
+        async def cleanup() -> None:
+            ran.set()
+
+        async def call_next(_request: Request) -> Response:
+            schedule_cleanup(cleanup())
+            msg = "no handler registered for this type"
+            raise ZeroDivisionError(msg)
+
+        with pytest.raises(ZeroDivisionError):
+            await stdapi_main._middleware(_request(), call_next)  # noqa: SLF001
+        await wait_for(ran.wait(), timeout=5)
+
+    async def test_client_disconnect_answers_499_and_runs_cleanups(self) -> None:
+        """The 499 disconnect short-circuit also drains scheduled cleanups."""
+        ran = Event()
+
+        async def cleanup() -> None:
+            ran.set()
+
+        async def call_next(_request: Request) -> Response:
+            schedule_cleanup(cleanup())
+            msg = "No response returned."
+            raise RuntimeError(msg)
+
+        async def receive() -> dict[str, Any]:
+            return {"type": "http.disconnect"}
+
+        request = Request(
+            {"type": "http", "method": "GET", "path": "/v1/models", "headers": []},
+            receive,
+        )
+        response = await stdapi_main._middleware(request, call_next)  # noqa: SLF001
+        assert response.status_code == 499
+        await wait_for(ran.wait(), timeout=5)
+
+    async def test_cancellation_still_runs_scheduled_cleanups(self) -> None:
+        """A cancelled request scope drains cleanups in a detached task.
+
+        The drain must survive the cancellation that killed the request scope,
+        so the middleware hands it to the event loop instead of awaiting it
+        inside the cancelled scope.
+        """
+        ran = Event()
+
+        async def cleanup() -> None:
+            ran.set()
+
+        async def call_next(_request: Request) -> Response:
+            schedule_cleanup(cleanup())
+            raise CancelledError
+
+        with pytest.raises(CancelledError):
+            await stdapi_main._middleware(_request(), call_next)  # noqa: SLF001
+        await wait_for(ran.wait(), timeout=5)

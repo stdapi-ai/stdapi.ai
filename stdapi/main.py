@@ -39,7 +39,7 @@ from stdapi.aws_bedrock import (
     set_performance_configuration,
 )
 from stdapi.aws_bedrock_mantle import set_mantle_project
-from stdapi.cleanup import CLEANUPS, run_scheduled_cleanups
+from stdapi.cleanup import CLEANUPS, run_cleanups_detached, run_scheduled_cleanups
 from stdapi.config import SETTINGS
 from stdapi.exceptions import ServerError
 from stdapi.input_file import reset_current_input_files
@@ -325,12 +325,19 @@ async def _middleware(
             set_performance_configuration(request.headers)
             set_mantle_project(request.headers)
             try:
-                response = await call_next(request)
-            except RuntimeError as exc:
-                if await request.is_disconnected():
-                    log["status_code"] = 499
-                    log_error_details(f"Client disconnected: {exc}", status=499)
-                    return Response(status_code=499)
+                try:
+                    response = await call_next(request)
+                except RuntimeError as exc:
+                    if await request.is_disconnected():
+                        log["status_code"] = 499
+                        log_error_details(f"Client disconnected: {exc}", status=499)
+                        run_cleanups_detached(log["id"])
+                        return Response(status_code=499)
+                    raise
+            except BaseException:
+                # No response will be sent (unhandled error or cancellation),
+                # so the post-response background drain never runs.
+                run_cleanups_detached(log["id"])
                 raise
             log["status_code"] = response.status_code
             response.headers[get_request_id_header(request)] = log["id"]

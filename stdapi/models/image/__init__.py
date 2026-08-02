@@ -259,7 +259,7 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
             raise ApiError(msg)
         return images[0]
 
-    async def generate_images(self) -> Iterable[ImageGenerationResponse]:
+    async def generate_images(self) -> list[ImageGenerationResponse]:
         """Generate images from text prompt.
 
         Returns:
@@ -525,9 +525,15 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
                     ) = await get_base64_image_size(image.image)
 
         if self._is_url:
-            image.image = await self._get_image_url(
+            # Drop this object's own reference to the base64 string before
+            # awaiting the upload: _get_image_url() releases its copy right
+            # after decoding, so only the coroutine's argument binding below
+            # keeps the (large) string alive during the long S3 upload.
+            url_coro = self._get_image_url(
                 image.image, index=image.index, output_format=self.output_format
             )
+            image.image = ""
+            image.image = await url_coro
 
         return image
 
@@ -549,8 +555,10 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
             ApiError: If S3 operations fail.
         """
         request_id = REQUEST_ID.get()
+        raw = await b64decode(image_data)
+        del image_data  # release the base64 string before the long S3 upload
         return await put_object_and_get_url(
-            await b64decode(image_data),
+            raw,
             f"image/{output_format}",
             f"{request_id}/image-{request_id}-{index + 1:03d}.{'jpg' if output_format == 'jpeg' else output_format}",
         )

@@ -312,10 +312,9 @@ def build_output_config(
         ``json_object`` formats.  For ``json_object`` no schema is applied here:
         Bedrock's structured output has no schema for "any JSON object" (an
         empty schema is rejected, and ``{"type": "object",
-        "additionalProperties": false}`` admits only ``{}``). JSON syntax is
-        instead enforced by a system-prompt instruction appended in
-        ``ChatModel.create_completion`` (``_openai_common.enforce_json_object``),
-        which is a best-effort nudge rather than a decoding-level constraint.
+        "additionalProperties": false}`` admits only ``{}``).  JSON syntax is
+        instead nudged by a system-prompt instruction appended in
+        ``ChatModel.create_completion`` (``_openai_common.enforce_json_object``).
     """
     match response_format:
         case None | ResponseFormatText():
@@ -349,10 +348,8 @@ def translate_request(
 ]:
     """Translate OpenAI-specific request parameters into Bedrock Converse inputs.
 
-    Handles inference configuration, tool configuration, service tier mapping,
-    prompt cache settings, and response format (structured output).  Message
-    mapping is handled separately by the ChatModel since it requires async
-    image/audio/file processing.
+    Message mapping is handled separately by the ChatModel since it requires
+    async image/audio/file processing.
 
     Args:
         request: OpenAI chat completion creation request.
@@ -655,11 +652,10 @@ def _extract_assistant_blocks(
 ) -> list[ContentBlockTypeDef]:
     """Append assistant tool use and content blocks.
 
-    Appends Bedrock toolUse blocks derived from OpenAI assistant message
-    `tool_calls` or legacy `function_call`, followed by any textual content
-    (including refusal text when present).  An `audio` reference to a previous
-    audio response has no replayable content and yields no block, so such a turn
-    is dropped instead of producing an empty Bedrock message.
+    Text and refusal content come first, then the ``toolUse`` blocks derived from
+    `tool_calls` or the legacy `function_call`.  An `audio` reference to a
+    previous audio response has no replayable content and yields no block, so
+    such a turn is dropped instead of producing an empty Bedrock message.
 
     Args:
         message_param: The assistant message to convert (may include tool calls).
@@ -942,9 +938,6 @@ async def _get_or_generate_audio(
 ) -> ChatCompletionAudio:
     """Return the audio output for a completion choice, generating it via TTS if absent.
 
-    If *contents* already contains an ``audio`` block (model-native audio), that
-    data is used directly.  Otherwise, the text is synthesised via TTS.
-
     Args:
         audio_params: Audio format and voice configuration.
         contents: Bedrock output content blocks for this choice.
@@ -961,18 +954,16 @@ async def _get_or_generate_audio(
             audio_content = source["bytes"]
             break
     else:
-        audio_content = b"".join(
-            [
-                chunk
-                async for chunk in await synthesize_speech(
-                    text=content,
-                    voice=audio_params.voice,
-                    resp_format="pcm"
-                    if audio_params.format == "pcm16"
-                    else audio_params.format,
-                )
-            ]
-        )
+        buf = bytearray()
+        async for chunk in await synthesize_speech(
+            text=content,
+            voice=audio_params.voice,
+            resp_format="pcm"
+            if audio_params.format == "pcm16"
+            else audio_params.format,
+        ):
+            buf.extend(chunk)
+        audio_content = bytes(buf)
     return ChatCompletionAudio(
         id=f"audio-{completion_id}-{index}",
         data=await b64encode(audio_content),

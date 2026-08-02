@@ -212,6 +212,7 @@ def _apply_stub_input_schemas(
             )
         ):
             continue
+        # Deep copy: a per-request mutation must never corrupt the shared stub.
         spec["inputSchema"] = {"json": deepcopy(schema)}
 
 
@@ -222,12 +223,8 @@ def _forward_tool_choice_to_additional_request_fields(
 
     Called when all ``toolSpec`` stubs are removed from *tool_config* in
     native-format mode so that the choice directive is not silently lost.
-    The Bedrock format uses a type-keyed wrapper dict (``{"any": {}}``);
-    the Anthropic ``additionalModelRequestFields`` format uses an explicit
-    ``"type"`` field (``{"type": "any"}``).
-
-    Only writes to *additional_request_fields* when ``tool_choice`` is not
-    already present (first-write wins).
+    Bedrock uses a type-keyed wrapper dict (``{"any": {}}``) where the Anthropic
+    ``additionalModelRequestFields`` format uses an explicit ``"type"`` field.
 
     Args:
         tool_choice: Bedrock ``toolChoice`` dict extracted from ``toolConfig``.
@@ -348,18 +345,15 @@ class AnthropicClaudeChatModel(_BaseChatModel):
         which preserves the documented argument names without duplicating any
         tool name across the two channels.
 
-        A natively-promoted tool must not also keep a ``toolSpec`` stub with
-        the same name in *tool_config*: Anthropic rejects duplicate tool
-        names, and the base class would otherwise resynthesize exactly such a
-        stub for every tool name it finds in history once *tool_config* is
-        left empty. So when removing the promoted stubs empties *tool_config*,
-        a replacement is synthesized here — but only for *other* tool names
-        still found in *bedrock_messages* history, never for the ones just
-        promoted natively. A ``toolChoice`` forcing one of the just-promoted
-        names is forwarded to *additional_request_fields* instead, since no
-        surviving ``toolSpec`` can back it; a ``toolChoice`` that is still
-        satisfiable by the surviving *tool_config* (``auto``/``any``, or a
-        name among the *other* tool names) is left in place.
+        A natively-promoted tool must not also keep a ``toolSpec`` stub of the
+        same name: Anthropic rejects duplicate tool names, and the base class
+        would resynthesize exactly such a stub for every tool name in history
+        once *tool_config* is left empty.  So when removing the promoted stubs
+        empties *tool_config*, a replacement is synthesized here for the *other*
+        history tool names only.  A ``toolChoice`` forcing a just-promoted name
+        is forwarded to *additional_request_fields*, since no surviving
+        ``toolSpec`` can back it; one still satisfiable by the surviving
+        *tool_config* is left in place.
 
         ``anthropic_beta`` flags are injected as well.
 
@@ -380,16 +374,11 @@ class AnthropicClaudeChatModel(_BaseChatModel):
 
         native_tool_names = {tool["name"] for tool in server_tools}
 
-        # Two constraints meet here and cannot both be satisfied in every case:
-        # Bedrock rejects a request whose history carries toolUse/toolResult
-        # blocks unless a toolConfig is present, and Anthropic rejects the same
-        # tool name appearing in both the toolConfig and the native tool list.
-        # Promoting is therefore only possible while something else is left to
-        # populate the toolConfig -- another declared tool, or another tool name
-        # in history.  When nothing is, the stub has to stay and the native
-        # definition cannot be sent for this turn; the stub gets the documented
-        # input schema instead, so the model keeps emitting the documented
-        # argument names, and the beta flags are still sent.
+        # Bedrock rejects a history carrying toolUse/toolResult blocks without a
+        # toolConfig, and Anthropic rejects a tool name present in both the
+        # toolConfig and the native tool list: promoting is only possible while
+        # something else populates the toolConfig (another declared tool, or
+        # another tool name in history).
         history_names = _history_tool_use_names(bedrock_messages)
         surviving_stubs = [
             entry

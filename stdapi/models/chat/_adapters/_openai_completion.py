@@ -85,14 +85,13 @@ async def build_user_messages(
     * A bare ``str`` or ``InputFileUrl`` → one message, one block.
     * **Text + files collapse**: a list with exactly one ``str`` and one or
       more ``InputFileUrl`` → one multimodal message combining them in input
-      order, returning a single choice.  The natural "ask once using these
-      files as context" pattern.
+      order, returning a single choice.
     * Any other list → one message per element, i.e. one ``Completion``
       choice per prompt.
 
-    The model layer fills the file source (``bytes`` or ``s3Location``) for
-    the target region via :func:`resolve_all_bedrock_content_blocks`, so this
-    function only builds the partial content blocks.
+    Only partial content blocks are built: the model layer fills the file source
+    (``bytes`` or ``s3Location``) for the target region via
+    :func:`resolve_all_bedrock_content_blocks`.
 
     Args:
         prompt: Raw prompt from the request body.
@@ -109,7 +108,7 @@ async def build_user_messages(
     if isinstance(prompt, (str, InputFileUrl)):
         return [{"role": "user", "content": [await _block(prompt)]}]
 
-    blocks = list(await gather(*(_block(item) for item in prompt)))
+    blocks = await gather(*(_block(item) for item in prompt))
     if len(blocks) >= 2 and sum(1 for item in prompt if isinstance(item, str)) == 1:
         return [{"role": "user", "content": blocks}]
     return [{"role": "user", "content": [block]} for block in blocks]
@@ -147,12 +146,10 @@ def translate_request(
             top_p=request.top_p,
             max_tokens=request.max_tokens,
             stop_sequences=request.stop,
-            # frequency_penalty, presence_penalty, logit_bias and seed are
-            # accepted and dropped rather than forwarded like the Chat
-            # Completions twin does: the text-completion models reject them
-            # outright ("extraneous key [frequency_penalty] is not permitted",
-            # measured live 2026-07-31), so forwarding them turns a working
-            # request into a 400.
+            # frequency_penalty, presence_penalty, logit_bias and seed are dropped,
+            # unlike on Chat Completions: the text-completion models reject them
+            # ("extraneous key [frequency_penalty] is not permitted"), so forwarding
+            # them turns a working request into a 400.
             **(request.model_extra or {}),
         ),
         additional_request_fields,
@@ -311,9 +308,8 @@ async def format_stream(
     aggregated ``usage`` attached to the last one when ``include_usage`` is
     ``True``.  The stream ends with a ``[DONE]`` sentinel.
 
-    If any underlying stream fails (e.g. a mid-stream Bedrock error), the
-    first such exception is re-raised once all streams have drained, so the
-    caller's monitoring wrapper can log it and emit an error SSE event.
+    A failing stream is not re-raised until every stream has drained, so the
+    caller's monitoring wrapper logs one error for the whole batch.
 
     Args:
         completion_id: Stable identifier for the completion.

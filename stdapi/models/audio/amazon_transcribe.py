@@ -184,6 +184,12 @@ class TranscribeJobData(TypedDict, total=False):
 #: Region that served the current request's transcription job.
 _SERVED_REGION: ContextVar[str] = ContextVar("transcribe_served_region", default="")
 
+#: Initial job-status poll interval, in seconds.
+_POLL_INTERVAL_INITIAL: float = 0.5
+
+#: Maximum job-status poll interval after exponential backoff, in seconds.
+_POLL_INTERVAL_MAX: float = 2.0
+
 
 def transcribe_job_candidates() -> list[tuple[RegionName, str]]:
     """Return the candidate (region, S3 bucket) pairs for transcription jobs.
@@ -582,10 +588,6 @@ def _handle_transcription_error(language: str | None) -> Generator[None]:
 
     Raises:
         ApiError: With appropriate error message.
-
-    Usage:
-        with _handle_transcription_error(language):
-            await transcribe.start_transcription_job(**job_params)
     """
     try:
         yield
@@ -643,6 +645,7 @@ async def _wait_for_transcription_completion(
     Raises:
         ApiError: If transcription fails
     """
+    poll_interval = _POLL_INTERVAL_INITIAL
     while True:  # Timeout at FastAPI level
         job = (await transcribe.get_transcription_job(TranscriptionJobName=job_id))[
             "TranscriptionJob"
@@ -650,17 +653,16 @@ async def _wait_for_transcription_completion(
         if job["TranscriptionJobStatus"] == "COMPLETED":
             break
         if job["TranscriptionJobStatus"] == "FAILED":
-            # A job fails on the submitted audio -- unsupported container, empty
-            # or corrupt stream -- so this is the caller's input, not an outage.
-            # The failure reason names the backend and its storage, and stays in
-            # the log.
+            # A job fails on the submitted audio, so this is a caller error; the
+            # reason names the backend and its storage, and stays in the log.
             log_error_details(job["FailureReason"], status=400)
             msg = (
                 "The audio could not be transcribed. Check that the file is a "
                 "supported, non-empty audio format and retry."
             )
             raise ApiError(msg)
-        await sleep(0.5)
+        await sleep(poll_interval)
+        poll_interval = min(poll_interval * 2, _POLL_INTERVAL_MAX)
 
     transcript = job["Transcript"]
     subtitle_uris = job.get("Subtitles", {}).get("SubtitleFileUris")
@@ -748,9 +750,6 @@ def _format_diarized_json_response(
     usage_duration: UsageDuration,
 ) -> TranscriptionDiarized:
     """Format transcription response as diarized JSON with speaker segments.
-
-    Converts AWS Transcribe speaker-labeled results into OpenAI-compatible
-    diarized JSON format with speaker segments.
 
     Args:
         transcript_data: Parsed transcription results from AWS Transcribe
@@ -850,10 +849,6 @@ def _format_json_response(
     timestamp_granularities: list[AudioTimestampGranularities] | None = None,
 ) -> TranscriptionCreateResponse:
     """Format transcription response based on requested output format.
-
-    Converts transcript data into the appropriate response format following
-    OpenAI API specification. Supports plain text, JSON, and verbose JSON
-    with optional timestamp granularity information.
 
     Args:
         transcript_data: Parsed transcription results from AWS Transcribe
@@ -970,10 +965,7 @@ class AudioModel(AudioModelBase[None, None]):
         cls,
         all_models: dict[str, ModelDetails],  # noqa: ARG003
     ) -> dict[str, str]:
-        """Return dynamic aliases specific to this model class.
-
-        Override in subclasses to provide model-specific aliases.
-        Each alias maps an alternative name to a Bedrock model ID.
+        """Return the OpenAI transcription model names mapped to AWS Transcribe.
 
         Args:
             all_models: All available models keyed by model ID.
@@ -1004,10 +996,6 @@ class AudioModel(AudioModelBase[None, None]):
         logprobs: bool = False,
     ) -> TranscribeJobData:
         """Perform transcription task using AWS Transcribe and returns row result.
-
-        This function handles the entire transcription workflow from audio upload
-        through AWS Transcribe processing to result retrieval, including AWS client
-        initialization and cleanup management.
 
         Args:
             audio_content: Audio file content file
@@ -1181,11 +1169,12 @@ class AudioModel(AudioModelBase[None, None]):
 
         if response_format == "verbose_json":
             audio_segments = transcript_data["audio_segments"]
+            language_code = _dominant_language_code(transcript_data)
             translated_segments = await gather(
                 *(
                     translate(
                         segment["transcript"],
-                        _dominant_language_code(transcript_data),
+                        language_code,
                         settings=settings,
                         terminology_names=terminology_names,
                     )
@@ -1221,10 +1210,6 @@ class AudioModel(AudioModelBase[None, None]):
         logprobs: bool,
     ) -> str | TranscriptionCreateResponse | TranscriptionDiarized | Response:
         """Perform transcription task using AWS Transcribe.
-
-        This function handles the entire transcription workflow from audio upload
-        through AWS Transcribe processing to result retrieval, including AWS client
-        initialization and cleanup management.
 
         Args:
             audio_content: Audio file content file
@@ -1338,8 +1323,8 @@ class AudioModel(AudioModelBase[None, None]):
     ) -> str | TranslationCreateResponse | Response:
         """Transcribe and translate audio to English.
 
-        This method performs transcription using AWS Transcribe, detects the source
-        language, and translates the transcribed text to English using AWS Translate.
+        The transcript's detected source language is translated to English
+        through AWS Translate.
 
         Args:
             audio_content: Audio file to transcribe and translate
