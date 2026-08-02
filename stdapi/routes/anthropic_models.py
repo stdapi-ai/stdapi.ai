@@ -25,6 +25,40 @@ from stdapi.models import (
 from stdapi.monitoring import log_request_params, log_response_params
 from stdapi.types.anthropic_messages import ModelInfo, ModelListResponse
 
+
+def paginate_models(
+    data: list[ModelInfo], limit: int, after_id: str | None, before_id: str | None
+) -> tuple[list[ModelInfo], bool]:
+    """Apply Stripe-style cursor pagination to a list of models.
+
+    Args:
+        data: Full, ordered list of models to paginate.
+        limit: Maximum number of models to return.
+        after_id: If set, only consider models after this cursor.
+        before_id: If set, only consider models before this cursor.
+
+    Returns:
+        Tuple of (page of models, whether more models exist beyond this page).
+    """
+    is_before = False
+    match (after_id, before_id):
+        case (str() as aid, None):
+            if (
+                idx := next((i for i, m in enumerate(data) if m.id == aid), None)
+            ) is not None:
+                data = data[idx + 1 :]
+        case (None, str() as bid):
+            if (
+                idx := next((i for i, m in enumerate(data) if m.id == bid), None)
+            ) is not None:
+                data = data[:idx]
+                is_before = True
+        case _:
+            pass
+    has_more = len(data) > limit
+    return (data[-limit:] if is_before else data[:limit]), has_more
+
+
 if SETTINGS.anthropic_routes_prefix != SETTINGS.openai_routes_prefix:
     _router = APIRouter(
         prefix=f"{SETTINGS.anthropic_routes_prefix}/v1", tags=["Models", TAG_ANTHROPIC]
@@ -53,38 +87,6 @@ if SETTINGS.anthropic_routes_prefix != SETTINGS.openai_routes_prefix:
             display_name=model.name,
             type="model",
         )
-
-    def paginate_models(
-        data: list[ModelInfo], limit: int, after_id: str | None, before_id: str | None
-    ) -> tuple[list[ModelInfo], bool]:
-        """Apply Stripe-style cursor pagination to a list of models.
-
-        Args:
-            data: Full, ordered list of models to paginate.
-            limit: Maximum number of models to return.
-            after_id: If set, only consider models after this cursor.
-            before_id: If set, only consider models before this cursor.
-
-        Returns:
-            Tuple of (page of models, whether more models exist beyond this page).
-        """
-        is_before = False
-        match (after_id, before_id):
-            case (str() as aid, None):
-                if (
-                    idx := next((i for i, m in enumerate(data) if m.id == aid), None)
-                ) is not None:
-                    data = data[idx + 1 :]
-            case (None, str() as bid):
-                if (
-                    idx := next((i for i, m in enumerate(data) if m.id == bid), None)
-                ) is not None:
-                    data = data[:idx]
-                    is_before = True
-            case _:
-                pass
-        has_more = len(data) > limit
-        return (data[-limit:] if is_before else data[:limit]), has_more
 
     @_router.get(
         "/models",

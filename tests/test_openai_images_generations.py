@@ -891,8 +891,9 @@ class TestImageGeneration:
         assert response.data[0].b64_json or response.data[0].url, (
             "the image is produced even though the requested quality was dropped"
         )
-        assert getattr(response, "quality", None) != "invalid-quality", (
-            "the response reports the quality produced, never the one refused"
+        assert getattr(response, "quality", None) in ("low", "medium", "high"), (
+            "the response reports the quality actually produced, never the "
+            "refused, invalid value"
         )
 
     def test_invalid_style_error(

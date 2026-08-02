@@ -508,8 +508,7 @@ class TestEmbeddingsEmptyInputRejected:
         """An empty ``input`` array returns 400 before reaching any backend.
 
         The ``input`` field carries ``min_length=1``, and the failure is reported
-        against ``body.input`` whichever union member Pydantic reports first. The
-        client has no lifespan, so any backend dispatch would fail differently.
+        against ``body.input`` whichever union member Pydantic reports first.
 
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/main.py:handle_validation_exception
@@ -535,7 +534,9 @@ class TestEmbeddingsTokenArrayRejected:
 
     pytestmark = pytest.mark.local
 
-    @pytest.mark.parametrize("input_value", [[1, 2, 3], [[1, 2], [3, 4]]])
+    @pytest.mark.parametrize(
+        "input_value", [[1, 2, 3], [[1, 2], [3, 4]], ["text", 123]]
+    )
     def test_token_array_input_returns_friendly_error(
         self, app_client: TestClientType, input_value: list[object]
     ) -> None:
@@ -544,6 +545,8 @@ class TestEmbeddingsTokenArrayRejected:
         The OpenAI schema allows an array of ints and an array of int arrays; no
         Bedrock embedding model accepts pre-tokenized input, so the gateway rejects
         both shapes with its own message instead of a generic type error.
+        ``["text", 123]`` covers the case a first-item-only check would miss: a
+        token-array element past index 0.
 
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/types/openai_embeddings.py:EmbeddingCreateParams._unsupported

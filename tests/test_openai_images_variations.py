@@ -71,7 +71,6 @@ class TestImagesVariationsBasic:
         width, height = (int(value) for value in response.size.split("x"))
         assert width == height
 
-        # Validate usage tracking
         assert response.usage is not None
         assert response.usage.input_tokens > 0
         assert response.usage.input_tokens_details.image_tokens > 0
@@ -109,7 +108,6 @@ class TestImagesVariationsBasic:
             "each variation must be stored under its own key"
         )
 
-        # Validate usage for multiple images
         assert response.usage is not None
         assert response.usage.output_tokens == 2
 
@@ -220,7 +218,6 @@ class TestImagesVariationsErrors:
 
         Ref: stdapi/models/__init__.py:validate_model
         """
-        # Use a chat model which doesn't support image variations at all
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.create_variation(
                 image=sample_image_file,
@@ -491,12 +488,11 @@ class TestImagesVariationsModelField:
 
 @pytest.mark.local
 class TestImagesVariationsSizeAuto:
-    """``size="auto"``: accepted by the JSON body, rejected by the multipart form.
+    """``size="auto"`` is accepted on both the JSON body and the multipart form.
 
-    The two encodings of this one route disagree. ``_ImageBaseParams`` resolves
-    ``auto`` to the default size for the JSON body, while the multipart ``size``
-    form field only matches ``WIDTHxHEIGHT`` -- unlike generations and edits,
-    which accept ``auto`` on both encodings.
+    ``_ImageBaseParams`` resolves ``auto`` to the default size for both
+    encodings; the multipart ``size`` form field pattern matches ``auto`` too,
+    consistent with generations and edits.
 
     Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
          stdapi/routes/openai_images_variations.py:create_image_variations
@@ -521,10 +517,15 @@ class TestImagesVariationsSizeAuto:
         assert response.json()["error"]["code"] == "model_not_found"
         assert probed_model_ids == ["probe-model-id"]
 
-    def test_multipart_form_auto_size_is_rejected(
+    def test_multipart_form_auto_size_is_accepted(
         self, app_client: TestClient, probed_model_ids: list[str]
     ) -> None:
-        """A multipart ``size="auto"`` fails the form pattern before model resolution."""
+        """A multipart ``size="auto"`` passes the form pattern and reaches model resolution.
+
+        Regression: the form ``size`` pattern only matched ``WIDTHxHEIGHT``,
+        rejecting ``auto`` with a 422 before the edits-route twin's pattern fix
+        was mirrored here.
+        """
         response = app_client.post(
             "/v1/images/variations",
             data={
@@ -536,10 +537,8 @@ class TestImagesVariationsSizeAuto:
         )
 
         assert response.status_code == 400
-        error = response.json()["error"]
-        assert error["type"] == "invalid_request_error"
-        assert "size" in error["message"]
-        assert probed_model_ids == [], "the model must not be resolved"
+        assert response.json()["error"]["code"] == "model_not_found"
+        assert probed_model_ids == ["probe-model-id"]
 
     def test_multipart_form_explicit_size_is_accepted(
         self, app_client: TestClient, probed_model_ids: list[str]

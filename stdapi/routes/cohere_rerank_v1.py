@@ -5,6 +5,7 @@ specification shape, calling AWS Bedrock rerank models (e.g., Amazon Rerank,
 Cohere Rerank) through the Bedrock Rerank API.
 """
 
+import json
 from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends
@@ -54,10 +55,17 @@ def _project_document(
     Returns:
         `document` unchanged (strings, or objects when `rank_fields` is unset),
         or an object containing only the requested fields.
+
+    Raises:
+        ApiError: If `rank_fields` matches none of the document's fields.
     """
     if isinstance(document, str) or rank_fields is None:
         return document
-    return {field: document[field] for field in rank_fields if field in document}
+    projected = {field: document[field] for field in rank_fields if field in document}
+    if not projected:
+        msg = f"'rank_fields' {rank_fields} matched none of this document's fields."
+        raise ApiError(msg)
+    return projected
 
 
 def _echo_document_text(document: str | JsonMapping) -> str:
@@ -66,6 +74,8 @@ def _echo_document_text(document: str | JsonMapping) -> str:
     A single-key `{"text": ...}` object echoes its text value verbatim;
     any other object is rendered as one `key: value` line per field (Cohere's
     own join algorithm for object documents is not publicly documented).
+    Non-string values are JSON-encoded rather than passed through `str()`, so
+    e.g. `True`/`None` render as `true`/`null` instead of Python literals.
 
     Args:
         document: A document, either free text or a field->value object.
@@ -78,7 +88,10 @@ def _echo_document_text(document: str | JsonMapping) -> str:
     text = document.get("text")
     if document.keys() == {"text"} and isinstance(text, str):
         return text
-    return "\n".join(f"{key}: {value}" for key, value in document.items())
+    return "\n".join(
+        f"{key}: {value if isinstance(value, str) else json.dumps(value)}"
+        for key, value in document.items()
+    )
 
 
 @router.post(

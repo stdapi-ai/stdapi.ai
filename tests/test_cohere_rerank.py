@@ -619,6 +619,30 @@ class TestCohereRerankV1Route:
             }
         ]
 
+    def test_return_documents_json_encodes_non_string_field_values(
+        self, app_client: TestClient, rerank_backend: _StubRerankModel
+    ) -> None:
+        """Non-string field values are JSON-encoded, not rendered as Python literals.
+
+        A plain ``str()`` join would render ``True``/``None`` (Python literals)
+        instead of ``true``/``null`` (JSON), so a boolean and a null field pin the
+        JSON encoding.
+
+        Ref: stdapi/routes/cohere_rerank_v1.py:_echo_document_text
+        """
+        response = app_client.post(
+            "/cohere/v1/rerank",
+            json={
+                "model": "cohere.rerank-v3-5:0",
+                "query": "q",
+                "documents": ["a", {"title": "Nevada", "active": True, "note": None}],
+                "return_documents": True,
+            },
+        )
+        assert response.status_code == 200, response.text
+        (result,) = response.json()["results"]
+        assert result["document"] == {"text": "title: Nevada\nactive: true\nnote: null"}
+
     def test_return_documents_echoes_documents(
         self, app_client: TestClient, rerank_backend: _StubRerankModel
     ) -> None:
@@ -691,7 +715,7 @@ class TestCohereRerankV1Route:
         (call,) = rerank_backend.calls
         assert call["documents"] == ["a"]
 
-    @pytest.mark.parametrize("rank_fields", [["title"], ["title", "text"], []])
+    @pytest.mark.parametrize("rank_fields", [["title"], ["title", "text"]])
     def test_custom_rank_fields_are_accepted(
         self,
         app_client: TestClient,
@@ -699,9 +723,6 @@ class TestCohereRerankV1Route:
         rank_fields: list[str],
     ) -> None:
         """rank_fields selects which object fields are ranked, in the listed order.
-
-        An empty ``rank_fields`` list projects the document down to an empty object
-        rather than falling back to ranking every field.
 
         Ref: https://docs.cohere.com/v1/reference/rerank
              stdapi/routes/cohere_rerank_v1.py:_project_document
@@ -719,10 +740,39 @@ class TestCohereRerankV1Route:
         expected: dict[tuple[str, ...], list[dict[str, str]]] = {
             ("title",): [{"title": "a"}],
             ("title", "text"): [{"title": "a", "text": "b"}],
-            (): [{}],
         }
         (call,) = rerank_backend.calls
         assert call["documents"] == expected[tuple(rank_fields)]
+
+    @pytest.mark.parametrize("rank_fields", [[], ["missing"]])
+    def test_rank_fields_matching_no_field_is_rejected(
+        self,
+        app_client: TestClient,
+        rerank_backend: _StubRerankModel,
+        rank_fields: list[str],
+    ) -> None:
+        """rank_fields that project a document down to an empty object are rejected.
+
+        An empty ``rank_fields`` list, or one naming only fields absent from the
+        document, would otherwise forward an empty object to Bedrock instead of
+        failing loudly on the caller's mistake.
+
+        Ref: stdapi/routes/cohere_rerank_v1.py:_project_document
+        """
+        response = app_client.post(
+            "/cohere/v1/rerank",
+            json={
+                "model": "cohere.rerank-v3-5:0",
+                "query": "q",
+                "documents": [{"title": "a", "text": "b"}],
+                "rank_fields": rank_fields,
+            },
+        )
+        assert response.status_code == 400, response.text
+        body = response.json()
+        assert set(body) == {"message", "id"}
+        assert "rank_fields" in body["message"]
+        assert not rerank_backend.calls
 
     def test_max_chunks_per_doc_is_rejected(
         self, app_client: TestClient, rerank_backend: _StubRerankModel

@@ -102,10 +102,8 @@ class EmbeddingCreateParams(BaseModelRequestWithExtra):
         Raises:
             ValueError: When an unsupported input shape is requested.
         """
-        if (
-            isinstance(self.input, list)
-            and self.input
-            and not isinstance(self.input[0], (str, InputFileUrl))
+        if isinstance(self.input, list) and any(
+            not isinstance(item, (str, InputFileUrl)) for item in self.input
         ):
             msg = "Token array inputs are not supported on this backend. Provide strings instead."
             raise ValueError(msg)

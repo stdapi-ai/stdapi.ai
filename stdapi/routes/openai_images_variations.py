@@ -151,9 +151,10 @@ async def create_image_variations(
     size: Annotated[
         str,
         Form(
-            description="The size of the generated images. "
-            "Supported values depend on the model; output size may differ for some models.",
-            pattern=r"^(\d+)x(\d+)$",
+            description="The size of the generated images, as `WIDTHxHEIGHT`, or `auto` "
+            "to let the model pick. Supported values depend on the model; output size "
+            "may differ for some models.",
+            pattern=r"^(auto|\d+x\d+)$",
         ),
     ] = "1024x1024",
     user: Annotated[

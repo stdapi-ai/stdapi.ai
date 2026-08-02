@@ -6,16 +6,14 @@ Embeddings, Cohere Embed v3) to compute embedding vectors.
 """
 
 from array import array
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends
 
-from stdapi.api_errors import ApiError
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.aws_bedrock import get_extra_model_parameters
 from stdapi.config import SETTINGS
-from stdapi.input_file import InputFileUrl
 from stdapi.models import validate_model
 from stdapi.models.capabilities import register_route_capability
 from stdapi.models.embedding import get_embedding_model
@@ -27,6 +25,9 @@ from stdapi.types.openai_embeddings import (
     Usage,
 )
 from stdapi.utils import b64encode
+
+if TYPE_CHECKING:
+    from stdapi.input_file import InputFileUrl
 
 register_route_capability(
     "openai_embedding",
@@ -107,16 +108,9 @@ async def create_embeddings(
     log_request_params(request, user_id=request.user)
     model_id = (await validate_model(request.model, "EMBEDDING")).id
     raw_inputs = request.input if isinstance(request.input, list) else [request.input]
-    inputs: list[InputFileUrl | str] = []
-    for item in raw_inputs:
-        if not isinstance(item, (str, InputFileUrl)):
-            # `EmbeddingCreateParams._unsupported` only inspects the first list
-            # item, so a mixed list (e.g. ["text", 123]) reaches here with a
-            # token-array element still in it; reject it explicitly instead of
-            # forwarding an int to the backend.
-            msg = "Token array inputs are not supported on this backend. Provide strings instead."
-            raise ApiError(msg)
-        inputs.append(item)
+    # `EmbeddingCreateParams._unsupported` rejects any non-str/InputFileUrl item,
+    # so every element here is already one of the two.
+    inputs: list[InputFileUrl | str] = raw_inputs  # type: ignore[assignment]
     response = await get_embedding_model(model_id).embed_text(
         inputs,
         dimensions=request.dimensions,
