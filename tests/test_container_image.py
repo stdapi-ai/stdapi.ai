@@ -15,9 +15,11 @@ has produced the ``.pyc`` beside it, most ``.dist-info`` content is stripped, an
 the final stage is a filesystem the builder's own smoke checks never saw. The
 runtime contracts that survive only if all of that was right — the application
 importing at all, every AWS client still constructing, libmagic and its database
-answering, the timezone database, the kept metadata, a non-root uid, an
-executable healthcheck — are pinned in :class:`TestFinalImageRuntime`, again
-against the application's own code rather than against a Dockerfile.
+answering, the timezone database, the kept metadata, the licence texts the
+redistribution of those packages requires, a non-root uid, a health probe that
+still passes once ``TRUSTED_HOSTS`` makes the server validate Host headers — are
+pinned in :class:`TestFinalImageRuntime`, again against the application's own
+code rather than against a Dockerfile.
 
 The images under test come from ``STDAPI_CONTAINER_DOCKERFILES``, a
 comma-separated list of ``label=path`` entries (absolute, or relative to the
@@ -38,6 +40,7 @@ Ref: https://docs.podman.io/en/latest/markdown/podman-build.1.html
 from __future__ import annotations
 
 import ast
+import asyncio
 import json
 import math
 import shlex
@@ -61,6 +64,7 @@ from urllib.request import urlopen
 from zlib import compress, crc32
 
 import pytest
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from stdapi.aws_bedrock import MIME_TYPES_TO_AUDIO_TYPE, MIME_TYPES_TO_DOCUMENT_TYPE
 from stdapi.media import _ffmpeg_args
@@ -75,6 +79,8 @@ from tests.conftest import REPO_ROOT
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
+
+    from starlette.types import Message, Receive, Scope, Send
 
 #: All tests here need a built image, which takes tens of minutes to produce.
 pytestmark = pytest.mark.container
@@ -173,6 +179,26 @@ _HEALTHCHECK_INSTRUCTION = "HEALTHCHECK "
 #: Separator between a healthcheck's options and the command it runs.
 _HEALTHCHECK_COMMAND = " CMD "
 
+#: ``TRUSTED_HOSTS`` deployments the container's own health probe must survive.
+_TRUSTED_HOSTS_CASES: Mapping[str, tuple[str, ...]] = {
+    "unset": (),
+    "documented-hosts": ("api.example.com", "www.example.com"),
+    "wildcard-subdomain": ("*.example.com",),
+    "any-host": ("*",),
+}
+
+#: Marker the probe script prefixes the healthcheck's exit status with.
+_PROBE_EXIT_MARKER = "HEALTHCHECK_EXIT "
+
+#: Marker the probe script prefixes the request its stub server recorded with.
+_PROBE_REQUEST_MARKER = "PROBE_REQUEST "
+
+#: Directories holding the licence texts of everything the image redistributes.
+_LICENSE_DIRECTORIES = ("/usr/share/licenses/stdapi.ai", "/usr/share/licenses/ffmpeg")
+
+#: Distributions whose METADATA declares licence files, one per wheel layout.
+_LICENSED_DISTRIBUTIONS = ("botocore", "fastapi")
+
 #: In-image program importing the served application and reporting its route count.
 _IMPORT_PROGRAM = "import stdapi.main; print(len(stdapi.main.app.routes))"
 
@@ -261,6 +287,110 @@ import sys
 from shutil import which
 
 print(json.dumps({name: which(name) or "" for name in sys.argv[1:]}))
+"""
+
+#: In-image program answering one ``/health`` request and running the probe against it.
+_STUB_SERVER_PROGRAM = """
+import json
+import os
+import subprocess
+import sys
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+record = {}
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.answer(body=True)
+
+    # Starlette serves HEAD on every GET route, so a "--spider" probe works too.
+    def do_HEAD(self):
+        self.answer(body=False)
+
+    def answer(self, body):
+        record.update(
+            {
+                "path": self.path,
+                "host": self.headers.get("Host", ""),
+                "method": self.command,
+            }
+        )
+        payload = b'{"status": "ok"}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        if body:
+            self.wfile.write(payload)
+
+    def log_message(self, *args):
+        pass
+
+
+# The same bind as the served command: every IPv4 address, and no IPv6 one.
+server = HTTPServer(("0.0.0.0", int(os.environ.get("GRANIAN_PORT", "8000"))), Handler)
+threading.Thread(target=server.handle_request, daemon=True).start()
+probe = subprocess.run(json.loads(sys.argv[1]), check=False)
+print("__EXIT__" + str(probe.returncode))
+print("__REQUEST__" + json.dumps(record))
+"""
+
+#: In-image program checking every licence file each distribution's METADATA declares.
+_LICENSE_PROGRAM = """
+import json
+from importlib.util import find_spec
+from pathlib import Path
+
+root = Path(next(iter(find_spec("stdapi").submodule_search_locations))).parent
+declared = {}
+missing = []
+for info in sorted(root.glob("*.dist-info")):
+    metadata = info / "METADATA"
+    if not metadata.is_file():
+        missing.append(info.name + "/METADATA")
+        continue
+    names = [
+        line.split(":", 1)[1].strip()
+        for line in metadata.read_text(errors="replace").splitlines()
+        if line.lower().startswith("license-file:")
+    ]
+    declared[info.name.partition("-")[0].replace("_", "-").lower()] = names
+    for name in names:
+        # Metadata 2.4 puts the files under "licenses/", older wheels at the root.
+        found = next(
+            (path for path in (info / "licenses" / name, info / name) if path.is_file()),
+            None,
+        )
+        try:
+            content = found.read_bytes() if found is not None else b""
+        except OSError:
+            content = b""
+        if not content:
+            missing.append(info.name + "/" + name)
+print(json.dumps({"declared": declared, "missing": missing}))
+"""
+
+#: In-image program reporting the readable size of every file under each directory.
+_LICENSE_DIRECTORY_PROGRAM = """
+import json
+import sys
+from pathlib import Path
+
+report = {}
+for name in sys.argv[1:]:
+    directory = Path(name)
+    files = {}
+    for path in sorted(directory.rglob("*")) if directory.is_dir() else []:
+        if not path.is_file():
+            continue
+        try:
+            files[str(path.relative_to(directory))] = len(path.read_bytes())
+        except OSError:
+            files[str(path.relative_to(directory))] = 0
+    report[name] = files
+print(json.dumps(report))
 """
 
 #: Credential variables the server validates through STS before it serves anything.
@@ -863,6 +993,145 @@ def _healthcheck_binaries(test: Sequence[str]) -> tuple[str, ...]:
     return (kind,)
 
 
+def _healthcheck_argv(test: Sequence[str]) -> list[str]:
+    """Return the declared healthcheck vector as the argument list to execute.
+
+    Args:
+        test: The healthcheck ``Test`` vector, without its ``NONE`` form.
+
+    Returns:
+        The argument list the engine would run, empty when the vector holds none.
+    """
+    kind, *rest = test
+    if kind == "CMD-SHELL":
+        # The engine hands the string to a shell, so the probe needs one too.
+        return [_HEALTHCHECK_SHELL, "-c", rest[0]] if rest else []
+    if kind == "CMD":
+        return list(rest)
+    # The legacy form is the command itself, with no keyword in front.
+    return list(test)
+
+
+def _marked_line(output: str, marker: str) -> str:
+    """Return what the probe script printed after *marker*, empty when absent.
+
+    Args:
+        output: The script's standard output.
+        marker: Prefix of the line to read.
+
+    Returns:
+        The rest of that line, stripped.
+    """
+    for line in output.splitlines():
+        if line.startswith(marker):
+            return line[len(marker) :].strip()
+    return ""
+
+
+def _healthcheck_probe(image: str, trusted_hosts: Sequence[str]) -> dict[str, object]:
+    """Run the image's own health probe against a stub server inside the image.
+
+    The command comes from the image's declaration rather than from a
+    transcription of it, and runs in the environment a deployment would give it,
+    so what the stub records is what the real server would have received. A stub
+    rather than the server itself: the probe's argument here is the ``Host``
+    header it announces, which needs no AWS credentials to observe.
+
+    Args:
+        image: Container image tag.
+        trusted_hosts: ``TRUSTED_HOSTS`` entries, empty to leave the setting unset.
+
+    Returns:
+        The probe's exit status under ``exit``, and the request path and ``Host``
+        header the stub recorded under ``path`` and ``host``.
+    """
+    probe = _healthcheck_argv(_image_healthcheck(image))
+    program = _STUB_SERVER_PROGRAM.replace("__EXIT__", _PROBE_EXIT_MARKER).replace(
+        "__REQUEST__", _PROBE_REQUEST_MARKER
+    )
+    environment = (
+        ["--env", f"TRUSTED_HOSTS={json.dumps(list(trusted_hosts))}"]
+        if trusted_hosts
+        else []
+    )
+    result = _engine_run(
+        [
+            "run",
+            "--rm",
+            "--network=none",
+            *environment,
+            # Driven by the image's own interpreter: the runtime images ship
+            # Python, and the hardened one ships no shell at all.
+            "--entrypoint",
+            probe[0],
+            image,
+            "-c",
+            program,
+            json.dumps(probe),
+        ]
+    )
+    output = result.stdout.decode(errors="replace")
+    status = _marked_line(output, _PROBE_EXIT_MARKER)
+    assert status.isdigit(), (
+        f"the probe reported no exit status:\n{output}\n{_tail(result.stderr)}"
+    )
+    recorded = _marked_line(output, _PROBE_REQUEST_MARKER)
+    request: dict[str, object] = json.loads(recorded) if recorded else {}
+    return {"exit": int(status), "output": output, **request}
+
+
+async def _serve_ok(_scope: Scope, _receive: Receive, send: Send) -> None:
+    """Answer 200 to any request, standing in for the served application."""
+    await send({"type": "http.response.start", "status": 200, "headers": []})
+    await send({"type": "http.response.body", "body": b""})
+
+
+def _host_is_trusted(host: str, allowed_hosts: Sequence[str]) -> bool:
+    """Return whether the middleware the server installs accepts *host*.
+
+    The verdict comes from the very middleware ``stdapi.main`` adds when
+    ``TRUSTED_HOSTS`` is set, driven with the request the image's probe made, so
+    no matching rule of it is transcribed here.
+
+    Args:
+        host: The ``Host`` header the probe announced.
+        allowed_hosts: The configured ``TRUSTED_HOSTS`` entries.
+
+    Returns:
+        Whether the request reached the application instead of a 400.
+    """
+    statuses: list[int] = []
+
+    async def receive() -> Message:
+        """Return an empty request body, which no host check ever reads."""
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: Message) -> None:
+        """Record the status of the response the middleware produced."""
+        if message["type"] == "http.response.start":
+            statuses.append(int(message["status"]))
+
+    scope: Scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/health",
+        "raw_path": b"/health",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"host", host.encode())],
+        "client": ("127.0.0.1", 0),
+        "server": ("127.0.0.1", _SERVER_PORT),
+    }
+    middleware = TrustedHostMiddleware(_serve_ok, allowed_hosts=list(allowed_hosts))
+
+    asyncio.run(middleware(scope, receive, send))
+
+    return statuses == [200]
+
+
 @cache
 def _application_aws_services() -> tuple[str, ...]:
     """Return every AWS service the application constructs a client for.
@@ -1397,6 +1666,96 @@ class TestFinalImageRuntime:
         assert not missing, (
             f"the healthcheck {test} needs {missing}, which the image does not ship"
         )
+
+    @pytest.mark.parametrize(
+        "trusted_hosts", _TRUSTED_HOSTS_CASES.values(), ids=_TRUSTED_HOSTS_CASES
+    )
+    def test_the_healthcheck_passes_under_host_validation(
+        self, image: str, trusted_hosts: tuple[str, ...]
+    ) -> None:
+        """The declared probe stays healthy under every ``TRUSTED_HOSTS`` setting.
+
+        ``TRUSTED_HOSTS`` makes the server answer 400 to every Host header it
+        does not name, ahead of routing and ``/health`` included, so a probe
+        announcing ``localhost`` fails for a deployment naming only its public
+        names — and the orchestrator kills a container that is serving traffic
+        correctly. The header the probe sends is judged by the middleware the
+        server itself installs, so no rule of it is restated here.
+
+        Ref: https://www.starlette.io/middleware/#trustedhostmiddleware
+             stdapi/main.py:app
+             stdapi/config.py:_Settings.trusted_hosts
+        """
+        if not _image_healthcheck(image):
+            pytest.skip("the image declares no healthcheck")
+
+        probe = _healthcheck_probe(image, trusted_hosts)
+
+        assert probe["exit"] == 0, (
+            f"the probe failed with TRUSTED_HOSTS={list(trusted_hosts)}:"
+            f"\n{probe['output']}"
+        )
+        assert probe.get("path") == "/health", (
+            f"the probe requested {probe.get('path')!r}:\n{probe['output']}"
+        )
+        host = str(probe.get("host", ""))
+        assert host, f"the probe announced no Host header:\n{probe['output']}"
+        assert not trusted_hosts or _host_is_trusted(host, trusted_hosts), (
+            f"the probe announced 'Host: {host}', which the server rejects with "
+            f"400 when TRUSTED_HOSTS={list(trusted_hosts)}"
+        )
+
+    def test_every_licence_file_the_packages_declare_ships(self, image: str) -> None:
+        """Each distribution keeps the licence files its own METADATA declares.
+
+        The image strips every ``.dist-info`` down to what it needs, and
+        publishing it is a binary redistribution: the Apache-2.0, BSD and MIT
+        terms of those packages all require their licence text and notices to
+        travel along. The expectation is each package's own ``License-File``
+        declarations, so a dependency added with a licence file is covered from
+        the moment it is installed.
+
+        Ref: https://packaging.python.org/en/latest/specifications/core-metadata/#license-file-multiple-use
+             Dockerfile
+        """
+        report = json.loads(_image_python(image, _LICENSE_PROGRAM))
+        declared = report["declared"]
+        # The derivation is metadata-driven: a stripped METADATA, or a parse
+        # that stopped matching, would declare nothing and check nothing.
+        for name in _LICENSED_DISTRIBUTIONS:
+            assert declared.get(name), (
+                f"'{name}' declares no licence file in the image, so this test "
+                f"proves nothing about the {len(declared)} distributions installed"
+            )
+
+        assert report["missing"] == [], (
+            "the image drops licence files its own packages declare: "
+            f"{report['missing']}"
+        )
+
+    def test_the_image_ships_the_licences_of_what_it_redistributes(
+        self, image: str
+    ) -> None:
+        """The application's own licence and ffmpeg's travel with the binaries.
+
+        The image is published as a whole: the served application under its
+        edition's licence, and the ffmpeg it builds from source under the LGPL.
+        Both texts must be in the image, and readable by the unprivileged user
+        it runs as.
+
+        Ref: https://www.gnu.org/licenses/agpl-3.0.html
+             https://www.ffmpeg.org/legal.html
+             Dockerfile
+        """
+        listing = json.loads(
+            _image_python(image, _LICENSE_DIRECTORY_PROGRAM, *_LICENSE_DIRECTORIES)
+        )
+
+        for directory in _LICENSE_DIRECTORIES:
+            files = listing[directory]
+            assert files, f"the image ships no licence text in '{directory}'"
+            empty = sorted(name for name, size in files.items() if not size)
+            assert not empty, f"'{directory}' holds unreadable or empty files: {empty}"
 
 
 class TestServerBoot:

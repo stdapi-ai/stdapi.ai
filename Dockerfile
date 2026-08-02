@@ -31,6 +31,10 @@ RUN apk add --no-cache build-base nasm curl && \
         --enable-filter=aresample,aformat,anull \
         --enable-parser=mpegaudio,flac,aac && \
     make -j"$(nproc)" && make install && \
+    # The LGPL text ships beside the binary built from these sources.
+    mkdir -p /ffmpeg-out/licenses && \
+    find . -maxdepth 1 \( -name "COPYING*" -o -name "LICENSE*" \) \
+        -exec cp {} /ffmpeg-out/licenses/ \; && \
     printf 'P:ffmpeg\nV:%s-r0\nA:x86_64\nT:Custom audio-only LGPL ffmpeg build (Polly output to wav/flac/aac/pcm, legacy audio uploads to flac)\nU:https://ffmpeg.org\nL:LGPL-2.1-or-later\no:ffmpeg\n\n' \
         "${ffmpeg_version}" > /ffmpeg-out/apk-entry
 
@@ -67,9 +71,13 @@ RUN find botocore/data -mindepth 1 -maxdepth 1 -type d \
     find . -type d -name __pycache__ -a -prune -exec rm -rf {} \; && \
     mv annotated_doc-*.dist-info /tmp/ && \
     mv mcp-*.dist-info /tmp/ && \
-    # Keep each package's METADATA so scanners inventory the Python deps.
+    # Keep each package's METADATA and SBOM so scanners inventory the Python
+    # deps, and its licence and notice files, which redistribution requires.
     find . -maxdepth 1 -name '*.dist-info' -type d \
-        -exec sh -c 'find "$1" -type f ! -name METADATA -delete' _ {} \; && \
+        -exec sh -c 'find "$1" -type f ! -name METADATA \
+            ! -path "$1/licenses/*" ! -path "$1/sboms/*" \
+            ! -name "LICEN[CS]E*" ! -name "NOTICE*" \
+            ! -name "COPYING*" ! -name "AUTHORS*" -delete' _ {} \; && \
     rm -rf *.virtualenv _virtualenv.pth _virtualenv.py _stdapi.pth && \
     mv /tmp/annotated_doc-*.dist-info . && \
     mv /tmp/mcp-*.dist-info . && \
@@ -91,9 +99,45 @@ RUN apk add --no-cache tzdata libmagic && \
 COPY --from=ffmpeg-builder /ffmpeg-out/bin/ffmpeg /usr/bin/ffmpeg
 COPY --from=builder /opt/app /opt/app
 
+# Licences of what the image redistributes: the served application and ffmpeg.
+COPY LICENSE-AGPL /usr/share/licenses/stdapi.ai/LICENSE-AGPL
+COPY --from=ffmpeg-builder /ffmpeg-out/licenses /usr/share/licenses/ffmpeg
+
 # Register the self-built ffmpeg in the APK inventory so scanners see it.
 COPY --from=ffmpeg-builder /ffmpeg-out/apk-entry /tmp/ffmpeg-apk-entry
-RUN cat /tmp/ffmpeg-apk-entry >> /lib/apk/db/installed && rm /tmp/ffmpeg-apk-entry
+RUN cat /tmp/ffmpeg-apk-entry >> /lib/apk/db/installed && rm /tmp/ffmpeg-apk-entry && \
+    chmod -R a+rX /usr/share/licenses
+
+# Health probe: TRUSTED_HOSTS makes the server answer 400 to every other Host
+# header, so the probe announces a trusted one, and addresses 127.0.0.1 since
+# "localhost" resolves to ::1 first, where the IPv4-only server never listens.
+RUN printf '%s\n' \
+    'import json' \
+    'import os' \
+    'import urllib.request' \
+    '' \
+    'setting = os.environ.get("TRUSTED_HOSTS", "").strip()' \
+    'try:' \
+    '    hosts = json.loads(setting) if setting else []' \
+    'except ValueError:' \
+    '    hosts = [setting]' \
+    'if isinstance(hosts, str):' \
+    '    hosts = [hosts]' \
+    'try:' \
+    '    host = str(hosts[0]).strip() or "localhost"' \
+    'except (IndexError, KeyError, TypeError):' \
+    '    # A setting the server itself would reject: probe the default host.' \
+    '    host = "localhost"' \
+    '# A wildcard is a pattern: "*" trusts any host, "*.x" any subdomain of x.' \
+    'if host == "*":' \
+    '    host = "localhost"' \
+    'elif host.startswith("*"):' \
+    '    host = "healthcheck" + host[1:]' \
+    'url = "http://127.0.0.1:" + os.environ.get("GRANIAN_PORT", "8000") + "/health"' \
+    'request = urllib.request.Request(url, headers={"Host": host})' \
+    'with urllib.request.urlopen(request, timeout=4) as response:' \
+    '    raise SystemExit(0 if response.status == 200 else 1)' \
+    > /usr/local/bin/healthcheck.py
 
 USER nonroot
 WORKDIR /opt/app
@@ -104,6 +148,6 @@ ENV GRANIAN_LOG_LEVEL="critical" \
     GRANIAN_LOG_ACCESS_ENABLED="false"
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=30s \
-    CMD wget --quiet --tries=1 --spider http://localhost:${GRANIAN_PORT:-8000}/health || exit 1
+    CMD ["python3", "/usr/local/bin/healthcheck.py"]
 
 CMD ["python3", "-m", "granian", "stdapi.main:app", "--host", "0.0.0.0", "--interface", "asgi", "--no-ws", "--loop", "uvloop"]

@@ -1,6 +1,9 @@
-# Build context: only the files the image copies (both editions copy the same).
+# Build context: the files the images copy (both editions copy the same, except
+# for the licence text each one ships).
 *
 !pyproject.toml
 !uv.lock
 !stdapi
+!LICENSE-AGPL
+!LICENSE-COMMERCIAL
 stdapi/**/__pycache__
