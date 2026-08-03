@@ -299,9 +299,10 @@ class TestStabilityUpscaleModels:
         assert base64.b64decode(b64_json).startswith(_JPEG_MAGIC)
 
     @pytest.mark.expensive
-    @pytest.mark.parametrize(
-        "model_id", [STABILITY_CREATIVE_UPSCALE, STABILITY_CONSERVATIVE_UPSCALE]
-    )
+    # Both upscale models are served by stability_stable_image_edit.py, the same
+    # job the control-sketch, control-structure, style-guide and outpaint tests
+    # already exercise, so one of the pair proves the path; it is the cheaper one.
+    @pytest.mark.parametrize("model_id", [STABILITY_CONSERVATIVE_UPSCALE])
     def test_creative_upscale(
         self, openai_client: OpenAI, chat_vision_judge_model: str, model_id: str
     ) -> None:

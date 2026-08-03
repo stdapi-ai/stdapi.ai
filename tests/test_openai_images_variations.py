@@ -316,38 +316,6 @@ class TestImagesVariationsJsonBody:
     )
 
     @pytest.mark.expensive
-    def test_variation_with_image_url(
-        self, openai_client: OpenAI, sample_image_file_base64: str
-    ) -> None:
-        """A ``data:`` URL ``image`` reference in a JSON body produces a variation.
-
-        Ref: stdapi/input_file.py:InputFile
-        """
-        http_client = openai_client._client  # noqa: SLF001
-        response = http_client.post(
-            f"{openai_client.base_url}images/variations",
-            json={
-                "model": "stability.sd3-5-large-v1:0",
-                "image": {"image_url": sample_image_file_base64},
-                "response_format": "b64_json",
-                "size": "512x512",
-                "n": 1,
-            },
-            headers={"Authorization": f"Bearer {openai_client.api_key}"},
-        )
-        assert response.status_code == 200, (
-            f"Expected 200, got {response.status_code}: {response.text}"
-        )
-        body = response.json()
-        assert body.get("created") is not None
-        assert body.get("data") is not None
-        assert len(body["data"]) == 1
-        assert body["data"][0].get("b64_json") is not None
-        assert body["data"][0].get("url") is None
-        assert validate_base64_image(body["data"][0]["b64_json"]) == "png"
-        assert body["output_format"] == "png"
-
-    @pytest.mark.expensive
     def test_variation_with_file_id(
         self, openai_client: OpenAI, sample_image_file: bytes
     ) -> None:

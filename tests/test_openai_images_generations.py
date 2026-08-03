@@ -339,15 +339,21 @@ class TestImageGeneration:
         """A text prompt returns a single image referenced by URL.
 
         ``response_format`` is left unset, and its default is ``url``, so the
-        image is uploaded and referenced instead of being inlined as base64.
+        image is uploaded and referenced instead of being inlined as base64;
+        passing ``url`` explicitly takes the same branch. ``user`` rides along
+        because it is recorded on the request log and never echoed back, so an
+        unchanged response is the whole observable contract -- and a second
+        generation to prove it would buy nothing.
 
         Ref: stdapi/routes/_images_common.py:build_images_response
+             stdapi/types/openai_images.py:_ImageBaseParams
         """
         response = openai_client.images.generate(
             prompt="A beautiful sunset over mountains",
             model=image_generation_model,
             n=1,
             size=image_generation_size,
+            user="test-user-123",
         )
 
         assert response.created is not None
@@ -359,38 +365,6 @@ class TestImageGeneration:
         assert image.url is not None
         validate_url_format(image.url)
         assert image.b64_json is None, "the url default must not inline base64 data"
-
-    @pytest.mark.expensive
-    def test_image_generation_with_user_parameter(
-        self,
-        openai_client: OpenAI,
-        image_generation_model: str,
-        image_generation_size: str,
-    ) -> None:
-        """``user`` is accepted for attribution and leaves the response unchanged.
-
-        ``user`` is recorded on the request log for monitoring and abuse
-        detection; it is never echoed back, so an unchanged image response is the
-        whole observable contract.
-
-        Ref: stdapi/types/openai_images.py:_ImageBaseParams
-             stdapi/monitoring.py:log_request_params
-        """
-        response = openai_client.images.generate(
-            prompt="A beautiful landscape",
-            model=image_generation_model,
-            n=1,
-            size=image_generation_size,
-            user="test-user-123",
-        )
-
-        assert response.created is not None
-        validate_timestamp(response.created)
-        assert response.data is not None
-        assert len(response.data) == 1
-        assert response.data[0].url is not None
-        validate_url_format(response.data[0].url)
-        assert response.data[0].b64_json is None
 
     @pytest.mark.expensive
     def test_multiple_images_generation(
@@ -426,39 +400,6 @@ class TestImageGeneration:
         assert response.data[0].url != response.data[1].url, (
             "each generated image must be returned under its own URL"
         )
-
-    @pytest.mark.expensive
-    def test_response_format_url(
-        self,
-        openai_client: OpenAI,
-        image_generation_model: str,
-        image_generation_size: str,
-    ) -> None:
-        """``response_format="url"`` returns a URL and no inline base64 payload.
-
-        The gateway supports ``url`` for every image model, unlike OpenAI's GPT
-        image models which always return base64.
-
-        Ref: https://stdapi.ai/api_openai_images_generations/
-             stdapi/models/image/__init__.py:ImageGenerationJobBase._get_image_url
-        """
-        response = openai_client.images.generate(
-            prompt="A landscape painting",
-            model=image_generation_model,
-            n=1,
-            size=image_generation_size,
-            response_format="url",
-        )
-
-        assert response.created is not None
-        validate_timestamp(response.created)
-        assert response.data is not None
-        assert len(response.data) == 1
-
-        image = response.data[0]
-        assert image.url is not None, "Missing URL in URL format response"
-        validate_url_format(image.url)
-        assert image.b64_json is None, "Unexpected b64_json in URL format response"
 
     @pytest.mark.expensive
     def test_response_format_b64_json(
@@ -498,11 +439,13 @@ class TestImageGeneration:
             )
 
     @pytest.mark.expensive
-    @pytest.mark.parametrize("size", ["512x512", "1024x1024"])
+    # One size only: every other live test here already runs at the fixture's
+    # default, so a second value would re-prove the same acceptance branch.
+    @pytest.mark.parametrize("size", ["512x512"])
     def test_size_parameter_functionality(
         self, openai_client: OpenAI, image_generation_model: str, size: str
     ) -> None:
-        """Both square sizes are accepted and produce an image.
+        """A requested square size is accepted and produces an image.
 
         The response's ``size`` is the size the model actually produced, not the
         requested one: backends such as Stability translate ``WIDTHxHEIGHT`` into
@@ -628,7 +571,13 @@ class TestImageGeneration:
     ) -> None:
         """``stream=True`` yields SSE events ending in one completed event per image.
 
+        ``partial_images`` is accepted for compatibility over its whole 0-3
+        range, and no Bedrock image model reports intermediate images, so the
+        value cannot change what the stream carries: one legal value rides on
+        this request rather than paying for a generation per value.
+
         Ref: https://developers.openai.com/api/docs/guides/image-generation
+             stdapi/types/openai_images.py:ImageGenerateParams
              stdapi/routes/openai_images_generations.py:stream_generator
         """
         response = openai_client.images.generate(
@@ -637,40 +586,7 @@ class TestImageGeneration:
             n=1,
             size=image_generation_stream_size,
             stream=True,
-        )
-
-        assert response is not None
-        events = validate_streaming_image_response(response)
-        completed = [e for e in events if e.type == "image_generation.completed"]
-        assert len(completed) == 1, (
-            f"Expected one completed event for n=1, got {len(completed)}"
-        )
-
-    @pytest.mark.expensive
-    @pytest.mark.parametrize("partial_images_value", [0, 2, 3])
-    def test_stream_with_partial_images(
-        self,
-        openai_client: OpenAI,
-        image_generation_stream_model: str,
-        image_generation_stream_size: str,
-        partial_images_value: int,
-    ) -> None:
-        """Every legal ``partial_images`` value still ends the stream with one completed event.
-
-        ``partial_images`` is accepted for compatibility for all of 0-3; no
-        Bedrock image model reports intermediate images, so the value cannot
-        change the number of completed events.
-
-        Ref: stdapi/types/openai_images.py:ImageGenerateParams
-             stdapi/routes/openai_images_generations.py:stream_generator
-        """
-        response = openai_client.images.generate(
-            prompt=f"A test image with partial_images={partial_images_value}",
-            model=image_generation_stream_model,
-            n=1,
-            size=image_generation_stream_size,
-            stream=True,
-            partial_images=partial_images_value,
+            partial_images=2,
         )
 
         assert response is not None
@@ -843,6 +759,7 @@ class TestImageGeneration:
             expected_param="response_format",
         )
 
+    @pytest.mark.expensive
     def test_invalid_quality_error(
         self,
         openai_client: OpenAI,
@@ -881,6 +798,7 @@ class TestImageGeneration:
             "refused, invalid value"
         )
 
+    @pytest.mark.expensive
     def test_invalid_style_error(
         self,
         openai_client: OpenAI,

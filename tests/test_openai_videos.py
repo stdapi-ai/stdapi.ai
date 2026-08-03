@@ -804,13 +804,21 @@ class TestOpenAIVideoIntegration:
     def test_video_generation_lifecycle(
         self, openai_client: OpenAI, video_generation_model: str, use_official_api: bool
     ) -> None:
-        """Create, poll, download, and delete a video with the default model.
+        """Create from a reference frame, poll, download, and delete a video.
 
         A fresh job starts in a non-terminal status, reaches ``progress`` 100 with
         a completion timestamp, then serves an MP4 (its 5th-8th bytes are the
         ISO-BMFF ``ftyp`` box) until it is deleted.
 
+        The job is started from a multipart ``input_reference`` frame, generated
+        at the requested size because both backends constrain the first frame's
+        dimensions. That is the richer of the two request payloads, and a clip
+        costs five seconds of generation, so this covers the plain prompt-only
+        payload too -- which ``tests/test_models_video.py`` pins offline. Whether
+        the video actually starts from that frame is not observable here.
+
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-luma.html
              stdapi/routes/openai_videos.py:get_video_content
         """
         # Luma bills 540p at half the 720p rate; Sora has no 540p size.
@@ -819,6 +827,7 @@ class TestOpenAIVideoIntegration:
             model=video_generation_model,
             prompt="A calico cat playing a piano",
             size=size,  # type: ignore[arg-type]
+            input_reference=("frame.png", _reference_frame(size), "image/png"),
         )
         video_id = video.id
         try:
@@ -843,38 +852,6 @@ class TestOpenAIVideoIntegration:
             assert deleted.id == video_id
         finally:
             # Best-effort cleanup when an assertion fails mid-lifecycle.
-            with suppress(Exception):
-                openai_client.videos.delete(video.id)
-
-    @pytest.mark.video
-    @pytest.mark.slow
-    def test_video_generation_from_reference_image(
-        self, openai_client: OpenAI, video_generation_model: str, use_official_api: bool
-    ) -> None:
-        """An uploaded reference image is accepted and the job completes.
-
-        The multipart ``input_reference`` frame is generated at the requested size
-        because both backends constrain the first frame's dimensions; whether the
-        video actually starts from that frame is not observable here.
-
-        Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-gen-access.html
-             https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-luma.html
-        """
-        # Luma bills 540p at half the 720p rate; Sora has no 540p size.
-        size = "1280x720" if use_official_api else "960x540"
-        video = openai_client.videos.create(
-            model=video_generation_model,
-            prompt="The camera slowly zooms in",
-            size=size,  # type: ignore[arg-type]
-            input_reference=("frame.png", _reference_frame(size), "image/png"),
-        )
-        try:
-            assert video.status in ("queued", "in_progress")
-            video = _wait_for_completion(openai_client, video.id)
-            assert video.size == size
-            assert video.progress == 100
-            assert video.error is None
-        finally:
             with suppress(Exception):
                 openai_client.videos.delete(video.id)
 

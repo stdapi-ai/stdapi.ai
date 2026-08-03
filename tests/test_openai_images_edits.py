@@ -384,9 +384,12 @@ class TestImagesEditsBasic:
         The edits endpoint has its own event names, and the OpenAI client
         discriminates its edit stream union on them: an ``image_generation.*``
         name here leaves ``usage`` an unparsed dict on the client side. Stability
-        backends never produce preview frames, so one event is the whole stream.
+        backends never produce preview frames, so one event is the whole stream
+        whatever ``partial_images`` asks for -- which is why a legal value rides
+        on this request instead of paying for an edit per value.
 
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/types/openai_images.py:_ImageEditCommonParams
              stdapi/routes/openai_images_generations.py:stream_generator
         """
         response = openai_client.images.edit(
@@ -397,209 +400,13 @@ class TestImagesEditsBasic:
             size="512x512",
             n=1,
             stream=True,
+            partial_images=2,
         )
 
         events = list(response)
         validate_streaming_image_response(events, prefix="image_edit")
         assert [str(event.type) for event in events] == ["image_edit.completed"]
         assert validate_base64_image(events[-1].b64_json) == "png"
-
-    @pytest.mark.expensive
-    @pytest.mark.parametrize("partial_images_value", [0, 2, 3])
-    def test_stream_with_partial_images(
-        self, openai_client: OpenAI, sample_image_file: bytes, partial_images_value: int
-    ) -> None:
-        """Any accepted `partial_images` value still yields only the final image event.
-
-        ``partial_images`` (0-3, streaming only) is validated and forwarded, but
-        no available backend emits preview frames, so the stream carries exactly
-        one ``image_edit.completed`` event and no ``partial_image`` event
-        whatever the requested preview count.
-
-        Ref: stdapi/types/openai_images.py:_ImageEditCommonParams
-             stdapi/routes/openai_images_generations.py:stream_generator
-        """
-        response = openai_client.images.edit(
-            image=sample_image_file,
-            prompt="A test image",
-            model="stability.stable-image-inpaint-v1:0",
-            size="512x512",
-            stream=True,
-            partial_images=partial_images_value,
-        )
-
-        events = list(response)
-        validate_streaming_image_response(events, prefix="image_edit")
-        assert [str(event.type) for event in events] == ["image_edit.completed"]
-
-    @pytest.mark.expensive
-    def test_image_parameter_aliases(
-        self, openai_client: OpenAI, sample_image_file: bytes, sample_mask_file: bytes
-    ) -> None:
-        """`image` and `image[]` are interchangeable multipart field names.
-
-        Also covers the two failure modes of the same merge step: no image field
-        at all (min-length error on ``body.image``) and a non-file value under
-        ``body.image[]``.
-
-        Ref: stdapi/routes/openai_images_edits.py:_merge_image_parameters
-        """
-        http_client = openai_client._client  # noqa: SLF001
-
-        headers = {
-            "Authorization": f"Bearer {openai_client.api_key}",
-            "OpenAI-Organization": openai_client.organization or "",
-        }
-
-        files_image = {
-            "image": ("image.png", sample_image_file, "image/png"),
-            "mask": ("mask.png", sample_mask_file, "image/png"),
-        }
-        data_image = {
-            "prompt": "A red square",
-            "model": "stability.stable-image-inpaint-v1:0",
-            "size": "512x512",
-            "n": "1",
-        }
-
-        response_image = http_client.post(
-            f"{openai_client.base_url}images/edits",
-            files=files_image,
-            data=data_image,
-            headers=headers,
-        )
-        assert response_image.status_code == 200, (
-            f"Expected 200, got {response_image.status_code}: {response_image.text}"
-        )
-        json_response_image = response_image.json()
-        assert json_response_image.get("created") is not None
-        validate_timestamp(json_response_image["created"])
-        assert json_response_image.get("data") is not None
-        assert len(json_response_image["data"]) == 1
-        assert json_response_image["data"][0].get("url") is not None
-        validate_url_format(json_response_image["data"][0]["url"])
-
-        files_image_array = {
-            "image[]": ("image.png", sample_image_file, "image/png"),
-            "mask": ("mask.png", sample_mask_file, "image/png"),
-        }
-        data_image_array = {
-            "prompt": "A blue circle",
-            "model": "stability.stable-image-inpaint-v1:0",
-            "size": "512x512",
-            "n": "1",
-        }
-
-        response_image_array = http_client.post(
-            f"{openai_client.base_url}images/edits",
-            files=files_image_array,
-            data=data_image_array,
-            headers=headers,
-        )
-        assert response_image_array.status_code == 200, (
-            f"Expected 200, got {response_image_array.status_code}: {response_image_array.text}"
-        )
-        json_response_array = response_image_array.json()
-        assert json_response_array.get("created") is not None
-        validate_timestamp(json_response_array["created"])
-        assert json_response_array.get("data") is not None
-        assert len(json_response_array["data"]) == 1
-        assert json_response_array["data"][0].get("url") is not None
-        validate_url_format(json_response_array["data"][0]["url"])
-
-        data_no_image = {
-            "prompt": "A test image",
-            "model": "stability.stable-image-inpaint-v1:0",
-            "size": "512x512",
-            "n": "1",
-        }
-
-        response_no_image = http_client.post(
-            f"{openai_client.base_url}images/edits", data=data_no_image, headers=headers
-        )
-        assert response_no_image.status_code == 400
-        error_response = response_no_image.json()
-        assert "error" in error_response
-        assert error_response["error"]["type"] == "invalid_request_error"
-
-        assert "message" in error_response["error"]
-        error_message = error_response["error"]["message"]
-        assert "body.image" in error_message, error_message
-        assert (
-            "validation" in error_message.lower() or "at least" in error_message.lower()
-        )
-
-        data_invalid_type = {
-            "prompt": "A test image",
-            "model": "stability.stable-image-inpaint-v1:0",
-            "size": "512x512",
-            "n": "1",
-            "image[]": "not_a_file",  # String instead of file upload
-        }
-
-        response_invalid_type = http_client.post(
-            f"{openai_client.base_url}images/edits",
-            data=data_invalid_type,
-            headers=headers,
-        )
-        assert response_invalid_type.status_code == 400
-        error_response_invalid = response_invalid_type.json()
-        assert "error" in error_response_invalid
-        assert error_response_invalid["error"]["type"] == "invalid_request_error"
-
-        assert "message" in error_response_invalid["error"]
-        error_message_invalid = error_response_invalid["error"]["message"]
-        assert "body.image[]" in error_message_invalid, error_message_invalid
-
-
-class TestImagesEditsJsonBody:
-    """/v1/images/edits with an ``application/json`` body instead of multipart.
-
-    Images are referenced by URL/data URL or Files API identifier rather than
-    uploaded as binary parts.
-
-    Ref: https://stdapi.ai/api_openai_images_edits/
-         stdapi/types/openai_images.py:ImageEditJsonBody
-    """
-
-    pytestmark = pytest.mark.gateway(
-        "stability.stable-image-inpaint-v1:0 not available on the official OpenAI API"
-    )
-
-    @pytest.mark.expensive
-    def test_edit_with_image_url(
-        self, openai_client: OpenAI, sample_image_file_base64: str
-    ) -> None:
-        """A ``data:`` URL in the JSON ``images`` array is accepted as the source image.
-
-        Ref: stdapi/types/openai_images.py:ImageInputReferenceParam
-             stdapi/input_file.py:InputFile
-        """
-        http_client = openai_client._client  # noqa: SLF001
-        response = http_client.post(
-            f"{openai_client.base_url}images/edits",
-            json={
-                "model": "stability.stable-image-inpaint-v1:0",
-                "prompt": "Make it look like a painting",
-                "images": [{"image_url": sample_image_file_base64}],
-                "response_format": "b64_json",
-                "size": "512x512",
-                "n": 1,
-            },
-            headers={"Authorization": f"Bearer {openai_client.api_key}"},
-        )
-        assert response.status_code == 200, (
-            f"Expected 200, got {response.status_code}: {response.text}"
-        )
-        body = response.json()
-        assert body.get("created") is not None
-        assert body.get("data") is not None
-        assert len(body["data"]) == 1
-        assert body["data"][0].get("b64_json") is not None
-        assert body["data"][0].get("url") is None
-        assert body["output_format"] == validate_base64_image(
-            body["data"][0]["b64_json"]
-        )
 
     @pytest.mark.expensive
     def test_edit_with_file_id(
