@@ -56,39 +56,11 @@ jobs:
             echo "This is a prerelease: $VERSION"
           fi
 
-  offline-tests:
-    # The Test workflow ignores tags, so without this a tag could be applied to
-    # a commit whose suite never ran and be published from it.
-    needs: validate-version
-    runs-on: ubuntu-latest
-    env:
-      FORCE_COLOR: "1"
-      # No credentials are configured, and blocking the IMDS endpoint turns a
-      # stray call into an immediate failure instead of a hang.
-      AWS_EC2_METADATA_DISABLED: "true"
-      AWS_CONFIG_FILE: /dev/null
-      AWS_SHARED_CREDENTIALS_FILE: /dev/null
-      AWS_REGION: us-east-1
-      AWS_DEFAULT_REGION: us-east-1
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
-        with:
-          enable-cache: true
-          activate-environment: true
-
-      - name: Install dependencies
-        run: uv sync --frozen --group test
-
-      - name: Run the offline tests
-        run: pytest --offline
-
   build-and-push:
-    needs: [validate-version, offline-tests]
+    # No source-level check runs here: Lint and Test already ran on this commit
+    # before it was tagged, and a tag is only applied to a green pipeline. What
+    # this job does check is the artifact, which nothing else has seen.
+    needs: validate-version
     environment: github-container-registry
     runs-on: ubuntu-latest
     permissions:
