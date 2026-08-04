@@ -23,7 +23,12 @@ from pydantic import ValidationError
 
 from stdapi import usage
 from stdapi.config import SETTINGS, _Settings
-from stdapi.pricing import Dimension, Service
+from stdapi.pricing import (
+    Dimension,
+    Service,
+    guardrail_policy_model,
+    normalize_model_key,
+)
 from stdapi.usage import (
     IMAGE_SPEC,
     UsageKey,
@@ -33,7 +38,7 @@ from stdapi.usage import (
     get_model_state,
     record_bedrock_usage,
     record_comprehend_usage,
-    record_guardrail_usage,
+    record_guardrail_policy_usage,
     record_polly_usage,
     record_transcribe_usage,
     record_translate_usage,
@@ -1204,47 +1209,106 @@ class TestNonBedrockRecordUsageHelpers:
         assert record.region == ""
 
 
-class TestGuardrailTextUnitsPricing:
-    """Guardrail text units: priced when published, silent when not.
+class TestGuardrailPolicyPricing:
+    """ApplyGuardrail usage: every applied policy billed at its own rate.
 
-    A configured guardrail applies to every route, so an unpriced text-unit
-    miss would raise the level of every request log to ``warning``; a
-    published Guardrails rate must still be billed.
+    A guardrail applies every policy the operator configured to the same
+    content, and AWS prices each policy separately, so their rates sum.
+    Recording one model per guardrail could only ever charge a single
+    policy's rate, under-billing every multi-policy guardrail.
 
     Ref: https://aws.amazon.com/bedrock/pricing/
-         stdapi/usage.py:record_guardrail_usage
+         stdapi/usage.py:record_guardrail_policy_usage
          stdapi/monitoring.py:_add_warnings
     """
 
+    @staticmethod
+    def _seed(policy: str, dimension: Dimension, amount: str) -> None:
+        """Publish one policy's rate in the test price index."""
+        set_test_price(
+            normalize_model_key(guardrail_policy_model(policy)),
+            "us-east-1",
+            dimension,
+            amount,
+            "USD",
+        )
+
     def test_unpriced_text_units_emit_no_pricing_miss_warning(self) -> None:
-        """With no Guardrails rate in the catalog, the record is silent, not warned about."""
+        """With no Guardrails rate in the catalog, the record is silent, not warned about.
+
+        A configured guardrail applies to every route, so a warned miss would
+        raise the level of every request log to ``warning``.
+        """
         # Seed an unrelated price so the catalog counts as ready.
         set_test_price(
             "othermodel", "us-east-1", Dimension.INPUT_TOKENS, "0.000003", "USD"
         )
-        record_guardrail_usage(
-            "amazon.bedrock-runtime-guardrail", text_units=3, region="us-east-1"
-        )
+        record_guardrail_policy_usage({"contentPolicyUnits": 3}, region="us-east-1")
         assert compute_costs() == []
         record = next(iter(usage.USAGE.get().values()))
         assert record.cost == Decimal(0)
 
-    def test_published_text_unit_rate_is_billed(self) -> None:
-        """A published Guardrails rate prices the recorded text units."""
-        set_test_price(
-            "bedrockruntimeguardrail",
-            "us-east-1",
-            Dimension.TEXT_UNITS,
-            "0.00015",
-            "USD",
+    def test_every_applied_policy_is_billed_at_its_own_rate(self) -> None:
+        """Three policies over the same text cost the sum of three rates, not one."""
+        self._seed("content", Dimension.TEXT_UNITS, "0.00015")
+        self._seed("topic", Dimension.TEXT_UNITS, "0.00015")
+        self._seed("automated-reasoning", Dimension.TEXT_UNITS, "0.00017")
+        record_guardrail_policy_usage(
+            {
+                "contentPolicyUnits": 3,
+                "topicPolicyUnits": 3,
+                "automatedReasoningPolicyUnits": 3,
+            },
+            region="us-east-1",
         )
-        record_guardrail_usage(
-            "amazon.bedrock-runtime-guardrail", text_units=3, region="us-east-1"
+        assert compute_costs() == []
+        records = list(usage.USAGE.get().values())
+        assert len(records) == 3
+        # 3 text units x (0.00015 + 0.00015 + 0.00017).
+        assert sum(record.cost for record in records) == Decimal("0.001410")
+        assert {record.currency for record in records} == {"USD"}
+
+    def test_the_content_policy_image_rate_bills_separately_from_its_text_rate(
+        self,
+    ) -> None:
+        """One policy, two dimensions: images must not be charged the text rate."""
+        self._seed("content", Dimension.TEXT_UNITS, "0.00015")
+        self._seed("content", Dimension.INPUT_IMAGES, "0.00075")
+        record_guardrail_policy_usage(
+            {"contentPolicyUnits": 2, "contentPolicyImageUnits": 1}, region="us-east-1"
         )
         assert compute_costs() == []
         record = next(iter(usage.USAGE.get().values()))
-        assert record.cost == Decimal("0.000450")
-        assert record.currency == "USD"
+        # Both dimensions aggregate onto the one content-policy model.
+        assert record.cost == Decimal("0.001050")
+
+    def test_unapplied_policies_record_nothing(self) -> None:
+        """Absent, zero and non-integer counts must not mint empty usage records.
+
+        ``usage`` reports every policy field, zeroed for the ones the
+        guardrail does not apply.
+        """
+        self._seed("content", Dimension.TEXT_UNITS, "0.00015")
+        record_guardrail_policy_usage(
+            {
+                "contentPolicyUnits": 2,
+                "topicPolicyUnits": 0,
+                "wordPolicyUnits": None,
+                "automatedReasoningPolicies": 4,
+            },
+            region="us-east-1",
+        )
+        assert [key.model for key in usage.USAGE.get()] == [
+            guardrail_policy_model("content")
+        ]
+
+    def test_the_policy_count_field_is_never_billed(self) -> None:
+        """``automatedReasoningPolicies`` counts policies, not billable units."""
+        self._seed("automated-reasoning", Dimension.TEXT_UNITS, "0.00017")
+        record_guardrail_policy_usage(
+            {"automatedReasoningPolicies": 7}, region="us-east-1"
+        )
+        assert usage.USAGE.get() == {}
 
 
 class TestFormatCost:

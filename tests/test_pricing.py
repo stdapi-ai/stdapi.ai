@@ -25,6 +25,7 @@ from stdapi import models, pricing
 from stdapi.aws import AWSConnectionManager, get_client
 from stdapi.config import SETTINGS
 from stdapi.models.deprecation import DEPRECATED_MODELS
+from stdapi.models.moderation import GUARDRAIL_CHECKS_MODERATION_MODEL
 from stdapi.pricing import (
     Dimension,
     Price,
@@ -36,6 +37,7 @@ from stdapi.pricing import (
     _region_family,
     _resolve_dimension,
     _resolve_tier,
+    guardrail_policy_model,
     inference_type_to_dimension,
     is_model_priced,
     normalize_model_key,
@@ -2200,7 +2202,7 @@ class TestGuardrailsIngestion:
 
     Ref: https://aws.amazon.com/bedrock/pricing/
          stdapi/pricing.py:_guardrail_model
-         stdapi/usage.py:record_guardrail_usage
+         stdapi/usage.py:record_guardrail_policy_usage
     """
 
     @staticmethod
@@ -2224,10 +2226,10 @@ class TestGuardrailsIngestion:
             )
         return results, diagnostics
 
-    def test_guardrail_policy_row_prices_the_apply_guardrail_model(
+    def test_guardrail_policy_row_prices_its_own_policy_model(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A policy row must key under "amazon.bedrock-runtime-guardrail" text units.
+        """A policy row must key under that policy's model, in text units.
 
         The usagetype ends in "UnitsConsumed", which the generic Bedrock
         fallback reads as generated images -- a dimension nothing records
@@ -2238,7 +2240,7 @@ class TestGuardrailsIngestion:
         )
         key = PriceKey(
             Service.BEDROCK,
-            normalize_model_key("amazon.bedrock-runtime-guardrail"),
+            normalize_model_key(guardrail_policy_model("content")),
             "us-east-1",
             Dimension.TEXT_UNITS,
             "standard",
@@ -2248,7 +2250,7 @@ class TestGuardrailsIngestion:
         monkeypatch.setattr(pricing._state, "price_index", results)  # noqa: SLF001
         price = resolve_price(
             Service.BEDROCK,
-            "amazon.bedrock-runtime-guardrail",
+            guardrail_policy_model("content"),
             "us-east-1",
             Dimension.TEXT_UNITS,
         )
@@ -2258,30 +2260,35 @@ class TestGuardrailsIngestion:
     def test_image_content_policy_row_prices_input_images(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The image content policy bills per image, the dimension image moderation records."""
+        """The content policy's image rate shares its model, split off by dimension.
+
+        AWS prices the same policy per text unit and per image; the two rows
+        stay distinct because image moderation records INPUT_IMAGES.
+        """
         results, _ = self._ingest(
+            self._item("USE1-Guardrail-ContentPolicyUnitsConsumed", "0.00015"),
             self._item(
                 "USE1-Guardrail-ContentPolicyImageUnitsConsumed",
                 "0.00075",
                 unit="Images Processed",
-            )
+            ),
         )
         monkeypatch.setattr(pricing._state, "price_index", results)  # noqa: SLF001
         price = resolve_price(
             Service.BEDROCK,
-            "amazon.bedrock-runtime-guardrail",
+            guardrail_policy_model("content"),
             "us-east-1",
             Dimension.INPUT_IMAGES,
         )
         assert price is not None
         assert price.amount == Decimal("0.00075")
 
-    def test_the_dearest_policy_rate_is_kept_without_a_collision(self) -> None:
-        """Every configured policy bills the same units, so the dearest is kept, quietly.
+    def test_each_policy_keeps_its_own_rate(self) -> None:
+        """Policies must not share a PriceKey: a guardrail pays every one it applies.
 
-        The policies share one PriceKey by design: reporting that as a
-        catalog collision would warn on every startup, and letting the last
-        row win would price a guardrail by price-list ordering.
+        Folding them onto one model could only ever charge a single policy's
+        rate, so a multi-policy guardrail would be billed a fraction of its
+        real cost no matter which row won.
         """
         results, diagnostics = self._ingest(
             self._item(
@@ -2293,7 +2300,30 @@ class TestGuardrailsIngestion:
             self._item("USE1-Guardrail-TopicPolicyUnitsConsumed", "0.00015"),
         )
         assert diagnostics == []
-        assert [price.amount for price in results.values()] == [Decimal("0.00017")]
+        assert {key.model: price.amount for key, price in results.items()} == {
+            normalize_model_key(
+                guardrail_policy_model("contextual-grounding")
+            ): Decimal("0.0001"),
+            normalize_model_key(guardrail_policy_model("automated-reasoning")): Decimal(
+                "0.00017"
+            ),
+            normalize_model_key(guardrail_policy_model("topic")): Decimal("0.00015"),
+        }
+
+    def test_an_unmodeled_policy_is_reported_rather_than_billed_at_nothing(
+        self,
+    ) -> None:
+        """A policy AWS adds later must surface, not silently cost nothing.
+
+        Its units would otherwise be recorded against no price key at all,
+        and TEXT_UNITS misses are deliberately silent at request time.
+        """
+        results, diagnostics = self._ingest(
+            self._item("USE1-Guardrail-QuantumPolicyUnitsConsumed", "0.00042")
+        )
+        assert results == {}
+        assert len(diagnostics) == 1
+        assert "QuantumPolicyUnitsConsumed" in diagnostics[0]
 
     def test_guardrail_checks_row_prices_the_checks_model(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2309,13 +2339,13 @@ class TestGuardrailsIngestion:
             )
         )
         assert [key.model for key in results] == [
-            normalize_model_key("amazon.bedrock-runtime-guardrail-checks")
+            normalize_model_key(GUARDRAIL_CHECKS_MODERATION_MODEL)
         ]
 
         monkeypatch.setattr(pricing._state, "price_index", results)  # noqa: SLF001
         price = resolve_price(
             Service.BEDROCK,
-            "amazon.bedrock-runtime-guardrail-checks",
+            GUARDRAIL_CHECKS_MODERATION_MODEL,
             "us-east-1",
             Dimension.TEXT_UNITS,
         )
@@ -2341,10 +2371,7 @@ class TestGuardrailsIngestion:
         )
         assert diagnostics == []
         assert [(key.model, price.amount) for key, price in results.items()] == [
-            (
-                normalize_model_key("amazon.bedrock-runtime-guardrail-checks"),
-                Decimal("0.00007"),
-            )
+            (normalize_model_key(GUARDRAIL_CHECKS_MODERATION_MODEL), Decimal("0.00007"))
         ]
 
 
@@ -4486,9 +4513,27 @@ _KNOWN_PRICING_GAPS: Final[frozenset[str]] = frozenset(
 
 #: Keys this app bills that no Price List row names: (service, model, dimension).
 _SYNTHETIC_MODEL_PROBES: Final[tuple[tuple[Service, str, Dimension], ...]] = (
-    (Service.BEDROCK, "amazon.bedrock-runtime-guardrail", Dimension.TEXT_UNITS),
-    (Service.BEDROCK, "amazon.bedrock-runtime-guardrail", Dimension.INPUT_IMAGES),
-    (Service.BEDROCK, "amazon.bedrock-runtime-guardrail-checks", Dimension.TEXT_UNITS),
+    # Every guardrail policy AWS charges for; the word and free
+    # sensitive-information policies publish $0 rows, which are not ingested.
+    (Service.BEDROCK, guardrail_policy_model("content"), Dimension.TEXT_UNITS),
+    (Service.BEDROCK, guardrail_policy_model("content"), Dimension.INPUT_IMAGES),
+    (Service.BEDROCK, guardrail_policy_model("topic"), Dimension.TEXT_UNITS),
+    (
+        Service.BEDROCK,
+        guardrail_policy_model("sensitive-information"),
+        Dimension.TEXT_UNITS,
+    ),
+    (
+        Service.BEDROCK,
+        guardrail_policy_model("contextual-grounding"),
+        Dimension.TEXT_UNITS,
+    ),
+    (
+        Service.BEDROCK,
+        guardrail_policy_model("automated-reasoning"),
+        Dimension.TEXT_UNITS,
+    ),
+    (Service.BEDROCK, GUARDRAIL_CHECKS_MODERATION_MODEL, Dimension.TEXT_UNITS),
     (Service.POLLY, "amazon.polly-standard", Dimension.INPUT_CHARACTERS),
     (Service.POLLY, "amazon.polly-neural", Dimension.INPUT_CHARACTERS),
     (Service.POLLY, "amazon.polly-long-form", Dimension.INPUT_CHARACTERS),

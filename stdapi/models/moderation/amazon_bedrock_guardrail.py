@@ -1,6 +1,5 @@
 """AWS Bedrock guardrail moderation model."""
 
-from math import ceil
 from typing import TYPE_CHECKING
 
 from stdapi.api_errors import ApiError
@@ -25,7 +24,7 @@ from stdapi.types.openai_moderations import (
     ModerationImageURLInput,
     ModerationTextInput,
 )
-from stdapi.usage import record_guardrail_usage
+from stdapi.usage import record_guardrail_policy_usage
 
 if TYPE_CHECKING:
     from types_aiobotocore_bedrock_runtime.client import BedrockRuntimeClient
@@ -146,12 +145,7 @@ class ModerationModel(ModerationModelBase):
                 # confidence, instead of omitting them (score would default to 0.0).
                 outputScope="FULL",
             )
-        if text is None:
-            record_guardrail_usage(self._model_id, images=1, region=self._region)
-        else:
-            record_guardrail_usage(
-                self._model_id, text_units=ceil(len(text) / 1000), region=self._region
-            )
+        record_guardrail_policy_usage(response.get("usage", {}), region=self._region)
         categories, scores, intervened = map_guardrail_filters(
             response.get("assessments", ())
         )

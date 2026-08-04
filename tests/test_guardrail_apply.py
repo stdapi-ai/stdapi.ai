@@ -18,7 +18,6 @@ import pytest
 from stdapi import aws_bedrock, models
 from stdapi.aws_bedrock import (
     GUARDRAIL_CONFIG_VAR,
-    GUARDRAIL_MODERATION_MODEL,
     GuardrailInterventionError,
     apply_guardrail_to_text,
     apply_guardrail_to_texts,
@@ -53,8 +52,21 @@ if TYPE_CHECKING:
 
     from starlette.testclient import TestClient
 
+#: Per-policy units ApplyGuardrail reports, deliberately not ceil(len(text)/1000).
+_USAGE: dict[str, int] = {
+    "topicPolicyUnits": 5,
+    "contentPolicyUnits": 5,
+    "wordPolicyUnits": 5,
+    "sensitiveInformationPolicyUnits": 5,
+    "sensitiveInformationPolicyFreeUnits": 0,
+    "contextualGroundingPolicyUnits": 0,
+    "contentPolicyImageUnits": 0,
+    "automatedReasoningPolicyUnits": 0,
+    "automatedReasoningPolicies": 0,
+}
+
 #: A guardrail response without any policy hit.
-_CLEAN_RESPONSE: dict[str, Any] = {"action": "NONE", "assessments": []}
+_CLEAN_RESPONSE: dict[str, Any] = {"action": "NONE", "assessments": [], "usage": _USAGE}
 
 #: Messaging configured on the guardrail, returned by a blocking intervention.
 _BLOCKED_MESSAGING = "Blocked by the acme-guardrail policy."
@@ -72,6 +84,7 @@ _BLOCKED_RESPONSE: dict[str, Any] = {
         }
     ],
     "outputs": [{"text": _BLOCKED_MESSAGING}],
+    "usage": _USAGE,
 }
 
 #: The masked text returned by a masking-only intervention.
@@ -126,19 +139,10 @@ def _record_usage_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]
     """Replace the guardrail usage recorder, capturing its calls."""
     calls: list[dict[str, Any]] = []
 
-    def _record(
-        model: str, *, text_units: int = 0, images: int = 0, region: str = ""
-    ) -> None:
-        calls.append(
-            {
-                "model": model,
-                "text_units": text_units,
-                "images": images,
-                "region": region,
-            }
-        )
+    def _record(usage: dict[str, Any], *, region: str = "") -> None:
+        calls.append({"usage": dict(usage), "region": region})
 
-    monkeypatch.setattr(aws_bedrock, "record_guardrail_usage", _record)
+    monkeypatch.setattr(aws_bedrock, "record_guardrail_policy_usage", _record)
     return calls
 
 
@@ -174,12 +178,13 @@ class TestApplyGuardrailHelper:
     async def test_clean_text_passes_and_records_usage(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A clean result returns the text unchanged and meters billed text units.
+        """A clean result returns the text unchanged and meters what AWS reports.
 
-        AWS bills ApplyGuardrail per 1,000-character text unit, rounded up per
-        call, so a 1,500-character input is metered as 2 units.
+        The response reports 5 units for a 1,500-character input, which a
+        ceil(len(text)/1000) estimate would have metered as 2: the units
+        billed are the ones the API returns, per policy, never a guess.
 
-        Ref: stdapi/usage.py:record_guardrail_usage
+        Ref: stdapi/usage.py:record_guardrail_policy_usage
         """
         stub = _stub_guardrail(monkeypatch, _CLEAN_RESPONSE)
         usage = _record_usage_calls(monkeypatch)
@@ -193,8 +198,7 @@ class TestApplyGuardrailHelper:
         assert request["source"] == "INPUT"
         assert request["content"] == [{"text": {"text": text}}]
         (entry,) = usage
-        assert entry["model"] == GUARDRAIL_MODERATION_MODEL
-        assert entry["text_units"] == 2
+        assert entry["usage"] == _USAGE
         assert entry["region"] == SETTINGS.aws_bedrock_regions[0]
 
     @pytest.mark.usefixtures("guardrail_context")

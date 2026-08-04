@@ -28,6 +28,7 @@ from stdapi.pricing import (
     Price,
     Routing,
     Service,
+    guardrail_policy_model,
     price_catalog_ready,
     resolve_price,
 )
@@ -595,10 +596,10 @@ def record_comprehend_usage(
 def record_guardrail_usage(
     model: str, *, text_units: int = 0, images: int = 0, region: str = ""
 ) -> None:
-    """Record AWS Bedrock Guardrails (ApplyGuardrail or InvokeGuardrailChecks) usage.
+    """Record AWS Bedrock Guardrails (InvokeGuardrailChecks) usage.
 
-    AWS bills guardrail policies and guardrail checks per text unit (1,000
-    characters) for text content and per image for image content.
+    AWS bills guardrail checks per text unit (1,000 characters) for text
+    content and per image for image content.
 
     Args:
         model: Guardrail model ID reported in the moderation response.
@@ -612,6 +613,48 @@ def record_guardrail_usage(
         region,
         quantities={Dimension.TEXT_UNITS: text_units, Dimension.INPUT_IMAGES: images},
     )
+
+
+#: ApplyGuardrail ``usage`` field to the policy slug and dimension it bills.
+_GUARDRAIL_POLICY_USAGE: Final[Mapping[str, tuple[str, Dimension]]] = {
+    "topicPolicyUnits": ("topic", Dimension.TEXT_UNITS),
+    "contentPolicyUnits": ("content", Dimension.TEXT_UNITS),
+    "contentPolicyImageUnits": ("content", Dimension.INPUT_IMAGES),
+    "wordPolicyUnits": ("word", Dimension.TEXT_UNITS),
+    "sensitiveInformationPolicyUnits": ("sensitive-information", Dimension.TEXT_UNITS),
+    "sensitiveInformationPolicyFreeUnits": (
+        "sensitive-information-free",
+        Dimension.TEXT_UNITS,
+    ),
+    "contextualGroundingPolicyUnits": ("contextual-grounding", Dimension.TEXT_UNITS),
+    "automatedReasoningPolicyUnits": ("automated-reasoning", Dimension.TEXT_UNITS),
+}
+
+
+def record_guardrail_policy_usage(
+    usage: Mapping[str, object], *, region: str = ""
+) -> None:
+    """Record the per-policy usage an ApplyGuardrail response reports.
+
+    A guardrail applies every policy the operator configured to the same
+    content and AWS prices each policy separately, so their rates sum. Billing
+    each on its own model is what keeps the total exact; folding them onto one
+    model could only ever charge a single policy's rate. ``usage`` counts the
+    units AWS actually billed, which is why no unit is derived from the input
+    text here.
+
+    Args:
+        usage: The ApplyGuardrail response's ``usage`` map.
+        region: Region hosting the guardrail.
+    """
+    for name, (policy, dimension) in _GUARDRAIL_POLICY_USAGE.items():
+        if isinstance(units := usage.get(name), int) and units > 0:
+            _record_usage(
+                Service.BEDROCK,
+                guardrail_policy_model(policy),
+                region,
+                quantities={dimension: units},
+            )
 
 
 def record_polly_usage(

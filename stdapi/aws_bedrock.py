@@ -5,7 +5,6 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from itertools import batched
-from math import ceil
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from botocore.exceptions import ClientError
@@ -15,7 +14,7 @@ from stdapi.api_errors import ApiError
 from stdapi.aws import get_client
 from stdapi.config import SETTINGS
 from stdapi.types import JsonMapping
-from stdapi.usage import record_guardrail_usage
+from stdapi.usage import record_guardrail_policy_usage
 from stdapi.utils import validation_error_handler
 
 if TYPE_CHECKING:
@@ -596,9 +595,7 @@ async def apply_guardrail_to_text(
             source=source,
             content=[{"text": {"text": text}}],
         )
-    record_guardrail_usage(
-        GUARDRAIL_MODERATION_MODEL, text_units=ceil(len(text) / 1000), region=region
-    )
+    record_guardrail_policy_usage(response.get("usage", {}), region=region)
     if response.get("action") != "GUARDRAIL_INTERVENED":
         return text
     assessments: Sequence[Mapping[str, Any]] = response.get("assessments", ())

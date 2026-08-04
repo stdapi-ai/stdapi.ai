@@ -24,6 +24,7 @@ from stdapi.models.moderation import (
     amazon_bedrock_guardrail_checks,
     amazon_comprehend,
 )
+from stdapi.pricing import guardrail_policy_model
 from stdapi.routes import openai_moderations
 from stdapi.types.openai_moderations import (
     ModerationCategories,
@@ -65,7 +66,19 @@ _FLAGGED_RESPONSE: dict[str, Any] = {
 }
 
 #: A guardrail response without any policy hit.
-_CLEAN_RESPONSE: dict[str, Any] = {"action": "NONE", "assessments": []}
+_CLEAN_RESPONSE: dict[str, Any] = {
+    "action": "NONE",
+    "assessments": [],
+    # A guardrail applying the content and topic policies to one text unit.
+    "usage": {"contentPolicyUnits": 1, "topicPolicyUnits": 1},
+}
+
+#: The same guardrail classifying one image instead of text.
+_CLEAN_IMAGE_RESPONSE: dict[str, Any] = {
+    "action": "NONE",
+    "assessments": [],
+    "usage": {"contentPolicyImageUnits": 1},
+}
 
 
 class _StubGuardrailClient:
@@ -581,8 +594,8 @@ class TestModerationsRoute:
         """Only an exactly-empty string short-circuits; ``"   "`` is classified and billed.
 
         The shortcut is ``text == ""``, not ``text.strip() == ""``: a
-        whitespace-only input reaches ApplyGuardrail and is metered as one
-        1000-character text unit.
+        whitespace-only input reaches ApplyGuardrail and is metered at the
+        units the response reports.
 
         Ref: https://stdapi.ai/api_openai_moderations/
              stdapi/models/moderation/amazon_bedrock_guardrail.py:ModerationModel.moderate
@@ -606,9 +619,9 @@ class TestModerationsRoute:
             }
         ]
         (request_log,) = [entry for entry in written if entry.get("type") == "request"]
-        (usage,) = request_log["usage"]
-        assert usage["model"] == "gr123:1"
-        assert usage["text_units"] == 1
+        assert {
+            entry["model"]: entry["text_units"] for entry in request_log["usage"]
+        } == {guardrail_policy_model("content"): 1, guardrail_policy_model("topic"): 1}
 
     def test_batches_preserve_input_order(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -932,17 +945,18 @@ class TestModerationsRoute:
             assert error["message"]
         assert not stub.requests
 
-    def test_usage_records_text_units_and_model(
+    def test_usage_records_text_units_per_policy(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Guardrail moderation records billed text units per input, summed.
+        """Guardrail moderation meters each applied policy on its own model, summed.
 
-        AWS bills guardrail policies per 1,000-character text unit, rounded up
-        per call, so two inputs are metered separately and then summed rather
-        than rounded once over the concatenation.
+        The guardrail's own identifier is not a Price List model, so recording
+        usage against it costs guardrail moderation nothing at all; the policy
+        models are the ones the catalog publishes rates for. Two inputs meter
+        separately and then sum.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html
-             stdapi/usage.py:record_guardrail_usage
+             stdapi/usage.py:record_guardrail_policy_usage
         """
         from stdapi import monitoring  # noqa: PLC0415
 
@@ -956,28 +970,32 @@ class TestModerationsRoute:
 
         assert response.status_code == 200, response.text
         (request_log,) = [w for w in written if w.get("type") == "request"]
-        (entry,) = request_log["usage"]
-        assert entry["service"] == "bedrock-runtime"
-        assert entry["model"] == "gr123:1"
-        assert entry["region"] == SETTINGS.aws_bedrock_regions[0]
-        # ceil(1500 / 1000) + ceil(5 / 1000) = 2 + 1 text units.
-        assert entry["text_units"] == 3
-        assert "input_images" not in entry
+        entries = {entry["model"]: entry for entry in request_log["usage"]}
+        assert set(entries) == {
+            guardrail_policy_model("content"),
+            guardrail_policy_model("topic"),
+        }
+        for model, entry in entries.items():
+            assert entry["service"] == "bedrock-runtime", model
+            assert entry["region"] == SETTINGS.aws_bedrock_regions[0]
+            # One unit reported per input, over two inputs.
+            assert entry["text_units"] == 2
+            assert "input_images" not in entry
 
     def test_usage_records_images_per_image(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Guardrail image moderation records one input image per input.
+        """Guardrail image moderation records the content policy's image units.
 
-        Image content is billed per image, not per text unit, so the usage entry
+        Image content is billed per image at its own rate, so the usage entry
         must carry ``input_images`` and no character-derived quantity.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html
-             stdapi/usage.py:record_guardrail_usage
+             stdapi/usage.py:record_guardrail_policy_usage
         """
         from stdapi import monitoring  # noqa: PLC0415
 
-        _stub_client(monkeypatch, _CLEAN_RESPONSE)
+        _stub_client(monkeypatch, _CLEAN_IMAGE_RESPONSE)
         written: list[dict[str, Any]] = []
         monkeypatch.setattr(monitoring, "write_log_event", written.append)
 
@@ -992,7 +1010,7 @@ class TestModerationsRoute:
         (request_log,) = [w for w in written if w.get("type") == "request"]
         (entry,) = request_log["usage"]
         assert entry["service"] == "bedrock-runtime"
-        assert entry["model"] == "gr123:1"
+        assert entry["model"] == guardrail_policy_model("content")
         assert entry["input_images"] == 1
         assert "text_units" not in entry
 

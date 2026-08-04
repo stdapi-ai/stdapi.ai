@@ -209,7 +209,7 @@ def _generic_usagetype_dimension(usagetype: str) -> Dimension | None:
         # Every policy's usagetype is "...UnitsConsumed", which the generic
         # branch below would read as generated images. Guardrails bill per
         # 1,000-character text unit, or per image for the image content
-        # policy -- the dimensions record_guardrail_usage records.
+        # policy -- the two dimensions the guardrail usage records use.
         return (
             Dimension.INPUT_IMAGES
             if "imageunit" in normalized
@@ -800,6 +800,33 @@ def _extract_price(
     return _parse_price(price_per_unit.get(currency, "0"), scale, currency)
 
 
+#: Prefix shared by every synthetic Bedrock Guardrails model.
+GUARDRAIL_MODEL_PREFIX: Final = "amazon.bedrock-runtime-guardrail"
+
+#: Guardrails usagetype fragment to the policy slug it prices (ordered).
+_GUARDRAIL_POLICY_SLUGS: Final[tuple[tuple[str, str], ...]] = (
+    ("contentpolicy", "content"),
+    ("topicpolicy", "topic"),
+    ("wordpolicy", "word"),
+    ("sensitiveinformationpolicyfree", "sensitive-information-free"),
+    ("sensitiveinformationpolicypaid", "sensitive-information"),
+    ("contextualgroundingpolicy", "contextual-grounding"),
+    ("automatedreasoningpolicy", "automated-reasoning"),
+)
+
+
+def guardrail_policy_model(policy: str) -> str:
+    """Build the synthetic model a guardrail policy's usage is billed against.
+
+    Args:
+        policy: The policy slug (see :data:`_GUARDRAIL_POLICY_SLUGS`).
+
+    Returns:
+        The synthetic model string.
+    """
+    return f"{GUARDRAIL_MODEL_PREFIX}-{policy}"
+
+
 def _is_guardrail_usagetype(usagetype: str) -> bool:
     """Whether *usagetype* names a Bedrock Guardrails policy or guardrail check."""
     return "guardrail" in _normalize_usagetype(usagetype)
@@ -809,16 +836,19 @@ def _guardrail_model(usagetype: str) -> str:
     """Build the synthetic guardrail model string for a Bedrock Guardrails row.
 
     Guardrails rows carry no `model` attribute, and their usagetype names the
-    evaluated policy rather than a model, so the billed API is read from the
-    usagetype instead.
+    evaluated policy rather than a model, so the billed model is read from the
+    usagetype instead. AWS prices each policy separately and ApplyGuardrail
+    reports each policy's units separately, so every policy gets its own model
+    rather than sharing one: a guardrail applies every policy the operator
+    configured, and their rates sum.
 
     Args:
         usagetype: The usagetype attribute.
 
     Returns:
-        The synthetic model string usage.record_guardrail_usage() records
-        against, or "" when the usagetype names no guardrail, or a check the
-        gateway never requests.
+        The synthetic model string the guardrail usage records bill against,
+        or "" when the usagetype names no guardrail, a check the gateway never
+        requests, or a policy this app does not model.
     """
     if not _is_guardrail_usagetype(usagetype):
         return ""
@@ -828,11 +858,14 @@ def _guardrail_model(usagetype: str) -> str:
         # so the other checks' rates would fold a rate this app never pays
         # onto the same key.
         return (
-            "amazon.bedrock-runtime-guardrail-checks"
+            guardrail_policy_model("checks")
             if "contentfiltercheck" in normalized
             else ""
         )
-    return "amazon.bedrock-runtime-guardrail"
+    for fragment, policy in _GUARDRAIL_POLICY_SLUGS:
+        if fragment in normalized:
+            return guardrail_policy_model(policy)
+    return ""
 
 
 def _synthesize_service_model_key(
@@ -954,8 +987,6 @@ def _store_price(
     price: Price,
     usagetype: str,
     diagnostics: list[str],
-    *,
-    keep_highest: bool = False,
 ) -> None:
     """Merge resolved price into results, recording cross-row PriceKey collisions.
 
@@ -973,16 +1004,8 @@ def _store_price(
         usagetype: The usagetype attribute of the row producing this price.
         diagnostics: Collision descriptions for this batch, appended to in
             place; surfaced as one summary warning rather than per collision.
-        keep_highest: Keep the dearest claim on *key* instead of the last one,
-            and report no collision -- for keys several usagetypes share by
-            design.
     """
     existing_price = results.get(key)
-    if keep_highest and existing_price is not None:
-        if price.amount > existing_price.amount:
-            results[key] = price
-            claims[key] = usagetype
-        return
     existing_usagetype = claims.get(key)
     if (
         existing_price is not None
@@ -1343,11 +1366,20 @@ def _ingest_native_item(
         return
 
     usagetype = attrs.get("usagetype", "")
-    guardrail = our_service == Service.BEDROCK and _is_guardrail_usagetype(usagetype)
-    if guardrail and not _guardrail_model(usagetype):
-        # A guardrail check this app never invokes. Guardrails rows are keyed
-        # by policy rather than model, so this one would otherwise mint a
-        # model key of its own that nothing ever prices against.
+    if (
+        our_service == Service.BEDROCK
+        and _is_guardrail_usagetype(usagetype)
+        and not _guardrail_model(usagetype)
+    ):
+        # Guardrails rows are keyed by policy rather than model, so an
+        # unmapped one would mint a model key of its own that nothing ever
+        # prices against. A check the gateway never invokes is expected; a
+        # policy AWS added since is not, and bills at nothing until mapped.
+        if "check" not in _normalize_usagetype(usagetype):
+            diagnostics.append(
+                f"Unmodeled Bedrock Guardrails policy usagetype {usagetype!r}: "
+                "its usage is billed at no cost until it is mapped."
+            )
         return
 
     if (
@@ -1389,19 +1421,7 @@ def _ingest_native_item(
             # Same-item price bands (tiered beginRange/endRange rows) share
             # one usagetype: last band wins, silently by design.
             if price := _extract_price(price_dim, default_currency=default_currency):
-                # A guardrail applies every policy the operator configured to
-                # the same units, each at its own rate, and that set isn't
-                # knowable here: keeping the dearest is what stops a
-                # multi-policy guardrail being priced by price-list ordering.
-                _store_price(
-                    results,
-                    claims,
-                    key,
-                    price,
-                    usagetype,
-                    diagnostics,
-                    keep_highest=guardrail,
-                )
+                _store_price(results, claims, key, price, usagetype, diagnostics)
 
 
 def _catalog_regions() -> set[str]:
