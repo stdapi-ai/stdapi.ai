@@ -99,18 +99,19 @@ def agentic_server(request: pytest.FixtureRequest) -> Generator[AgenticServer]:
     """The stdapi.ai server every agentic CLI in the session is pointed at.
 
     One authenticated server serves both the Anthropic and OpenAI routes, so the
-    lane costs a single process regardless of how many tools it drives. With
-    ``--server-url`` an external deployment is used instead and the model-identity
-    assertions are skipped, since its logs are not observable here.
-    """
-    external: str | None = request.config.getoption("--server-url", default=None)
-    if external:
-        from os import getenv  # noqa: PLC0415
+    lane costs a single process regardless of how many tools it drives.
 
-        yield AgenticServer(
-            base_url=external.rstrip("/"), api_key=getenv("OPENAI_API_KEY", "")
+    ``--server-url`` is refused rather than honored: the CLIs are handed
+    ``http://127.0.0.1:<forwarded port>`` by :mod:`._tools`, which pasta maps to
+    a server on the host's loopback, and an external deployment has no such port
+    to forward. Pointing them at the URL instead would also make the lane's
+    model-identity assertions unobservable, since they read the server's own log.
+    """
+    if request.config.getoption("--server-url", default=None):
+        pytest.skip(
+            "the agentic lane drives its CLIs through a loopback port forwarded "
+            "into their container, which no external deployment provides"
         )
-        return
     server = start_server()
     yield server
     stop_server(server)
