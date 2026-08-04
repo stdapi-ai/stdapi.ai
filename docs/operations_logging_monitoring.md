@@ -172,7 +172,10 @@ Usage is reported as a nested `usage` list on `request` / `request_stream` event
 | `comprehend_units`          | int | Real Comprehend units (100-char units, 3-unit minimum per call)                                       |
 | `grounding_requests`        | int | Built-in grounding tool invocations (e.g., Amazon Nova Grounding `web_search`, billed per request)     |
 | `search_units`              | int | Rerank search units (one per rerank query)                                                             |
-| `text_units`                | int | Bedrock Guardrails text units (1,000 characters each), billed per guardrail policy evaluation          |
+| `text_units`                | int | Bedrock Guardrails text units (1,000 characters each), as reported by ApplyGuardrail, per applied policy |
+
+!!! warning "Guardrail cost coverage"
+    Guardrail units are recorded only on routes that enforce the guardrail through the ApplyGuardrail API, which reports the units each policy consumed. Chat routes use Bedrock's native guardrail integration, whose responses carry no unit counts, so their guardrail cost is absent from these entries even though AWS charges it — see [route coverage](operations_configuration.md#route-coverage).
 
 !!! note "Usage field placement"
     - **Non-streaming requests**: Usage appears on the `request` event

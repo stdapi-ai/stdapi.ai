@@ -3211,7 +3211,7 @@ Amazon Bedrock Guardrails add content filtering and safety controls to model inp
 
 ### Route Coverage
 
-The configured guardrail applies to every route. Chat routes use the native Bedrock integration; routes whose AWS backend has no guardrail mechanism enforce it through the [ApplyGuardrail API](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html): client-supplied text is checked as `INPUT` before the backend call and generated text as `OUTPUT` after it. ApplyGuardrail calls are billed per text unit like moderation requests.
+The configured guardrail applies to every route. Chat routes use the native Bedrock integration; routes whose AWS backend has no guardrail mechanism enforce it through the [ApplyGuardrail API](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html): client-supplied text is checked as `INPUT` before the backend call and generated text as `OUTPUT` after it.
 
 | Routes                                                     | Mechanism                            | Checked content                                        |
 |------------------------------------------------------------|--------------------------------------|--------------------------------------------------------|
@@ -3224,6 +3224,18 @@ The configured guardrail applies to every route. Chat routes use the native Bedr
 | Audio Speech                                               | :material-shield-check: ApplyGuardrail | `INPUT` — text to synthesize                          |
 | Audio Transcriptions (including streaming)                 | :material-shield-check: ApplyGuardrail | `OUTPUT` — transcript                                 |
 | Audio Translations                                         | :material-shield-check: ApplyGuardrail | `OUTPUT` — translated text                            |
+
+!!! warning "Cost Tracking"
+    AWS bills the guardrail on **every** route it applies to, but only the ApplyGuardrail-enforced ones report the units consumed. The mechanism a route uses therefore decides whether its guardrail cost is visible.
+
+    | Mechanism | Guardrail cost in [usage logs](operations_logging_monitoring.md) |
+    |-----------|-----------------------------------------------------------------|
+    | :material-shield-check: ApplyGuardrail | :material-check-circle:{ .success role="img" aria-label="Tracked" } **Tracked** — the response returns the units each policy consumed |
+    | :material-link: Native (Converse / InvokeModel) | :material-close-circle:{ .unsupported role="img" aria-label="Not tracked" } **Not tracked** — the response reports no guardrail units |
+
+    On ApplyGuardrail routes, the units AWS reports appear as `text_units` and `input_images` under one `amazon.bedrock-runtime-guardrail-*` model per applied policy, each priced at that policy's own rate; see [Moderations billing](api_openai_moderations.md#billing). A route that checks both `INPUT` and `OUTPUT` calls the API twice, so it records two sets of units for one request.
+
+    On native routes the guardrail still runs and AWS still charges for it, but the Converse and InvokeModel responses carry no unit counts for the gateway to record. **Reported costs on these routes are lower than the AWS bill by the guardrail's share.** Deriving the units from text length instead would be a guess, not a measurement, so none is made.
 
 !!! info "Intervention Behavior"
     On ApplyGuardrail-enforced routes, a blocking intervention fails the request with HTTP 400 and error code `content_filter` (the same code chat routes report as their finish reason), carrying the guardrail's configured blocked messaging. A masking-only intervention (sensitive-information anonymization) substitutes the masked text — input masking reaches the backend model, and a masked transcript or translation is returned on the plain `json`/`text` formats. Response formats that cannot carry masked text (`srt`, `vtt`, `verbose_json`, `diarized_json`) fail with the same `content_filter` error instead of leaking the unmasked content.
