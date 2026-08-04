@@ -776,30 +776,58 @@ class TestPartialFetchFailureIsTolerated:
 class TestNativeCacheTtl:
     """Native (non-Marketplace) 1-hour prompt-cache-write pricing.
 
+    AWS spells the marker "-1-hour" on Bedrock's own rows and "-1h-" on the
+    bedrock-mantle ones. Missing either folds the 1-hour rate onto the
+    5-minute key, where the surviving rate is whichever row the Price List
+    happened to return last.
+
     Ref: stdapi/pricing.py:_ingest_native_item
+         stdapi/pricing.py:_CACHE_WRITE_1H_PATTERN
     """
 
-    def test_one_hour_usagetype_becomes_cache_ttl_1h(self) -> None:
-        """A "1 hour" usagetype row must be keyed under cache_ttl="1h", not merged."""
+    @staticmethod
+    def _ingest(usagetype: str, price: str) -> tuple[dict[PriceKey, Price], list[str]]:
+        """Ingest one native cache-write row, returning its results and diagnostics."""
         results: dict[PriceKey, Price] = {}
+        diagnostics: list[str] = []
         item = json.dumps(
             _price_item(
                 {
                     "regionCode": "us-east-1",
-                    "usagetype": (
-                        "USE1-Claude4Sonnet-cache-write-input-token-count-1-hour"
-                    ),
+                    "usagetype": usagetype,
                     "inferenceType": "Prompt cache write input tokens",
                     "model": "Claude Sonnet 4.5",
                     "feature": "On-demand Inference",
                 },
                 unit="1K tokens",
-                price="0.0075",
+                price=price,
             )
         )
-        _ingest_price_list_item(item, Service.BEDROCK, "us-east-1", "USD", results)
+        _ingest_price_list_item(
+            item, Service.BEDROCK, "us-east-1", "USD", results, {}, diagnostics
+        )
+        return results, diagnostics
+
+    @pytest.mark.parametrize(
+        ("usagetype", "service"),
+        [
+            (
+                "USE1-Claude4Sonnet-cache-write-input-token-count-1-hour",
+                Service.BEDROCK,
+            ),
+            (
+                "USE1-anthropic.claude-sonnet-4-5-mantle-cache-write-tokens-1h-standard",
+                Service.BEDROCK_MANTLE,
+            ),
+        ],
+    )
+    def test_one_hour_usagetype_becomes_cache_ttl_1h(
+        self, usagetype: str, service: Service
+    ) -> None:
+        """Either spelling of the 1-hour marker must key under cache_ttl="1h"."""
+        results, _ = self._ingest(usagetype, "0.0075")
         key = PriceKey(
-            Service.BEDROCK,
+            service,
             "claudesonnet45",
             "us-east-1",
             Dimension.CACHE_WRITE_TOKENS,
@@ -808,6 +836,51 @@ class TestNativeCacheTtl:
         )
         assert key in results
         assert results[key].amount == Decimal("0.0075") / 1000
+
+    def test_the_default_ttl_row_keeps_its_own_key(self) -> None:
+        """A row with no 1-hour marker must not be bucketed as 1h."""
+        results, _ = self._ingest(
+            "USE1-anthropic.claude-sonnet-4-5-mantle-cache-write-tokens-standard",
+            "0.00375",
+        )
+        assert [key.cache_ttl for key in results] == [""]
+
+    def test_the_two_ttls_do_not_collide(self) -> None:
+        """The 1-hour and default rows must survive as two separately-priced keys."""
+        results: dict[PriceKey, Price] = {}
+        claims: dict[PriceKey, str] = {}
+        diagnostics: list[str] = []
+        for usagetype, price in (
+            (
+                "USE1-anthropic.claude-sonnet-4-5-mantle-cache-write-tokens-1h-standard",
+                "0.0075",
+            ),
+            (
+                "USE1-anthropic.claude-sonnet-4-5-mantle-cache-write-tokens-standard",
+                "0.00375",
+            ),
+        ):
+            item = json.dumps(
+                _price_item(
+                    {
+                        "regionCode": "us-east-1",
+                        "usagetype": usagetype,
+                        "inferenceType": "Prompt cache write input tokens",
+                        "model": "Claude Sonnet 4.5",
+                        "feature": "On-demand Inference",
+                    },
+                    unit="1K tokens",
+                    price=price,
+                )
+            )
+            _ingest_price_list_item(
+                item, Service.BEDROCK, "us-east-1", "USD", results, claims, diagnostics
+            )
+        assert diagnostics == []
+        assert {key.cache_ttl: price.amount for key, price in results.items()} == {
+            "1h": Decimal("0.0075") / 1000,
+            "": Decimal("0.00375") / 1000,
+        }
 
 
 class TestMarketplaceCacheTtl:

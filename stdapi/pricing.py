@@ -1232,6 +1232,12 @@ def _native_routing(
     return "global" if "crossregionglobal" in blob else ""
 
 
+#: 1-hour cache-write TTL marker in a usagetype: "-1h-", "-1-hour" or "-1hour-".
+_CACHE_WRITE_1H_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?:^|[-_])1[-_]?h(?:our)?(?:[-_]|$)", re.IGNORECASE
+)
+
+
 #: Image-generation inferenceType "T2I/I2I <res> <quality>" ("Custom " never matches).
 _IMAGE_GENERATION_SPEC_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^(?:t2i|i2i)\s+(\d+)\s+(standard|premium)$", re.IGNORECASE
@@ -1402,7 +1408,7 @@ def _ingest_native_item(
     cache_ttl: CacheTtlBucket = (
         "1h"
         if dimension == Dimension.CACHE_WRITE_TOKENS
-        and "1hour" in _normalize_usagetype(usagetype)
+        and _CACHE_WRITE_1H_PATTERN.search(usagetype)
         else ""
     )
     key = PriceKey(
