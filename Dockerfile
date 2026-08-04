@@ -11,6 +11,9 @@ FROM python:3-alpine AS ffmpeg-builder
 RUN apk add --no-cache build-base nasm curl && \
     apk update >/dev/null && \
     ffmpeg_version="$(apk search -x ffmpeg | head -1 | sed 's/^ffmpeg-//; s/-r[0-9]*$//')" && \
+    if [ -z "${ffmpeg_version}" ]; then \
+        echo "No ffmpeg version found in the Alpine package index" >&2; exit 1; \
+    fi && \
     echo "Building ffmpeg ${ffmpeg_version}" && \
     for url in "https://ffmpeg.org/releases/ffmpeg-${ffmpeg_version}.tar.xz" \
                "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n${ffmpeg_version}.tar.gz"; do \
@@ -35,8 +38,8 @@ RUN apk add --no-cache build-base nasm curl && \
     mkdir -p /ffmpeg-out/licenses && \
     find . -maxdepth 1 \( -name "COPYING*" -o -name "LICENSE*" \) \
         -exec cp {} /ffmpeg-out/licenses/ \; && \
-    printf 'P:ffmpeg\nV:%s-r0\nA:x86_64\nT:Custom audio-only LGPL ffmpeg build (Polly output to wav/flac/aac/pcm, legacy audio uploads to flac)\nU:https://ffmpeg.org\nL:LGPL-2.1-or-later\no:ffmpeg\n\n' \
-        "${ffmpeg_version}" > /ffmpeg-out/apk-entry
+    printf 'P:ffmpeg\nV:%s-r0\nA:%s\nT:Custom audio-only LGPL ffmpeg build (Polly output to wav/flac/aac/pcm, legacy audio uploads to flac)\nU:https://ffmpeg.org\nL:LGPL-2.1-or-later\no:ffmpeg\n\n' \
+        "${ffmpeg_version}" "$(apk --print-arch)" > /ffmpeg-out/apk-entry
 
 FROM python:3-alpine AS builder
 
