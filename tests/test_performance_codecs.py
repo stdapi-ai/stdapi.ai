@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from typing import Any
 
 import pytest
 from botocore import serialize as botocore_serialize
 from botocore.loaders import Loader
-from botocore.model import ServiceModel
+from botocore.model import OperationModel, ServiceModel
 from botocore.utils import parse_timestamp
 from fastapi.datastructures import DefaultPlaceholder
 from fastapi.responses import JSONResponse as FastAPIJSONResponse
@@ -38,7 +39,7 @@ from stdapi.utils import JSONResponse, json_sse, to_json_bytes, to_json_str
 pytestmark = pytest.mark.local
 
 #: JSON documents whose pydantic_core encoding is byte-identical to compact stdlib.
-_BYTE_IDENTICAL_CORPUS = [
+_BYTE_IDENTICAL_CORPUS: list[Any] = [
     None,
     True,
     False,
@@ -65,7 +66,7 @@ _BYTE_IDENTICAL_CORPUS = [
 
 #: Small-exponent floats: pydantic_core formats the exponent differently
 #: (``0.00001`` vs ``1e-05``) — equal JSON numbers, not equal bytes.
-_SEMANTIC_ONLY_CORPUS = [1e-5, -1e-7, {"tiny": [1e-6]}]
+_SEMANTIC_ONLY_CORPUS: list[Any] = [1e-5, -1e-7, {"tiny": [1e-6]}]
 
 #: JSON texts that must parse identically through stdlib and pydantic_core.
 _PARSE_CORPUS = [
@@ -201,8 +202,8 @@ def test_json_response_render_matches_stdlib() -> None:
     for value in _BYTE_IDENTICAL_CORPUS:
         assert JSONResponse(value).body == FastAPIJSONResponse(value).body, value
     for value in _SEMANTIC_ONLY_CORPUS:
-        assert json.loads(JSONResponse(value).body) == json.loads(
-            FastAPIJSONResponse(value).body
+        assert json.loads(bytes(JSONResponse(value).body)) == json.loads(
+            bytes(FastAPIJSONResponse(value).body)
         ), value
     response = JSONResponse({"ok": True})
     assert response.media_type == "application/json"
@@ -234,7 +235,7 @@ def test_json_response_installed_as_app_default() -> None:
     assert response_class is JSONResponse
 
 
-def _converse_operation_model() -> object:
+def _converse_operation_model() -> OperationModel:
     """Load the real bedrock-runtime ``Converse`` operation model (offline)."""
     model = Loader().load_service_model("bedrock-runtime", "service-2")
     return ServiceModel(model, "bedrock-runtime").operation_model("Converse")
@@ -359,11 +360,11 @@ async def test_rest_json_serializer_installed_on_fresh_client() -> None:
     async with AWS_SESSION.create_client(
         "bedrock-runtime", region_name="us-east-1", config=CONFIG
     ) as client:
-        assert isinstance(client._serializer, PydanticRestJSONSerializer)  # noqa: SLF001
+        assert isinstance(client._serializer, PydanticRestJSONSerializer)  # type: ignore[attr-defined] # noqa: SLF001
 
 
 #: Real-world AWS timestamp shapes: ISO8601 variants, epoch numbers, RFC 822.
-_TIMESTAMP_CORPUS = [
+_TIMESTAMP_CORPUS: list[Any] = [
     "2024-05-06T12:34:56Z",
     "2024-05-06T12:34:56.123Z",
     "2024-05-06T12:34:56.123456Z",
@@ -411,7 +412,7 @@ async def test_timestamp_parser_installed_on_fresh_client() -> None:
     async with AWS_SESSION.create_client(
         "bedrock", region_name="us-east-1", config=CONFIG
     ) as client:
-        endpoint_factory = client._endpoint._response_parser_factory  # noqa: SLF001
+        endpoint_factory = client._endpoint._response_parser_factory  # type: ignore[attr-defined] # noqa: SLF001
         assert endpoint_factory is factory
         fresh = endpoint_factory.create_parser("rest-json")
         assert fresh._timestamp_parser is parse_aws_timestamp  # noqa: SLF001

@@ -6,6 +6,7 @@ Ref: https://docs.aws.amazon.com/polly/latest/APIReference/API_SynthesizeSpeech.
 """
 
 from datetime import UTC, datetime
+from shutil import which
 from typing import TYPE_CHECKING
 
 import pytest
@@ -34,6 +35,13 @@ if TYPE_CHECKING:
 
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
+
+
+@pytest.fixture
+def _requires_ffmpeg() -> None:
+    """Skip a test that asserts on bytes only a real ffmpeg can produce."""
+    if which("ffmpeg") is None:
+        pytest.skip("ffmpeg is required to re-encode Polly output")
 
 
 #: Module dictionaries mutated by initialize_polly_models.
@@ -750,6 +758,7 @@ class TestSynthesizeSpeechEncodedFormats:
          stdapi/media.py:encode_audio_stream
     """
 
+    @pytest.mark.usefixtures("_requires_ffmpeg")
     async def test_wav_request_synthesizes_from_pcm_by_default(
         self, stub_polly: Callable[[bytes], _StubPollyClient]
     ) -> None:
@@ -846,6 +855,7 @@ class TestSynthesizeSpeechPcmSampleRate:
          stdapi/models/audio/amazon_polly.py:AudioModel.tts
     """
 
+    @pytest.mark.usefixtures("_requires_ffmpeg")
     async def test_pcm_request_synthesizes_from_16khz_and_resamples_to_24khz(
         self, stub_polly: Callable[[bytes], _StubPollyClient]
     ) -> None:

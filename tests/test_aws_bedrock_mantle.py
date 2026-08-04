@@ -69,6 +69,7 @@ from stdapi.models.chat._mantle.openai_gpt_oss import ChatModel as GptOssChatMod
 from stdapi.models.chat.openai_gpt import ChatModel as OpenAiGptChatModel
 from stdapi.monitoring import REQUEST, REQUEST_ID, EventLog
 from stdapi.pricing import Service
+from stdapi.region_routing import RegionRouter
 from stdapi.routes.openai_responses import _decode_mantle_id, _require_local_response_id
 from stdapi.types.anthropic_messages import Message, MessageCreateParams, MessageParam
 from stdapi.types.openai import ModerationResult, ResponseModeration
@@ -2705,8 +2706,13 @@ class TestRouteAndExecuteMantleFailover:
          stdapi/models/__init__.py:route_and_execute
     """
 
-    async def test_failover_error_retries_next_call(self) -> None:
+    async def test_failover_error_retries_next_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A failover-eligible ``MantleError`` is retried by a further call."""
+        # Without a router every request is region-pinned, whatever the
+        # candidate list holds, and no failover can happen at all.
+        monkeypatch.setattr(stdapi_models, "REGION_ROUTER", RegionRouter())
         calls: list[RegionName] = []
 
         async def fn(region: RegionName) -> str:

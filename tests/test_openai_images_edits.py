@@ -551,7 +551,11 @@ class TestImagesEditsModelField:
         """
         response = app_client.post(
             "/v1/images/edits",
-            data={"model": "probe-model-id", "prompt": "test"},
+            data={
+                "model": "probe-model-id",
+                "prompt": "test",
+                "response_format": "b64_json",
+            },
             files={"image": ("image.png", b"fake-bytes", "image/png")},
         )
         assert response.status_code == 400
@@ -709,6 +713,7 @@ class TestImagesEditsUnsupportedOptions:
                 "model": "probe-model-id",
                 "prompt": "test",
                 "background": "transparent",
+                "response_format": "b64_json",
             },
             files={"image": ("image.png", b"fake-bytes", "image/png")},
         )
@@ -731,6 +736,7 @@ class TestImagesEditsUnsupportedOptions:
                 "model": "probe-model-id",
                 "prompt": "test",
                 "input_fidelity": "high",
+                "response_format": "b64_json",
             },
             files={"image": ("image.png", b"fake-bytes", "image/png")},
         )

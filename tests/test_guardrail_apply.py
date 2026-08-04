@@ -52,6 +52,8 @@ if TYPE_CHECKING:
 
     from starlette.testclient import TestClient
 
+    from stdapi.models.audio.amazon_transcribe import TranscribeJobData
+
 #: Per-policy units ApplyGuardrail reports, deliberately not ceil(len(text)/1000).
 _USAGE: dict[str, int] = {
     "topicPolicyUnits": 5,
@@ -870,7 +872,7 @@ class TestTranscriptionOutputGuardrail:
     ) -> None:
         """Subtitle formats cannot carry masked text, so masking blocks them."""
         _stub_guardrail(monkeypatch, _MASKED_RESPONSE)
-        transcript_data = {
+        transcript_data: TranscribeJobData = {
             **_STUB_TRANSCRIPT_DATA,
             "subtitle_content": "1\n00:00:00,000 --> 00:00:02,000\nhello world\n",
         }
@@ -930,7 +932,9 @@ class TestTranscriptionOutputGuardrail:
     ) -> None:
         """A clean transcript streams the original events unchanged."""
         _stub_guardrail(monkeypatch, _CLEAN_RESPONSE)
-        source_events = [
+        source_events: list[
+            TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent
+        ] = [
             TranscriptionTextDeltaEvent(delta="hello", type="transcript.text.delta"),
             TranscriptionTextDoneEvent(text="hello", type="transcript.text.done"),
         ]

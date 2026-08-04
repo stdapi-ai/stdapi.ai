@@ -23,6 +23,7 @@ from stdapi.models.moderation import (
     amazon_bedrock_guardrail,
     amazon_bedrock_guardrail_checks,
     amazon_comprehend,
+    guardrail_checks_regions,
 )
 from stdapi.pricing import guardrail_policy_model
 from stdapi.routes import openai_moderations
@@ -354,6 +355,7 @@ class TestModerationsRoute:
         """
         stub, regions = _stub_client(monkeypatch, _CLEAN_RESPONSE)
         monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_guardrail_override", True)
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1", "eu-west-1"])
         arn = "arn:aws:bedrock:eu-west-1:000000000000:guardrail/abc123"
 
         response = app_client.post("/v1/moderations", json={"input": "x", "model": arn})
@@ -1854,7 +1856,8 @@ _ACCESS_DENIED = ClientError(
             "Code": "AccessDeniedException",
             "Message": "not authorized to perform bedrock:InvokeGuardrailChecks",
         },
-        "ResponseMetadata": {"HTTPStatusCode": 403},
+        # Only the key under test: the stubs type the rest as required.
+        "ResponseMetadata": {"HTTPStatusCode": 403},  # type: ignore[typeddict-item]
     },
     "InvokeGuardrailChecks",
 )
@@ -2376,10 +2379,7 @@ class TestGuardrailChecksModerationsRoute:
         (entry,) = request_log["usage"]
         assert entry["service"] == "bedrock-runtime"
         assert entry["model"] == _CHECKS_MODEL
-        assert (
-            entry["region"]
-            == amazon_bedrock_guardrail_checks.guardrail_checks_regions()[0]
-        )
+        assert entry["region"] == guardrail_checks_regions()[0]
         assert entry["text_units"] == 3
         assert "input_images" not in entry
 
@@ -2427,7 +2427,8 @@ class TestGuardrailChecksModerationsRoute:
             ClientError(
                 {
                     "Error": {"Code": "ThrottlingException", "Message": "slow down"},
-                    "ResponseMetadata": {"HTTPStatusCode": 429},
+                    # Only the key under test: the stubs type the rest as required.
+                    "ResponseMetadata": {"HTTPStatusCode": 429},  # type: ignore[typeddict-item]
                 },
                 "InvokeGuardrailChecks",
             ),

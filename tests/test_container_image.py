@@ -289,14 +289,14 @@ from shutil import which
 print(json.dumps({name: which(name) or "" for name in sys.argv[1:]}))
 """
 
-#: In-image program answering one ``/health`` request and running the probe against it.
+#: In-image program answering the probe's ``/health`` request and running the probe.
 _STUB_SERVER_PROGRAM = """
 import json
 import os
 import subprocess
 import sys
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 record = {}
 
@@ -310,13 +310,11 @@ class Handler(BaseHTTPRequestHandler):
         self.answer(body=False)
 
     def answer(self, body):
-        record.update(
-            {
-                "path": self.path,
-                "host": self.headers.get("Host", ""),
-                "method": self.command,
-            }
-        )
+        # Only the probe's own first request: a connection it retries must be
+        # served too, but it must not overwrite what is being asserted on.
+        record.setdefault("path", self.path)
+        record.setdefault("host", self.headers.get("Host", ""))
+        record.setdefault("method", self.command)
         payload = b'{"status": "ok"}'
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -330,8 +328,14 @@ class Handler(BaseHTTPRequestHandler):
 
 
 # The same bind as the served command: every IPv4 address, and no IPv6 one.
-server = HTTPServer(("0.0.0.0", int(os.environ.get("GRANIAN_PORT", "8000"))), Handler)
-threading.Thread(target=server.handle_request, daemon=True).start()
+# Threaded and serving forever, so the probe's own timeout is the only clock in
+# play: a single-request handler makes a retried or reopened connection hang
+# until the probe gives up, which fails the run for a healthy image.
+server = ThreadingHTTPServer(
+    ("0.0.0.0", int(os.environ.get("GRANIAN_PORT", "8000"))), Handler
+)
+server.daemon_threads = True
+threading.Thread(target=server.serve_forever, daemon=True).start()
 probe = subprocess.run(json.loads(sys.argv[1]), check=False)
 print("__EXIT__" + str(probe.returncode))
 print("__REQUEST__" + json.dumps(record))

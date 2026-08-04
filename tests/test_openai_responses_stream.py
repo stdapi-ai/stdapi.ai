@@ -53,6 +53,7 @@ from stdapi.types.openai_responses import (
     ResponseFunctionToolCall,
     ResponseFunctionWebSearch,
     ResponseIncludable,
+    ResponseOutputItem,
     ResponseOutputMessage,
     ResponseOutputText,
     WebSearchActionSearch,
@@ -1954,7 +1955,7 @@ class TestImageGenerationConcurrency:
         passthrough = ResponseFunctionToolCall(
             type="function_call", call_id="call_x", name="other_tool", arguments="{}"
         )
-        items = [
+        items: list[ResponseOutputItem] = [
             _image_tool_call({"prompt": "one"}),
             passthrough,
             _image_tool_call({"prompt": "two"}),

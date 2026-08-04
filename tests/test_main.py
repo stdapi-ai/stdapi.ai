@@ -65,8 +65,10 @@ def _gzip_minimum_size() -> int:
         Starlette's default (the stricter bound) when gzip is disabled.
     """
     for middleware in stdapi_main.app.user_middleware:
-        if middleware.cls is GZipMiddleware:
-            return int(
+        # Starlette types ``cls`` as a generic factory and ``kwargs`` as ParamSpec
+        # keywords, so neither narrows to the middleware actually installed.
+        if middleware.cls is GZipMiddleware:  # type: ignore[comparison-overlap]
+            return int(  # type: ignore[no-any-return,call-overload]
                 middleware.kwargs.get("minimum_size", _GZIP_DEFAULT_MINIMUM_SIZE)
             )
     return _GZIP_DEFAULT_MINIMUM_SIZE

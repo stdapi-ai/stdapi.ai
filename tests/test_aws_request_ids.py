@@ -59,7 +59,8 @@ def _make_client_error_with_request_id(code: str, request_id: str) -> ClientErro
     return ClientError(
         {
             "Error": {"Code": code, "Message": code},
-            "ResponseMetadata": {"RequestId": request_id},
+            # Only the key under test: the stubs type the rest as required.
+            "ResponseMetadata": {"RequestId": request_id},  # type: ignore[typeddict-item]
         },
         "PutObject",
     )

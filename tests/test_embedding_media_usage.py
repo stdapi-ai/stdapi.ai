@@ -157,7 +157,7 @@ class TestNovaSingleEmbeddingImageUsage:
             extra_params={},
             region=None,
         )
-        model.invoke.assert_awaited_once()
+        model.invoke.assert_awaited_once()  # type: ignore[attr-defined]
         assert not usage.USAGE.get()
 
 

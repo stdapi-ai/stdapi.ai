@@ -28,6 +28,7 @@ from anthropic import NotFoundError as AnthropicNotFoundError
 
 from stdapi import input_file as input_file_mod
 from stdapi.aws_s3 import BUCKET_TO_REGION
+from stdapi.config import SETTINGS
 from stdapi.files import FileRecord, _core
 from stdapi.routes import anthropic_files
 
@@ -485,6 +486,9 @@ class TestAnthropicFilesJsonBodySources:
     @pytest.fixture
     def uploaded_source(monkeypatch: pytest.MonkeyPatch) -> list[InputFile]:
         """Record the ``InputFile`` the route hands to the storage layer."""
+        # A ``file-id:`` body resolves its bucket while the source is parsed, so
+        # the Files API has to be configured for the parser to reject it itself.
+        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", "test-bucket")
         recorded: list[InputFile] = []
 
         async def _fake_upload_file(file: InputFile, *_args: object) -> FileRecord:

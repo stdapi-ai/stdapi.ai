@@ -221,6 +221,7 @@ class TestInitializeModerationModels:
              stdapi/aws_bedrock.py:guardrail_region
         """
         arn = "arn:aws:bedrock:eu-west-1:000000000000:guardrail/abc123"
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1", "eu-west-1"])
         monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", arn)
         monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_version", "1")
         await initialize_moderation_models()

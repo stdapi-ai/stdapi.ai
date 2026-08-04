@@ -427,7 +427,7 @@ class TestImagesVariationsModelField:
         """A model supplied via multipart form data still reaches model resolution unchanged."""
         response = app_client.post(
             "/v1/images/variations",
-            data={"model": "probe-model-id"},
+            data={"model": "probe-model-id", "response_format": "b64_json"},
             files={"image": ("image.png", b"fake-bytes", "image/png")},
         )
         assert response.status_code == 400

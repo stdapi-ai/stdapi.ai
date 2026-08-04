@@ -36,8 +36,10 @@ if TYPE_CHECKING:
 
     from starlette.testclient import TestClient as TestClientType
 
+from stdapi.models.audio.amazon_transcribe import TranscribeJobData
+
 #: Stubbed AWS Transcribe job result used by response-format regression tests.
-_STUB_TRANSCRIPT_DATA: dict[str, Any] = {
+_STUB_TRANSCRIPT_DATA: TranscribeJobData = {
     "transcripts": [{"transcript": "hello world"}],
     "audio_segments": [
         {"id": 0, "start_time": "0.0", "end_time": "1.0", "transcript": "hello"},
@@ -73,7 +75,7 @@ def _stub_transcribe(monkeypatch: pytest.MonkeyPatch) -> None:
 
     async def _fake_transcribe(
         _self: AudioModel, *_args: object, **_kwargs: object
-    ) -> dict[str, Any]:
+    ) -> TranscribeJobData:
         return _STUB_TRANSCRIPT_DATA
 
     monkeypatch.setattr(AudioModel, "_transcribe", _fake_transcribe)

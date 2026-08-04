@@ -16,6 +16,7 @@ from base64 import b64encode
 import pytest
 from pydantic import ValidationError
 
+from stdapi.config import SETTINGS
 from stdapi.input_file import InputFile
 from stdapi.models.chat._adapters._anthropic_message import _map_messages
 from stdapi.types.anthropic_messages import (
@@ -318,6 +319,9 @@ class TestMapMessagesRemoteSources:
     @pytest.fixture
     def recorded_sources(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         """Record every ``InputFile`` the mapper asks for a Bedrock content block."""
+        # A ``file-id:`` source resolves its bucket while the block is built, so
+        # the Files API has to be configured for the dispatch to be reached.
+        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", "test-bucket")
         recorded: list[str] = []
 
         async def _fake_block(
