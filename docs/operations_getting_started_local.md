@@ -11,8 +11,9 @@ Run stdapi.ai locally for development, testing, and evaluation using the free co
 !!! tip "New to Amazon Bedrock?"
     To run stdapi.ai locally you need:
 
-    1. An **AWS account** — [create one free](https://aws.amazon.com/free/)
-    2. **AWS credentials** configured locally — via `aws configure` or `aws sso login` ([AWS CLI setup guide](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-quickstart.html))
+    1. **[Docker](https://docs.docker.com/get-started/get-docker/) or [Podman](https://podman.io/docs/installation)** installed
+    2. An **AWS account** — [create one free](https://aws.amazon.com/free/)
+    3. **AWS credentials** configured locally — via `aws configure` or `aws sso login` ([AWS CLI setup guide](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-quickstart.html))
 
 ---
 
@@ -93,6 +94,8 @@ curl http://localhost:8000/v1/chat/completions \
 
 **Interactive API docs:** Open [http://localhost:8000/docs](http://localhost:8000/docs) for Swagger UI with all available endpoints.
 
+**Point an application at it:** set the `base_url` (Python) / `baseURL` (Node.js) option to `http://localhost:8000/v1` (OpenAI SDK) or `http://localhost:8000/anthropic` (Anthropic SDK), and set the `model` field to a model from the catalog above. No API key is required by default — pass any non-empty string if your client insists on one. The [API Overview](api_overview.md) has SDK snippets for Python, Node.js, and more.
+
 !!! tip "Try other models"
     `amazon.nova-micro-v1:0` is a fast, low-cost model — great for confirming the pipeline works. Once you see a response, switch the `model` field to `anthropic.claude-fable-5`, `anthropic.claude-sonnet-5`, or any other Bedrock model available in your configured regions.
 
@@ -114,7 +117,7 @@ curl http://localhost:8000/v1/chat/completions \
 **Configuration:** See [Configuration Reference](operations_configuration.md) for all environment variables.
 
 !!! tip "Ready for Production?"
-    When you're ready to deploy to AWS with HTTPS, auto-scaling, and enterprise features, the [production deployment guide](operations_getting_started.md) gets you running in 5 minutes with Terraform. The [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) subscription includes a **14-day free trial**.
+    When you're ready to deploy to AWS with HTTPS, auto-scaling, and enterprise features, the [production deployment guide](operations_getting_started.md) gets you running with two Terraform commands. The [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) subscription includes a **14-day free trial of the license**.
 
 ---
 

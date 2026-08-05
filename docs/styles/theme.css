@@ -164,7 +164,8 @@
   flex-shrink: 0;
   transition: transform 160ms ease, box-shadow 160ms ease, filter 160ms ease, opacity 160ms ease, background 160ms ease;
 }
-.logo-item:hover, .logo-item:focus-visible {
+/* Only clickable tiles get the lift-and-highlight affordance. */
+a.logo-item:hover, a.logo-item:focus-visible {
   transform: translateY(-1px) scale(1.02);
   box-shadow: 0 8px 20px rgba(0,0,0,0.16);
   background: var(--accent);
@@ -318,7 +319,7 @@
 .carousel__dot:focus-visible,
 .compare:focus-visible,
 .usecase a:focus-visible,
-.logo-item:focus-visible {
+a.logo-item:focus-visible {
   outline: 2px solid var(--accent-light);
   outline-offset: 2px;
 }
@@ -407,8 +408,8 @@
 .logo-marquee:hover .logo-track,
 .logo-marquee:focus-within .logo-track { animation-play-state: paused; }
 /* The hover/focus tile turns accent-orange; white ink would drop to 2.1:1. */
-.logo-item:hover span,
-.logo-item:focus-visible span { color: var(--primary-dark); }
+a.logo-item:hover span,
+a.logo-item:focus-visible span { color: var(--primary-dark); }
 
 /* --- ACT 2: differentiator carousel --- */
 .carousel {
@@ -429,13 +430,23 @@
   flex-wrap: wrap;
   margin-bottom: 1.4rem;
 }
-.carousel__tabs { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+/* Tabs are the only way to reach a panel, so they scroll rather than wrap. */
+.carousel__tabs {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding-bottom: 0.35rem;
+  scroll-snap-type: x proximity;
+}
 .carousel__tab {
   cursor: pointer;
+  flex: 0 0 auto;
+  scroll-snap-align: start;
   font-family: var(--mono);
   font-size: 0.62rem;
   font-weight: 600;
-  min-height: 32px;
+  min-height: 44px;
   padding: 0.4rem 0.8rem;
   border-radius: 99px;
   background: transparent;
@@ -529,7 +540,7 @@
   display: grid;
   grid-template-columns: 1.1fr 0.9fr;
   gap: 1.6rem;
-  align-items: center;
+  align-items: start;
 }
 .panel-visual {
   background: var(--card-bg);
@@ -570,7 +581,7 @@
   color: var(--accent);
   background: transparent;
   padding: 0;
-  min-width: 2.6em;
+  min-width: 3.2em;
   flex-shrink: 0;
 }
 .md-typeset .panel-stats > p { margin: 0.9rem 0 0; font-size: 0.72rem; }
@@ -784,7 +795,8 @@
 .compare__legend { margin-top: 0.8rem; font-size: 0.65rem; color: var(--ink-60); }
 
 /* --- What teams run on it --- */
-.usecases { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.7rem; }
+/* Three across so the six guided categories fill two even rows. */
+.usecases { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.7rem; }
 .usecase {
   background: var(--deep-bg);
   border: 1px solid rgba(255, 255, 255, 0.07);

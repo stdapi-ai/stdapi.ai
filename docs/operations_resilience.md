@@ -1,7 +1,7 @@
 ---
 title: Resilience & Failover
-description: Infrastructure-level and application-level resilience for stdapi.ai on AWS — multi-AZ ECS, ALB health checks, Bedrock cross-region inference, S3 durability, and automatic multi-region request routing with quota multiplication.
-keywords: AWS high availability, multi-AZ ECS Fargate, ALB resilience, Bedrock cross-region inference, S3 durability, AWS Bedrock region routing, multi-region AI, quota management, automatic failover, region strategy, lowest latency, round robin, ordered routing, prompt caching, S3 region routing, cross-region S3 copy, model region restrict, deprecated models failover, deprecated model fallback
+description: Infrastructure-level and application-level resilience for stdapi.ai on AWS — multi-AZ ECS, ALB health checks, Bedrock cross-region inference, S3 durability, and multi-region request routing where each enabled region contributes its own independent Bedrock quota.
+keywords: AWS high availability, multi-AZ ECS Fargate, ALB resilience, Bedrock cross-region inference, S3 durability, AWS Bedrock region routing, multi-region AI, quota management, regional failover, region strategy, lowest latency, round robin, ordered routing, prompt caching, S3 region routing, cross-region S3 copy, model region restrict, deprecated models failover, deprecated model fallback
 ---
 
 # :material-shield-check: Resilience & Failover
@@ -12,10 +12,20 @@ stdapi.ai on AWS is designed for high availability at every layer — from intel
 
 ## :material-directions-fork: Region Routing
 
-stdapi.ai can automatically distribute Bedrock requests across your configured AWS regions. When a region becomes temporarily unavailable or hits quota limits, requests are transparently routed to another region — no client changes needed.
+stdapi.ai can automatically distribute Bedrock requests across your configured AWS regions. When a region becomes temporarily unavailable or hits quota limits, eligible failures are retried in another enabled region — no client changes needed.
 
-!!! tip "Multiply Your Effective Quota"
-    Each AWS region has its own independent quota. By configuring multiple regions, your effective quota scales proportionally — with 3 regions you get approximately **3× the tokens per minute and 3× the daily token limit** compared to a single-region setup.
+!!! tip "Each Region Contributes Its Own Quota"
+    Bedrock quotas are per-region: every region you enable adds its own independent tokens-per-minute and requests-per-minute limits, so a multi-region deployment draws on multiple independent quotas rather than one. How much of that headroom a given workload reaches depends on the quotas granted per model in each region and on the routing strategy in use.
+
+!!! info "What failover covers"
+    Retrying in another region is conditional, and the carve-outs matter more than the happy path:
+
+    - **Synchronous** requests retry across regions within the same request, each candidate region tried at most once.
+    - **Streaming** requests can only fail over **before** the stream opens; once bytes are flowing the region is locked.
+    - **Asynchronous** jobs select a region at job start and do not move.
+    - **Requests carrying S3 inputs** are pinned to a single region and do not fail over at all.
+
+    See [Failover Scope](#failover-scope) and [S3-Aware Region Selection](#s3-aware-region-selection) for the full behaviour.
 
 ### :material-information-outline: Overview
 
@@ -338,7 +348,7 @@ The Terraform module deploys stdapi.ai following AWS best practices for high ava
   <br>ECS tasks spread across all Availability Zones; a single AZ failure does not interrupt service
 
 - :material-autorenew: __Stateless Service Design__
-  <br>stdapi.ai holds no local state — failed tasks are replaced instantly with zero data loss
+  <br>stdapi.ai holds no local state — a failed task is replaced without loss of stored data, since all persistent data lives in S3
 
 - :material-heart-pulse: __ALB Health Checks__
   <br>Unhealthy tasks drained and replaced within seconds; traffic rerouted to healthy AZs automatically
@@ -353,7 +363,7 @@ The Terraform module deploys stdapi.ai following AWS best practices for high ava
   <br>New tasks become healthy in under 30 seconds, minimizing the recovery window after any failure
 
 - :material-update: __Zero-Downtime Updates__
-  <br>Rolling deployments and ALB connection draining ensure in-flight requests always complete cleanly
+  <br>Rolling deployments and ALB connection draining let in-flight requests finish on the outgoing task before it is deregistered
 
 </div>
 
@@ -398,7 +408,7 @@ flowchart TB
 
 **Stateless by design.** stdapi.ai stores no local state — all persistent data lives in S3. Each ECS Fargate task is fully replaceable: ECS can terminate and relaunch a failed task without any loss of data or request state that the client cannot retry.
 
-**Multi-AZ spread.** The Terraform module places ECS tasks across all available Availability Zones in the region. If an AZ experiences a partial or full failure, tasks in the remaining AZs continue to process requests without interruption. The default configuration maintains at least one task per Availability Zone, guaranteeing availability even during a task replacement event.
+**Multi-AZ spread.** The Terraform module places ECS tasks across all available Availability Zones in the region. If an AZ experiences a partial or full failure, tasks in the remaining AZs continue to process requests without interruption. The default configuration maintains at least one task per Availability Zone, so capacity remains in the other AZs during a task replacement event.
 
 **Auto-scaling.** Task count scales automatically based on CPU utilization, memory utilization, and ALB request count — whichever metric signals pressure first. Fargate Spot is optionally available for cost-sensitive deployments — see [Cost-Optimized Deployment](operations_deploy_advanced.md#cost-optimized-deployment) for the trade-offs.
 
@@ -407,7 +417,7 @@ flowchart TB
 
 **Fast startup.** The stdapi.ai container image is optimized for minimal startup time — a new task typically becomes healthy in under 30 seconds. Fast startup is critical for recovery: when ECS detects a failed task it launches a replacement immediately, keeping the degraded window short and ensuring the service restores full capacity without manual intervention.
 
-**Zero-downtime updates.** ECS rolling deployments start the new container version and wait for it to pass health checks before draining the old task. The ALB connection draining period lets in-flight requests complete on the outgoing task before it is deregistered. Application updates never interrupt ongoing API calls.
+**Zero-downtime updates.** ECS rolling deployments start the new container version and wait for it to pass health checks before draining the old task. The ALB connection draining period lets in-flight requests complete on the outgoing task before it is deregistered, so an application update does not cut off calls that are already under way — provided they finish within the draining window.
 
 ### :material-connection: ALB Resilience
 
@@ -524,7 +534,7 @@ flowchart LR
 **Infrastructure:**
 
 - :material-terraform: **Use the Terraform module** — The [stdapi-ai Terraform module](operations_getting_started.md#quick-start) provisions all resilience features out of the box: multi-AZ ECS, ALB health checks, auto-scaling, WAF, and CloudWatch alarms. Deploying manually risks missing critical settings.
-- :material-earth: **Run at least two Bedrock regions** — Configure `aws_bedrock_regions` with two or more regions to unlock quota multiplication and automatic failover. A single region is a single point of failure for quota limits.
+- :material-earth: **Run at least two Bedrock regions** — Configure `aws_bedrock_regions` with two or more regions so the deployment draws on more than one independent Bedrock quota and eligible failures can retry elsewhere. A single region is a single point of failure for quota limits. Each additional region is also a cost driver — see [Cost Management](operations_cost_management.md).
 
 **Region routing:**
 
@@ -536,7 +546,7 @@ flowchart LR
 - :material-pulse: **Consider `AWS_ADAPTIVE_RETRY`** — Enable this when many concurrent clients share the same endpoint and sustained congestion is likely. It paces retries based on real-time error signals, reducing the risk of retry storms — at the cost of potentially higher per-request latency under load. Avoid it for latency-sensitive or low-traffic workloads.
 - :material-magnify: **Monitor `model_regions` in logs** — If one region consistently appears in error logs, consider adjusting its quota or removing it from the region list.
 - :material-bucket-outline: **Declare accepted buckets** — If your users provide S3 URLs from buckets outside the application's own buckets, add them to `AWS_S3_ACCEPTED_BUCKETS` so the router can resolve their region and convert HTTP URLs to S3 URIs.
-- :material-pin-outline: **Pin models when needed** — Use `AWS_BEDROCK_MODEL_REGION_RESTRICT` for models that have region-specific features (e.g. grounding) to guarantee those features are always available. The model will be restricted exclusively to the listed regions.
+- :material-pin-outline: **Pin models when needed** — Use `AWS_BEDROCK_MODEL_REGION_RESTRICT` for models that have region-specific features (e.g. grounding) so requests for that model are only served where the feature exists. The model will be restricted exclusively to the listed regions.
 - :material-swap-horizontal: **Plan for model deprecations** — Keep `AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK=true` (the default) so clients survive AWS model retirements without downtime. Switch to `false` in environments where you want to enforce explicit client migrations.
 
 ---
@@ -545,9 +555,11 @@ flowchart LR
 
 <div class="grid cards" markdown>
 
-- :material-rocket-launch: [**Getting Started**](operations_getting_started.md) — Deploy to AWS with Terraform in 5 minutes
+- :material-rocket-launch: [**Getting Started**](operations_getting_started.md) — Deploy to AWS with two Terraform commands
 - :material-server-network: [**Advanced Deployment**](operations_deploy_advanced.md) — Multi-region Terraform examples with resilience configured
 - :material-cog: [**Configuration Reference**](operations_configuration.md) — All routing and failover environment variables
 - :material-shield-lock: [**Data Sovereignty & Compliance**](operations_compliance.md) — GDPR-compliant region configuration
+- :material-cash-multiple: [**Cost Management**](operations_cost_management.md) — What each additional region and task costs
+- :material-email-outline: [**Contact**](contact.md) — Discuss a multi-region or high-availability deployment
 
 </div>

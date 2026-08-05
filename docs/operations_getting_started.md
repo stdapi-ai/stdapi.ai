@@ -1,21 +1,18 @@
 ---
 title: Getting Started - Deploy stdapi.ai on AWS
-description: Deploy stdapi.ai on AWS using Terraform in 5 minutes. Production-grade ECS Fargate deployment with HTTPS, auto-scaling, and optional WAF and monitoring. 14-day free trial on AWS Marketplace.
+description: Deploy stdapi.ai on AWS with two Terraform commands. Production-grade ECS Fargate deployment with HTTPS, auto-scaling, and optional WAF and monitoring. 14-day free trial of the license on AWS Marketplace.
 keywords: deploy OpenAI gateway AWS, AWS Bedrock deployment, Terraform AWS AI, enterprise AI deployment, AWS Bedrock setup, OpenAI API hosting, production AI gateway, AWS ECS Fargate AI
 ---
 
 # :material-rocket-launch: Deploy stdapi.ai on AWS
 
-Get a production-grade OpenAI-compatible AI gateway running on AWS in 5 minutes. Terraform handles everything — ECS Fargate, HTTPS, auto-scaling, optional WAF, and optional monitoring.
+Get a production-grade AI gateway running on AWS with two Terraform commands, speaking the OpenAI, Anthropic, and Cohere APIs. Terraform provisions the stack — ECS Fargate, HTTPS, auto-scaling, optional WAF, and optional monitoring. You bring the Marketplace subscription, AWS credentials, and — for a custom domain — the domain and its certificate.
 
 !!! tip trial "14-Day Free Trial"
-    The AWS Marketplace subscription includes a **14-day free trial**. Test the full production stack in your environment risk-free.
+    The AWS Marketplace subscription includes a **14-day free trial of the stdapi.ai license**. AWS charges for the infrastructure it deploys (ALB, Fargate, KMS, NAT) and for Bedrock usage apply from the first minute — see [Deployment Cost](#deployment-cost).
 
 !!! info "Need help?"
     For questions, issue reports, or assistance, see the [Contact](contact.md) page.
-
-!!! info "Prefer a hands-off setup?"
-    A [managed deployment service](https://aws.amazon.com/marketplace/pp/prodview-xknxzjgl7zi5s) is available if you'd rather not manage Terraform yourself. Choose between guided assistance (step-by-step support while you retain full control) or fully managed setup (handled on your behalf, inside your AWS account). Response time is 1 business day during the engagement.
 
 ---
 
@@ -62,7 +59,7 @@ terraform apply
     terraform apply
     ```
 
-That's it. In ~5 minutes you have:
+That's it. Two Terraform commands, and you have:
 
 - Production-grade ECS Fargate deployment with HTTPS
 - Regional S3 buckets
@@ -99,8 +96,8 @@ terraform output docs_url
 
     Every exposed tool adds its schema to each MCP client's context window, so expose only the tools your agents actually use — for example `mcp_include_tools = "openai_chat_completion,openai_embedding,search_models"`. See the [MCP configuration reference](operations_configuration.md#summary-mcp).
 
-!!! tip offer "Save 10% with an AWS Marketplace private offer"
-    Contact us to receive a private rate of **$0.09/container-hour** instead of $0.10. Same pay-per-use model, no upfront payment or minimum usage. Want to try first? Use the 14-day free trial of the public listing, then accept the private offer.
+!!! tip offer "Buying for an organization? Use an AWS Marketplace private offer"
+    Custom terms and duration, committed usage, and a preferential rate of **$0.09/container-hour** instead of $0.10. Procured through your existing AWS relationship — no new vendor onboarding, billed on your existing AWS invoice. Want to try first? Use the 14-day free trial of the public listing, then accept the private offer.
 
     [:material-email-outline: Request a Private Offer](contact.md#private-offer)
 
@@ -113,7 +110,7 @@ terraform output docs_url
 !!! info "If the docs page returns 503 or shows a TLS warning"
     These are normal on a fresh deployment. The ECS service takes 2–3 minutes to pass health checks (→ 503), and the auto-generated `*.elb.amazonaws.com` domain has no trusted TLS certificate (→ browser warning; safe to bypass for testing). See [Troubleshooting](operations_troubleshooting.md) for a permanent HTTPS setup with a custom domain.
 
-stdapi.ai is compatible with both OpenAI and Anthropic SDKs. If you've used either before, you already know how to use it — only the base URL changes. Here are the raw HTTP calls with `curl` so you can verify the endpoint from any shell:
+stdapi.ai is compatible with both OpenAI and Anthropic SDKs. If you've used either before, you already know how to use it — the base URL changes, and usually the model name with it. Here are the raw HTTP calls with `curl` so you can verify the endpoint from any shell:
 
 === "OpenAI-compatible"
 
@@ -147,7 +144,7 @@ stdapi.ai is compatible with both OpenAI and Anthropic SDKs. If you've used eith
       }'
     ```
 
-**Using the official SDKs?** Point the `base_url` (Python) / `baseURL` (Node.js) option at `$API_ENDPOINT/v1` (OpenAI SDK) or `$API_ENDPOINT/anthropic` (Anthropic SDK) and use your existing code — no other changes needed. The [API Overview](api_overview.md) has SDK snippets for Python, Node.js, and more.
+**Using the official SDKs?** Point the `base_url` (Python) / `baseURL` (Node.js) option at `$API_ENDPOINT/v1` (OpenAI SDK) or `$API_ENDPOINT/anthropic` (Anthropic SDK), and set the `model` field to a model from the catalog below. The rest of your existing code is unchanged. The [API Overview](api_overview.md) has SDK snippets for Python, Node.js, and more.
 
 !!! tip "Discover the full model catalog"
     Once your first call succeeds, switch the `model` field to any other Bedrock model — `anthropic.claude-fable-5`, `anthropic.claude-sonnet-5`, `qwen.qwen3-coder-next`, and more.
@@ -174,6 +171,9 @@ The `/health` endpoint requires no authentication and is used by the ALB health 
 The `503` and TLS-warning hiccups on first deployment are already covered above — see [Make Your First API Call](#make-your-first-api-call).
 
 :material-arrow-right: **Full troubleshooting guide:** [Troubleshooting](operations_troubleshooting.md) — 401 auth errors, 404 model not found, ThrottlingException, S3 errors, VPC connectivity, Terraform IAM failures, and more.
+
+!!! info "Prefer a hands-off setup?"
+    A [managed deployment service](https://aws.amazon.com/marketplace/pp/prodview-xknxzjgl7zi5s) is available if you'd rather not manage Terraform yourself. Choose between guided assistance (step-by-step support while you retain full control) or fully managed setup (handled on your behalf, inside your AWS account). Response time is 1 business day during the engagement.
 
 ---
 
@@ -207,7 +207,7 @@ Running from the ZIP download instead of `git clone`? Run the same command from 
 - :material-cog: [**Configuration**](operations_configuration.md) — All environment variables and options
 - :material-server-network: [**Advanced Deployment**](operations_deploy_advanced.md) — VPC integration, multi-region, cost optimization, manual ECS
 - :material-cash-multiple: [**Cost Management**](operations_cost_management.md) — Infrastructure, license, and AI usage cost breakdown
-- :material-directions-fork: [**Resilience & Failover**](operations_resilience.md) — Multi-region routing and quota multiplication
+- :material-directions-fork: [**Resilience & Failover**](operations_resilience.md) — Multi-region routing, and the quota each enabled region adds
 - :material-shield-lock: [**Data Sovereignty & Compliance**](operations_compliance.md) — GDPR-compliant region configuration
 - :material-puzzle: [**Use Cases**](use_cases.md) — Open WebUI, n8n, coding assistants, and more
 - :material-wrench: [**Troubleshooting**](operations_troubleshooting.md) — Common first-deployment errors and fixes

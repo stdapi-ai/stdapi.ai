@@ -9,13 +9,13 @@ hide:
 
 # Contact
 
-Feel free to get in touch to discuss your needs.
+stdapi.ai is built and supported by **J. Goutin** ([jgoutin.dev](https://jgoutin.dev)). Questions go straight to product engineering, so expect a technical answer rather than a discovery call. Feel free to get in touch to discuss your needs.
 
 <span id="private-offer"></span>
 
-!!! tip offer "Request a 10% discount via a private offer"
+!!! tip offer "Buy through an AWS Marketplace private offer"
 
-    Get **$0.09/container-hour** instead of $0.10 — a 10% reduction on the standard rate, with the same pay-per-use model and no upfront payment or minimum usage. Want to try first? Use the [14-day free trial](operations_getting_started.md) of the public listing, then accept your private offer once we send it.
+    A private offer is how an organization buys stdapi.ai: **custom terms and duration**, **committed usage**, and a **preferential rate of $0.09/container-hour** instead of $0.10. It is procured through your existing AWS relationship — no new vendor onboarding, no new supplier record, billed on your existing AWS invoice. Marketplace spend may count toward an EDP or Private Pricing Agreement; check your agreement to confirm whether yours does.
 
     [Request your private offer](mailto:private@offers.stdapi.ai?subject=Private%20offer%20request%20-%20stdapi.ai&body=Company%3A%20%0AAWS%20account%20ID%3A%20%0AUse%20case%3A%20%0ADesired%20start%20date%3A%20){ .md-button .md-button--primary }
 
@@ -28,7 +28,17 @@ Feel free to get in touch to discuss your needs.
     3. **Accept it** in AWS Marketplace.
     4. **Pay $0.09/container-hour** — billed automatically, same pay-per-use model as the public listing.
 
+    **Which AWS account ID?** An offer is extended to one specific account, not to an organization. Give the account ID that will hold the subscription — usually the linked account that runs the deployment, unless your organization subscribes centrally from the management (payer) account. Under consolidated billing the charges land on the payer's invoice either way. If you are unsure, tell us your structure in the email and we'll confirm before creating the offer.
+
+    **Already on the 14-day free trial?** The trial belongs to the public listing, and accepting a private offer moves you onto the new agreement. To use the trial in full, tell us the date it ends as your desired start date and we'll set the offer to begin then.
+
     Your request is handled by an automated AI agent — it creates the offer and replies in your language, typically within minutes. A human follows every conversation and steps in whenever needed.
+
+!!! info "Not ready to talk yet?"
+
+    - :material-scale-balance: [**Licensing & pricing**](operations_licensing.md) — Community (AGPL-3.0) vs commercial, and what each includes
+    - :material-cash-multiple: [**Cost management**](operations_cost_management.md) — What a deployment actually costs, tier by tier
+    - :material-docker: [**Run the free Community edition**](operations_getting_started_local.md) — Same endpoints, $0, one `docker run` command
 
 ---
 

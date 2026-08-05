@@ -12,13 +12,13 @@ Discover how to integrate stdapi.ai with popular AI applications and tools. stda
 
 - **No code changes required** - Just update the API endpoint in your application settings
 - **Access 100+ models** - Claude, OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen, GLM, Nova, Llama, Stability AI, and more
-- **Enterprise data control** - All processing stays in your AWS account
-- **Pay-per-use pricing** - No subscriptions, pay only Amazon Bedrock rates for actual usage
+- **Enterprise data control** - The gateway runs in your own AWS account — no third party sits between your users and your models
+- **Pay-per-use pricing** - Pay Amazon Bedrock rates for actual usage, with no markup and no per-seat fees
 - **AWS-native features** - Leverage prompt caching, reasoning modes, and guardrails through standard OpenAI, Anthropic, and Cohere APIs
 - **Three-dialect API compatibility** - Use the OpenAI, Anthropic, or Cohere SDK with the same deployment
 
 !!! tip "Try it before committing to anything"
-    Run stdapi.ai on your laptop in minutes with the [free community Docker image](operations_getting_started_local.md) — or deploy to AWS with a [14-day free trial](operations_getting_started.md). Every integration below works identically against either.
+    Run stdapi.ai on your laptop with the [free community Docker image](operations_getting_started_local.md) — or deploy to AWS with a [14-day free trial](operations_getting_started.md). Both editions expose the same API surface, so the integrations below are configured the same way against either.
 
 ## :material-lightning-bolt: How Integration Works
 
@@ -38,6 +38,8 @@ client = OpenAI(base_url="https://your-endpoint/v1", api_key="YOUR_KEY")
 ## :material-view-grid: Choose Your Integration
 
 Pick the category that matches your goal — categories marked :material-book-open-variant: have a dedicated step-by-step guide.
+
+Throughout this page, tools in **bold** are driven end to end by an automated test suite against a real deployment; the others have a documented setup.
 
 <div class="grid cards" markdown>
 
@@ -66,7 +68,7 @@ Pick the category that matches your goal — categories marked :material-book-op
 
 *For teams that want frontier coding models in their IDEs and terminals — without sending code to third-party AI clouds.*
 
-Enhance your development workflow with AI-powered coding assistants. stdapi.ai integrates seamlessly with popular IDEs and AI development frameworks, allowing you to leverage Amazon Bedrock models (Claude, Kimi thinking, Qwen3 Coder Next) for code completion, generation, and intelligent assistance.
+Enhance your development workflow with AI-powered coding assistants. stdapi.ai integrates with popular IDEs and AI development frameworks, allowing you to leverage Amazon Bedrock models (Claude, Kimi thinking, Qwen3 Coder Next) for code completion, generation, and intelligent assistance.
 
 **What you can do:**
 
@@ -74,7 +76,7 @@ Enhance your development workflow with AI-powered coding assistants. stdapi.ai i
 - **Code generation** - Natural language to code with Claude and specialized coding models
 - **Codebase understanding** - Chat with your codebase, explain functions, refactor code
 
-**Popular tools:** Claude Code, Cline, OpenCode, Pi Agent, OpenClaw, Zed, JetBrains AI Assistant
+**Popular tools:** **Claude Code**, **Codex**, **Qwen Code**, **pi**, **OpenClaw**, Cline, OpenCode, Zed, JetBrains AI Assistant
 
 **[AI Coding Assistants Guide](use_cases_coding_assistants.md)** — Universal setup for IDEs and development frameworks
 
@@ -94,7 +96,7 @@ Build self-directed AI agents that can plan, execute, and refine complex tasks a
 - **Task automation** - Self-improving workflows that adapt to results
 - **Code agents** - Autonomous development and testing systems
 
-**Compatible frameworks:** OpenClaw, Hermes Agent, LangChain, LangGraph, LlamaIndex, CrewAI, OpenAI Agents SDK, Pydantic AI, Strands Agents
+**Compatible frameworks:** **OpenClaw**, **Hermes**, **LangChain**, **Pydantic AI**, LangGraph, LlamaIndex, CrewAI, OpenAI Agents SDK, Strands Agents
 
 All agent frameworks that support OpenAI or Anthropic SDKs work immediately — point the SDK's base URL to stdapi.ai. See the [API overview](api_overview.md) for connection details.
 
@@ -121,7 +123,7 @@ Build ChatGPT-like experiences with Amazon Bedrock models and complete privacy c
 - **Multi-modal applications** - Process text, voice, images, and documents
 - **Voice chat & image generation** - Speech input/output and in-chat image creation through the same endpoint
 
-**Popular tools:** Open WebUI, LobeHub, AnythingLLM, LibreChat
+**Popular tools:** **Open WebUI**, LobeHub, AnythingLLM, LibreChat
 
 **[Open WebUI Integration Guide](use_cases_openwebui.md)** — Complete setup with Terraform deployment examples
 
@@ -141,7 +143,7 @@ Integrate Amazon Bedrock AI into your business processes and automation workflow
 - **Document workflows** - Automated summarization, translation, and classification
 - **Content safety** - Screen user-generated content with the [Moderations API](api_openai_moderations.md)
 
-**Popular tools:** n8n, Langflow, Dify, Flowise
+**Popular tools:** **n8n**, **Haystack**, Langflow, Dify, Flowise
 
 !!! note "Make & Zapier"
     Make and Zapier can call stdapi.ai through their generic HTTP/webhook modules, but their native OpenAI modules do not support custom endpoints.
@@ -165,7 +167,7 @@ Build voice-first applications on the same OpenAI-compatible endpoint: text-to-s
 
 **Popular frameworks:** Pipecat, LiveKit Agents, TEN Framework — all accept a custom OpenAI-compatible base URL for LLM, speech-to-text, and text-to-speech services
 
-**Popular tools:** Home Assistant Assist (via the wyoming-openai proxy)
+**Popular tools:** Home Assistant Assist (via the **wyoming-openai** proxy)
 
 **[Home Assistant Voice Guide](use_cases_home_assistant.md)** — Complete setup for local voice assistants backed by Amazon Transcribe and Amazon Polly
 
@@ -187,7 +189,7 @@ Build retrieval-augmented generation and semantic search pipelines with Bedrock 
 - **Semantic search** - Search by meaning across documents, tickets, and knowledge bases
 - **Multimodal search** - Embed text and images with models like Cohere Embed v4
 
-**Popular tools:** LlamaIndex, Haystack, RAGFlow, LightRAG — works with any vector database (pgvector, Qdrant, and others store the vectors; stdapi.ai serves the embeddings)
+**Popular tools:** **Haystack**, LlamaIndex, RAGFlow, LightRAG — works with any vector database (pgvector, Qdrant, and others store the vectors; stdapi.ai serves the embeddings)
 
 **[RAG Pipelines Guide](use_cases_rag.md)** — Configuring embeddings, Cohere-compatible reranking, and generation together
 
@@ -209,7 +211,7 @@ Generate and edit visual content with Amazon Bedrock media models through the st
 **Popular tools:** Open WebUI (built-in image generation), n8n media workflows, or the APIs directly
 
 !!! tip "Getting started"
-    Any tool that supports the OpenAI Images API works by pointing it at your stdapi.ai `/v1` URL. Video generation requires S3 storage — see the [Videos API](api_openai_videos.md) for setup.
+    Any tool that supports the OpenAI Images API works by pointing it at your stdapi.ai `/v1` URL. Video generation requires S3 storage. No dedicated guide yet — see the [Videos API](api_openai_videos.md) for setup and the [API overview](api_overview.md) for connection details.
 
 ---
 
@@ -241,7 +243,7 @@ Deploy intelligent AI assistants to your team's communication platforms powered 
 
 **What you can build:**
 
-- **Team Q&A bot** - Answer common questions instantly in Slack or Teams
+- **Team Q&A bot** - Answer common questions in Slack or Teams
 - **Documentation assistant** - Search and cite internal docs in real-time
 - **Task automation** - Create tickets, schedule meetings, update databases via chat
 - **Moderated channels** - Screen messages with the [Moderations API](api_openai_moderations.md)
@@ -255,16 +257,17 @@ Deploy intelligent AI assistants to your team's communication platforms powered 
 
 ## :material-help-circle: Common Questions
 
-- **Where does my data go?** Nowhere outside your AWS account — all inference runs in your account and is never shared with model providers or used for training. [Data sovereignty & compliance →](operations_compliance.md)
-- **What does it cost?** $0.10/container-hour for the gateway plus Amazon Bedrock rates — no markup, no subscriptions, no per-seat fees. [Cost management →](operations_cost_management.md)
+- **Where does my data go?** The gateway runs in your own AWS account, so no third party sits between your users and your models: inference runs on the AWS services and regions you enable, and Amazon Bedrock does not share prompts with model providers or use them for training. [Data sovereignty & compliance →](operations_compliance.md)
+- **What does it cost?** $0.10/container-hour for the gateway — the Terraform module runs one container per Availability Zone by default — plus Amazon Bedrock rates, with no markup and no per-seat fees. [Licensing & pricing →](operations_licensing.md) · [Cost management →](operations_cost_management.md)
 - **Am I locked in?** No — stdapi.ai speaks the standard OpenAI, Anthropic, and Cohere APIs. Leaving is the same one-line base-URL change that got you in.
 
 ## :material-arrow-right: Ready to Get Started?
 
 <div class="grid cards" markdown>
 
-- :material-rocket-launch: [**Deploy to AWS**](operations_getting_started.md) — Production-ready in 5 minutes with Terraform (14-day free trial)
+- :material-rocket-launch: [**Deploy to AWS**](operations_getting_started.md) — Production-ready with two Terraform commands (14-day free trial)
 - :material-docker: [**Try Locally with Docker**](operations_getting_started_local.md) — Free community image for development and testing
 - :material-book-open-variant: [**API Overview**](api_overview.md) — Endpoints, parameters, and usage examples
+- :material-email-outline: [**Contact**](contact.md) — Integration questions, sales, and private offers
 
 </div>

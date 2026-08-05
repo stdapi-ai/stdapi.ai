@@ -13,7 +13,7 @@ Run your favorite OpenAI, Anthropic, and Cohere-compatible applications on Amazo
 [![Terraform Module](https://img.shields.io/badge/Terraform-Commercial%20Edition%20module-844FBA?logo=terraform&logoColor=ffffff)](https://registry.terraform.io/modules/stdapi-ai/stdapi-ai/aws/latest)
 [![OpenTofu Module](https://img.shields.io/badge/OpenTofu-Commercial%20Edition%20module-FFDA18?logo=opentofu&logoColor=ffffff)](https://search.opentofu.org/module/stdapi-ai/stdapi-ai/aws/latest)
 
-[**14-day free trial on AWS Marketplace** · **$0.10/container-hour**](https://stdapi.ai/operations_getting_started/)
+[**14-day free trial on AWS Marketplace** · **$0.10/container-hour**](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)
 
 ---
 [![Community Edition Docker image](https://img.shields.io/badge/Docker-Community%20Edition-2496ED?logo=docker&logoColor=ffffff)](https://github.com/stdapi-ai/stdapi.ai/pkgs/container/stdapi.ai-community)
@@ -95,7 +95,7 @@ curl http://localhost:8000/anthropic/v1/messages \
 
 ## 🚀 Production Deployment
 
-Deploy to AWS in minutes with Terraform. The [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) subscription includes a **14-day free trial**.
+Deploy to AWS with Terraform — two commands. The [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) subscription includes a **14-day free trial** on the license.
 
 ```hcl
 module "stdapi_ai" {
@@ -104,9 +104,28 @@ module "stdapi_ai" {
 }
 ```
 
-That's it. You get a production-grade ECS Fargate deployment with HTTPS, auto-scaling, and optional WAF and monitoring.
+That deploys an auto-scaling ECS Fargate service in private subnets, with KMS-encrypted S3 storage and least-privilege IAM — reachable from inside the VPC only. A public HTTPS endpoint, WAF and API key authentication are opt-in:
 
-**[Full deployment guide →](https://stdapi.ai/operations_getting_started/)** · **[Advanced deployment →](https://stdapi.ai/operations_deploy_advanced/)**
+```hcl
+module "stdapi_ai" {
+  source  = "stdapi-ai/stdapi-ai/aws"
+  version = "~> 1.0"
+
+  # Public HTTPS endpoint on a custom domain (ACM cert auto-issued via Route 53)
+  alb_enabled           = true
+  alb_public            = true
+  alb_domain_name       = "api.example.com"
+  alb_route53_zone_name = "example.com"
+
+  # Optional protection and authentication
+  alb_waf_enabled = true
+  api_key_create  = true
+}
+```
+
+The default deploys one task per availability zone, so a 3-AZ region runs 3 containers (~$216/month in license at $0.10/container-hour), before ALB, NAT, Fargate and KMS costs.
+
+**[Full deployment guide →](https://stdapi.ai/operations_getting_started/)** · **[Advanced deployment →](https://stdapi.ai/operations_deploy_advanced/)** · **[Cost management →](https://stdapi.ai/operations_cost_management/)**
 
 Prefer a hands-off setup? A [managed deployment service](https://aws.amazon.com/marketplace/pp/prodview-xknxzjgl7zi5s) is available.
 
@@ -114,18 +133,20 @@ Prefer a hands-off setup? A [managed deployment service](https://aws.amazon.com/
 
 ## 🎯 Why stdapi.ai?
 
-- **🔌 Drop-in replacement** — Change only the base URL. Works with Open WebUI, n8n, OpenClaw, Claude Code, LangChain, OpenCode, and hundreds of other applications and tools.
-- **🔒 Data stays in your AWS account** — All inference runs in your account. Data never shared with model providers or used for training. Configure allowed regions for GDPR, HIPAA, FedRAMP.
-- **🌍 Multiply quota across regions** — Each AWS region has independent quota. 3 regions = up to 3× tokens per minute. Automatic routing and failover—no client changes.
-- **💰 Pay only what you use** — Amazon Bedrock rates, no markup, no subscriptions or monthly minimums.
+- **🔌 Drop-in replacement** — Change only the base URL. Standard OpenAI, Anthropic and Cohere SDKs connect on the base URL alone, and hundreds of applications and tools build on them. Twelve clients are driven end to end against a live gateway by the [automated test suite](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests): **Claude Code**, **Codex**, **pi**, **OpenClaw**, **Hermes**, **Qwen Code**, **n8n**, **Haystack**, **Open WebUI**, **wyoming-openai**, **LangChain**, **Pydantic AI**.
+- **🔒 Runs in your AWS account** — No third party sits between your users and your models. Amazon Bedrock does not share your prompts with model providers or use them for training. Configure region allow-lists to match your own requirements — AWS compliance certifications apply to the AWS services and regions you choose, and are not inherited by stdapi.ai or by your application. **[Compliance guide →](https://stdapi.ai/operations_compliance/)**
+- **🌍 Add a region, add its quota** — Every AWS region has its own Bedrock quota, and every region you enable adds its own. Eligible throttling and availability failures retry in another enabled region, with no client changes. Streaming retries only before the stream opens, and asynchronous jobs stay in the region that accepted them. **[Resilience guide →](https://stdapi.ai/operations_resilience/)**
+- **💰 Pay only what you use** — Amazon Bedrock rates with 0% markup: model usage is billed to you directly by AWS, with no minimum commitment. The gateway license itself is metered per container-hour.
 - **⚡ Advanced Bedrock features** — Reasoning modes (Claude, Nova), prompt caching, guardrails, service tiers, inference profiles, prompt routers, stored conversations—all through standard OpenAI and Anthropic API parameters.
-- **🧠 100+ models** — Claude, OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen, GLM, Nova, Llama, Stability AI, and more. Switch instantly—no vendor lock-in.
-- **🎨 Complete multi-modal API** — Chat, embeddings, image generation/editing/variations, video generation, audio speech/transcription/translation, content moderation. Amazon Polly, Transcribe, Translate unified under OpenAI-compatible endpoints.
-- **📊 Full observability** — OpenTelemetry integration, request/response logging, real-time AWS cost tracking per request, Swagger and ReDoc API documentation.
+- **🧠 100+ models** — Claude, OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen, GLM, Nova, Llama, Stability AI, and more. Switch model by name — no vendor lock-in.
+- **🎨 Complete multi-modal API** — Chat, embeddings, image generation/editing/variations, video generation, audio speech/transcription/translation, content moderation. Amazon Bedrock, Bedrock Mantle, Polly, Transcribe and Comprehend are discovered automatically and surface as one catalog under OpenAI-compatible endpoints — no model list to maintain. Amazon Translate backs audio translation.
+- **📊 Full observability** — OpenTelemetry integration, request/response logging, Swagger and ReDoc API documentation, and opt-in per-request cost tracking — off by default, and estimated from published AWS prices rather than read back from your invoice.
 - **🤖 Integrated MCP server** — Every API endpoint exposed as a Model Context Protocol tool. AI agents connect directly—no HTTP client code required. Streamable HTTP and SSE transports with configurable tool selection.
 - **🔄 Automatic deprecated model fallback** — When AWS retires a model, requests are transparently redirected to its replacement. Applications survive model deprecations without code changes.
 
-**[See all features →](https://stdapi.ai/features/)**
+**Measured, not asserted:** `<1 ms` gateway overhead (0.8 ms of gateway CPU on a 2.5 KB chat request) · **5,000+ automated test cases** run against real AWS services · **12 third-party clients** driven end to end against a live gateway · **50+ API operations** exposed as MCP tools.
+
+**[See all features →](https://stdapi.ai/features/)** · **[Browse the test suite →](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests)**
 
 ---
 
@@ -133,11 +154,14 @@ Prefer a hands-off setup? A [managed deployment service](https://aws.amazon.com/
 
 | Category | What You Can Build | Tools | Guide |
 |---|---|---|---|
-| **💬 Chat Interfaces** | Private ChatGPT alternative, team chat, knowledge base with RAG | Open WebUI, AnythingLLM, LibreChat | [Guide →](https://stdapi.ai/use_cases_openwebui/) |
-| **💻 Coding Assistants** | AI pair programming, code completion, codebase chat | Claude Code, Cline, OpenCode, Pi Agent, Zed | [Guide →](https://stdapi.ai/use_cases_coding_assistants/) |
-| **🔄 Workflow Automation** | AI-powered ticket routing, content creation, data processing | n8n, Langflow, Dify, Flowise | [Guide →](https://stdapi.ai/use_cases_n8n/) |
+| **💬 Chat Interfaces** | Private ChatGPT alternative, team chat, knowledge base with RAG | **Open WebUI**, AnythingLLM, LibreChat | [Guide →](https://stdapi.ai/use_cases_openwebui/) |
+| **💻 Coding Assistants** | AI pair programming, code completion, codebase chat | **Claude Code**, **Codex**, **Qwen Code**, **pi**, Cline, OpenCode, Zed | [Guide →](https://stdapi.ai/use_cases_coding_assistants/) |
+| **🔄 Workflow Automation** | AI-powered ticket routing, content creation, data processing | **n8n**, Langflow, Dify, Flowise | [Guide →](https://stdapi.ai/use_cases_n8n/) |
 | **🤖 Chatbots** | Slack/Discord/Teams bots, documentation assistants | Dify, Chatwoot, Typebot | |
-| **🧠 Autonomous Agents** | Personal AI assistants, research agents, multi-agent systems, code agents | OpenClaw, Hermes Agent, LangGraph, CrewAI | |
+| **🧠 Autonomous Agents** | Personal AI assistants, research agents, multi-agent systems, code agents | **OpenClaw**, **Hermes**, **Pydantic AI**, LangGraph, CrewAI | |
+| **🔍 RAG & Voice** | Semantic search, document pipelines, speech assistants | **LangChain**, **Haystack**, **wyoming-openai** | |
+
+**Bold** = driven end to end against a live gateway by the [automated test suite](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests). The others have a documented setup and use the same standard SDKs.
 
 **[All use cases and integration guides →](https://stdapi.ai/use_cases/)**
 
@@ -147,16 +171,16 @@ Prefer a hands-off setup? A [managed deployment service](https://aws.amazon.com/
 
 The commercial license via [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) is for production, internal tools, and proprietary applications:
 
-- ✅ **14-day free trial** — test in your environment risk-free
+- ✅ **14-day free trial** — the licence is free for 14 days; AWS resources and model usage bill as usual
 - ✅ **Commercial license** — no AGPL obligations, keep your code private
 - ✅ **Hardened containers** — security-optimized with regular updates
-- ✅ **Terraform module** — production-ready infrastructure in minutes
+- ✅ **Terraform module** — production-ready infrastructure from two Terraform commands
 - ✅ **Streamlined AWS billing** — consolidated with your existing AWS costs
 - ✅ **$0.10/container-hour** — no markup on model usage; pay Amazon Bedrock rates directly
 
 **[Start 14-Day Free Trial →](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)**
 
-**Save 10% with a private offer:** pay **$0.09/container-hour** instead — same pay-per-use model, 14-day free trial included, no upfront payment or minimum usage. [Contact us](https://stdapi.ai/contact/) with your AWS account ID to request one.
+**Buy through an AWS Marketplace private offer:** custom terms and duration, committed usage, and a preferential rate. Procured through your existing AWS relationship — no new vendor onboarding, billed on your existing AWS invoice. Marketplace spend may count toward an EDP or Private Pricing Agreement; check your agreement. The private-offer rate is **$0.09/container-hour**, same pay-per-use model, 14-day free trial included, no upfront payment or minimum usage. [Contact us](https://stdapi.ai/contact/) with your AWS account ID to request one.
 
 ---
 

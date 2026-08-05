@@ -27,8 +27,8 @@ Home Assistant's Assist voice pipeline speaks [Wyoming](https://github.com/OHF-V
 - :material-swap-horizontal: __No Cloud Voice Subscription__
   <br>Replace a cloud speech-to-text/text-to-speech subscription with Amazon Transcribe and Amazon Polly, billed at Bedrock/AWS rates.
 
-- :material-lock: __Voice Data Stays in Your AWS Account__
-  <br>Spoken audio and transcripts are processed in your account and never shared with a third-party voice assistant vendor.
+- :material-lock: __No Third-Party Voice Vendor__
+  <br>Spoken audio and transcripts are processed by Amazon Transcribe, Polly and Bedrock in the regions you enable, reached through your own deployment — no consumer voice-assistant vendor in the path.
 
 - :material-home-automation: __Works with Your Existing Assist Setup__
   <br>Assist's speech-to-text and text-to-speech pipeline selection is unchanged—only the backend the proxy talks to is stdapi.ai.

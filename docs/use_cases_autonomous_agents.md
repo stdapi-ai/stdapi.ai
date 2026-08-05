@@ -28,8 +28,8 @@ Unlike IDE coding assistants, autonomous agent CLIs plan and execute multi-step 
 - :material-aws: __Access Amazon Bedrock Models__
   <br>Claude, Nova, DeepSeek, Qwen, and 100+ models, driven through the same agent loop your CLI already runs.
 
-- :material-lock: __Data Stays in Your AWS Account__
-  <br>Every tool call and model response is processed inside your own Bedrock deployment, never shared with a third-party AI cloud.
+- :material-lock: __No Third-Party AI Cloud__
+  <br>Tool calls and model responses are processed by the AWS services you enable, reached through your own deployment — no third-party AI vendor sits in the request path.
 
 - :material-currency-usd-off: __Pay-Per-Use Pricing__
   <br>No per-seat or per-agent licensing. Pay only Amazon Bedrock rates for the calls the agent actually makes.

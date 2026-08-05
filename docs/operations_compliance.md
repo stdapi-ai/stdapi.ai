@@ -6,12 +6,13 @@ keywords: data sovereignty, data residency, GDPR compliance AWS, AWS Bedrock com
 
 # :material-shield-lock: Data Sovereignty & Compliance
 
-stdapi.ai is deployed entirely within your AWS account. All AI model inference, data storage, and service calls are performed within the AWS regions you explicitly configure — no data is ever sent to third-party services or leaves your account without your control.
+stdapi.ai is deployed entirely within your AWS account. Model inference, data storage, and service calls run on the AWS services and regions you explicitly configure — no third party sits between your users and your models, and the gateway contacts no vendor endpoint of its own.
 
 !!! success "What this means for your organization"
-    - **Your data never leaves your AWS account** — all model inference, storage, and service calls run exclusively in the regions you configure
-    - **Amazon Bedrock does not retain or train on your data** — prompts and completions are never used for model training; model providers have no access
+    - **No vendor endpoint in the request path** — no third party sits between your users and your models; inference runs on the AWS services and regions you enable
+    - **Amazon Bedrock does not train on your data** — prompts and completions are not used for model training, and model providers have no access unless you explicitly enable `provider_data_share`
     - **AWS services carry enterprise compliance certifications** — GDPR, ISO 27001/27017/27018, SOC 1/2/3, HIPAA, FedRAMP (Moderate and High), PCI-DSS, and more via Amazon Bedrock
+    - **Those certifications are not inherited** — AWS compliance certifications apply to the AWS services and regions you choose; they are not inherited by stdapi.ai or by your application
     - **All data encrypted in transit and at rest** — TLS 1.2+ on all AWS service calls; the Terraform module additionally configures the ALB with TLS 1.2+ with TLS 1.3 and post-quantum key exchange enabled, and Customer Managed KMS keys for all stored data
 
 <div class="grid cards" markdown>
@@ -20,7 +21,7 @@ stdapi.ai is deployed entirely within your AWS account. All AI model inference, 
   <br>Every AWS service call (Bedrock, S3, Polly, Transcribe, Comprehend, Translate) is restricted to your configured regions
 
 - :material-shield-key: __No Third-Party Egress__
-  <br>The application initiates no third-party calls of its own — only AWS services. The sole exceptions are under your control: remote URLs your own clients supply (SSRF-guarded) and OTLP trace export when you enable telemetry
+  <br>The application initiates no third-party calls of its own — only AWS services. The exceptions are all under your control: remote URLs your own clients supply (SSRF-guarded), OTLP trace export when you enable telemetry, a Mantle endpoint you override, and web searches Bedrock runs when a client asks for a grounding tool
 
 - :material-lock: __Data in Transit Encrypted__
   <br>All AWS service calls use TLS 1.2+. The Terraform module configures the ALB with TLS 1.3 and post-quantum hybrid key exchange.
@@ -50,6 +51,8 @@ flowchart TD
     ecs -->|"HTTPS — temp files"| s3["Amazon S3\n(your bucket, TTL = request duration)"]
     ecs -->|"HTTPS — metadata only"| cw["Amazon CloudWatch\n(no prompt content by default)"]
     ecs -.->|"HTTPS — when used"| ai["Polly / Transcribe\nComprehend / Translate"]
+    ecs -.->|"when a client passes a public\nfile URL (SSRF-validated)"| web["Public web"]
+    bedrock -.->|"when a client requests\na web search tool"| web
 ```
 
 **What this means:**
@@ -59,14 +62,16 @@ flowchart TD
 - **Amazon S3** — temporary storage for multimodal inputs/outputs (images, audio, PDFs); files are deleted immediately after the request completes — see [S3 Data Storage](#s3-data-storage) for the lifecycle-policy failsafe
 - **Amazon CloudWatch** — receives structured request metadata (method, path, status, model, latency); prompt and response content are **never logged by default** (requires `LOG_REQUEST_PARAMS=true` to enable)
 - **Amazon Polly / Transcribe / Comprehend / Translate** — used only when audio or translation features are invoked; see [AI service opt-out](#aws-ai-service-improvement-opt-out) for data retention controls
+- **Public web** — reached two ways, both driven by the client: the gateway fetches a file the client referenced by `http(s)` URL (destination chosen by the caller, every hop validated against the SSRF guard, private and loopback ranges refused by default), or Bedrock performs a web search on the model's behalf when the client asks for that tool. Neither happens for requests that send inline data or S3 references and no web-search tool; see the outbound paths below
 
 stdapi.ai communicates with the seven AWS services above, all within the regions you configure, plus a handful of conditional AWS services enabled only by specific features: AWS SSM and Secrets Manager (API key storage, if configured), AWS STS (account ID lookup when the ECS task metadata endpoint is unavailable — credentials themselves come from the standard AWS credential chain), the AWS Price List API (only when `COST_TRACKING=true`), AWS Marketplace Metering (AWS Marketplace image only), `bedrock-agent-runtime` (Amazon Bedrock sessions backing `store=true` on the Responses and Chat Completions APIs, and the Rerank API), `bedrock-agent` (Bedrock Prompt Management, only when [`AWS_BEDROCK_ALLOW_PROMPT_ARN`](operations_configuration.md#bedrock-allow-prompt-arn) is enabled), and `bedrock-mantle` (the Amazon Bedrock Mantle endpoint serving OpenAI GPT, xAI Grok, Google Gemma and similar models, enabled by default via [`AWS_BEDROCK_MANTLE_ENABLED`](operations_configuration.md#bedrock-mantle-enabled)).
 
-The server initiates no third-party calls of its own: it contacts no external API, analytics service, or vendor endpoint on its own behalf. Only three outbound paths can leave AWS, all driven by your own configuration or your own clients:
+The server initiates no third-party calls of its own: it contacts no external API, analytics service, or vendor endpoint on its own behalf. Four outbound paths can leave AWS, each driven by your own configuration or your own clients:
 
 - **Remote URLs supplied by a client** — when a request references an input file by `http(s)` URL, the gateway downloads that URL as instructed. The destination is chosen by the caller, never by the server, and every connection (including redirect hops) is validated against [`SSRF_PROTECTION_BLOCK_PRIVATE_NETWORKS`](operations_configuration.md#ssrf-protection-block-private-networks), enabled by default. Clients that send inline data or S3 references never trigger any outbound fetch.
 - **OpenTelemetry trace export** — when [`OTEL_ENABLED`](operations_configuration.md#otel-enabled) is set to `true`, traces are exported in OTLP format to [`OTEL_EXPORTER_ENDPOINT`](operations_configuration.md#otel-exporter-endpoint), which defaults to a collector on localhost. Tracing is disabled by default, and the endpoint is yours to choose.
 - **An operator-overridden Mantle endpoint** — [`AWS_BEDROCK_MANTLE_ENDPOINT_URL`](operations_configuration.md#bedrock-mantle-endpoint-url) replaces the default `https://bedrock-mantle.{region}.api.aws` address. The override must use `https`, and a `{region}` placeholder is substituted when present, but its host is whatever you set; left unset, Mantle traffic stays on the AWS endpoint in your configured regions.
+- **Model-side web search** — when a client includes a web search tool in a request (Amazon Nova's `nova_grounding` system tool, or the native `web_search` tool on Claude models), Amazon Bedrock performs the search on the model's behalf and queries the public web with content derived from the prompt. The gateway issues no such request itself, and no call triggers it unless the client asks for the tool. Amazon Nova's code interpreter (`nova_code_interpreter`) likewise executes inside Bedrock, not in your container. See [Built-in Tool Pricing](operations_cost_management.md#built-in-tool-pricing) for how these invocations are metered, and [`AWS_BEDROCK_MODEL_REGION_RESTRICT`](operations_configuration.md#bedrock-model-region-restrict) to pin the models that offer them.
 
 ### Data in Transit
 
@@ -98,8 +103,8 @@ AWS gives you explicit control over whether your prompts and outputs are retaine
 | `provider_data_share` | AWS retains and shares your inference data with the model provider per their requirements. Required for access to certain models (see below).                                              |
 | `none`                | **Zero data retention (ZDR).** No request or response data is written to durable storage by AWS or shared with the model provider.                                                         |
 
-!!! info "Your retention policy is always respected"
-    If your account or project is configured for zero data retention (`data_retention_mode: none`) and you invoke a model that requires retention, Amazon Bedrock **blocks the request and returns an error** — you always control your retention policy.
+!!! info "Your retention policy takes precedence over model access"
+    If your account or project is configured for zero data retention (`data_retention_mode: none`) and you invoke a model that requires retention, Amazon Bedrock **blocks the request and returns an error** rather than retaining the data anyway.
 
 #### Zero Data Retention (ZDR) for High-Compliance Accounts
 
@@ -192,7 +197,7 @@ Amazon Polly, Transcribe, Comprehend, and Translate each run in an independently
 
     > *"When you opt out of content use by an AWS AI service, that service deletes all of the associated historical content that was shared with AWS before you set the option."*
 
-    You do not need to opt out for Amazon Bedrock — Bedrock never retains or uses prompts for training by design.
+    You do not need to opt out for Amazon Bedrock — Bedrock does not use prompts or completions to improve models, and does not share them with model providers unless you enable `provider_data_share`. Retention itself is governed separately by your [data retention mode](#data-retention-modes), and by the model-specific [abuse-detection](#abuse-detection) rules that apply to a small number of models.
 
 ---
 
@@ -325,7 +330,7 @@ Security Hub Foundational Security Best Practices control mapping, GuardDuty Run
 
 ## :material-gavel: US Law and Cloud Provider Obligations
 
-AWS is incorporated and headquartered in the United States. Regardless of where your data is stored, AWS as a legal entity is subject to US law — including statutes with explicit extraterritorial reach.
+AWS is incorporated and headquartered in the United States. Regardless of where your data is stored, AWS as a legal entity is subject to US law — including statutes with explicit extraterritorial reach. This section describes the statutes and the AWS commitments and technical controls that exist around them; it is not legal advice, and how these statutes apply to your data is a question for your own counsel.
 
 ### CLOUD Act
 
@@ -336,13 +341,13 @@ Key limits and AWS commitments ([AWS CLOUD Act page](https://aws.amazon.com/comp
 - **Challenge mechanism**: AWS can file a motion to quash or modify requests that would require violating another country's laws, and preserves this right contractually.
 - **Customer notification**: AWS's policy is to notify customers of government data requests unless prohibited by a court order (gag order).
 - **Zero cross-border content disclosures**: AWS publicly reports that it has not disclosed enterprise or government content stored outside the US to the US government since it began reporting this metric in 2020.
-- **Technical barrier**: The [AWS Nitro System](https://aws.amazon.com/ec2/nitro/) restricts all administrative access — including by AWS employees — validated by independent security audit (NCC Group). Combined with customer-managed encryption (see [FISA Section 702](#fisa-section-702) below), AWS may be technically unable to hand over intelligible data.
+- **Administrative access controls**: The [AWS Nitro System](https://aws.amazon.com/ec2/nitro/) restricts administrative access to customer workloads — including by AWS employees — a design validated by independent security audit (NCC Group).
 
 ### FISA Section 702
 
 Section 702 of the **Foreign Intelligence Surveillance Act** authorizes US intelligence agencies to compel US-based electronic communication service providers to deliver communications of non-US persons located outside the United States — without a per-target warrant. This authority was reauthorized in April 2024 and has no provider challenge mechanism equivalent to the CLOUD Act.
 
-The primary technical countermeasure is **customer-managed encryption (CMK)**: if AWS cannot decrypt the data, intelligible content cannot be produced. This is distinct from contractual protections, which cannot override applicable US law.
+The encryption controls described on this page apply here as they do everywhere else: data stored by stdapi.ai is encrypted with a **customer-managed KMS key (CMK)** whose policy and grants you control, and whose usage is visible to you in CloudTrail (see [KMS Encryption](#kms-encryption)). Contractual protections, likewise, cannot override applicable US law. Whether a given combination of controls satisfies your obligations is a legal assessment to make with your own counsel.
 
 ### Transfer Frameworks
 
@@ -352,18 +357,18 @@ AWS also incorporates **Standard Contractual Clauses (SCCs)** into its Data Proc
 
 **APAC and other regions.** There is no unified bilateral transfer framework equivalent to the EU-US DPF for APAC jurisdictions. Enterprises typically rely on AWS contractual commitments, customer-managed encryption, and jurisdiction-specific legal analysis. AWS maintains local certifications (IRAP for Australia, ISMAP for Japan, K-ISMS for South Korea, MTCS for Singapore) relevant to respective regulatory environments.
 
-!!! info "Strongest available posture"
-    Deploy in AWS regions within your target geography + customer-managed KMS keys (so AWS cannot technically access plaintext) + SCCs as a transfer mechanism independent of DPF validity. This combination provides both contractual and technical protections against third-party access.
+!!! info "Recommended posture"
+    Deploy in AWS regions within your target geography, encrypt stored data with customer-managed KMS keys whose policy you control, and maintain SCCs as a transfer mechanism independent of DPF validity. This combines a residency control, an encryption control and a contractual transfer mechanism; assess with your own counsel whether it meets your obligations.
 
 ---
 
 ## :material-lightbulb-outline: Best Practices for High-Compliance Deployments
 
 - :material-check: **Restrict all region settings to compliant regions** — `AWS_BEDROCK_REGIONS` is the primary control; all services default to it, and any optional per-service override must stay within your target geography.
-- :material-check: **Set `AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL=false`** — stdapi.ai will then automatically use geography-pinned inference profiles (`us.*`, `eu.*`, `apac.*`), ensuring cross-region failover never leaves the named geography.
+- :material-check: **Set `AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL=false`** — stdapi.ai will then use geography-pinned inference profiles (`us.*`, `eu.*`, `apac.*`), whose destination region list AWS commits to keeping within the named geography.
 - :material-check: **Opt out of AWS AI service improvement** via an AWS Organizations policy — one-time console action covering Polly, Transcribe, Comprehend, and Translate.
-- :material-check: **Use a CMK with a restrictive key policy** — the Terraform module creates one by default; see [FISA Section 702](#fisa-section-702) for why this is the primary technical countermeasure against CLOUD Act and FISA 702 demands. For stricter control: bring your own key, limit decrypt to the ECS task role, enable automatic rotation, crypto-shredding for right-to-erasure, or a CloudHSM-backed store for FIPS 140-3 Level 3.
-- :material-check: **Confirm `LOG_REQUEST_PARAMS` is disabled** (the default) in production — prompt and response content will then never appear in application logs. If Bedrock invocation logging is enabled for audit purposes, configure a KMS CMK for the S3 or CloudWatch destination.
+- :material-check: **Use a CMK with a restrictive key policy** — the Terraform module creates one by default, so the key policy, its grants and its CloudTrail usage records are yours to control. For stricter control: bring your own key, limit decrypt to the ECS task role, enable automatic rotation, crypto-shredding for right-to-erasure, or a CloudHSM-backed store for FIPS 140-3 Level 3.
+- :material-check: **Confirm `LOG_REQUEST_PARAMS` is disabled** (the default) in production — prompt and response content are then kept out of application logs entirely. If Bedrock invocation logging is enabled for audit purposes, configure a KMS CMK for the S3 or CloudWatch destination.
 - :material-check: **Use AWS PrivateLink** for Bedrock and S3 to keep service calls off the public internet, and **enable TLS 1.3 on the ALB** to activate post-quantum hybrid key exchange.
 - :material-check: **Enable AWS CloudTrail** in all configured regions to monitor API activity across Bedrock, S3, KMS, and AI services.
 - :material-check: **Enable AWS Security Hub and GuardDuty** on the account — deploy via the Terraform module and set `compliance_vpc_endpoints_enabled=true`, `guardduty_vpc_endpoint_enabled=true`, and `dns_firewall_enabled=true` (dedicated VPC only) to close the remaining FSBP gaps, support GuardDuty Runtime Monitoring, and block DNS resolution of known-malicious domains. See [AWS Security Hub, GuardDuty & DNS Firewall Integration](operations_authentication_security.md#aws-security-hub-guardduty-dns-firewall-integration).
@@ -392,17 +397,17 @@ Amazon Bedrock carries **SOC 1/2/3**, **PCI-DSS**, and **GDPR** certifications. 
 
 stdapi.ai itself does not process or store payment card data. Your PCI-DSS scoping decision is determined by what data your application sends to the gateway — not by the gateway itself.
 
-For concerns about cross-border data access under US law (CLOUD Act, FISA 702) — including why a Customer Managed KMS key (created by default in the Terraform module) is the primary technical countermeasure — see [US Law and Cloud Provider Obligations](#us-law-and-cloud-provider-obligations).
+For the legal context around cross-border data access under US law (CLOUD Act, FISA 702), the AWS commitments that apply, and the region and encryption controls available to you, see [US Law and Cloud Provider Obligations](#us-law-and-cloud-provider-obligations).
 
 ### :material-office-building: Government / Public Sector (FedRAMP)
 
 Amazon Bedrock has received **FedRAMP Moderate and High authorization**. See the [AWS FedRAMP page](https://aws.amazon.com/compliance/fedramp/) and the [FedRAMP Marketplace](https://marketplace.fedramp.gov/) for current authorization status.
 
-Restrict `AWS_BEDROCK_REGIONS` to US regions and set `AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL=false` to ensure inference never leaves US geography.
+Restrict `AWS_BEDROCK_REGIONS` to US regions and set `AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL=false` so that inference is served only from US regions and US geography-pinned inference profiles.
 
 ### :material-briefcase: Legal & Professional Services
 
-Attorneys, consultants, accountants, and other professionals bound by confidentiality obligations cannot transmit client materials to third-party AI services. stdapi.ai processes all inference within your own AWS infrastructure — the gateway never sends client data to an endpoint of its own choosing, and with the defaults it never leaves your account (the few outbound paths that can exist are yours to configure; see [Application Data Flow](#application-data-flow)). This makes it the appropriate choice for AI-assisted document review, contract analysis, and research where client confidentiality is non-negotiable.
+Attorneys, consultants, accountants, and other professionals bound by confidentiality obligations cannot transmit client materials to third-party AI services. stdapi.ai runs inference on the AWS services and regions you enable — no third party sits between your users and your models, and the gateway contacts no vendor endpoint of its own choosing. The outbound paths that can exist are driven by your configuration or your own clients; see [Application Data Flow](#application-data-flow). This makes it a workable basis for AI-assisted document review, contract analysis, and research where client confidentiality is non-negotiable.
 
 ---
 
@@ -413,5 +418,6 @@ Attorneys, consultants, accountants, and other professionals bound by confidenti
 - :material-server-network: [**Advanced Deployment**](operations_deploy_advanced.md) — Multi-region Terraform examples
 - :material-directions-fork: [**Resilience & Failover**](operations_resilience.md) — Multi-region routing and infrastructure resilience
 - :material-cog: [**Configuration Reference**](operations_configuration.md) — Complete list of environment variables
+- :material-email-outline: [**Contact**](contact.md) — Questions about the product's controls, configuration or licensing, and private offers. Assessing those controls against your obligations is a judgement for you and your own advisers
 
 </div>

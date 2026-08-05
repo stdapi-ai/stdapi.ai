@@ -1,7 +1,7 @@
 ---
 title: stdapi.ai - OpenAI, Anthropic & Cohere Compatible AI Gateway for Amazon Bedrock
-description: Run your favorite OpenAI, Anthropic, and Cohere-compatible apps on Amazon Bedrock. Access 100+ models including Claude, OpenAI GPT, xAI Grok, Amazon Nova for chat, video generation, and content moderation, with stored conversations, enterprise compliance, and pay-per-use pricing. 14-day free trial on AWS Marketplace.
-keywords: OpenAI API gateway, Anthropic API gateway, Cohere API gateway, AWS Bedrock API, OpenAI compatible API, Anthropic compatible API, Cohere compatible API, AWS AI gateway, OpenAI AWS integration, Anthropic AWS integration, enterprise AI API, AWS Bedrock integration, OpenAI alternative, Anthropic alternative, video generation API, content moderation API, private AI deployment, HIPAA compliant AI
+description: Run your favorite OpenAI, Anthropic, and Cohere-compatible apps on Amazon Bedrock. Access 100+ models including Claude, OpenAI GPT, xAI Grok, Amazon Nova for chat, images, video, audio, embeddings, and content moderation — in your own AWS account, at AWS rates with no markup. 14-day free trial on AWS Marketplace.
+keywords: OpenAI API gateway, Anthropic API gateway, Cohere API gateway, AWS Bedrock API, OpenAI compatible API, Anthropic compatible API, Cohere compatible API, AWS AI gateway, OpenAI AWS integration, Anthropic AWS integration, enterprise AI API, AWS Bedrock integration, OpenAI alternative, Anthropic alternative, multimodal AI API, multi-region AI gateway, video generation API, content moderation API, private AI deployment
 hide:
   - toc
   - navigation
@@ -11,9 +11,9 @@ hide:
 <div class="hero2" markdown>
 <div class="hero2__copy" markdown>
 
-# Your OpenAI &amp; Anthropic apps, running on AWS Bedrock.
+# Your OpenAI &amp; Anthropic apps on AWS. Not just chat.
 
-Change one line — the base URL. 100+ models — Claude, OpenAI GPT, DeepSeek, Nova — inside your own AWS account, at AWS Bedrock rates with zero markup. Works with Claude Code, OpenClaw, Open WebUI, n8n, and hundreds of other tools via the OpenAI, Anthropic, or Cohere SDK.
+An AI gateway you run in your own AWS account. Point Claude Code, Open WebUI, n8n, OpenClaw — or your own code — at it, and they reach 100+ models including Claude, OpenAI GPT, DeepSeek and Nova, at AWS Bedrock rates with zero markup. One line changes: the base URL.
 
 <div class="buttons" markdown>
 [Start 14-day free trial](operations_getting_started.md){ .md-button .md-button--primary }
@@ -24,14 +24,14 @@ Change one line — the base URL. 100+ models — Claude, OpenAI GPT, DeepSeek, 
 <span><strong>AWS Qualified</strong> Software</span>
 <span><strong>$0.10</strong>/container-hour</span>
 <span><strong>0%</strong> markup on model usage</span>
-<span><strong>~1 ms</strong> added latency</span>
+<span><strong>&lt;1 ms</strong> gateway overhead</span>
 <span>Open-source Community Edition</span>
 </div>
 
 </div>
 <div class="hero2__code">
 <div class="code-card">
-<div class="code-card__title">app.py — the entire migration</div>
+<div class="code-card__title">app.py — the client-side change</div>
 <pre><code><span class="del">- client = OpenAI()</span>
 <span class="add">+ client = OpenAI(base_url=<span class="str">"https://ai.yourco.com/v1"</span>)</span>
 
@@ -50,9 +50,9 @@ response = client.chat.completions.create(
 <div class="carousel__panel" data-tab="Quota &amp; failover" markdown>
 <div class="carousel__kicker">FOR PRODUCTION WORKLOADS</div>
 
-## Bedrock throttling you? Multiply your quota across regions.
+## Bedrock throttling you? Add a region, add its quota.
 
-Every AWS region has its own independent Bedrock quota. stdapi.ai routes requests across the regions you enable and fails over automatically — on throttling, a regional outage, or a retired model. One throttled region never reaches your clients, and you never touch application code.
+Every AWS region has its own independent Bedrock quota. stdapi.ai routes requests across the regions you enable and retries eligible failures elsewhere — on throttling, a temporary regional outage, or a retired model. Routing happens in the gateway, so you never touch application code.
 
 <div class="panel-split" markdown>
 <div class="panel-visual">
@@ -60,19 +60,22 @@ Every AWS region has its own independent Bedrock quota. stdapi.ai routes request
 <div class="quota__gw"><img src="styles/logo.svg" alt="" width="1787" height="1953" decoding="async" /><div><strong>stdapi.ai</strong><br/><small>routing + failover</small></div></div>
 <div class="quota__arrows" aria-hidden="true"><span></span><span></span><span></span></div>
 <div class="quota__regions">
-<div class="quota__region"><span><strong>us-east-1</strong> · own quota</span><code>1× tokens/min</code></div>
-<div class="quota__region"><span><strong>us-west-2</strong> · own quota</span><code>2× tokens/min</code></div>
-<div class="quota__region"><span><strong>eu-west-1</strong> · own quota</span><code>3× tokens/min</code></div>
+<div class="quota__region"><span><strong>us-east-1</strong> · enabled</span><code>own quota</code></div>
+<div class="quota__region"><span><strong>us-west-2</strong> · enabled</span><code>own quota</code></div>
+<div class="quota__region"><span><strong>eu-west-1</strong> · enabled</span><code>own quota</code></div>
 </div>
 </div>
-<div class="panel-visual__caption">throttle on one region → transparent retry on the next — the client just gets its answer</div>
+<div class="panel-visual__caption">throttle on one region → eligible requests retry on the next</div>
 </div>
 <div class="panel-stats" markdown>
 
-- <code>n×</code> tokens/minute — each enabled region adds its full quota
-- <code>0</code> errors when a region throttles — requests reroute before clients notice
+- <code>+1</code> quota per region — every region you enable brings its own
+- <code>auto</code> retry in another enabled region on eligible throttling or outage
 - <code>0</code> code changes — routing happens in the gateway, not your app
 - <code>24/7</code> multi-AZ ECS Fargate deployment via the validated Terraform module
+
+Streaming responses can only retry before the stream opens, and asynchronous jobs stay in the region that accepted them.
+{ .panel-stats__note }
 
 [:octicons-arrow-right-24: Resilience &amp; failover documentation](operations_resilience.md)
 
@@ -83,9 +86,9 @@ Every AWS region has its own independent Bedrock quota. stdapi.ai routes request
 <div class="carousel__panel" data-tab="Beyond chat" markdown>
 <div class="carousel__kicker">FOR EVERY MODALITY</div>
 
-## One gateway, the entire API surface.
+## One gateway, every modality you're already calling.
 
-Most gateways stop at chat completions. stdapi.ai delivers the full OpenAI, Anthropic, and Cohere surface on AWS — chat with server-side stored conversations, embeddings, images, video, speech, transcription, moderation, reranking, and file storage.
+Most gateways stop at chat completions. stdapi.ai covers text, embeddings, images, video, speech, transcription, moderation, reranking, and file storage across the OpenAI, Anthropic, and Cohere protocols — with server-side stored conversations on chat.
 
 <div class="panel-split" markdown>
 <div class="panel-visual" markdown>
@@ -98,13 +101,13 @@ Most gateways stop at chat completions. stdapi.ai delivers the full OpenAI, Anth
 - :material-shield-check-outline: <span class="chip">/v1/moderations</span> <span class="chip">/v1/files</span>
 
 </div>
-<div class="panel-visual__caption">every parameter your SDK sends that AWS can honour — not just the common subset</div>
+<div class="panel-visual__caption">the parameters your SDK sends are honoured wherever AWS supports them — not just the common subset</div>
 </div>
 <div class="panel-stats" markdown>
 
 - <code>3</code> API protocols — OpenAI, Anthropic, and Cohere — from one deployment
 - <code>50+</code> endpoints — text, images, video, audio, embeddings, moderation, files
-- <code>0</code> plugins or client changes — standard SDKs and tools connect instantly
+- <code>0</code> plugins — standard SDKs connect on the base URL alone
 
 [:octicons-arrow-right-24: API overview](api_overview.md)
 
@@ -143,6 +146,9 @@ Agents need no HTTP glue code. stdapi.ai publishes its whole API surface over th
 - <code>0</code> HTTP client code — agents call every endpoint directly
 - <code>auto</code> discovery — agents find every tool through the server card and API catalog
 
+This exposes the gateway's own AI and media APIs over MCP; it is not an aggregator for third-party MCP servers.
+{ .panel-stats__note }
+
 [:octicons-arrow-right-24: MCP &amp; agent capabilities](features.md#mcp-model-context-protocol)
 
 </div>
@@ -154,7 +160,7 @@ Agents need no HTTP glue code. stdapi.ai publishes its whole API surface over th
 
 ## 100+ models — including OpenAI GPT and Anthropic Claude.
 
-The full Bedrock catalog plus Bedrock Mantle models, discovered automatically across your regions. Every text API works with every model, and retired models transparently redirect to their replacement — your apps never break.
+Bedrock, Bedrock Mantle, Polly, Transcribe and Comprehend all surface as models in one catalog, detected automatically at startup. On a shared endpoint they interchange by name — swapping a Polly voice for a Bedrock speech model is a one-word change, and nothing needs writing or maintaining as AWS adds and retires models. All four text APIs work with every discovered model, and retired model IDs can redirect to their supported successor instead of failing.
 
 <div class="panel-split" markdown>
 <div class="panel-visual">
@@ -184,9 +190,9 @@ The full Bedrock catalog plus Bedrock Mantle models, discovered automatically ac
 </div>
 <div class="panel-stats" markdown>
 
-- <code>100+</code> models across 10+ providers, auto-discovered at startup
+- <code>0</code> configuration — one catalog spanning Bedrock, Mantle, Polly, Transcribe and Comprehend
+- <code>100+</code> models across 10+ providers in a typical multi-region catalog
 - <code>4</code> text APIs on every model — passthrough or converted automatically
-- <code>0</code> breaking changes when a model retires — automatic fallback to its successor
 
 </div>
 </div>
@@ -195,22 +201,22 @@ The full Bedrock catalog plus Bedrock Mantle models, discovered automatically ac
 <div class="carousel__panel" data-tab="AWS native" markdown>
 <div class="carousel__kicker">FOR AWS-NATIVE TEAMS</div>
 
-## Every AWS capability, zero custom code.
+## Deep AWS features, zero custom code.
 
-Built for AWS, not around it — every Bedrock-native feature is exposed through standard OpenAI and Anthropic parameters, with AWS AI services and S3 woven into the same API.
+Built for AWS, not around it — Bedrock-native capabilities are exposed through standard OpenAI and Anthropic parameters, with AWS AI services and S3 woven into the same API.
 
 <div class="panel-split" markdown>
 <div class="panel-visual">
 <div class="chips">
-<span class="chip">Full S3 integration</span>
+<span class="chip">Amazon S3 inputs &amp; outputs</span>
 <span class="chip">Prompt caching</span>
-<span class="chip">Extended thinking</span>
-<span class="chip">Guardrails</span>
+<span class="chip">Reasoning</span>
+<span class="chip">Bedrock Guardrails</span>
 <span class="chip">Service tiers</span>
 <span class="chip">Inference profiles</span>
 <span class="chip">Prompt routers</span>
-<span class="chip">Cross-region inference</span>
-<span class="chip">Nova web grounding</span>
+<span class="chip">Geographic routing</span>
+<span class="chip">Web grounding</span>
 <span class="chip">Code interpreter</span>
 <span class="chip">SSML speech</span>
 <span class="chip">Speaker diarization</span>
@@ -241,9 +247,9 @@ Built for AWS, not around it — every Bedrock-native feature is exposed through
 <div class="carousel__panel" data-tab="Cost control" markdown>
 <div class="carousel__kicker">FOR BUDGET OWNERS</div>
 
-## Pay AWS rates. See the cost of every request.
+## Pay AWS rates. Track what every request costs.
 
-No subscriptions, no minimums, no markup on model usage. Built-in cost tracking prices every call from AWS's own Price List — serving region, service tier, cached tokens, and long-context rates included.
+No subscriptions, no minimums, no markup on model usage. Optional built-in cost tracking prices each call from AWS's own Price List — serving region, service tier, cached tokens, and long-context rates included.
 
 <div class="panel-split" markdown>
 <div class="panel-visual panel-visual--mono">
@@ -252,14 +258,14 @@ No subscriptions, no minimums, no markup on model usage. Built-in cost tracking 
 <div class="receipt__row"><span>model</span><span>claude-fable-5</span></div>
 <div class="receipt__row"><span>region · tier</span><span>eu-west-1 · priority</span></div>
 <div class="receipt__row"><span>tokens</span><span>in 12,410 (9,800 cached) · out 642</span></div>
-<div class="receipt__row receipt__row--total"><span>cost</span><span class="amount">$0.048231 USD</span></div>
+<div class="receipt__row receipt__row--total"><span>estimated cost</span><span class="amount">$0.048231 USD</span></div>
 </div>
 </div>
 <div class="panel-stats" markdown>
 
 - <code>0%</code> markup on model usage — Bedrock billed by AWS directly
 - <code>live</code> rates from the AWS Price List catalog — fetched from AWS, not hand-maintained
-- <code>1:1</code> per-request and per-user cost attribution across all endpoints
+- <code>1:1</code> per-request and per-user cost attribution — estimated from published AWS prices, not read back from your invoice
 
 [:octicons-arrow-right-24: Cost management documentation](operations_cost_management.md)
 
@@ -285,8 +291,8 @@ The validated Terraform module ships the whole stack — ECS Fargate, HTTPS, aut
 </div>
 <div class="panel-stats" markdown>
 
-- <code>5min</code> from AWS Marketplace subscription to a production endpoint
-- <code>0</code> required configuration — secure, IP-restricted, FSBP-aligned defaults
+- <code>2</code> commands from AWS Marketplace subscription to a production endpoint
+- <code>FSBP</code> aligned defaults out of the box — private subnets, least privilege, encryption at rest
 - <code>100+</code> optional variables for power users — bring your own VPC, go multi-region, or cost-optimize
 
 [:octicons-arrow-right-24: Deploy on AWS guide](operations_getting_started.md)
@@ -303,110 +309,110 @@ Prefer hands-off? A [managed deployment service](https://aws.amazon.com/marketpl
 
 <div class="logo-marquee logo-marquee--slim" role="group" aria-label="Top models and AWS AI services">
   <div class="logo-track">
-    <a class="logo-item" href="https://aws.amazon.com/ai/generative-ai/" target="_blank" rel="noopener" title="Amazon Generative AI" aria-label="Amazon Generative AI">
+    <div class="logo-item" title="Amazon Generative AI">
       <img src="styles/logo_amazon.svg" alt="Amazon Generative AI logo" width="40" height="40" decoding="async" />
       <span>Amazon AI</span>
-    </a>
-    <a class="logo-item" href="https://aws.amazon.com/bedrock/" target="_blank" rel="noopener" title="Amazon Bedrock" aria-label="Amazon Bedrock">
+    </div>
+    <div class="logo-item" title="Amazon Bedrock">
       <img src="styles/logo_amazon_bedrock.svg" alt="Amazon Bedrock logo" width="80" height="80" decoding="async" />
       <span>Amazon Bedrock</span>
-    </a>
-    <a class="logo-item" href="https://claude.ai" target="_blank" rel="noopener" title="Anthropic Claude" aria-label="Anthropic Claude">
+    </div>
+    <div class="logo-item" title="Anthropic Claude">
       <img src="styles/logo_anthropic_claude.svg" alt="Anthropic Claude logo" width="24" height="24" decoding="async" />
       <span>Claude</span>
-    </a>
-    <a class="logo-item" href="https://www.deepseek.com" target="_blank" rel="noopener" title="DeepSeek" aria-label="DeepSeek">
+    </div>
+    <div class="logo-item" title="DeepSeek">
       <img src="styles/logo_deepSeek.svg" alt="DeepSeek logo" width="25" height="19" decoding="async" />
       <span>DeepSeek</span>
-    </a>
-    <a class="logo-item" href="https://aws.amazon.com/polly/" target="_blank" rel="noopener" title="Amazon Polly" aria-label="Amazon Polly">
+    </div>
+    <div class="logo-item" title="Amazon Polly">
       <img src="styles/logo_amazon_polly.svg" alt="Amazon Polly logo" width="80" height="80" decoding="async" />
       <span>Amazon Polly</span>
-    </a>
-    <a class="logo-item" href="https://ai.meta.com/llama/" target="_blank" rel="noopener" title="Meta Llama" aria-label="Meta Llama">
+    </div>
+    <div class="logo-item" title="Meta Llama">
       <img src="styles/logo_meta.svg" alt="Meta logo" width="25" height="17" decoding="async" />
       <span>Meta Llama</span>
-    </a>
-    <a class="logo-item" href="https://www.nvidia.com/en-us/ai/" target="_blank" rel="noopener" title="Nvidia" aria-label="Nvidia">
+    </div>
+    <div class="logo-item" title="Nvidia">
       <img src="styles/logo_nvidia.svg" alt="Nvidia logo" width="23" height="16" decoding="async" />
       <span>Nvidia</span>
-    </a>
-    <a class="logo-item" href="https://qwen.ai" target="_blank" rel="noopener" title="Qwen" aria-label="Qwen">
+    </div>
+    <div class="logo-item" title="Qwen">
       <img src="styles/logo_qwen.svg" alt="Qwen logo" width="153" height="151" decoding="async" />
       <span>Qwen</span>
-    </a>
-    <a class="logo-item" href="https://openai.com" target="_blank" rel="noopener" title="OpenAI GPT" aria-label="OpenAI GPT">
+    </div>
+    <div class="logo-item" title="OpenAI GPT">
       <img src="styles/logo_openai.svg" alt="OpenAI logo" width="503" height="499" decoding="async" />
       <span>OpenAI GPT</span>
-    </a>
-    <a class="logo-item" href="https://x.ai" target="_blank" rel="noopener" title="xAI Grok" aria-label="xAI Grok">
+    </div>
+    <div class="logo-item" title="xAI Grok">
       <img src="styles/logo_xai.svg" alt="xAI logo" width="21" height="23" decoding="async" />
       <span>xAI Grok</span>
-    </a>
-    <a class="logo-item" href="https://www.moonshot.ai/" target="_blank" rel="noopener" title="Moonshot AI" aria-label="Moonshot AI">
+    </div>
+    <div class="logo-item" title="Moonshot AI">
       <img src="styles/logo_moonshot.svg" alt="Moonshot AI logo" width="25" height="25" decoding="async" />
       <span>Moonshot AI</span>
-    </a>
-    <a class="logo-item" href="https://aws.amazon.com/translate/" target="_blank" rel="noopener" title="Amazon Translate" aria-label="Amazon Translate">
+    </div>
+    <div class="logo-item" title="Amazon Translate">
       <img src="styles/logo_amazon_translate.svg" alt="Amazon Translate logo" width="80" height="80" decoding="async" />
       <span>Amazon Translate</span>
-    </a>
-    <a class="logo-item" href="https://mistral.ai" target="_blank" rel="noopener" title="Mistral AI" aria-label="Mistral AI">
+    </div>
+    <div class="logo-item" title="Mistral AI">
       <img src="styles/logo_mistralai.svg" alt="Mistral AI logo" width="191" height="135" decoding="async" />
       <span>Mistral AI</span>
-    </a>
-    <a class="logo-item" href="https://cohere.com" target="_blank" rel="noopener" title="Cohere" aria-label="Cohere">
+    </div>
+    <div class="logo-item" title="Cohere">
       <img src="styles/logo_cohere.svg" alt="Cohere logo" width="78" height="78" decoding="async" />
       <span>Cohere</span>
-    </a>
-    <a class="logo-item" href="https://stability.ai" target="_blank" rel="noopener" title="Stability AI" aria-label="Stability AI">
+    </div>
+    <div class="logo-item" title="Stability AI">
       <img src="styles/logo_stabilityai.svg" alt="Stability AI logo" width="103" height="86" decoding="async" />
       <span>Stability AI</span>
-    </a>
-    <a class="logo-item" href="https://www.minimax.io/" target="_blank" rel="noopener" title="Minimax" aria-label="Minimax">
+    </div>
+    <div class="logo-item" title="Minimax">
       <img src="styles/logo_minimax.svg" alt="Minimax logo" width="25" height="21" decoding="async" />
       <span>Minimax</span>
-    </a>
-    <a class="logo-item" href="https://aws.amazon.com/transcribe/" target="_blank" rel="noopener" title="Amazon Transcribe" aria-label="Amazon Transcribe">
+    </div>
+    <div class="logo-item" title="Amazon Transcribe">
       <img src="styles/logo_amazon_transcribe.svg" alt="Amazon Transcribe logo" width="80" height="80" decoding="async" />
       <span>Amazon Transcribe</span>
-    </a>
-    <a class="logo-item" href="https://www.ai21.com" target="_blank" rel="noopener" title="AI21 Labs" aria-label="AI21 Labs">
+    </div>
+    <div class="logo-item" title="AI21 Labs">
       <img src="styles/logo_ai21.svg" alt="AI21 Labs logo" width="38" height="36" decoding="async" />
       <span>AI21 Labs</span>
-    </a>
-    <a class="logo-item" href="https://www.anthropic.com" target="_blank" rel="noopener" title="Anthropic" aria-label="Anthropic">
+    </div>
+    <div class="logo-item" title="Anthropic">
       <img src="styles/logo_anthropic.svg" alt="Anthropic logo" width="24" height="24" decoding="async" />
       <span>Anthropic</span>
-    </a>
-    <a class="logo-item" href="https://z.ai" target="_blank" rel="noopener" title="Z.ai" aria-label="Z.ai">
+    </div>
+    <div class="logo-item" title="Z.ai">
       <img src="styles/logo_zai.svg" alt="Z.ai logo" width="30" height="30" decoding="async" />
       <span>Z.ai</span>
-    </a>
-    <a class="logo-item" href="https://aws.amazon.com/bedrock/nova/" target="_blank" rel="noopener" title="Amazon Nova" aria-label="Amazon Nova">
+    </div>
+    <div class="logo-item" title="Amazon Nova">
       <img src="styles/logo_amazon_nova.svg" alt="Amazon Nova logo" width="80" height="80" decoding="async" />
       <span>Amazon Nova</span>
-    </a>
-    <a class="logo-item" href="https://ai.google/" target="_blank" rel="noopener" title="Google Gemma" aria-label="Google Gemma">
+    </div>
+    <div class="logo-item" title="Google Gemma">
       <img src="styles/logo_google.svg" alt="Google logo" width="23" height="23" decoding="async" />
       <span>Google Gemma</span>
-    </a>
-    <a class="logo-item" href="https://luma.ai" target="_blank" rel="noopener" title="Luma AI" aria-label="Luma AI">
+    </div>
+    <div class="logo-item" title="Luma AI">
       <img src="styles/logo_luma.svg" alt="Luma AI logo" width="24" height="24" decoding="async" />
       <span>Luma AI</span>
-    </a>
-    <a class="logo-item" href="https://www.twelvelabs.io" target="_blank" rel="noopener" title="Twelve Labs" aria-label="Twelve Labs">
+    </div>
+    <div class="logo-item" title="Twelve Labs">
       <img src="styles/logo_twelvelabs.svg" alt="Twelve Labs logo" width="600" height="600" decoding="async" />
       <span>Twelve Labs</span>
-    </a>
-    <a class="logo-item" href="https://aws.amazon.com/comprehend/" target="_blank" rel="noopener" title="Amazon Comprehend" aria-label="Amazon Comprehend">
+    </div>
+    <div class="logo-item" title="Amazon Comprehend">
       <img src="styles/logo_amazon_comprehend.svg" alt="Amazon Comprehend logo" width="80" height="80" decoding="async" />
       <span>Amazon Comprehend</span>
-    </a>
-    <a class="logo-item" href="https://writer.com" target="_blank" rel="noopener" title="Writer" aria-label="Writer">
+    </div>
+    <div class="logo-item" title="Writer">
       <img src="styles/logo_writer.svg" alt="Writer logo" width="40" height="40" decoding="async" />
       <span>Writer</span>
-    </a>
+    </div>
   </div>
 </div>
 
@@ -414,27 +420,27 @@ Prefer hands-off? A [managed deployment service](https://aws.amazon.com/marketpl
 <div class="band band--plain" markdown>
 <div class="carousel__kicker">FOR REGULATED WORKLOADS</div>
 
-## Your data never leaves your AWS account.
+## No third party sits between your users and your models.
 
-Unlike SaaS gateways, stdapi.ai is infrastructure you run: no third party ever sits between your users and your models.
+Unlike SaaS gateways, stdapi.ai is infrastructure you run. There is no vendor endpoint in the request path — your traffic goes from your application to your own deployment to AWS.
 
 <div class="grid cards" markdown>
 
-- :material-shield-lock: __Data sovereignty by design__
-  <br>All inference inside your AWS account. Never shared with model providers, never used for training.
+- :material-shield-lock: __Runs in your account__
+  <br>Inference stays on the AWS services you enable. Bedrock does not share your prompts with model providers or use them for training.
 
 - :material-earth: __Region allow-lists__
-  <br>Pin workloads to approved regions for GDPR, HIPAA, and FedRAMP requirements.
+  <br>Pin workloads to approved regions, disable global routing, or use geography-pinned inference profiles where supported.
 
 - :material-key: __Customer-managed encryption__
-  <br>CMK encryption mitigates CLOUD Act and FISA 702 exposure for regulated data.
+  <br>Bring your own KMS key for data at rest, with prompt and response bodies unlogged unless you enable it.
 
 - :material-shield-star: __Security Hub aligned__
   <br>Terraform module built against AWS FSBP controls; GuardDuty and DNS Firewall opt-ins close the gaps.
 
 </div>
 
-Legal, healthcare (HIPAA), EU sovereignty (GDPR), FedRAMP — [:octicons-arrow-right-24: Data Sovereignty &amp; Compliance guide](operations_compliance.md)
+AWS compliance certifications apply to the AWS services and regions you choose — they are not inherited by stdapi.ai or by your application. [:octicons-arrow-right-24: Data sovereignty &amp; compliance guide](operations_compliance.md)
 { .band__note }
 
 <div class="qualified-card">
@@ -447,7 +453,7 @@ Legal, healthcare (HIPAA), EU sovereignty (GDPR), FedRAMP — [:octicons-arrow-r
 <!-- How it compares -->
 ## How it compares
 
-All four expose an OpenAI-compatible API in front of Amazon Bedrock — the coverage differs.
+All four expose an OpenAI-compatible API in front of Amazon Bedrock — the coverage differs. stdapi.ai is AWS-only, and therefore AWS-deep: if you need multi-cloud routing or per-key spend budgets, LiteLLM is the better fit. Competitor capabilities verified against official sources on 5 August 2026.
 
 <div class="compare" role="region" aria-label="Feature comparison" tabindex="0" markdown>
 
@@ -455,14 +461,20 @@ All four expose an OpenAI-compatible API in front of Amazon Bedrock — the cove
 | ------------------------------------------------------------------------------------------- | ------------------------ | --------------------------- | --------------------------- | --------------------------- |
 | Full multi-modal API — images, video, audio, files                                            | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | OpenAI + Anthropic + Cohere protocols                                                         | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> |
-| Multi-region quota multiplication                                                             | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
-| Automatic failover — throttling, region outages, retired models                               | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
+| Multi-region capacity — combine independent regional quotas                                   | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
+| Regional retry — throttling, region outages, retired models                                   | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
+| Zero-config model discovery — every region, Bedrock + Mantle                                  | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> |
 | AWS AI services &amp; advanced Bedrock features — Polly, Transcribe, guardrails, service tiers | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> |
-| Integrated MCP server                                                                         | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
-| Real-time cost tracking &amp; observability                                                   | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
-| Production deployment — Terraform, WAF, auto-scaling                                          | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> |
+| Own AI &amp; media APIs exposed as MCP tools                                                  | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
+| Multi-provider routing beyond AWS                                                             | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
+| Spend limits enforced at request time                                                         | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
+| Per-request cost tracking &amp; observability                                                 | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> |
+| Production AWS deployment — Terraform, auto-scaling, optional WAF                             | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> |
 
 </div>
+
+MCP is not a like-for-like row: stdapi.ai exposes its own AI and media endpoints as tools, while LiteLLM gateways external MCP servers — related capabilities that solve different problems.
+{ .compare__legend }
 
 <div class="compare__legend" markdown>
 <span class="m-y" aria-hidden="true">✓</span> full &nbsp; <span class="m-p" aria-hidden="true">◐</span> partial / manual setup &nbsp; <span class="m-n" aria-hidden="true">—</span> not available &nbsp;·&nbsp; [Full comparison](features.md#how-stdapiai-compares)
@@ -473,9 +485,9 @@ All four expose an OpenAI-compatible API in front of Amazon Bedrock — the cove
 </div>
 
 <!-- What teams run on it -->
-## What teams run on it
+## Verified against the tools teams already use
 
-Every integration is the same three steps: deploy, copy your endpoint URL, paste it into the tool's settings. There is no step four.
+Every integration is the same three steps: deploy, copy your endpoint URL, paste it into the tool's settings. There is no step four. The tools in **bold** are driven end to end by an automated suite against a real deployment — not just documented.
 
 <div class="usecases" markdown>
 
@@ -483,7 +495,7 @@ Every integration is the same three steps: deploy, copy your endpoint URL, paste
 <div class="usecase__tag">PRIVATE CHATGPT</div>
 <div class="usecase__title">Enterprise chat</div>
 <div class="usecase__body">ChatGPT-style assistant for your organization — chat, voice, images, and RAG, with every conversation staying in your account.</div>
-<div class="usecase__tools">Open WebUI · LobeHub · LibreChat</div>
+<div class="usecase__tools"><strong>Open WebUI</strong> · <strong>wyoming-openai</strong> · LobeHub · LibreChat</div>
 [Open WebUI guide](use_cases_openwebui.md)
 </div>
 
@@ -491,7 +503,7 @@ Every integration is the same three steps: deploy, copy your endpoint URL, paste
 <div class="usecase__tag">CODING AGENTS</div>
 <div class="usecase__title">AI-assisted development</div>
 <div class="usecase__body">Frontier coding models in your IDE and terminal — without sending your codebase to a third-party AI cloud.</div>
-<div class="usecase__tools">Claude Code · Codex · OpenCode · Zed</div>
+<div class="usecase__tools"><strong>Claude Code</strong> · <strong>Codex</strong> · <strong>Qwen Code</strong> · <strong>pi</strong> · OpenCode · Zed</div>
 [Coding assistants guide](use_cases_coding_assistants.md)
 </div>
 
@@ -499,7 +511,7 @@ Every integration is the same three steps: deploy, copy your endpoint URL, paste
 <div class="usecase__tag">NO-CODE AUTOMATION</div>
 <div class="usecase__title">AI in business workflows</div>
 <div class="usecase__body">Add AI steps to business processes with visual workflow builders — classification, summarization, content generation.</div>
-<div class="usecase__tools">n8n · Dify · Langflow · Flowise</div>
+<div class="usecase__tools"><strong>n8n</strong> · <strong>Haystack</strong> · Dify · Langflow · Flowise</div>
 [n8n guide](use_cases_n8n.md)
 </div>
 
@@ -507,19 +519,67 @@ Every integration is the same three steps: deploy, copy your endpoint URL, paste
 <div class="usecase__tag">AUTONOMOUS AGENTS</div>
 <div class="usecase__title">Agents you control</div>
 <div class="usecase__body">Self-directed agents on infrastructure you own — with the built-in MCP server exposing every endpoint as an agent tool.</div>
-<div class="usecase__tools">OpenClaw · Hermes · LangGraph · CrewAI</div>
-[All use cases](use_cases.md)
+<div class="usecase__tools"><strong>OpenClaw</strong> · <strong>Hermes</strong> · <strong>LangChain</strong> · <strong>Pydantic AI</strong> · LangGraph · CrewAI</div>
+[Autonomous agents guide](use_cases_autonomous_agents.md)
+</div>
+
+<div class="usecase" markdown>
+<div class="usecase__tag">VOICE &amp; AUDIO</div>
+<div class="usecase__title">Speech in, speech out</div>
+<div class="usecase__body">Voice agents, transcription with speaker diarization, and subtitles — on Amazon Polly and Transcribe, without a second AI vendor.</div>
+<div class="usecase__tools"><strong>wyoming-openai</strong> · Home Assistant · Pipecat · LiveKit Agents</div>
+[Home Assistant voice guide](use_cases_home_assistant.md)
+</div>
+
+<div class="usecase" markdown>
+<div class="usecase__tag">RAG &amp; SEARCH</div>
+<div class="usecase__title">Answers grounded in your data</div>
+<div class="usecase__body">Two-stage retrieval through one deployment — Bedrock embeddings, then Cohere-compatible reranking, with any vector database.</div>
+<div class="usecase__tools"><strong>Haystack</strong> · LlamaIndex · RAGFlow · LightRAG</div>
+[RAG pipelines guide](use_cases_rag.md)
 </div>
 
 </div>
 
-[:octicons-arrow-right-24: Use cases &amp; integration guides](use_cases.md)
+Media generation, knowledge management and team chatbots are covered too. [:octicons-arrow-right-24: All use cases &amp; integration guides](use_cases.md)
 { .usecases__more }
+
+<!-- Compatibility evidence -->
+<div class="band band--plain" markdown>
+<div class="carousel__kicker">PUBLIC ENGINEERING EVIDENCE</div>
+
+## Compatibility you can inspect
+
+&ldquo;Compatible&rdquo; should mean more than one successful chat request. The test suite is public, and the same test bodies also run against the real OpenAI, Anthropic, and Cohere endpoints — so compatibility is measured against the originals, not asserted.
+
+<div class="grid cards" markdown>
+
+- :material-test-tube: __5,000+ test cases__
+  <br>Run against real AWS services rather than mocks.
+
+- :material-account-check: __12 client &amp; framework suites__
+  <br>Real CLIs, apps, and libraries driven end to end against a live deployment.
+
+- :material-brain: __100 model-probe records__
+  <br>Committed observations of what each model actually accepts and rejects.
+
+- :material-robot: __53 MCP API tools__
+  <br>Every exposed tool called end to end through the official MCP client.
+
+</div>
+
+Offline CI runs on every push and pull request with an enforced coverage floor. The live-AWS, vendor cross-validation, and client suites run on demand against a real deployment.
+{ .band__note }
+
+[:octicons-arrow-right-24: Inspect the public test suite](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests) &nbsp;·&nbsp; [what each client suite exercises](https://github.com/stdapi-ai/stdapi.ai/blob/main/tests/agentic/README.md)
+{ .band__note }
+
+</div>
 
 <!-- Pricing — the closing conversion moment -->
 ## Transparent pricing
 
-Start local, graduate to AWS — same API, your application code never changes. And zero lock-in: leaving is the same one-line base-URL change that got you in.
+Start local, graduate to AWS — same API, same SDKs. And zero lock-in: leaving is the same one-line base-URL change that got you in.
 
 <div class="pricing">
 <div class="pricing__col">
@@ -532,13 +592,13 @@ Start local, graduate to AWS — same API, your application code never changes. 
 <div class="pricing__flag">14-DAY FREE TRIAL</div>
 <div class="pricing__tier">Commercial · AWS Marketplace</div>
 <div class="pricing__price">$0.10 <small>/container-hour</small></div>
-<p>No markup on model usage — pay Bedrock rates directly. Hardened container, Terraform module, commercial support (1 business day), no AGPL obligations, AWS billing.</p>
+<p>Per running container — the Terraform module defaults to one per Availability Zone. No markup on model usage: pay Bedrock rates directly. Hardened container, Terraform module, commercial support (1 business day), no AGPL obligations. Billed through AWS Marketplace onto your existing AWS invoice — no new vendor onboarding.</p>
 <p><a class="md-button md-button--primary" href="operations_getting_started/">Start 14-day free trial</a></p>
 </div>
 <div class="pricing__col pricing__col--offer">
-<div class="pricing__tier pricing__tier--accent">Private offer · save 10%</div>
+<div class="pricing__tier pricing__tier--accent">Private offer · buy on your terms</div>
 <div class="pricing__price">$0.09 <small>/container-hour</small></div>
-<p>Same pay-per-use model, no minimums. Want to try first? Use the free trial, then accept your offer. Send your AWS account ID — we'll set it up directly.</p>
+<p>Custom terms and duration, committed usage, and a preferential rate — procured through your existing AWS relationship, so there's no new vendor to onboard. Want to try first? Use the free trial, then accept your offer.</p>
 <p><a class="md-button" href="contact/#private-offer">Request a private offer</a></p>
 </div>
 </div>

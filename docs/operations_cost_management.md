@@ -1,6 +1,6 @@
 ---
 title: Cost Management - Amazon Bedrock Gateway Spend, Pricing & Attribution
-description: Understand and control what stdapi.ai costs — AWS Marketplace vs AWS-billed models and credit eligibility, infrastructure and license cost, real-time cost tracking, and per-user cost attribution.
+description: Understand and control what stdapi.ai costs — AWS Marketplace vs AWS-billed models and credit eligibility, infrastructure and license cost, per-request cost estimation from published AWS prices, and per-user cost attribution.
 keywords: AWS Bedrock cost, AI gateway pricing, AWS Marketplace billing, AWS credits, Bedrock cost tracking, cost attribution, FinOps AWS AI, LLM cost management
 ---
 
@@ -22,7 +22,7 @@ stdapi.ai **adds no markup**: model usage is billed to you by AWS at the same ra
 
 ## :material-tag-search: Knowing the Price Before You Call
 
-The [Model Pricing API](api_model_pricing.md) (`GET /model_pricing`) exposes the exact AWS unit prices stdapi.ai resolved for each model, from the same catalog it uses to compute costs. Use it for cost-aware model selection — comparing candidates before routing traffic, rather than discovering the rate afterwards in the logs.
+The [Model Pricing API](api_model_pricing.md) (`GET /model_pricing`) exposes the AWS unit prices stdapi.ai resolved for each model, from the same published-price catalog it uses to estimate costs. Use it for cost-aware model selection — comparing candidates before routing traffic, rather than discovering the rate afterwards in the logs.
 
 ---
 
@@ -62,9 +62,9 @@ The split follows the model **provider**, not the API you call. Per AWS, models 
 
 ---
 
-## :material-currency-usd: Cost Tracking (Real-Time AWS Pricing)
+## :material-currency-usd: Cost Tracking (Estimated from Published AWS Prices) { #cost-tracking-real-time-aws-pricing }
 
-When `COST_TRACKING=true` is enabled, stdapi.ai computes real-time costs from live AWS pricing. Costs are attributed to the actual region where each request was served.
+Cost tracking is **opt-in and off by default**. When `COST_TRACKING=true` is enabled, stdapi.ai estimates the cost of every request from AWS's published prices — an estimate computed at request time, not your billed amount read back from AWS. Costs are attributed to the actual region where each request was served.
 
 ### How It Works
 
@@ -81,7 +81,7 @@ When `COST_TRACKING=true` is enabled, stdapi.ai computes real-time costs from li
 
 | Setting | Default | Description |
 |:--------|:--------|:------------|
-| `COST_TRACKING` | `false` | Enable/disable real-time cost computation (needs `pricing:GetProducts`) |
+| `COST_TRACKING` | `false` | Enable/disable per-request cost estimation (needs `pricing:GetProducts`) |
 | `COST_PRICE_OVERRIDES` | `{}` | JSON map for operator-supplied prices for models not in AWS catalog |
 
 ### Request Log Format
@@ -101,7 +101,7 @@ Each usage entry includes cost and currency when resolved:
 }
 ```
 
-Costs are exact plain-decimal strings (never floats), so no precision is lost and no exponent or trailing zeros ever appear. The request-level total is also logged:
+Costs are plain-decimal strings rather than floats, so no precision is lost and no exponent or trailing zeros appear. The request-level total is also logged:
 
 ```json
 {
@@ -320,5 +320,6 @@ stdapi.ai is [dual-licensed](operations_licensing.md): the free AGPL-3.0-or-late
 - :material-tag-search: [**Model Pricing API**](api_model_pricing.md) — Query AWS unit prices per model for cost-aware selection
 - :material-cog: [**Configuration Reference**](operations_configuration.md) — `COST_TRACKING`, `COST_PRICE_OVERRIDES` and IAM permissions
 - :material-scale-balance: [**Licensing**](operations_licensing.md) — AGPL vs commercial license and AWS Marketplace subscription
+- :material-email-outline: [**Contact**](contact.md) — Private offers, committed usage, and billing questions
 
 </div>

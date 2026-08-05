@@ -5,7 +5,8 @@
  * Progressive enhancement — without JavaScript the marquee still scrolls (CSS
  * animation) and every carousel panel renders stacked with no dead controls.
  * With JavaScript the marquee track is doubled for a seamless loop and the
- * carousel shows one panel at a time.
+ * carousel shows one panel at a time. Panel selection is always reader-driven;
+ * panels never auto-advance.
  *
  * Loaded via extra_javascript, so it runs on every page. Two small site-wide
  * accessibility repairs ride along here because this is the only such hook:
@@ -13,14 +14,6 @@
  */
 (function () {
   "use strict";
-
-  //: Auto-advance interval, in milliseconds.
-  var ADVANCE_MS = 7000;
-
-  //: Teardown callbacks for the previous page render (Material instant nav).
-  var teardowns = [];
-
-  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
   /* Duplicate the track so the CSS translateX(-50%) loop is seamless. The
      clones repeat existing links, so they are hidden from assistive tech and
@@ -40,6 +33,7 @@
   }
 
   function setupCarousel(root) {
+    if (root.dataset.carouselEnhanced) return;
     var panels = [].slice.call(root.querySelectorAll(".carousel__panel"));
     if (panels.length < 2) return;
 
@@ -102,31 +96,9 @@
       }
     }
 
-    // Auto-advance stops for good once the reader picks a panel themselves.
-    var timer = null;
-    var stopped = reduceMotion.matches;
-    var held = 0;
-
-    function tick() {
-      if (!held && !document.hidden) select((current + 1) % panels.length);
-    }
-
-    function stop() {
-      stopped = true;
-      if (timer !== null) {
-        clearInterval(timer);
-        timer = null;
-      }
-    }
-
-    function pick(index) {
-      stop();
-      select(index);
-    }
-
     tabs.forEach(function (tab, i) {
       tab.addEventListener("click", function () {
-        pick(i);
+        select(i);
       });
       tab.addEventListener("keydown", function (event) {
         var next;
@@ -137,49 +109,19 @@
         else if (event.key === "End") next = panels.length - 1;
         else return;
         event.preventDefault();
-        pick(next);
+        select(next);
         tabs[next].focus();
       });
     });
 
     dotButtons.forEach(function (dot, i) {
       dot.addEventListener("click", function () {
-        pick(i);
+        select(i);
       });
     });
-
-    // Pause for pointer and keyboard users alike (WCAG 2.2.2).
-    function hold() {
-      held++;
-    }
-    function release() {
-      held = Math.max(0, held - 1);
-    }
-    var holds = [
-      ["mouseenter", hold],
-      ["mouseleave", release],
-      ["focusin", hold],
-      ["focusout", release],
-    ];
-    holds.forEach(function (pair) {
-      root.addEventListener(pair[0], pair[1]);
-    });
-
-    function onMotionChange() {
-      if (reduceMotion.matches) stop();
-    }
-    reduceMotion.addEventListener("change", onMotionChange);
 
     select(0);
-    if (!stopped) timer = setInterval(tick, ADVANCE_MS);
-
-    teardowns.push(function () {
-      stop();
-      holds.forEach(function (pair) {
-        root.removeEventListener(pair[0], pair[1]);
-      });
-      reduceMotion.removeEventListener("change", onMotionChange);
-    });
+    root.dataset.carouselEnhanced = "true";
   }
 
   /* Material injects its instant-navigation progress bar with role=progressbar
@@ -221,9 +163,6 @@
   );
 
   function init() {
-    teardowns.splice(0).forEach(function (fn) {
-      fn();
-    });
     nameProgressBar();
     nameRedocFrame();
     tabStopScrollableCode();

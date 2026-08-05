@@ -33,8 +33,8 @@ AI coding assistants are IDE extensions and terminal tools that leverage large l
 - :material-brain: __Best-in-Class Coding Models__
   <br>Claude for reasoning and architecture, Kimi thinking for complex problem-solving, Qwen3 Coder Next for specialized coding tasks. Choose the right model for each task.
 
-- :material-lock: __Code Privacy Guaranteed__
-  <br>Your code never leaves your AWS account. Perfect for proprietary codebases, enterprise security requirements, or compliance-sensitive projects.
+- :material-lock: __No Third-Party AI Cloud__
+  <br>Your code goes from your IDE to your own deployment to Amazon Bedrock — no vendor endpoint in between, and Bedrock does not use prompts to train models. Suited to proprietary codebases and compliance-sensitive projects.
 
 - :material-server-network: __Flexible Deployment Options__
   <br>Run stdapi.ai in AWS for production or locally with Docker for development. Test locally, deploy to cloud—same API, same experience.

@@ -155,17 +155,22 @@ No migration required between steps. Your Terraform configuration and applicatio
 2. **Accept Contract** — Accept the AWS Marketplace Standard Contract during checkout
 3. **Deploy** — Use the [Terraform module](operations_getting_started.md) to deploy immediately with commercial rights activated
 
-**Pricing:** The commercial license is billed at **$0.10/container-hour** through AWS Marketplace — no per-request markup and no markup on model usage. You pay Amazon Bedrock rates directly for inference.
+**Pricing:** The commercial license is billed at **$0.10/container-hour** through AWS Marketplace — no per-request markup and no markup on model usage. You pay Amazon Bedrock rates directly for inference. The bill therefore scales with **how many containers run, and for how long**: the Terraform module runs **one task per Availability Zone by default**, so the container count follows your AZ count unless you set it explicitly.
 
-**Typical monthly cost example** (license only, excluding AWS infrastructure and Bedrock model costs):
+**Monthly cost examples** (license only, excluding AWS infrastructure and Bedrock model costs — 720 h/month per running container):
 
-| Scenario | Hours/month | License cost |
-|---|---|---|
-| 1 container, 24 × 7 | 720 h | ~$72/month |
-| Dev/staging with scheduled stop outside business hours | ~165 h | ~$17/month |
+| Scenario | Containers | Container-hours/month | License cost |
+|---|---|---|---|
+| **Module default**, 3-AZ region, 24 × 7 | 3 | 2,160 h | ~$216/month |
+| **Module default**, `us-east-1` (6 AZs), 24 × 7 | 6 | 4,320 h | ~$432/month |
+| Cost-optimized: single container, 24 × 7 | 1 | 720 h | ~$72/month |
+| Cost-optimized: single container, dev/staging with scheduled stop outside business hours | 1 | ~165 h | ~$17/month |
+
+!!! note "Why the default is more than one container"
+    The Terraform module leaves `availability_zones_count` unset (it uses **all Availability Zones in the region**) and `autoscaling_min_capacity` unset (**one task per Availability Zone**), so a default deployment runs 3 containers in a typical 3-AZ region and 6 in `us-east-1`. The two cost-optimized rows above assume `autoscaling_min_capacity = 1`, which trades the multi-AZ redundancy of the default for a lower floor. See [Keeping It Low](operations_cost_management.md#keeping-it-low) for the settings that drive this number.
 
 !!! note "Fargate Spot does not reduce the license cost"
-    The license fee is billed per container-hour regardless of the Fargate pricing model — 720 h × $0.10 = $72/month whether the underlying container runs on Spot or standard Fargate. Spot only discounts the **AWS infrastructure** cost (the ECS/Fargate compute itself), not the Marketplace license. See [Cost Management](operations_cost_management.md#gateway-cost) for the full infrastructure-vs-license breakdown.
+    The license fee is billed per container-hour regardless of the Fargate pricing model — a default 3-AZ deployment is 2,160 h × $0.10 = $216/month whether the underlying containers run on Spot or standard Fargate. Spot only discounts the **AWS infrastructure** cost (the ECS/Fargate compute itself), not the Marketplace license. See [Cost Management](operations_cost_management.md#gateway-cost) for the full infrastructure-vs-license breakdown.
 
 Consolidated AWS billing — one bill, no separate invoice or procurement (AWS promotional credits do not apply to Marketplace charges).
 
@@ -188,7 +193,7 @@ Your commercial license activates automatically upon deployment.
 
     1. **Free AGPL version** - Use the community Docker image (AGPL-3.0) for evaluation, development, and testing. No cost, full features.
 
-    2. **14-day free trial** - AWS Marketplace commercial license includes a 14-day trial. Test the hardened production container in your environment risk-free.
+    2. **14-day free trial** - AWS Marketplace commercial license includes a 14-day trial of the license. Test the hardened production container in your environment; AWS resources and model usage bill as usual from the first minute.
 
     Both options give you full access to validate stdapi.ai before committing.
 

@@ -8,6 +8,9 @@ keywords: OpenAI API documentation, Anthropic API documentation, AWS Bedrock API
 
 stdapi.ai provides OpenAI-, Anthropic-, and Cohere-compatible APIs backed by Amazon Bedrock and AWS AI services. Any application that works with OpenAI, Anthropic, or Cohere works with stdapi.ai by simply changing the API endpoint.
 
+!!! tip "One catalog, discovered automatically"
+    Amazon Bedrock, Bedrock Mantle, Amazon Polly, Amazon Transcribe and Amazon Comprehend all surface as **models in a single catalog**. stdapi.ai discovers them from your AWS account at startup — there is no model list to declare or maintain, and a model AWS adds appears without a configuration change. They are interchangeable by name on a shared endpoint: [`GET /v1/models`](api_openai_models.md) lists them together, [`GET /search_models`](api_search_models.md) filters them by capability, and the endpoint routes to whichever AWS service backs the model you named — `POST /v1/audio/transcriptions` reaches Amazon Transcribe or a Bedrock audio model, and `POST /v1/moderations` reaches Bedrock Guardrails or Amazon Comprehend, from the same request.
+
 ## :material-book-open-variant: Documentation & Tooling
 
 stdapi.ai provides multiple resources for exploring and testing the API—choose the one that fits your workflow:
@@ -211,5 +214,7 @@ Your Cohere rerank and embed integrations continue to work without any code chan
 - :material-check-all: [**Features**](features.md) — Full capabilities and AWS integrations
 - :material-rocket-launch: [**Getting Started**](operations_getting_started.md) — Deploy to AWS with Terraform
 - :material-puzzle: [**Use Cases**](use_cases.md) — Integration examples with popular tools
+- :material-cash-multiple: [**Cost Management**](operations_cost_management.md) — Model, infrastructure, and license costs, and per-request cost estimation
+- :material-email-outline: [**Contact**](contact.md) — Technical questions, sales, and private offers
 
 </div>

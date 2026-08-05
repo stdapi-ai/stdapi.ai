@@ -410,7 +410,10 @@ The Anthropic node's **Prompt** resource (`Generate Prompt`, `Improve Prompt`, `
 
 ## :material-alert-outline: Known Limitations
 
-n8n's **Cohere Reranker** node (used by vector store nodes for hybrid search) cannot be pointed at stdapi.ai: its `cohereApi` credential takes only an API key and always calls Cohere's own endpoint, with no base URL field to redirect. Use an **HTTP Request** node against `POST /cohere/v2/rerank` (see [Cohere Rerank API](api_cohere_rerank.md)) instead, or a framework with a configurable reranker base URL—see [RAG Pipelines](use_cases_rag.md).
+n8n's Cohere sub-nodes—**Cohere Reranker** (used by vector store nodes for hybrid search) and **Embeddings Cohere**—cannot be pointed at stdapi.ai. Their shared `cohereApi` credential exposes only an API key: its base URL is a hidden field pinned to Cohere's own endpoint, and both nodes build their client from the API key and the model alone, so that URL never reaches the request anyway.
+
+- **Reranking:** use an **HTTP Request** node against `POST /cohere/v2/rerank` (see [Cohere Rerank API](api_cohere_rerank.md)), or a framework with a configurable reranker base URL—see [RAG Pipelines](use_cases_rag.md).
+- **Embeddings:** use the **Embeddings OpenAI** node described [above](#embeddings), which reaches the same Amazon Bedrock models through `/v1/embeddings`; an **HTTP Request** node against `POST /cohere/v2/embed` (see [Cohere Embed API](api_cohere_embed.md)) works too, but its output cannot be fed to a vector store sub-node.
 
 ## :material-arrow-right: Next Steps
 

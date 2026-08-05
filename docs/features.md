@@ -14,7 +14,7 @@ stdapi.ai is an **AI gateway purpose-built for AWS**. It brings full OpenAI, Ant
 
 - :material-api: **One URL change, 100+ models** — Drop in as an OpenAI, Anthropic, or Cohere replacement
 - :material-aws: **Everything stays in your AWS account** — No third-party routing, no data sharing
-- :material-shield-check: **Enterprise compliance built in** — ISO, SOC, HIPAA, GDPR, FedRAMP via AWS
+- :material-shield-check: **Runs on AWS services in scope** for ISO, SOC, HIPAA, GDPR and FedRAMP
 - :material-rocket-launch: **Production in minutes** — Terraform module on AWS Marketplace, 14-day free trial
 
 </div>
@@ -220,7 +220,7 @@ Access every model available on Amazon Bedrock through a single, consistent API 
 - Streaming generation with partial image previews
 - Style presets (model-specific)
 
-**Editing** — Powerful inpainting and transformation:
+**Editing** — Inpainting and transformation:
 
 - Mask-based inpainting (define edit regions precisely)
 - Image-to-image transformation (style, structure conditioning)
@@ -280,9 +280,9 @@ Access every model available on Amazon Bedrock through a single, consistent API 
 
 ## :material-aws: Purpose-Built for AWS
 
-### Multi-Region & Quota Multiplication
+### Multi-Region Routing & Quota Headroom
 
-Configure multiple AWS regions to scale your throughput and maximize availability:
+Configure multiple AWS regions to draw on more than one Bedrock quota and to keep serving when one region is degraded:
 
 | Routing Strategy    | Description                             | Prompt Caching |
 |---------------------|-----------------------------------------|----------------|
@@ -291,8 +291,8 @@ Configure multiple AWS regions to scale your throughput and maximize availabilit
 | `round_robin`       | Distribute evenly across regions        | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not compatible</span> |
 | `disabled`          | Single region per model                 | ✓ Compatible   |
 
-- **3 regions ≈ 3× your tokens-per-minute** — each region has its own independent quota
-- **Automatic failover** — transparent region switching on throttle, quota, or service errors
+- **Each region adds its own quota** — Bedrock tokens-per-minute and requests-per-minute limits are per region, so a multi-region deployment draws on several independent quotas rather than one. How much of that headroom a workload reaches depends on the quota granted per model in each region and on the routing strategy
+- **Regional retry** — eligible failures switch region transparently on throttle, quota, or service errors. Streaming responses can only retry before the stream opens, and asynchronous jobs stay in the region that accepted them
 - **Exponential backoff** — doubles per consecutive error, capped at 1 hour
 - **Region health tracking** — per-model health status with configurable recovery delays
 
@@ -319,7 +319,7 @@ stdapi.ai serves models from the **Amazon Bedrock Mantle** endpoint alongside th
 
 - **Every text API, every model** — All four text APIs (chat completions, responses, messages, legacy completions) work with every Mantle model: served natively (passthrough) when the model supports the API upstream, converted automatically otherwise, with an automatic fallback order (responses → chat completions → messages) learned at runtime
 - **Predictable routing** — Models available on both the classic endpoint and Mantle are served by the classic endpoint by default; Mantle serves Mantle-only models. Dual-homed models can be routed through Mantle globally or per request (`x-stdapi-service: bedrock-mantle` header) to tap Mantle's separate throughput quotas
-- **Automatic failover** — Region failover and quota backoff work exactly like classic Bedrock region routing; requests chained via `previous_response_id` are pinned to their origin region
+- **Region failover** — Region failover and quota backoff work exactly like classic Bedrock region routing; requests chained via `previous_response_id` are pinned to their origin region
 - **No static secrets** — Mantle access uses the same AWS credential chain as the rest of the server; there is no separate API key to issue, store or rotate
 - **Native stored conversations** — `/v1/responses` with `store`, `previous_response_id`, and `GET`/`DELETE /v1/responses/{id}` use Mantle's native server-side storage: 30-day retention, region-local, project-scoped
 - **Usage & billing** — Token usage (including cached tokens and standard/flex/priority service tiers) is recorded and priced at bedrock-mantle rates, like all other models
@@ -399,7 +399,7 @@ stdapi.ai supports multiple authentication strategies to fit your architecture:
 
 ### Compliance & Data Sovereignty
 
-Data never leaves your AWS account — every AWS service call is restricted to the regions you configure. All AWS services used by stdapi.ai (Bedrock, S3, Polly, Transcribe, and more) are in scope for **GDPR**, **ISO 27001/27017/27018**, **SOC 1/2/3**, **HIPAA**, **FedRAMP**, **PCI-DSS**, and **CSA STAR Level 2**. The commercial Terraform module adds VPC endpoints (no internet egress), Customer Managed KMS keys, and region-pinned cross-region profiles for strict data residency.
+AWS service calls are restricted to the regions you configure. The AWS services used by stdapi.ai (Bedrock, S3, Polly, Transcribe, and more) are in scope for **GDPR**, **ISO 27001/27017/27018**, **SOC 1/2/3**, **HIPAA**, **FedRAMP**, **PCI-DSS**, and **CSA STAR Level 2** — these certifications apply to the AWS services and regions you choose, and are not inherited by stdapi.ai or by your application. The commercial Terraform module adds VPC endpoints (no internet egress), Customer Managed KMS keys, and region-pinned cross-region profiles for strict data residency.
 
 [:octicons-arrow-right-24: Data Sovereignty & Compliance](operations_compliance.md)
 
@@ -516,9 +516,9 @@ export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
 
 ### Cost Tracking
 
-- **Real AWS-billed usage** — Token, character, second, and image counts sourced directly from AWS responses, never estimated; recorded per request across chat, embeddings, images, audio, and built-in tools
-- **Real-time pricing** — Costs computed from AWS's own published Price List, refreshed automatically; no manual price list to maintain (operator overrides available for gaps)
-- **Exact billing attribution** — Each call is priced with everything AWS prices differently: serving region, service tier (standard/flex/priority/batch, using the tier that *actually served* the call), prompt-cache TTLs, cross-region and latency-optimized routing, long-context rates, and image resolution/quality
+- **Usage counts read back from AWS** — Token, character, second, and image counts come from the AWS responses themselves rather than from client-side counting; recorded per request across chat, embeddings, images, audio, and built-in tools
+- **Priced from the published AWS Price List** — Costs computed from AWS's own price list, refreshed automatically; no manual price list to maintain (operator overrides available for gaps)
+- **Priced on the dimensions AWS bills on** — Each call is priced with everything AWS prices differently: serving region, service tier (standard/flex/priority/batch, using the tier that *actually served* the call), prompt-cache TTLs, cross-region and latency-optimized routing, long-context rates, and image resolution/quality
 - **Per-request and aggregate cost** — Request log entries carry cost and currency as exact decimal strings, with a per-request total rollup
 - **Multi-currency aware** — Detects your AWS partition's currency (USD, EUR, CNY) and never sums costs across currencies
 - **Model Pricing API** — Query the loaded catalog through [`GET /model_pricing`](api_model_pricing.md) for cost-aware model selection, also exposed as an MCP tool
@@ -570,8 +570,8 @@ Typical requests are dominated by the fixed sub-millisecond serving floor; the o
 
 <div class="grid cards" markdown>
 
-- :material-test-tube: __4,400+ automated tests__
-  <br>Every endpoint, parameter and error path, run against real AWS services rather than mocks.
+- :material-test-tube: __5,000+ automated tests__
+  <br>Run against real AWS services rather than mocks.
 
 - :material-shield-check: __Branch coverage, every test tier enabled__
   <br>Tracked continuously, from fast contract checks to full release validation against a live deployment.
@@ -643,6 +643,11 @@ No release ships without the full suite passing against a real deployment of the
 
 All four solutions below expose an OpenAI-compatible API in front of Amazon Bedrock. The comparison focuses on the AWS deployment context — LiteLLM is evaluated with AWS services as the backend provider (Bedrock, Polly, Transcribe), not as a multi-cloud proxy. Bedrock Access Gateway is the official AWS-maintained open-source sample. Bedrock Mantle is AWS's own managed OpenAI-compatible endpoint, requiring no self-hosting — and stdapi.ai can also front it as an additional backend, serving Mantle-only models through the gateway (see [Bedrock Mantle Models](#bedrock-mantle-models)).
 
+Competitor capabilities were verified against official sources on 5 August 2026. stdapi.ai is AWS-only: if you need multi-cloud routing or spend limits enforced at request time, LiteLLM is the better fit.
+
+!!! note "Cost attribution is not a spend limit"
+    Bedrock's native attribution — IAM principal, application inference profiles, projects and workspaces — reports [aggregated billed cost to Cost Explorer and CUR 2.0 at per-usage-type-per-day granularity](https://docs.aws.amazon.com/bedrock/latest/userguide/cost-management.html), not as a per-request row. That is reporting, not enforcement: it cannot block a request that would exceed a budget. stdapi.ai's per-request cost figures are likewise an estimate for visibility. Enforcing a hard limit requires a gateway layer in front of inference — the approach AWS itself takes in its [Generative AI Gateway Solution](https://aws.amazon.com/solutions/), which uses LiteLLM.
+
 | Capability                                  |              stdapi.ai              |            LiteLLM (on AWS)             |         Bedrock Access Gateway          |             Bedrock Mantle              |
 |---------------------------------------------|:-----------------------------------:|:---------------------------------------:|:---------------------------------------:|:---------------------------------------:|
 | **OpenAI Chat completions**                 | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^2] |
@@ -662,12 +667,12 @@ All four solutions below expose an OpenAI-compatible API in front of Amazon Bedr
 | **OpenAI Realtime API**                     | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **Cohere Rerank API**                       | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **Cohere Embed API**                        | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
-| **Integrated MCP server**                   | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
+| **Own AI &amp; media APIs as MCP tools**    | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^20] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **Bedrock Full model catalog**              | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^1] | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^10] | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^2] |
 | **Unified Bedrock + Mantle catalog**        | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^15] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **Every model on every text API**           | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^16] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **Multimodal inputs**                       | text · image · audio · video · docs |           text · image · docs           |              text · image               |              text · image               |
-| **Multi-region quota multiplication**       | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^8] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
+| **Multi-region capacity combining**         | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^8] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **Bedrock Cross-region inference profiles** | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^13] | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^13] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **Bedrock system tools**                    | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **Bedrock Guardrails**                      | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
@@ -684,7 +689,6 @@ All four solutions below expose an OpenAI-compatible API in front of Amazon Bedr
 | **Self-hosted**                             | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **AWS-native focus**                        | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^5] | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> |
 | **Multi-provider support**                  | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> [^11] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
-| **Open-source community**                   |                Small                |             Large - ~55k ★              |             Medium - ~1k ★              | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **Source license**                          |  AGPL-3.0 (community) · commercial  |                   MIT                   |                  MIT-0                  |               AWS service               |
 | **Distribution & supply chain**             |       AWS Marketplace · GHCR        |                pip/PyPI                 |             GitHub (MIT-0)              |               AWS-managed               |
 
@@ -730,3 +734,4 @@ All four solutions below expose an OpenAI-compatible API in front of Amazon Bedr
 [^17]: Conversation state kept in LiteLLM's own datastore rather than native provider server-side storage
 [^18]: Served via LiteLLM's `/responses` endpoint, auto-bridged to `/chat/completions`; no native Bedrock Responses passthrough
 [^19]: Mantle uses Projects/Workspaces (tag-based cost allocation via Cost Explorer) for workload isolation instead of application inference profiles — see [Amazon Bedrock Projects](https://docs.aws.amazon.com/bedrock/latest/userguide/projects.html)
+[^20]: LiteLLM provides an [MCP gateway](https://docs.litellm.ai/docs/mcp/) that proxies configured third-party MCP servers and converts OpenAPI specs to tools — a related capability, but it does not expose LiteLLM's own AI and media endpoints as tools
