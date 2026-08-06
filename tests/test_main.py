@@ -14,6 +14,9 @@ from contextlib import asynccontextmanager
 from inspect import signature
 from io import BytesIO
 from json import loads
+from os import environ
+from subprocess import run
+from sys import executable
 from typing import TYPE_CHECKING, Any, Self
 
 import pytest
@@ -39,6 +42,7 @@ from stdapi.routes import core_root, openai_chat_completions
 from stdapi.server import SERVER_ID
 from stdapi.types.openai_chat_completions import ChatCompletion
 from tests._helpers import make_client_error, make_event_log, make_model_details
+from tests.conftest import REPO_ROOT
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -449,6 +453,88 @@ class TestSharedResponsesStayBelowTheGzipThreshold:
                 "place, permanently serving gzip to clients that did not ask "
                 "for it. Render this response per request instead of caching it."
             )
+
+
+#: Application built in a subprocess, so the proxy-header settings apply at import.
+_FORWARDED_CLIENT_SCRIPT = """
+import os
+os.environ.update({
+    "AWS_BEDROCK_REGIONS": "us-east-1",
+    "ENABLE_PROXY_HEADERS": "true",
+    "LOG_CLIENT_IP": "true",
+    "PROXY_TRUSTED_HOSTS": '["10.0.0.0/8"]',
+})
+import asyncio, contextlib, io, json
+import stdapi.main
+from httpx import ASGITransport, AsyncClient
+
+
+async def request():
+    transport = ASGITransport(app=stdapi.main.app, client=("10.0.0.5", 1234))
+    async with AsyncClient(transport=transport, base_url="http://gateway") as client:
+        await client.get("/v1/no-such-route", headers={"x-forwarded-for": "203.0.113.42"})
+
+
+captured = io.StringIO()
+with contextlib.redirect_stdout(captured):
+    asyncio.run(request())
+for line in captured.getvalue().splitlines():
+    try:
+        event = json.loads(line)
+    except ValueError:
+        continue
+    if event.get("type") == "request":
+        print(event.get("client_ip"))
+"""
+
+
+class TestForwardedClientAddress:
+    """The recorded client address is the forwarded one, not the proxy's.
+
+    ``ProxyHeadersMiddleware`` rewrites ``scope["client"]``, and ``_middleware``
+    reads it the moment it opens the request log, so the proxy shim only has any
+    effect while it stays registered *after* ``_middleware`` — ``add_middleware``
+    inserts at the head, making the last registration the outermost. Registered
+    the other way round, every deployment behind a load balancer silently records
+    the balancer's own address as the client, in logs and in OpenTelemetry spans.
+
+    The settings are read at import, so the application is built in a subprocess
+    rather than reconfigured in place.
+
+    Ref: https://www.uvicorn.org/deployment/#proxies-and-forwarded-headers
+         stdapi/main.py:_middleware
+         stdapi/monitoring.py:log_request_event
+    """
+
+    def test_forwarded_client_ip_reaches_the_request_log(self) -> None:
+        """A trusted proxy's ``X-Forwarded-For`` wins over the peer address."""
+        environment = {
+            k: v
+            for k, v in environ.items()
+            if not k.startswith(("ENABLE_", "LOG_", "PROXY_", "AWS_BEDROCK_"))
+        }
+        environment.update(
+            AWS_EC2_METADATA_DISABLED="true",
+            AWS_CONFIG_FILE="/dev/null",
+            AWS_SHARED_CREDENTIALS_FILE="/dev/null",
+            AWS_REGION="us-east-1",
+            AWS_DEFAULT_REGION="us-east-1",
+        )
+        result = run(  # noqa: S603
+            [executable, "-c", _FORWARDED_CLIENT_SCRIPT],
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+            env=environment,
+            timeout=180,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr[-2000:]
+        assert result.stdout.strip().splitlines()[-1] == "203.0.113.42", (
+            "The request log recorded the immediate peer instead of the forwarded "
+            "client. ProxyHeadersMiddleware must be registered after _middleware "
+            f"so that it wraps it.\nstdout: {result.stdout!r}"
+        )
 
 
 #: Stand-in AWS Marketplace product code for the Enterprise build's registration.

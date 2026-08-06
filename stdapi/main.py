@@ -270,13 +270,6 @@ if SETTINGS.enable_gzip:
 
     app.add_middleware(GZipMiddleware, minimum_size=1024)
 
-if SETTINGS.enable_proxy_headers:
-    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
-
-    app.add_middleware(
-        ProxyHeadersMiddleware, trusted_hosts=SETTINGS.proxy_trusted_hosts
-    )
-
 if SETTINGS.trusted_hosts:
     from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
@@ -357,6 +350,18 @@ async def _middleware(
             response.background = BackgroundTask(run_scheduled_cleanups, log["id"])
     response.headers["server"] = "stdapi.ai"
     return response
+
+
+# Registered after `_middleware`, and therefore wrapping it: `add_middleware`
+# inserts at the head of the stack, so the last one added runs first. The client
+# address and scheme have to carry the forwarded values before anything reads
+# them, and `_middleware` reads the client the moment it opens the request log.
+if SETTINGS.enable_proxy_headers:
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+    app.add_middleware(
+        ProxyHeadersMiddleware, trusted_hosts=SETTINGS.proxy_trusted_hosts
+    )
 
 
 @app.exception_handler(HTTPException)
