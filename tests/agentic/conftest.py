@@ -50,6 +50,7 @@ _HOST_CLIENTS: Mapping[str, Mapping[str, str]] = {
         "langchain_openai": "langchain-openai",
         "langchain_anthropic": "langchain-anthropic",
     },
+    "test_litellm.py": {"litellm": "litellm"},
     "test_pydantic_ai.py": {"pydantic_ai": "pydantic-ai-slim"},
     "test_wyoming_audio.py": {"wyoming": "wyoming"},
 }

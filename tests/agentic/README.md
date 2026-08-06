@@ -1,7 +1,7 @@
 # Agentic test lane
 
 Real third-party clients — Claude Code, Codex, pi, OpenClaw, Hermes, Qwen Code,
-n8n, Haystack, Open WebUI, wyoming-openai, LangChain and pydantic-ai —
+n8n, Haystack, Open WebUI, wyoming-openai, LangChain, pydantic-ai and litellm —
 driven end to end against a live stdapi.ai server. They are the only tests that
 exercise a client's own wire behaviour: its system prompt, tool definitions,
 multi-turn tool-call replays, SSE streaming and multipart uploads, all translated
@@ -21,6 +21,7 @@ by the gateway for a model that is usually not the vendor's own.
 | wyoming-openai | audio ×2 | The only client streaming `/v1/audio/speech` and the only one calling it concurrently |
 | langchain-openai / langchain-anthropic | `/v1` chat + embeddings, `/anthropic` | Streaming, `bind_tools`, `with_structured_output`, and the embeddings token-array trap, in plain Python |
 | pydantic-ai | `/v1/chat/completions` | Proves a real multi-turn tool loop survives Claude's silent `reasoning_content` replay drop |
+| litellm | `/v1` chat + embeddings | The only client that puts *its own* control parameters in the request body — the client half of `EXTRA_MODEL_PARAMS_DENYLIST` |
 
 pi is parametrized over its three providers, so one failure isolates to one
 adapter: the binary, prompt, model and assertions are identical across the three,
@@ -101,6 +102,19 @@ real multi-turn tool loop — and the same replay path, driven against Qwen 3 32
 over Mantle instead, proves the gateway's `reasoning`/`reasoning_content` rename
 survives one too.
 
+litellm reaches no new route either, and it is here for what it puts *in* the
+request rather than where it sends it. `extra_body` is merged into the body at the
+top level, so `extra_body={"drop_params": True}` — the literal call RAGFlow's
+embedding client makes — arrives as a body field named `drop_params`, a LiteLLM
+convention and a model parameter for no provider at all. It is therefore the
+client-side half of `EXTRA_MODEL_PARAMS_DENYLIST`, and the module asserts both
+halves: the denylisted name gets through, and a name that is genuinely not a model
+parameter still fails, because a denylist that swallowed everything would pass the
+first assertion just as well. litellm also forwards *unknown* keyword arguments
+regardless of its own `drop_params` flag — that flag only drops parameters it
+knows a provider rejects — so an unrecognized field is one keyword argument away
+for any litellm user.
+
 ```bash
 uv run pytest tests/agentic --agentic -s          # whole lane, with metric lines
 uv run pytest tests/agentic --agentic --agentic-rebuild   # refresh the CLIs first
@@ -115,9 +129,10 @@ uv run pytest tests/agentic/test_open_webui.py --agentic   # the documented env 
 uv run pytest tests/agentic/test_wyoming_audio.py --agentic   # streamed TTS
 uv run pytest tests/agentic/test_langchain.py --agentic      # both langchain routes
 uv run pytest tests/agentic/test_pydantic_ai.py --agentic    # the reasoning-replay proof
+uv run pytest tests/agentic/test_litellm.py --agentic        # the control-parameter denylist
 ```
 
-The last three need the client overlay described under
+The last four need the client overlay described under
 [In-process clients](#in-process-clients); without it they are dropped from
 collection and the run says so.
 
@@ -134,7 +149,7 @@ CC-METRICS | amazon.nova-2-lite-v1:0 | test_trace_request_pipeline | steps=  7 |
   user namespace a rootless container needs, so `--remote` is used automatically
   against the host's podman socket
 - Bedrock credentials, as for the rest of the suite
-- the client overlay, for the three modules listed below
+- the client overlay, for the four modules listed below
 
 The CLIs are **never executed on the host**. If podman is unavailable the lane
 skips rather than falling back to a host binary, so a run always reports the tool
@@ -142,8 +157,9 @@ version it actually tested.
 
 ## In-process clients
 
-Three clients are Python libraries rather than binaries, so they run in the test
-process: `test_langchain.py`, `test_pydantic_ai.py` and `test_wyoming_audio.py`. Their packages are listed in `requirements.txt` and layered
+Four clients are Python libraries rather than binaries, so they run in the test
+process: `test_langchain.py`, `test_pydantic_ai.py`, `test_wyoming_audio.py` and
+`test_litellm.py`. Their packages are listed in `requirements.txt` and layered
 over the project environment at run time:
 
 ```bash
@@ -164,7 +180,7 @@ gateway surfaces here. The versions a session actually resolved are printed in i
 header:
 
 ```
-agentic clients: langchain-anthropic==1.5.3, langchain-openai==1.4.1, pydantic-ai-slim==2.23.0, wyoming==1.10.0
+agentic clients: langchain-anthropic==1.5.3, langchain-openai==1.4.1, litellm==1.95.0, pydantic-ai-slim==2.23.0, wyoming==1.10.0
 ```
 
 Without the overlay, those modules are dropped from collection and the header
@@ -365,7 +381,7 @@ image runs it — and is copied verbatim into `/work` per run; the gateway, the
 three models and the question all arrive as environment variables, so nothing is
 rendered. It prints one JSON record and writes the same record to
 `/work/rag_run.json`, which is what `_tools.py:haystack_record` reads back for the
-assertions. Two things bite:
+assertions. Three things bite:
 
 - **the assertion is the *movement*, not the status code.** The corpus is built so
   the two rankings disagree: every decoy repeats the question's wording while the
@@ -434,7 +450,7 @@ program and makes both synthesis paths reachable from one boot. Four things bite
 
 ## The pure-Python HTTP clients
 
-`test_langchain.py` and `test_pydantic_ai.py` drive their
+`test_langchain.py`, `test_pydantic_ai.py` and `test_litellm.py` drive their
 libraries in-process against `agentic_server`, with no container at all: unlike
 every other module here, they are plain HTTP client libraries, not third-party
 binaries, so there is nothing for podman to sandbox. Each still declares a real
@@ -443,7 +459,7 @@ purely so the autouse model-identity check runs for free; its
 `build`/`parse`/`prepare_workdir` are never called, since none of them ever
 requests `agentic_image` or calls `run_agent`. Their packages come from the
 overlay, not from `uv.lock` — see [In-process clients](#in-process-clients).
-Two things bite:
+Three things bite:
 
 - **the shared podman skip still applies.** `_model_identity_check` checks for
   podman before resolving `agentic_server`, for every module in this directory —
@@ -463,6 +479,13 @@ Two things bite:
   reasoning text back from Mantle's `reasoning` field: `TestMantleReasoningReplaySurvivesToolLoop`
   is the client-level guard for that gateway-side rename, which only emits its text
   at `reasoning_effort="high"` — `"low"` has no observable effect on this model.
+- **litellm merges `extra_body` into the body at the top level.** It is not
+  nested under any envelope, so `extra_body={"drop_params": True}` is
+  indistinguishable on the wire from a caller having typed `drop_params` as a
+  model parameter — which is precisely why the gateway needs a name-based denylist
+  rather than a structural rule. Its `drop_params` flag is unrelated to what
+  reaches us: it removes parameters litellm knows a provider rejects, and forwards
+  unknown keyword arguments either way.
 
 ## What the tests actually assert
 

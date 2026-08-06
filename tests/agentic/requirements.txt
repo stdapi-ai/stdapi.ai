@@ -23,3 +23,6 @@ pydantic-ai-slim[openai]
 # tests/agentic/test_wyoming_audio.py -- the Home Assistant voice protocol client
 # that talks to the wyoming-openai container, not a gateway client itself.
 wyoming
+
+# tests/agentic/test_litellm.py
+litellm
