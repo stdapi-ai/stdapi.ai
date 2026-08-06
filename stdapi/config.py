@@ -1267,6 +1267,37 @@ class _Settings(BaseSettings):
         ),
     )
 
+    extra_model_params_drop_all: bool = Field(
+        default=False,
+        description=(
+            "If true, disable the 'extra model parameters' passthrough entirely: "
+            "no undeclared request field (a request's model_extra) is ever "
+            "forwarded to Bedrock as a provider-specific inference parameter, on "
+            "every route that supports it (the chat completions/responses/messages "
+            "inference extras, and embeddings/images/audio/rerank/etc. through "
+            "get_extra_model_parameters()). Overrides extra_model_params_denylist: "
+            "with this enabled, denylist filtering no longer matters because "
+            "nothing is forwarded.\n\n"
+            "Set to false (default) to keep the passthrough, filtered by the "
+            "built-in default denylist and extra_model_params_denylist."
+        ),
+    )
+
+    extra_model_params_denylist: Annotated[frozenset[str], NoDecode] = Field(
+        default=frozenset(),
+        description=(
+            "Additional parameter names to strip from the 'extra model "
+            "parameters' passthrough, merged with the built-in default denylist "
+            "of LiteLLM client-control parameters (e.g. 'drop_params', "
+            "'api_key', 'custom_llm_provider') that some OpenAI-SDK-based "
+            "clients leak into extra_body and that are never legitimate "
+            "Bedrock model parameters.\n\n"
+            "Only effective when extra_model_params_drop_all is false.\n\n"
+            "Environment variable format: Comma-separated string\n"
+            "Example: 'x_internal_debug_flag,x_proxy_trace_id'"
+        ),
+    )
+
     @field_validator("mcp_include_tools", "mcp_exclude_tools", mode="before")
     @classmethod
     def _parse_mcp_tools_list(cls, value: list[str] | str | None) -> list[str] | None:
@@ -1296,6 +1327,67 @@ class _Settings(BaseSettings):
         """
         extra = cls._parse_comma_list(value) if isinstance(value, str) else value
         return frozenset(_ANTHROPIC_BETA_BEDROCK_FLAGS | set(extra))
+
+    @field_validator("extra_model_params_denylist", mode="before")
+    @classmethod
+    def _parse_extra_model_params_denylist(
+        cls, value: frozenset[str] | str, info: ValidationInfo
+    ) -> frozenset[str]:
+        """Parse extra_model_params_denylist and merge with built-in defaults.
+
+        Merging here rather than per request keeps the filter a single membership
+        test against an already-built frozenset. Reads ``extra_model_params_drop_all``
+        from *info*, which requires that field to stay declared before this one.
+
+        Args:
+            value: A comma-separated string of parameter names or a frozenset.
+            info: Validation context, holding the fields validated so far.
+
+        Returns:
+            Every parameter name to drop, empty when nothing is forwarded at all.
+        """
+        if info.data.get("extra_model_params_drop_all"):
+            return frozenset()
+        # LiteLLM client-side parameters, never forwarded as Bedrock model parameters.
+        default_dropped = frozenset(
+            {
+                "acompletion",
+                "additional_drop_params",
+                "aimg_generation",
+                "api_base",
+                "api_key",
+                "api_version",
+                "atext_completion",
+                "caching",
+                "context_window_fallback_dict",
+                "custom_llm_provider",
+                "drop_params",
+                "fallbacks",
+                "force_timeout",
+                "litellm_call_id",
+                "litellm_credential_name",
+                "litellm_logging_obj",
+                "litellm_metadata",
+                "litellm_request_debug",
+                "litellm_session_id",
+                "litellm_system_prompt",
+                "litellm_trace_id",
+                "logger_fn",
+                "max_retries",
+                "mock_response",
+                "mock_timeout",
+                "model_info",
+                "model_list",
+                "num_retries",
+                "proxy_server_request",
+                "request_timeout",
+                "stream_timeout",
+                "use_client",
+                "verbose",
+            }
+        )
+        extra = cls._parse_comma_list(value) if isinstance(value, str) else value
+        return default_dropped | frozenset(extra)
 
     @field_validator(
         "aws_bedrock_mantle_regions",

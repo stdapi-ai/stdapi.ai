@@ -311,6 +311,8 @@ Configure **one** source. If several are set, precedence is `API_KEY` → SSM Pa
 | [`DROP_UNSUPPORTED_SYSTEM_PROMPT`](#drop-unsupported-system-prompt) | `true`                  | Drop system prompts for unsupported models; when `false`, return error instead             |
 | [`ANTHROPIC_BETA_FILTER`](#anthropic-beta-filter)                   | `true`                  | Enable filtering of unsupported `anthropic_beta` flags for Claude models                   |
 | [`ANTHROPIC_BETA_ALLOWLIST`](#anthropic-beta-allowlist)             | None                    | Additional `anthropic_beta` flags to allow beyond built-in Bedrock defaults                |
+| [`EXTRA_MODEL_PARAMS_DENYLIST`](#extra-model-params-denylist)       | None                    | Additional "extra model parameters" names to strip, beyond the built-in LiteLLM control-parameter denylist |
+| [`EXTRA_MODEL_PARAMS_DROP_ALL`](#extra-model-params-drop-all)       | `false`                 | Disable the "extra model parameters" passthrough entirely                                  |
 | [`IMAGE_GENERATION_MODEL`](#image-generation-model)                 | None                    | Default Bedrock image model ID used when the `image_generation` Responses API tool is invoked |
 
 ### :material-file-document: API Documentation { #summary-api-documentation }
@@ -4088,6 +4090,51 @@ export ANTHROPIC_BETA_ALLOWLIST='new-feature-2026-03-01,another-flag-2026-04-01'
     - :material-robot: **Claude Code via Bedrock** - Clients work without `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`
     - :material-shield-check: **Production stability** - Prevent unsupported flags from causing request failures
     - :material-swap-horizontal: **Drop-in compatibility** - Clients configured for direct Anthropic API work through stdapi.ai without changes
+
+#### `EXTRA_MODEL_PARAMS_DENYLIST` { #extra-model-params-denylist }
+
+:octicons-package-24: **Purpose**
+:   Add extra parameter names to strip from the "extra model parameters" passthrough (any undeclared top-level JSON field on a chat or non-chat route, forwarded to Bedrock as a provider-specific inference field)
+
+:octicons-code-24: **Format**
+:   Comma-separated string of additional parameter names
+
+:octicons-gear-24: **Default**
+:   Empty (only the built-in denylist is used)
+
+:octicons-workflow-24: **Behavior**
+:   The names specified here are **merged with** the built-in denylist of LiteLLM client-control parameters (such as `drop_params`, `api_key`, `custom_llm_provider`) that some OpenAI-SDK-based clients leak into `extra_body` and that are never legitimate Bedrock model parameters — for example RAGFlow hardcodes `extra_body={"drop_params": True}` on every embeddings call, which previously reached Bedrock as an unrecognized inference field and failed with `ValidationException`. Every other extra parameter keeps being forwarded as before. Only effective when [`EXTRA_MODEL_PARAMS_DROP_ALL`](#extra-model-params-drop-all) is `false`
+
+```bash
+# Use the built-in denylist only (recommended) - no environment variable needed
+
+# Also strip a project-specific control field some client leaks into requests
+export EXTRA_MODEL_PARAMS_DENYLIST='x_internal_debug_flag,x_proxy_trace_id'
+```
+
+#### `EXTRA_MODEL_PARAMS_DROP_ALL` { #extra-model-params-drop-all }
+
+:octicons-package-24: **Purpose**
+:   Disable the "extra model parameters" passthrough entirely
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false`
+
+:octicons-workflow-24: **Behavior**
+:   When enabled, no undeclared request field is ever forwarded to Bedrock as a provider-specific inference parameter, on every route that supports the passthrough (chat completions/responses/messages, and embeddings/images/audio/rerank/etc.). This overrides [`EXTRA_MODEL_PARAMS_DENYLIST`](#extra-model-params-denylist): with drop-all enabled, denylist filtering no longer matters because nothing is forwarded. Per-model defaults configured through [`DEFAULT_MODEL_PARAMS`](#default-model-params) are unaffected — only request-supplied extras are dropped
+
+```bash
+# Keep the passthrough (default) - no environment variable needed
+
+# Lock the deployment down to only declared API fields
+export EXTRA_MODEL_PARAMS_DROP_ALL=true
+```
+
+!!! tip "When to Enable"
+    Set to `true` only when you need to guarantee that no undeclared client field ever reaches Bedrock, for example a strict multi-tenant deployment where provider-specific knobs must go through an explicit allowlisted mechanism instead of the passthrough.
 
 ---
 

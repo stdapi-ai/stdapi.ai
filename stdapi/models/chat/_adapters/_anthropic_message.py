@@ -881,27 +881,6 @@ _RESERVED_INFERENCE_PARAMS: frozenset[str] = frozenset(
 )
 
 
-def _inference_extras(extras: dict[str, Any] | None) -> dict[str, Any]:
-    """Validate the request extras forwarded as provider-specific inference fields.
-
-    Args:
-        extras: Undeclared request keys, or ``None`` when the request has none.
-
-    Returns:
-        The extras, unchanged.
-
-    Raises:
-        ApiError: If an extra reuses a ``set_inference_configuration`` argument
-            name, which would bind twice and fail the call.
-    """
-    extras = extras or {}
-    if reserved := sorted(_RESERVED_INFERENCE_PARAMS.intersection(extras)):
-        names = ", ".join(f"'{name}'" for name in reserved)
-        msg = f"Unsupported parameter: {names} cannot be sent as a model extra."
-        raise ApiError(msg)
-    return extras
-
-
 async def translate_request(
     request: MessageCreateParams,
     model_id: str,
@@ -986,7 +965,7 @@ async def translate_request(
             max_tokens=request.max_tokens,
             stop_sequences=request.stop_sequences,
             top_k=request.top_k,
-            **_inference_extras(request.model_extra),
+            **_common.inference_extras(request.model_extra, _RESERVED_INFERENCE_PARAMS),
         ),
         additional_request_fields,
         tool_config,

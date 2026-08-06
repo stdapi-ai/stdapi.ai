@@ -3731,7 +3731,7 @@ class TestTranslateRequestParameters:
         arguments would bind twice and raise ``TypeError``, which no handler
         maps: the caller would get a 500 for a body the schema accepts.
 
-        Ref: stdapi/models/chat/_adapters/_anthropic_message.py:_inference_extras
+        Ref: stdapi/models/chat/_adapters/_common.py:inference_extras
              stdapi/aws_bedrock.py:set_inference_configuration
         """
         with pytest.raises(ApiError) as exc_info:

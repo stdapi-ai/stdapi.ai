@@ -774,6 +774,27 @@ def set_inference_configuration(
     return config
 
 
+def filter_extra_model_parameters(extra: JsonMapping | None) -> JsonMapping:
+    """Strip LiteLLM client-control parameters leaked into request extras.
+
+    Shared by every route that forwards a request's ``model_extra`` to Bedrock as
+    provider-specific inference fields: :func:`get_extra_model_parameters` for the
+    non-chat routes, and each chat adapter's ``_inference_extras``.
+
+    Args:
+        extra: Candidate extra parameters keyed by name, or ``None`` when the
+            request carries none.
+
+    Returns:
+        ``extra`` with dropped keys removed. Empty when it holds nothing or when
+        ``SETTINGS.extra_model_params_drop_all`` is true.
+    """
+    if extra is None or SETTINGS.extra_model_params_drop_all:
+        return {}
+    dropped = SETTINGS.extra_model_params_denylist
+    return {key: value for key, value in extra.items() if key not in dropped}
+
+
 def get_extra_model_parameters(
     model_id: str, request: BaseModelRequestWithExtra
 ) -> JsonMapping:
@@ -781,14 +802,15 @@ def get_extra_model_parameters(
 
     Args:
         model_id: Bedrock model identifier; used to look up ``SETTINGS.default_model_params``.
-        request: Request object whose ``model_extra`` dict takes precedence over defaults.
+        request: Request object whose ``model_extra`` dict takes precedence over defaults,
+            filtered through :func:`filter_extra_model_parameters`.
 
     Returns:
         Merged parameter dict.
     """
     return {
         **SETTINGS.default_model_params.get(model_id, {}),
-        **(request.model_extra or {}),
+        **filter_extra_model_parameters(request.model_extra),
     }
 
 

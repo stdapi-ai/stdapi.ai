@@ -1,7 +1,7 @@
 ---
 title: Troubleshooting - Common stdapi.ai deployment issues
 description: Fixes for the most common errors encountered when deploying and running stdapi.ai - Terraform failures, 400/401/403/404/429/503 responses, Bedrock throttling, IAM permission errors, S3 bucket errors, VPC connectivity, and more.
-keywords: stdapi.ai troubleshooting, AWS Bedrock errors, Terraform apply failed, 503 ECS service, 401 API key, 403 permission IAM, AccessDeniedException, 404 model not found, ThrottlingException Bedrock, S3 bucket region, ElastiCache capacity, VPC endpoint timeout, podman SELinux, ECONNREFUSED IPv6 service discovery
+keywords: stdapi.ai troubleshooting, AWS Bedrock errors, Terraform apply failed, 503 ECS service, 401 API key, 403 permission IAM, AccessDeniedException, 404 model not found, ThrottlingException Bedrock, S3 bucket region, ElastiCache capacity, VPC endpoint timeout, podman SELinux, ECONNREFUSED IPv6 service discovery, drop_params ValidationException
 ---
 
 # :material-wrench: Troubleshooting
@@ -145,6 +145,13 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
 
     - Read the message detail returned in the response (correlate with `x-request-id` in the server logs).
     - Confirm the parameter is supported by the model — see the per-API **Feature Compatibility** tables.
+
+??? failure "`400 Bad Request` — a client's own control flag reaches Bedrock as a model parameter"
+    Request fields stdapi.ai does not declare are forwarded to Amazon Bedrock as provider-specific inference parameters, so any parameter a model accepts can be passed through — including the highly model-specific ones no common API surface exposes. Some OpenAI-SDK-based clients also use that same channel for their *client-side* settings — LiteLLM-derived ones send `drop_params`, `api_key` or `custom_llm_provider` in `extra_body` — and Bedrock answers `ValidationException` for a field no model declares. The symptom is a route that fails for one client and works for every other.
+
+    - The known LiteLLM control parameters are stripped by a built-in denylist, so this only appears for a name it does not yet cover. The rejected field is in the Bedrock message detail, correlated via `x-request-id` in the server logs.
+    - Add that name to [`EXTRA_MODEL_PARAMS_DENYLIST`](operations_configuration.md#extra-model-params-denylist) — it is merged with the built-in list, and every other extra parameter keeps being forwarded.
+    - If no client needs the passthrough, [`EXTRA_MODEL_PARAMS_DROP_ALL`](operations_configuration.md#extra-model-params-drop-all) disables it outright. Per-model defaults set through [`DEFAULT_MODEL_PARAMS`](operations_configuration.md#default-model-params) are unaffected — only request-supplied extras are dropped.
 
 ??? failure "S3 error on image generation or audio transcription"
     The S3 bucket is missing, unreachable, or in the wrong region.

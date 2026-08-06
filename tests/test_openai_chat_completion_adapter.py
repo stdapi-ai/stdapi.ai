@@ -15,9 +15,11 @@ from pybase64 import b64decode
 
 from stdapi.aws_bedrock import PROMPT_CACHING
 from stdapi.config import SETTINGS
+from stdapi.models.chat._adapters._common import inference_extras
 from stdapi.models.chat._adapters._openai_chat_completion import (
     _FINISH_REASONS,
     _LEGACY_FUNCTION,
+    _RESERVED_INFERENCE_PARAMS,
     _get_or_generate_audio,
     build_output_config,
     extract_output_text,
@@ -1095,6 +1097,103 @@ class TestTopKForwarding:
             {"model": "model", "messages": [{"role": "user", "content": "hi"}]}
         )
         assert "top_k" not in additional_fields
+
+
+class TestInferenceExtrasDenylist:
+    """LiteLLM client-control parameters are stripped from the inference extras.
+
+    Regression coverage for the ``extra_body={"drop_params": True}`` pattern that
+    LiteLLM-derived clients (e.g. RAGFlow) hardcode: such keys must never reach
+    Bedrock as ``additionalModelRequestFields``, while pass-through keeps working
+    for anything not on the denylist.
+
+    Ref: stdapi/models/chat/_adapters/_common.py:inference_extras
+         stdapi/aws_bedrock.py:filter_extra_model_parameters
+    """
+
+    @staticmethod
+    def _additional_fields(payload: dict[str, Any]) -> dict[str, Any]:
+        """Translate a chat completion request and return its model request fields.
+
+        Args:
+            payload: Raw chat completion request payload.
+
+        Returns:
+            The Bedrock ``additionalModelRequestFields``.
+        """
+        request = CompletionCreateParams.model_validate(payload)
+        _, additional_fields, *_ = translate_request(
+            request, "anthropic.claude-haiku-4-5-20251001-v1:0"
+        )
+        return additional_fields
+
+    def test_default_dropped_param_does_not_reach_the_body(self) -> None:
+        """A LiteLLM control key leaked via extra_body never reaches the model request."""
+        additional_fields = self._additional_fields(
+            {
+                "model": "model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "drop_params": True,
+                "custom_field": "x",
+            }
+        )
+        assert additional_fields == {"custom_field": "x"}
+
+    def test_non_listed_extra_is_still_forwarded(self) -> None:
+        """An extra absent from every denylist keeps reaching the model request."""
+        additional_fields = self._additional_fields(
+            {
+                "model": "model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "custom_field": "x",
+            }
+        )
+        assert additional_fields == {"custom_field": "x"}
+
+    def test_denylist_setting_drops_additional_keys(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """extra_model_params_denylist adds to, rather than replaces, the built-in set."""
+        monkeypatch.setattr(
+            SETTINGS, "extra_model_params_denylist", frozenset({"x_custom_flag"})
+        )
+        additional_fields = self._additional_fields(
+            {
+                "model": "model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "x_custom_flag": True,
+                "custom_field": "x",
+            }
+        )
+        assert additional_fields == {"custom_field": "x"}
+
+    def test_drop_all_setting_removes_every_extra(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """extra_model_params_drop_all disables the passthrough entirely."""
+        monkeypatch.setattr(SETTINGS, "extra_model_params_drop_all", True)
+        additional_fields = self._additional_fields(
+            {
+                "model": "model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "custom_field": "x",
+            }
+        )
+        assert additional_fields == {}
+
+    def test_denylisted_key_colliding_with_a_reserved_name_is_dropped_silently(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Filtering runs before the reserved-argument-name collision check.
+
+        A key added to the denylist that also happens to be a
+        ``set_inference_configuration`` argument name must be dropped rather than
+        raise ``ApiError`` — dropping happens first.
+        """
+        monkeypatch.setattr(
+            SETTINGS, "extra_model_params_denylist", frozenset({"top_k"})
+        )
+        assert inference_extras({"top_k": 7}, _RESERVED_INFERENCE_PARAMS) == {}
 
 
 #: Bedrock output content block carrying model-native audio.

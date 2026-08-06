@@ -1,9 +1,10 @@
 """Extra model parameters, inference config and guardrail helpers in stdapi.aws_bedrock.
 
 Covers gateway-internal helpers with no upstream analogue: the merge of
-``default_model_params`` with per-request extras, the ``inferenceConfig``
-builder, the ``X-Amzn-Bedrock-Guardrail*`` header override, guardrail Region
-resolution, and the guardrail-assessment to OpenAI-moderation mapping.
+``default_model_params`` with per-request extras, the denylist filtering out
+leaked LiteLLM client-control parameters, the ``inferenceConfig`` builder, the
+``X-Amzn-Bedrock-Guardrail*`` header override, guardrail Region resolution,
+and the guardrail-assessment to OpenAI-moderation mapping.
 
 Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
      https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html
@@ -18,6 +19,7 @@ from starlette.datastructures import Headers
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import (
     GUARDRAIL_CONFIG_VAR,
+    filter_extra_model_parameters,
     get_extra_model_parameters,
     guardrail_region,
     map_guardrail_filters,
@@ -110,6 +112,108 @@ class TestGetExtraModelParameters:
         assert first_params == {"temperature": 0.5, "top_k": 1}
         assert second_params == {"temperature": 0.5, "max_tokens": 2}
         assert SETTINGS.default_model_params["model-a"] == {"temperature": 0.5}
+
+    def test_default_dropped_param_does_not_reach_the_body(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A LiteLLM control key leaked via extra_body never reaches the model body.
+
+        Regression for RAGFlow-style clients hardcoding ``drop_params`` into
+        ``extra_body``: the merged parameters sent to Bedrock as
+        ``additionalModelRequestFields`` must not include it.
+        """
+        monkeypatch.setattr(SETTINGS, "default_model_params", {})
+        request = _Request.model_validate(
+            {"model": "model-a", "drop_params": True, "temperature": 0.5}
+        )
+
+        params = get_extra_model_parameters("model-a", request)
+
+        assert params == {"temperature": 0.5}
+
+    def test_non_listed_extra_is_still_forwarded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An extra that is not on any denylist keeps reaching the model body.
+
+        Regression guard for the passthrough feature itself: filtering must not
+        turn into an accidental allowlist.
+        """
+        monkeypatch.setattr(SETTINGS, "default_model_params", {})
+        request = _Request.model_validate({"model": "model-a", "custom_field": "x"})
+
+        params = get_extra_model_parameters("model-a", request)
+
+        assert params == {"custom_field": "x"}
+
+
+class TestFilterExtraModelParameters:
+    """filter_extra_model_parameters: the denylist shared by every extra-params funnel.
+
+    Ref: stdapi/aws_bedrock.py:filter_extra_model_parameters
+    """
+
+    def test_default_dropped_key_is_removed(self) -> None:
+        """A key from the built-in denylist is stripped."""
+        assert filter_extra_model_parameters({"drop_params": True, "top_k": 1}) == {
+            "top_k": 1
+        }
+
+    def test_unlisted_key_passes_through(self) -> None:
+        """A key absent from every denylist is forwarded unchanged."""
+        assert filter_extra_model_parameters({"reasoning_effort": "high"}) == {
+            "reasoning_effort": "high"
+        }
+
+    def test_denylist_setting_drops_additional_keys(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """extra_model_params_denylist adds to, rather than replaces, the built-in set."""
+        monkeypatch.setattr(
+            SETTINGS,
+            "extra_model_params_denylist",
+            SETTINGS.extra_model_params_denylist | {"x_custom_flag"},
+        )
+
+        result = filter_extra_model_parameters(
+            {"x_custom_flag": True, "drop_params": True, "top_k": 1}
+        )
+
+        assert result == {"top_k": 1}
+
+    def test_drop_all_setting_removes_every_extra(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """extra_model_params_drop_all disables the passthrough entirely."""
+        monkeypatch.setattr(SETTINGS, "extra_model_params_drop_all", True)
+
+        assert (
+            filter_extra_model_parameters({"top_k": 1, "reasoning_effort": "x"}) == {}
+        )
+
+    def test_built_in_denylist_excludes_real_request_fields(self) -> None:
+        """Regression guard: real request field names must never be denylisted.
+
+        A name that is a legitimate field on some route must never be in the
+        built-in denylist, or a real user parameter would be silently swallowed.
+        """
+        assert SETTINGS.extra_model_params_denylist.isdisjoint(
+            {
+                "metadata",
+                "user",
+                "stream",
+                "tags",
+                "ttl",
+                "order",
+                "id",
+                "client",
+                "weight",
+                "headers",
+                "roles",
+                "self",
+                "region_name",
+            }
+        )
 
 
 @pytest.mark.usefixtures("configured_guardrail")

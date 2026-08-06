@@ -3900,7 +3900,7 @@ class TestReservedModelExtras:
     accepts.
 
     Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
-         stdapi/models/chat/_adapters/_openai_chat_completion.py:_inference_extras
+         stdapi/models/chat/_adapters/_common.py:inference_extras
          stdapi/aws_bedrock.py:set_inference_configuration
     """
 

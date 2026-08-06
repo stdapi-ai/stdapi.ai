@@ -569,6 +569,57 @@ class TestMcpToolFiltering:
         assert settings.mcp_include_tools is None
 
 
+class TestExtraModelParamsDropSettings:
+    """extra_model_params_denylist / extra_model_params_drop_all parsing.
+
+    These settings customize the LiteLLM client-control parameter filter shared
+    by every "extra model parameters" funnel.
+
+    Ref: stdapi/config.py:_parse_extra_model_params_denylist
+         stdapi/aws_bedrock.py:filter_extra_model_parameters
+    """
+
+    def test_denylist_defaults_to_the_built_in_names(self) -> None:
+        """With nothing configured, the setting already holds the built-in names."""
+        settings = _Settings(aws_bedrock_regions=["us-east-1"])
+        assert {"drop_params", "api_key", "custom_llm_provider"} <= (
+            settings.extra_model_params_denylist
+        )
+
+    def test_denylist_comma_separated_string_extends_the_built_in_names(self) -> None:
+        """A comma-separated env value is merged into the built-in names, not swapped for them.
+
+        The merge happens here so the request path is one membership test; an
+        operator adding a project-specific field must not silently disable the
+        built-in protection.
+        """
+        settings = _Settings(
+            aws_bedrock_regions=["us-east-1"],
+            extra_model_params_denylist="x_flag, x_trace_id ,x_flag",  # type: ignore[arg-type]
+        )
+        assert {"x_flag", "x_trace_id", "drop_params"} <= (
+            settings.extra_model_params_denylist
+        )
+
+    def test_denylist_is_not_built_when_the_passthrough_is_disabled(self) -> None:
+        """extra_model_params_drop_all leaves nothing to filter, so nothing is retained.
+
+        The filter short-circuits on the flag, so keeping the merged set would
+        hold names no request path ever reads.
+        """
+        settings = _Settings(
+            aws_bedrock_regions=["us-east-1"],
+            extra_model_params_drop_all=True,
+            extra_model_params_denylist="x_flag",  # type: ignore[arg-type]
+        )
+        assert settings.extra_model_params_denylist == frozenset()
+
+    def test_drop_all_defaults_to_false(self) -> None:
+        """The passthrough stays enabled unless explicitly disabled."""
+        settings = _Settings(aws_bedrock_regions=["us-east-1"])
+        assert settings.extra_model_params_drop_all is False
+
+
 class TestOpenApiJsonImplication:
     """enable_openapi_json is implied by enable_docs and enable_redoc.
 
