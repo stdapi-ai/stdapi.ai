@@ -1,8 +1,8 @@
 # Agentic test lane
 
 Real third-party clients — Claude Code, Codex, pi, OpenClaw, Hermes, Qwen Code,
-n8n, Haystack, Open WebUI, wyoming-openai, LangChain, pydantic-ai and litellm —
-driven end to end against a live stdapi.ai server. They are the only tests that
+n8n, Haystack, Open WebUI, wyoming-openai, Docling Serve, LangChain, pydantic-ai
+and litellm — driven end to end against a live stdapi.ai server. They are the only tests that
 exercise a client's own wire behaviour: its system prompt, tool definitions,
 multi-turn tool-call replays, SSE streaming and multipart uploads, all translated
 by the gateway for a model that is usually not the vendor's own.
@@ -22,6 +22,7 @@ by the gateway for a model that is usually not the vendor's own.
 | langchain-openai / langchain-anthropic | `/v1` chat + embeddings, `/anthropic` | Streaming, `bind_tools`, `with_structured_output`, and the embeddings token-array trap, in plain Python |
 | pydantic-ai | `/v1/chat/completions` | Proves a real multi-turn tool loop survives Claude's silent `reasoning_content` replay drop |
 | litellm | `/v1` chat + embeddings | The only client that puts *its own* control parameters in the request body — the client half of `EXTRA_MODEL_PARAMS_DENYLIST` |
+| Docling Serve | `/v1/chat/completions` | The only client sending an `image_url` content part — a real app's multimodal request |
 
 pi is parametrized over its three providers, so one failure isolates to one
 adapter: the binary, prompt, model and assertions are identical across the three,
@@ -115,6 +116,22 @@ regardless of its own `drop_params` flag — that flag only drops parameters it
 knows a provider rejects — so an unrecognized field is one keyword argument away
 for any litellm user.
 
+Docling Serve is the lane's document-ingestion client, and the only one whose
+chat request carries an `image_url` content part: its optional VLM pipeline
+renders each page to an image and asks a vision model to transcribe it, where
+every other chat client here sends text. The page it converts is rendered in the
+test with a planted non-word on it and no text layer at all, so that word can only
+reach the Markdown through a model that saw the image. The default pipeline is the
+control: classical layout/OCR on the same document, asserted to reach the gateway
+*not at all*, because a VLM run silently falling back to OCR would transcribe the
+planted word just as well.
+
+Its image floats on `:latest` while the deployment sample pins a release, and that
+divergence is the point: the custom VLM preset the environment block declares is
+shaped after Docling's pydantic models rather than after its own documentation,
+which shows fields no current model has. The floating tag is what reports that the
+sample's wiring went stale, here rather than in a customer's ingestion stage.
+
 ```bash
 uv run pytest tests/agentic --agentic -s          # whole lane, with metric lines
 uv run pytest tests/agentic --agentic --agentic-rebuild   # refresh the CLIs first
@@ -126,6 +143,7 @@ uv run pytest tests/agentic/test_qwen_code.py --agentic   # the reasoning round 
 uv run pytest tests/agentic/test_n8n.py --agentic --expensive   # + the image tests
 uv run pytest tests/agentic/test_rag_haystack.py --agentic   # the rerank route
 uv run pytest tests/agentic/test_open_webui.py --agentic   # the documented env block
+uv run pytest tests/agentic/test_docling.py --agentic         # the VLM vision call
 uv run pytest tests/agentic/test_wyoming_audio.py --agentic   # streamed TTS
 uv run pytest tests/agentic/test_langchain.py --agentic      # both langchain routes
 uv run pytest tests/agentic/test_pydantic_ai.py --agentic    # the reasoning-replay proof
