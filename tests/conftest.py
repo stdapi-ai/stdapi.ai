@@ -43,8 +43,10 @@ from pybase64 import b64encode
 # Starlette's TestClient subclasses whichever HTTP library it can import, and prefers
 # httpx2, which every vendor SDK below rejects as an ``http_client``. Aliasing the name
 # while starlette binds it takes starlette's httpx fallback branch; the alias is dropped
-# at once so genai-prices -- which is why httpx2 is installed at all, through the
-# agentic lane's pydantic-ai -- still gets the real one.
+# at once so genai-prices -- which is why httpx2 is ever installed, through the agentic
+# lane's pydantic-ai -- still gets the real one. Only the client overlay pulls httpx2 in
+# (see tests/agentic/requirements.txt), so a plain sync takes the fallback branch anyway;
+# this stays unconditional because it has to hold in the run that does have it.
 assert "starlette.testclient" not in sys.modules, (
     "starlette.testclient was imported before this alias could be installed"
 )

@@ -1,17 +1,21 @@
 """Fixtures shared by every agentic test module.
 
-The whole lane is opt-in (``--agentic``) and container-only: the CLIs are
-third-party binaries driven by a model, so they are never executed on the host.
+The whole lane is opt-in (``--agentic``). Every third-party *binary* runs in a
+container and never on the host; the handful of clients that are Python libraries
+run in the test process, from the overlay described in ``requirements.txt``.
 A module joins the lane by exporting a module-level ``TOOL`` and parametrizing on
 ``model_config``; the identity check below then applies to it automatically.
 
 Ref: tests/agentic/_podman.py
      tests/agentic/_server.py
      tests/agentic/_tools.py:AGENTIC_TOOLS
+     tests/agentic/requirements.txt
 """
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version
+from importlib.util import find_spec
 from typing import TYPE_CHECKING
 
 import pytest
@@ -27,10 +31,81 @@ from ._server import AgenticServer, start_server, stop_server
 from ._tools import DEFAULT_IMAGE_GROUP, IMAGE_GROUPS, npm_packages
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Generator, Mapping
     from pathlib import Path
 
     from ._tools import AgenticTool
+
+
+#: Import name to distribution name of every client library the lane drives
+#: in-process, keyed by the module that imports it.
+#:
+#: These live in ``requirements.txt`` and are layered over the project environment
+#: at run time, so a plain ``uv run pytest`` has none of them: their modules are
+#: dropped from collection below rather than failing to import. Keeping them out of
+#: ``uv.lock`` is what lets them float -- uv resolves the lock as one universal
+#: resolution, which would pin every client to whatever also satisfies the gateway.
+_HOST_CLIENTS: Mapping[str, Mapping[str, str]] = {
+    "test_langchain.py": {
+        "langchain_openai": "langchain-openai",
+        "langchain_anthropic": "langchain-anthropic",
+    },
+    "test_pydantic_ai.py": {"pydantic_ai": "pydantic-ai-slim"},
+    "test_wyoming_audio.py": {"wyoming": "wyoming"},
+}
+
+#: Modules whose client library the running interpreter cannot import.
+_MISSING_CLIENTS: tuple[str, ...] = tuple(
+    module
+    for module, imports in _HOST_CLIENTS.items()
+    if any(find_spec(name) is None for name in imports)
+)
+
+collect_ignore = list(_MISSING_CLIENTS)
+
+
+def pytest_report_header(config: pytest.Config) -> list[str] | None:
+    """Report the in-process client versions the session will actually test.
+
+    The lane pins nothing, so the version driven is whatever the overlay last
+    resolved. Naming it here makes a client that moved underneath the suite visible
+    in the run that first fails, which is the whole point of letting it float.
+
+    Args:
+        config: Configuration of the session.
+
+    Returns:
+        One line for the clients present and one for those missing, or None when
+        the lane is not selected.
+    """
+    if not config.getoption("--agentic", default=False):
+        return None
+    installed = {
+        dist: found
+        for imports in _HOST_CLIENTS.values()
+        for name, dist in imports.items()
+        if find_spec(name) is not None and (found := _version(dist))
+    }
+    lines = []
+    if installed:
+        lines.append(
+            "agentic clients: "
+            + ", ".join(f"{d}=={v}" for d, v in sorted(installed.items()))
+        )
+    if _MISSING_CLIENTS:
+        lines.append(
+            f"agentic clients missing, skipping {', '.join(_MISSING_CLIENTS)} -- rerun "
+            "with: uv run --refresh --with-requirements tests/agentic/requirements.txt"
+        )
+    return lines or None
+
+
+def _version(distribution: str) -> str | None:
+    """Installed version of *distribution*, or None when it is absent."""
+    try:
+        return version(distribution)
+    except PackageNotFoundError:
+        return None
 
 
 def tool_under_test(request: pytest.FixtureRequest) -> AgenticTool | None:

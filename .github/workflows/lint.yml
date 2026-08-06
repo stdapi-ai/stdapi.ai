@@ -35,5 +35,9 @@ jobs:
       - name: Python format checking
         run: ruff format --check .
 
+      # The agentic lane's client libraries are layered in from their own
+      # requirements file rather than from uv.lock, so they float; typing them for
+      # real needs them installed, and a release that changes their API surfaces
+      # here before the lane is next run by hand.
       - name: Python type checking
-        run: mypy .
+        run: uv run --with-requirements tests/agentic/requirements.txt mypy .

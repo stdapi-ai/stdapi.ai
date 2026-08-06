@@ -1,7 +1,7 @@
 # Agentic test lane
 
 Real third-party clients — Claude Code, Codex, pi, OpenClaw, Hermes, Qwen Code,
-n8n, Haystack, Open WebUI and wyoming-openai —
+n8n, Haystack, Open WebUI, wyoming-openai, LangChain and pydantic-ai —
 driven end to end against a live stdapi.ai server. They are the only tests that
 exercise a client's own wire behaviour: its system prompt, tool definitions,
 multi-turn tool-call replays, SSE streaming and multipart uploads, all translated
@@ -117,6 +117,10 @@ uv run pytest tests/agentic/test_langchain.py --agentic      # both langchain ro
 uv run pytest tests/agentic/test_pydantic_ai.py --agentic    # the reasoning-replay proof
 ```
 
+The last three need the client overlay described under
+[In-process clients](#in-process-clients); without it they are dropped from
+collection and the run says so.
+
 `-s` surfaces one benchmark line per run:
 
 ```
@@ -130,10 +134,42 @@ CC-METRICS | amazon.nova-2-lite-v1:0 | test_trace_request_pipeline | steps=  7 |
   user namespace a rootless container needs, so `--remote` is used automatically
   against the host's podman socket
 - Bedrock credentials, as for the rest of the suite
+- the client overlay, for the three modules listed below
 
 The CLIs are **never executed on the host**. If podman is unavailable the lane
 skips rather than falling back to a host binary, so a run always reports the tool
 version it actually tested.
+
+## In-process clients
+
+Three clients are Python libraries rather than binaries, so they run in the test
+process: `test_langchain.py`, `test_pydantic_ai.py` and `test_wyoming_audio.py`. Their packages are listed in `requirements.txt` and layered
+over the project environment at run time:
+
+```bash
+uv run --with-requirements tests/agentic/requirements.txt pytest tests/agentic --agentic
+uv run --refresh --with-requirements tests/agentic/requirements.txt pytest tests/agentic --agentic
+```
+
+`--refresh` re-resolves them, and is to these clients what `--agentic-rebuild` is
+to the images.
+
+They are deliberately **not** in `pyproject.toml`. `uv.lock` is a single universal
+resolution covering every dependency group at once, so a client declared there
+would be pinned to whatever version also satisfies the gateway's own constraints —
+and would be installed by every CI job, none of which run this lane. Keeping them
+in a separate requirements file is what lets them float, exactly like the unpinned
+packages the container images install, so an upstream release that breaks the
+gateway surfaces here. The versions a session actually resolved are printed in its
+header:
+
+```
+agentic clients: langchain-anthropic==1.5.3, langchain-openai==1.4.1, pydantic-ai-slim==2.23.0, wyoming==1.10.0
+```
+
+Without the overlay, those modules are dropped from collection and the header
+names them rather than letting the run look complete. `mypy` needs the overlay too,
+which is why CI's type-checking step uses it.
 
 ## Isolation
 
@@ -178,6 +214,12 @@ Nothing else is needed. The image picks the package up automatically, because it
 tag is a digest of the package list and the `Containerfile` — changing either
 rebuilds on the next run. The server, sandboxing, assertions, metrics and the
 autouse model-identity check are all shared.
+
+A client that is a Python library takes a third step instead of the first one's
+npm package: add it to `requirements.txt`, and register the module against its
+import name in `_HOST_CLIENTS` in `conftest.py` so a run without the overlay drops
+it from collection rather than failing to import. See
+[In-process clients](#in-process-clients).
 
 ## Two primitives for clients that do not fit
 
@@ -323,7 +365,7 @@ image runs it — and is copied verbatim into `/work` per run; the gateway, the
 three models and the question all arrive as environment variables, so nothing is
 rendered. It prints one JSON record and writes the same record to
 `/work/rag_run.json`, which is what `_tools.py:haystack_record` reads back for the
-assertions. Three things bite:
+assertions. Two things bite:
 
 - **the assertion is the *movement*, not the status code.** The corpus is built so
   the two rankings disagree: every decoy repeats the question's wording while the
@@ -392,14 +434,16 @@ program and makes both synthesis paths reachable from one boot. Four things bite
 
 ## The pure-Python HTTP clients
 
-`test_langchain.py` and `test_pydantic_ai.py` drive their libraries in-process
-against `agentic_server`, with no container at all: unlike every other module
-here, they are plain HTTP client libraries, not third-party binaries, so there is
-nothing for podman to sandbox. Each still declares a real `AgenticTool` (or an
-`agentic_tool` fixture, for `test_langchain.py`'s two routes) purely so the
-autouse model-identity check runs for free; its `build`/`parse`/`prepare_workdir`
-are never called, since neither module ever requests `agentic_image` or calls
-`run_agent`. Two things bite:
+`test_langchain.py` and `test_pydantic_ai.py` drive their
+libraries in-process against `agentic_server`, with no container at all: unlike
+every other module here, they are plain HTTP client libraries, not third-party
+binaries, so there is nothing for podman to sandbox. Each still declares a real
+`AgenticTool` (or an `agentic_tool` fixture, for `test_langchain.py`'s two routes)
+purely so the autouse model-identity check runs for free; its
+`build`/`parse`/`prepare_workdir` are never called, since none of them ever
+requests `agentic_image` or calls `run_agent`. Their packages come from the
+overlay, not from `uv.lock` — see [In-process clients](#in-process-clients).
+Two things bite:
 
 - **the shared podman skip still applies.** `_model_identity_check` checks for
   podman before resolving `agentic_server`, for every module in this directory —
