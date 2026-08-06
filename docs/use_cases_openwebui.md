@@ -231,15 +231,19 @@ Deploy Open WebUI + stdapi.ai together with production infrastructure:
 - Playwright for web scraping
 - HTTPS with ALB on your own domain
 - All environment variables pre-configured
+- Official container images used as published — no local Docker build and no registry credential
 
 **Deploy:**
 
 ```bash
 git clone https://github.com/stdapi-ai/samples.git
 cd samples/getting_started_openwebui/terraform
-terraform init
-terraform apply
+tofu init
+tofu apply
 ```
+
+!!! note "Requires a sibling checkout for now"
+    This example pins the ECS module to a local path, because the S3 Files support it relies on is not yet in a published module release. Clone [JGoutin/terraform-aws-ecs](https://github.com/JGoutin/terraform-aws-ecs) next to your `samples` checkout until that release ships.
 
 ---
 

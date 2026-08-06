@@ -535,7 +535,7 @@ Every integration is the same three steps: deploy, copy your endpoint URL, paste
 <div class="usecase__tag">RAG &amp; SEARCH</div>
 <div class="usecase__title">Answers grounded in your data</div>
 <div class="usecase__body">Two-stage retrieval through one deployment — Bedrock embeddings, then Cohere-compatible reranking, with any vector database.</div>
-<div class="usecase__tools"><strong>Haystack</strong> · LlamaIndex · RAGFlow · LightRAG</div>
+<div class="usecase__tools"><strong>Haystack</strong> · LlamaIndex · RAGFlow · Docling · LightRAG</div>
 [RAG pipelines guide](use_cases_rag.md)
 </div>
 

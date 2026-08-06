@@ -154,12 +154,12 @@ Prefer a hands-off setup? A [managed deployment service](https://aws.amazon.com/
 
 | Category | What You Can Build | Tools | Guide |
 |---|---|---|---|
-| **💬 Chat Interfaces** | Private ChatGPT alternative, team chat, knowledge base with RAG | **Open WebUI**, AnythingLLM, LibreChat | [Guide →](https://stdapi.ai/use_cases_openwebui/) |
+| **💬 Chat Interfaces** | Private ChatGPT alternative, team chat, knowledge base with RAG | **Open WebUI**, LobeHub, AnythingLLM, LibreChat | [Guide →](https://stdapi.ai/use_cases_openwebui/) |
 | **💻 Coding Assistants** | AI pair programming, code completion, codebase chat | **Claude Code**, **Codex**, **Qwen Code**, **pi**, Cline, OpenCode, Zed | [Guide →](https://stdapi.ai/use_cases_coding_assistants/) |
 | **🔄 Workflow Automation** | AI-powered ticket routing, content creation, data processing | **n8n**, Langflow, Dify, Flowise | [Guide →](https://stdapi.ai/use_cases_n8n/) |
 | **🤖 Chatbots** | Slack/Discord/Teams bots, documentation assistants | Dify, Chatwoot, Typebot | |
-| **🧠 Autonomous Agents** | Personal AI assistants, research agents, multi-agent systems, code agents | **OpenClaw**, **Hermes**, **Pydantic AI**, LangGraph, CrewAI | |
-| **🔍 RAG & Voice** | Semantic search, document pipelines, speech assistants | **LangChain**, **Haystack**, **wyoming-openai** | |
+| **🧠 Autonomous Agents** | Personal AI assistants, research agents, multi-agent systems, code agents | **OpenClaw**, **Hermes**, **Pydantic AI**, LangGraph, CrewAI | [Guide →](https://stdapi.ai/use_cases_autonomous_agents/) |
+| **🔍 RAG & Voice** | Semantic search, document pipelines, speech assistants | **LangChain**, **Haystack**, **wyoming-openai**, RAGFlow, Docling | [Guide →](https://stdapi.ai/use_cases_rag/) |
 
 **Bold** = driven end to end against a live gateway by the [automated test suite](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests). The others have a documented setup and use the same standard SDKs.
 

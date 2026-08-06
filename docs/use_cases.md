@@ -76,7 +76,7 @@ Enhance your development workflow with AI-powered coding assistants. stdapi.ai i
 - **Code generation** - Natural language to code with Claude and specialized coding models
 - **Codebase understanding** - Chat with your codebase, explain functions, refactor code
 
-**Popular tools:** **Claude Code**, **Codex**, **Qwen Code**, **pi**, **OpenClaw**, Cline, OpenCode, Zed, JetBrains AI Assistant
+**Popular tools:** **Claude Code**, **Codex**, **Qwen Code**, **pi**, Cline, OpenCode, Zed, JetBrains AI Assistant
 
 **[AI Coding Assistants Guide](use_cases_coding_assistants.md)** — Universal setup for IDEs and development frameworks
 
@@ -126,6 +126,8 @@ Build ChatGPT-like experiences with Amazon Bedrock models and complete privacy c
 **Popular tools:** **Open WebUI**, LobeHub, AnythingLLM, LibreChat
 
 **[Open WebUI Integration Guide](use_cases_openwebui.md)** — Complete setup with Terraform deployment examples
+
+**[LobeHub Integration Guide](use_cases_lobehub.md)** — Complete setup with Terraform deployment examples
 
 ---
 
@@ -184,14 +186,17 @@ Build retrieval-augmented generation and semantic search pipelines with Bedrock 
 
 **What you can build:**
 
+- **Document ingestion** - Parse PDFs and office documents into Markdown with Docling before embedding
 - **RAG pipelines** - Ground model answers in your documents with [embeddings](api_openai_embeddings.md)
 - **Two-stage retrieval** - Improve relevance with the [Rerank API](api_cohere_rerank.md) on top of vector search
 - **Semantic search** - Search by meaning across documents, tickets, and knowledge bases
 - **Multimodal search** - Embed text and images with models like Cohere Embed v4
 
-**Popular tools:** **Haystack**, LlamaIndex, RAGFlow, LightRAG — works with any vector database (pgvector, Qdrant, and others store the vectors; stdapi.ai serves the embeddings)
+**Popular tools:** Docling for document parsing, **Haystack**, RAGFlow, LlamaIndex, LightRAG for retrieval — works with any vector database (pgvector, Qdrant, and others store the vectors; stdapi.ai serves the embeddings)
 
-**[RAG Pipelines Guide](use_cases_rag.md)** — Configuring embeddings, Cohere-compatible reranking, and generation together
+**[RAG Pipelines Guide](use_cases_rag.md)** — Configuring document parsing, embeddings, Cohere-compatible reranking, and generation together
+
+**[RAGFlow Integration Guide](use_cases_ragflow.md)** — Complete setup with Terraform deployment examples
 
 ---
 

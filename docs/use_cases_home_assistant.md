@@ -102,6 +102,40 @@ Naming the same model in both `TTS_MODELS` and `TTS_STREAMING_MODELS` puts its v
 
 ---
 
+## :material-rocket-launch: Terraform Deployment
+
+Deploy Home Assistant, wyoming-openai, and stdapi.ai together on ECS Fargate:
+
+**📦 [stdapi-ai/samples/getting_started_home_assistant](https://github.com/stdapi-ai/samples/tree/main/getting_started_home_assistant)**
+
+**What's included:**
+
+- Home Assistant and wyoming-openai in the same ECS Fargate task, talking over `localhost`
+- stdapi.ai gateway connected to Amazon Bedrock, Amazon Transcribe, and Amazon Polly
+- `configuration.yaml` seeded on first boot with the reverse-proxy trust settings Home Assistant needs behind an ALB
+- Both container images pulled directly and anonymously from ghcr.io — no local build, no registry credential
+- HTTPS-capable ALB on your own domain (needed for microphone access in the browser)
+
+!!! warning "Demonstration sample, not a production Home Assistant deployment"
+    AWS Fargate has no access to a home network: Zigbee/Z-Wave USB dongles, mDNS device discovery, and other LAN-only integrations do not work here, and a Wyoming voice satellite on your home LAN cannot reach this deployment unless you put a VPN between them. Use it to try Assist voice through Amazon Transcribe/Polly, or as a starting point for a self-hosted, cloud-reachable instance you administer through the web UI.
+
+!!! warning "Local ECS module source"
+    `module "home_assistant"` currently points at a local relative path (`../../../terraform-aws-ecs`) instead of the published registry module, because it needs S3 Files mount-point support (used to seed `configuration.yaml`) that isn't in a tagged release yet. This means `terraform-aws-ecs` must be checked out as a sibling of `samples/` before `tofu init` succeeds — see the sample's README for the exact layout.
+
+**Deploy:**
+
+```bash
+git clone https://github.com/stdapi-ai/samples.git
+git clone https://github.com/JGoutin/terraform-aws-ecs.git
+cd samples/getting_started_home_assistant/terraform
+tofu init
+tofu apply
+```
+
+Three steps stay manual after `tofu apply`, for reasons specific to Home Assistant: creating the owner account through the onboarding wizard, adding the Wyoming integration (**Settings → Devices & Services**), and pointing an Assist pipeline at it. See the sample's README for the exact steps.
+
+---
+
 ## :material-alert-outline: Known Issues
 
 The proxy speaks the Wyoming protocol over its own TCP port, not HTTP—there is no `/health` endpoint to check readiness with a plain web request. Wait for a successful Wyoming `describe` exchange (or check the container logs) rather than polling an HTTP path.

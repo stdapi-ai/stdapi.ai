@@ -408,6 +408,33 @@ n8n calls the `/anthropic/v1/files` endpoints (see [Anthropic Files API](api_ant
 
 The Anthropic node's **Prompt** resource (`Generate Prompt`, `Improve Prompt`, `Templatize Prompt`) calls Anthropic's experimental prompt tools endpoints, which are not part of the Amazon Bedrock API surface and are not available through stdapi.ai. Use a `Message a Model` node with prompt-engineering instructions instead.
 
+## :material-rocket-launch: Terraform Deployment
+
+Deploy n8n + stdapi.ai together, with a credential and thirteen sample workflows already imported:
+
+**📦 [stdapi-ai/samples/getting_started_n8n](https://github.com/stdapi-ai/samples/tree/main/getting_started_n8n)**
+
+**What's included:**
+
+- n8n on ECS Fargate, backed by Aurora PostgreSQL
+- stdapi.ai gateway connected to Amazon Bedrock, preconfigured as both an OpenAI and an Anthropic n8n credential
+- Thirteen sample workflows — one per stdapi.ai route family — imported automatically on first start
+- Owner account pre-provisioned non-interactively, no signup screen to click through
+- HTTPS-only ALB on your own domain (required — n8n's session cookie needs it)
+- No local image build — the official `n8nio/n8n` image is pulled directly from Docker Hub
+
+!!! warning "Local ECS module source"
+    `module "n8n"` currently points at a local relative path (`../../../terraform-aws-ecs`) instead of the published registry module, because it needs S3 Files mount-point support (used to seed the credential and workflows) that isn't in a tagged release yet. Cloning only the samples repository is not enough for `tofu init` to resolve it — see the sample's README ("Status") for the sibling-checkout layout it currently requires.
+
+**Deploy:**
+
+```bash
+git clone https://github.com/stdapi-ai/samples.git
+cd samples/getting_started_n8n/terraform
+tofu init
+tofu apply
+```
+
 ## :material-alert-outline: Known Limitations
 
 n8n's Cohere sub-nodes—**Cohere Reranker** (used by vector store nodes for hybrid search) and **Embeddings Cohere**—cannot be pointed at stdapi.ai. Their shared `cohereApi` credential exposes only an API key: its base URL is a hidden field pinned to Cohere's own endpoint, and both nodes build their client from the API key and the model alone, so that URL never reaches the request anyway.

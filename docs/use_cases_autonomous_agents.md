@@ -106,11 +106,95 @@ prompt_caching:
 
 Only `5m` and `1h` are accepted—any other value is ignored. This pairs directly with stdapi.ai's own Anthropic Messages prompt-caching support: Hermes' breakpoints arrive as standard `cache_control` markers, which stdapi.ai translates into Bedrock cache points, up to the four the Converse API allows per request.
 
+### :material-rocket-launch: Terraform Deployment
+
+Deploy Hermes + stdapi.ai together on ECS Fargate, with `config.yaml` pre-seeded and ready to run:
+
+**📦 [stdapi-ai/samples/getting_started_hermes](https://github.com/stdapi-ai/samples/tree/main/getting_started_hermes)**
+
+**What's included:**
+
+- Hermes gateway API and web dashboard on ECS Fargate, each behind its own generated credential
+- stdapi.ai gateway connected to Amazon Bedrock, registered as a custom OpenAI-compatible provider
+- `config.yaml` seeded on first boot with the stdapi.ai URL and API key already filled in
+- Persistent state (config, sessions, memories, skills) on EFS, so it survives redeployments
+- No local image build — the public `nousresearch/hermes-agent` image is pulled anonymously by Fargate
+- ECS Exec enabled for shelling into the container or driving Hermes' interactive CLI directly
+
+!!! warning "Local ECS module source"
+    `module "hermes"` currently points at a local relative path (`../../../terraform-aws-ecs`) instead of the published registry module, because it needs S3 Files mount-point support (used to seed `config.yaml`) that isn't in a tagged release yet. Cloning only the samples repository is not enough for `tofu init` to resolve it — see the sample's README for the sibling-checkout layout it currently requires.
+
+**Deploy:**
+
+```bash
+git clone https://github.com/stdapi-ai/samples.git
+cd samples/getting_started_hermes/terraform
+tofu init
+tofu apply
+```
+
 ---
 
 ## :material-account-cog: OpenClaw
 
-[OpenClaw](https://github.com/openclaw/openclaw) doubles as a personal-assistant CLI and a coding agent. Its stdapi.ai configuration—onboarding wizard, the `--custom-compatibility` wire-format switch, and model selection—is documented once, in the [AI Coding Assistants guide](use_cases_coding_assistants.md#configuration), and applies the same way whether OpenClaw is driving a coding task or a general assistant task.
+[OpenClaw](https://github.com/openclaw/openclaw) is a personal-assistant CLI (npm package `openclaw`) that also writes code as part of a task. Custom endpoints are registered through its onboarding wizard, not through the `agent` command itself:
+
+```bash
+openclaw onboard \
+  --custom-provider-id stdapi \
+  --custom-base-url https://YOUR_STDAPI_URL/v1 \
+  --custom-model-id anthropic.claude-fable-5 \
+  --custom-compatibility openai \
+  --custom-api-key YOUR_STDAPI_API_KEY
+```
+
+Omit `--custom-api-key` to read the key from `CUSTOM_API_KEY` in the environment instead. Then run the agent with the model qualified by the provider id:
+
+```bash
+openclaw agent --model stdapi/anthropic.claude-fable-5
+```
+
+`--custom-compatibility` is the standout setting here: one flag picks which of stdapi.ai's three chat dialects OpenClaw speaks, and `--custom-base-url` has to match the route serving it:
+
+| `--custom-compatibility` | `--custom-base-url` | API |
+|---|---|---|
+| `openai` | `https://YOUR_STDAPI_URL/v1` | [Chat Completions](api_openai_chat_completions.md) |
+| `openai-responses` | `https://YOUR_STDAPI_URL/v1` | [Responses](api_openai_responses.md) |
+| `anthropic` | `https://YOUR_STDAPI_URL/anthropic` | [Anthropic Messages](api_anthropic_messages.md) |
+
+Re-run `openclaw onboard` with a different `--custom-provider-id` to register more than one route side by side.
+
+### :material-rocket-launch: Terraform Deployment
+
+Deploy OpenClaw + stdapi.ai together on ECS Fargate, with the provider and default model preconfigured:
+
+**📦 [stdapi-ai/samples/getting_started_openclaw](https://github.com/stdapi-ai/samples/tree/main/getting_started_openclaw)**
+
+**What's included:**
+
+- OpenClaw gateway and Control UI on ECS Fargate, authenticated with a generated token
+- stdapi.ai gateway connected to Amazon Bedrock, registered as a custom OpenAI-compatible provider (`api: "openai-completions"`)
+- `openclaw.json` seeded on first boot with the provider and default model already filled in
+- Persistent config, auth material, and workspace on EFS
+- No local image build — the public `ghcr.io/openclaw/openclaw` image is pulled anonymously by Fargate
+
+!!! warning "Agent sandboxing is off"
+    OpenClaw can run agent tool calls inside a nested sandbox, but Fargate exposes none of the backends that requires (most commonly a host Docker socket), so this sample sets `agents.defaults.sandbox.mode` to `"off"`. Tool calls therefore run directly inside the container itself, with only the container's own boundary as isolation. Do not point this deployment at an agent workload you would not trust to run arbitrary commands there.
+
+!!! warning "Device pairing stays manual"
+    OpenClaw's Control UI requires pairing a browser device before use, done through a few `aws ecs execute-command` calls after deployment — see the sample's README for the exact commands. This is not automated by Terraform.
+
+!!! warning "Local ECS module source"
+    `module "openclaw"` currently points at a local relative path (`../../../terraform-aws-ecs`) instead of the published registry module, because it needs S3 Files mount-point support (used to seed `openclaw.json`) that isn't in a tagged release yet. Cloning only the samples repository is not enough for `tofu init` to resolve it — see the sample's README for the sibling-checkout layout it currently requires.
+
+**Deploy:**
+
+```bash
+git clone https://github.com/stdapi-ai/samples.git
+cd samples/getting_started_openclaw/terraform
+tofu init
+tofu apply
+```
 
 ---
 

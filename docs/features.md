@@ -427,7 +427,7 @@ stdapi.ai is a drop-in replacement in hundreds of applications and tools. Change
   <br>Pipecat, LiveKit Agents, TEN Framework, Home Assistant — voice agents with speech, transcription, and translation
 
 - :material-magnify: **RAG & Semantic Search**
-  <br>LlamaIndex, Haystack, RAGFlow, LightRAG — embeddings and Cohere-compatible reranking
+  <br>LlamaIndex, Haystack, RAGFlow, Docling, LightRAG — embeddings and Cohere-compatible reranking
 
 - :material-forum: **Team Chatbots**
   <br>Slack, Discord, Microsoft Teams — AI assistants in your team's communication tools

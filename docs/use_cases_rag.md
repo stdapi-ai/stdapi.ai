@@ -59,6 +59,41 @@ flowchart LR
 
 Every RAG framework that speaks the OpenAI and Cohere SDKs follows the same pattern: the embedder and the generator take the OpenAI-compatible `/v1` base URL, and the reranker takes the Cohere-compatible `/cohere` base URL.
 
+### :material-file-document-outline: Document Parsing
+
+Before embedding, a RAG pipeline needs plain text out of PDFs and office documents. [Docling Serve](https://github.com/docling-project/docling-serve) converts them to Markdown/JSON over an HTTP API — deploy it as the ingestion stage in front of the embedder below, not as a standalone gateway showcase.
+
+Docling's default pipeline is classical layout/OCR/table-structure extraction and never calls an LLM. Its optional VLM pipeline additionally routes page images through stdapi.ai to a vision-capable Bedrock model, for documents that benefit from model-assisted layout understanding.
+
+!!! example "Convert a document"
+    ```bash
+    curl -s -X POST "$DOCLING_URL/v1/convert/source" \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "options": {"to_formats": ["md"]},
+        "sources": [{"kind": "http", "url": "https://example.com/document.pdf"}]
+      }' | jq -r '.document.md_content'
+    ```
+
+    Docling Serve's own usage documentation shows `http_sources` here, but the server's OpenAPI schema requires the `sources` array with a `kind` discriminator shown above.
+
+    Feed the returned Markdown into the embedder below to complete the ingestion stage.
+
+**📦 [stdapi-ai/samples/getting_started_docling](https://github.com/stdapi-ai/samples/tree/main/getting_started_docling)** deploys Docling Serve on ECS Fargate, CPU-only, with the VLM pipeline pre-wired to a Bedrock vision model through stdapi.ai.
+
+!!! warning "Local ECS module source"
+    `module "docling"` currently points at a local relative path (`../../../terraform-aws-ecs`) instead of the published registry module, because it needs S3 Files/public-image support that isn't in a tagged release yet. Cloning only the samples repository is not enough for `tofu init` to resolve it — you need a sibling checkout of `terraform-aws-ecs` next to `samples/`.
+
+**Deploy:**
+
+```bash
+git clone https://github.com/stdapi-ai/samples.git
+git clone https://github.com/JGoutin/terraform-aws-ecs.git
+cd samples/getting_started_docling/terraform
+tofu init
+tofu apply
+```
+
 ### :material-vector-polyline: Embeddings
 
 Point your framework's OpenAI-compatible embedder at `/v1` with an embeddings-capable model.
@@ -125,6 +160,9 @@ Point your framework's OpenAI-compatible chat generator at `/v1`, answering from
 ### :material-toolbox: Other Frameworks
 
 The same two-route pattern—OpenAI-compatible `/v1` for embedding and generation, Cohere-compatible `/cohere` for reranking—applies to any framework built on those SDKs, including LlamaIndex, RAGFlow, and LightRAG. Set the base URL and API key on the framework's OpenAI and Cohere client configuration; the vector store itself (pgvector, Qdrant, or an in-memory store) is unaffected and stores whatever the embedder returns.
+
+!!! tip "Want the platform instead of the pipeline?"
+    This page covers wiring stdapi.ai into a pipeline you assemble yourself. If you would rather run a finished product—a web UI, document parsing, knowledge bases, and grounded chat, with no pipeline code to write—see the [RAGFlow Integration](use_cases_ragflow.md) guide, which deploys RAGFlow with all three stages already bound to Amazon Bedrock.
 
 !!! warning "n8n cannot rerank through stdapi.ai"
     n8n's Cohere Reranker node has no base URL field—see [n8n Integration: Known Limitations](use_cases_n8n.md#known-limitations) for a workaround.
