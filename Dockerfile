@@ -113,7 +113,7 @@ RUN cat /tmp/ffmpeg-apk-entry >> /lib/apk/db/installed && rm /tmp/ffmpeg-apk-ent
 
 # Health probe: TRUSTED_HOSTS makes the server answer 400 to every other Host
 # header, so the probe announces a trusted one, and addresses 127.0.0.1 since
-# "localhost" resolves to ::1 first, where the IPv4-only server never listens.
+# "localhost" resolves to ::1 first, which a GRANIAN_HOST of 0.0.0.0 never binds.
 RUN printf '%s\n' \
     'import json' \
     'import os' \
@@ -145,12 +145,17 @@ RUN printf '%s\n' \
 USER nonroot
 WORKDIR /opt/app
 
+# Bind address and port stay out of CMD so they remain overridable: granian reads
+# its own GRANIAN_* variables, but an argument spelled out in CMD would take
+# priority over them.  Set GRANIAN_HOST="::" for a dual-stack socket, needed
+# wherever a client may resolve the server to an IPv6 address.
 # Default GRANIAN_PORT=8000
 EXPOSE 8000
-ENV GRANIAN_LOG_LEVEL="critical" \
+ENV GRANIAN_HOST="0.0.0.0" \
+    GRANIAN_LOG_LEVEL="critical" \
     GRANIAN_LOG_ACCESS_ENABLED="false"
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=30s \
     CMD ["python3", "/usr/local/bin/healthcheck.py"]
 
-CMD ["python3", "-m", "granian", "stdapi.main:app", "--host", "0.0.0.0", "--interface", "asgi", "--no-ws", "--loop", "uvloop"]
+CMD ["python3", "-m", "granian", "stdapi.main:app", "--interface", "asgi", "--no-ws", "--loop", "uvloop"]

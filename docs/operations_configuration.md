@@ -33,6 +33,8 @@ stdapi.ai is configured entirely through environment variables, which are read o
 !!! info "Container Runtime"
     Both the AWS Marketplace and community Docker images run using [Granian](https://github.com/emmett-framework/granian), a high-performance Python ASGI server. In addition to the stdapi.ai-specific configuration variables documented below, you can also use Granian environment variables to configure the server runtime (e.g., `GRANIAN_PORT`, `GRANIAN_WORKERS`, `GRANIAN_THREADS`, etc.).
 
+    The images listen on IPv4 only (`GRANIAN_HOST=0.0.0.0`). Set `GRANIAN_HOST=::` to bind a dual-stack socket answering both IPv4 and IPv6 clients. This is needed wherever a client may resolve the server to an IPv6 address — in particular with ECS service discovery, which publishes an `AAAA` record for every task in an IPv6-enabled subnet, and some clients (Node.js among them) try that address first and fail with `ECONNREFUSED` against an IPv4-only listener. The [official Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) sets it for you when the VPC has IPv6 enabled.
+
 ## :material-rocket-launch: Quick Start
 
 For production deployments, configure these essential settings:
@@ -2234,6 +2236,15 @@ export PROXY_TRUSTED_HOSTS='["10.0.0.0/8"]'
 
 !!! tip "Configured automatically by the official Terraform module"
     The [stdapi-ai Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) sets this for you when the ALB is enabled with client IP logging (`alb_enabled = true`, `log_client_ip = true`): it enables proxy headers and pins `PROXY_TRUSTED_HOSTS` to the ALB's subnet CIDRs, so only the load balancer is trusted and direct clients cannot forge `X-Forwarded-For`. Override it with the module's `proxy_trusted_hosts` variable when fronting the ALB with an additional proxy (for example CloudFront).
+
+!!! warning "On a dual-stack listener, cover the IPv4-mapped form too"
+    With `GRANIAN_HOST=::` the operating system reports an IPv4 peer as an IPv4-mapped IPv6 address such as `::ffff:10.0.1.5`, which belongs to no IPv4 network and therefore matches no IPv4 entry here. Add the mapped range alongside the plain one — an IPv4 `/16` becomes a `/112` once the 96-bit mapping prefix is counted:
+
+    ```bash
+    export PROXY_TRUSTED_HOSTS='["10.0.0.0/16", "::ffff:10.0.0.0/112"]'
+    ```
+
+    Miss it and the proxy stops being trusted: `X-Forwarded-For` is ignored and the load balancer's own address is recorded as the client IP. The Terraform module derives these entries for you, including for values passed to its `proxy_trusted_hosts` variable.
 
 ---
 

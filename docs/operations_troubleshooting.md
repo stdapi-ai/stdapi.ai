@@ -1,7 +1,7 @@
 ---
 title: Troubleshooting - Common stdapi.ai deployment issues
 description: Fixes for the most common errors encountered when deploying and running stdapi.ai - Terraform failures, 400/401/403/404/429/503 responses, Bedrock throttling, IAM permission errors, S3 bucket errors, VPC connectivity, and more.
-keywords: stdapi.ai troubleshooting, AWS Bedrock errors, Terraform apply failed, 503 ECS service, 401 API key, 403 permission IAM, AccessDeniedException, 404 model not found, ThrottlingException Bedrock, S3 bucket region, ElastiCache capacity, VPC endpoint timeout, podman SELinux
+keywords: stdapi.ai troubleshooting, AWS Bedrock errors, Terraform apply failed, 503 ECS service, 401 API key, 403 permission IAM, AccessDeniedException, 404 model not found, ThrottlingException Bedrock, S3 bucket region, ElastiCache capacity, VPC endpoint timeout, podman SELinux, ECONNREFUSED IPv6 service discovery
 ---
 
 # :material-wrench: Troubleshooting
@@ -71,6 +71,13 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     - Wait 2–3 minutes after deployment and refresh.
     - Check the ALB target group health in the AWS console.
     - If it persists longer than 5 minutes, inspect CloudWatch logs for the ECS task.
+
+??? failure "`ECONNREFUSED` — connection refused, but only from some clients"
+    The images bind IPv4 only (`GRANIAN_HOST=0.0.0.0`), so a client that resolves the server to an IPv6 address reaches a port nothing is listening on. Clients disagree about which address to try first, which is why the same deployment looks reachable from one language and dead from another: Node.js prefers the `AAAA` record and fails outright, while most Python clients fall back to the `A` record and hide the problem.
+
+    - Typically hit with **ECS service discovery**, which publishes an `AAAA` record for every task in an IPv6-enabled subnet. Deployments fronted by an ALB are unaffected — the load balancer terminates the client connection itself and reaches the task over IPv4.
+    - Set `GRANIAN_HOST=::` for a dual-stack socket answering both families; see the Container Runtime note in [Configuration](operations_configuration.md). The [Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) sets it when the VPC has IPv6 enabled.
+    - After switching, extend [`PROXY_TRUSTED_HOSTS`](operations_configuration.md#proxy-trusted-hosts) with the IPv4-mapped form of each range (`::ffff:10.0.0.0/112`) — a dual-stack listener reports IPv4 peers in that form, and an untrusted proxy means `X-Forwarded-For` is ignored and the load balancer's own address is logged as the client IP.
 
 ??? failure "Targets never become healthy after setting `TRUSTED_HOSTS`"
     Host header validation applies to `/health` as well. A load balancer health check addresses the target directly, so its `Host` header carries the target's IP address — which a list of domain names does not match, and every probe is answered with `400`. The target group stays unhealthy and the ALB keeps returning `503`.
