@@ -111,37 +111,6 @@ COPY --from=ffmpeg-builder /ffmpeg-out/apk-entry /tmp/ffmpeg-apk-entry
 RUN cat /tmp/ffmpeg-apk-entry >> /lib/apk/db/installed && rm /tmp/ffmpeg-apk-entry && \
     chmod -R a+rX /usr/share/licenses
 
-# Health probe: TRUSTED_HOSTS makes the server answer 400 to every other Host
-# header, so the probe announces a trusted one, and addresses 127.0.0.1 since
-# "localhost" resolves to ::1 first, which a GRANIAN_HOST of 0.0.0.0 never binds.
-RUN printf '%s\n' \
-    'import json' \
-    'import os' \
-    'import urllib.request' \
-    '' \
-    'setting = os.environ.get("TRUSTED_HOSTS", "").strip()' \
-    'try:' \
-    '    hosts = json.loads(setting) if setting else []' \
-    'except ValueError:' \
-    '    hosts = [setting]' \
-    'if isinstance(hosts, str):' \
-    '    hosts = [hosts]' \
-    'try:' \
-    '    host = str(hosts[0]).strip() or "localhost"' \
-    'except (IndexError, KeyError, TypeError):' \
-    '    # A setting the server itself would reject: probe the default host.' \
-    '    host = "localhost"' \
-    '# A wildcard is a pattern: "*" trusts any host, "*.x" any subdomain of x.' \
-    'if host == "*":' \
-    '    host = "localhost"' \
-    'elif host.startswith("*"):' \
-    '    host = "healthcheck" + host[1:]' \
-    'url = "http://127.0.0.1:" + os.environ.get("GRANIAN_PORT", "8000") + "/health"' \
-    'request = urllib.request.Request(url, headers={"Host": host})' \
-    'with urllib.request.urlopen(request, timeout=4) as response:' \
-    '    raise SystemExit(0 if response.status == 200 else 1)' \
-    > /usr/local/bin/healthcheck.py
-
 USER nonroot
 WORKDIR /opt/app
 
@@ -156,6 +125,6 @@ ENV GRANIAN_HOST="0.0.0.0" \
     GRANIAN_LOG_ACCESS_ENABLED="false"
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=30s \
-    CMD ["python3", "/usr/local/bin/healthcheck.py"]
+    CMD ["python3", "-S", "-m", "stdapi.healthcheck"]
 
 CMD ["python3", "-m", "granian", "stdapi.main:app", "--interface", "asgi", "--no-ws", "--loop", "uvloop"]

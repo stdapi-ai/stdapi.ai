@@ -534,6 +534,7 @@ The example below uses ARM64 architecture, which requires the `-arm64` image tag
       "image": "709825985650.dkr.ecr.us-east-1.amazonaws.com/j-goutin/stdapi.ai:1.15.0-arm64",
       "essential": true,
       "readonlyRootFilesystem": true,
+      "user": "65532:65532",
       "portMappings": [
         {
           "containerPort": 8000,
@@ -558,11 +559,7 @@ The example below uses ARM64 architecture, which requires the `-arm64` image tag
         }
       ],
       "healthCheck": {
-        "command": [
-          "CMD",
-          "python3",
-          "/usr/local/bin/healthcheck.py"
-        ],
+        "command": ["CMD", "python3", "-S", "-m", "stdapi.healthcheck"],
         "interval": 30,
         "timeout": 5,
         "retries": 3,
@@ -591,8 +588,10 @@ The example below uses ARM64 architecture, which requires the `-arm64` image tag
 }
 ```
 
-!!! tip "Keep the image's own health probe"
-    The `healthCheck` above simply re-declares the command the image already ships as its `HEALTHCHECK`: `python3 /usr/local/bin/healthcheck.py`. That script probes `/health` on the container's own port with a `Host` header derived from [`TRUSTED_HOSTS`](operations_configuration.md#trusted-hosts), so it keeps working when Host validation is enabled. A hand-written `curl`/`urllib` probe sends the wrong `Host` and is rejected with `400`. Omit the block entirely to inherit the image default.
+!!! tip "Declare the image's own health probe"
+    ECS ignores the image's `HEALTHCHECK`, so the task definition must re-declare it — the `healthCheck` above is that same command. It requests `/health` on the container's own port with a `Host` header derived from [`TRUSTED_HOSTS`](operations_configuration.md#trusted-hosts), so it keeps working when Host validation is enabled. A hand-written `curl` or `urllib` probe sends an untrusted `Host` and is rejected with `400`.
+
+    `"user": "65532:65532"` is the image's own non-root user, declared explicitly because Security Hub control ECS.20 reads the task definition rather than the image.
 
 **Note:** This is a minimal example. For production, configure:
 

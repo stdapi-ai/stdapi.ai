@@ -1,7 +1,7 @@
 ---
 title: Troubleshooting - Common stdapi.ai deployment issues
 description: Fixes for the most common errors encountered when deploying and running stdapi.ai - Terraform failures, 400/401/403/404/429/503 responses, Bedrock throttling, IAM permission errors, S3 bucket errors, VPC connectivity, and more.
-keywords: stdapi.ai troubleshooting, AWS Bedrock errors, Terraform apply failed, 503 ECS service, 401 API key, 403 permission IAM, AccessDeniedException, 404 model not found, ThrottlingException Bedrock, S3 bucket region, ElastiCache capacity, VPC endpoint timeout, podman SELinux, ECONNREFUSED IPv6 service discovery, drop_params ValidationException
+keywords: stdapi.ai troubleshooting, AWS Bedrock errors, Terraform apply failed, 503 ECS service, 401 API key, 403 permission IAM, AccessDeniedException, 404 model not found, ThrottlingException Bedrock, S3 bucket region, ElastiCache capacity, VPC endpoint timeout, podman SELinux, ECONNREFUSED IPv6 service discovery, drop_params ValidationException, ECS task unhealthy restart loop, container healthCheck command
 ---
 
 # :material-wrench: Troubleshooting
@@ -85,6 +85,13 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     - Prefer host validation at the load balancer: an ALB listener rule on the `Host` header, with `TRUSTED_HOSTS` left unset.
     - If the application-level allow-list is required, include the address the health check actually sends.
     - The container's own `HEALTHCHECK` is unaffected: it derives its `Host` header from `TRUSTED_HOSTS`. See [`TRUSTED_HOSTS`](operations_configuration.md#trusted-hosts).
+
+??? failure "The ECS task never reports healthy, or restarts in a loop"
+    ECS ignores the image's own `HEALTHCHECK`, so a task definition that declares no `healthCheck` gets no container-level probe at all, and one that declares a probe carried over from an earlier version runs a command the current image no longer provides. Either way the container is reported unhealthy and the service replaces it.
+
+    - Copy the `healthCheck` block from the [ECS task definition example](operations_deploy_advanced.md#ecs-task-definition-example), which declares the image's own probe, and re-copy it when upgrading.
+    - The [Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) declares it for you.
+    - Do not substitute a `curl` or `urllib` one-liner: it sends an untrusted `Host` and is answered with `400` as soon as [`TRUSTED_HOSTS`](operations_configuration.md#trusted-hosts) is set.
 
 ??? failure "Browser TLS warning on the /docs page"
     The ALB uses the default `*.elb.amazonaws.com` domain, which has no trusted certificate. This is expected and safe to bypass for testing.
