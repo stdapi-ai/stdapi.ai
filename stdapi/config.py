@@ -70,6 +70,9 @@ _KMS_KEY_ARN_PATTERN = re.compile(
     r"^arn:aws(?:-[a-z]+)*:kms:[a-zA-Z0-9-]*:[0-9]{12}:key/[a-zA-Z0-9-]{36}$"
 )
 
+#: Amazon Cognito user pool ID format: the pool's AWS Region, then its identifier.
+_COGNITO_USER_POOL_ID_PATTERN = re.compile(r"^[a-z]{2}[a-z-]*-[0-9]+_[A-Za-z0-9]+$")
+
 #: Built-in set of ``anthropic_beta`` flags known to be supported by AWS Bedrock.
 _ANTHROPIC_BETA_BEDROCK_FLAGS: frozenset[str] = frozenset(
     {
@@ -911,6 +914,87 @@ class _Settings(BaseSettings):
         ),
     )
 
+    authentication_mode: Literal["any", "api_key", "cognito"] = Field(
+        default="any",
+        description=(
+            "Which client authentication methods this deployment accepts:\n"
+            "- 'any': every method that is configured (default)\n"
+            "- 'api_key': the API key only\n"
+            "- 'cognito': Amazon Cognito user pool tokens only\n\n"
+            "The value asserts the intended security posture: startup fails when "
+            "the selected method is not configured, and when a method that would "
+            "be ignored is configured anyway, so a credential is never accepted "
+            "or silently refused by accident.\n"
+            "Example: 'cognito'"
+        ),
+    )
+
+    aws_cognito_user_pool_id: str | None = Field(
+        default=None,
+        description=(
+            "Identifier of the Amazon Cognito user pool whose tokens authenticate "
+            "clients. Clients send a pool access token in the "
+            "'Authorization: Bearer <token>' header; the token signature, issuer, "
+            "expiry, application and scopes are validated on every request.\n\n"
+            "The identifier is prefixed by the pool's AWS Region, which is where "
+            "the signing keys are read from. Requires aws_cognito_client_ids.\n\n"
+            "If not specified, user pool authentication is disabled.\n"
+            "Example: 'eu-west-3_a1b2c3d4e'"
+        ),
+    )
+
+    aws_cognito_client_ids: Annotated[list[str], NoDecode] = Field(
+        default=[],
+        description=(
+            "Amazon Cognito user pool application client IDs whose tokens are "
+            "accepted, as a comma-separated list. A token issued to any other "
+            "application is rejected.\n\n"
+            "Required when aws_cognito_user_pool_id is set.\n"
+            "Example: '1example23456789abcdefghij,2example3456789abcdefghijk'"
+        ),
+    )
+
+    aws_cognito_required_scopes: Annotated[list[str], NoDecode] = Field(
+        default=[],
+        description=(
+            "OAuth 2.0 scopes a token must all carry to be accepted, as a "
+            "comma-separated list.\n\n"
+            "Custom scopes exist only on tokens obtained from the user pool's "
+            "OAuth 2.0 token endpoint, which requires a resource server and a "
+            "pool domain. Tokens obtained by signing in with a username and "
+            "password carry only 'aws.cognito.signin.user.admin', so requiring a "
+            "custom scope rejects them.\n\n"
+            "If not specified, any scope set is accepted.\n"
+            "Example: 'stdapi/invoke'"
+        ),
+    )
+
+    aws_cognito_accept_id_token: bool = Field(
+        default=False,
+        description=(
+            "Accept Amazon Cognito identity tokens in addition to access tokens.\n\n"
+            "Identity tokens describe the signed-in user rather than granting API "
+            "access, and carry no scopes. Enable only for clients that cannot "
+            "obtain an access token.\n"
+            "Example: 'true'"
+        ),
+    )
+
+    aws_cognito_issuer_type: Literal["original", "updated"] = Field(
+        default="original",
+        description=(
+            "Issuer configuration of the Amazon Cognito user pool, which decides "
+            "the issuer URL its tokens carry:\n"
+            "- 'original': 'https://cognito-idp.<region>.amazonaws.com/<pool-id>' "
+            "(default)\n"
+            "- 'updated': 'https://issuer-cognito-idp.<region>.amazonaws.com/"
+            "<pool-id>', available on the Essentials and Plus pool tiers\n\n"
+            "Tokens whose issuer does not match are rejected, so this must match "
+            "the pool's own setting.\n"
+            "Example: 'updated'"
+        ),
+    )
+
     otel_enabled: bool = Field(
         default=False,
         description=(
@@ -1573,6 +1657,8 @@ class _Settings(BaseSettings):
     @field_validator(
         "aws_bedrock_mantle_regions",
         "aws_bedrock_mantle_preferred_models",
+        "aws_cognito_client_ids",
+        "aws_cognito_required_scopes",
         mode="before",
     )
     @classmethod
@@ -1858,6 +1944,82 @@ class _Settings(BaseSettings):
             raise ValueError(msg) from error
         return value
 
+    def _validate_cognito(self) -> None:
+        """Ensure the Amazon Cognito user pool configuration is complete.
+
+        A half-configured pool would leave the deployment authenticated by
+        whatever else happens to be set, so an incomplete combination fails
+        startup instead.
+
+        Raises:
+            ValueError: If the pool configuration is incomplete or malformed.
+        """
+        if self.aws_cognito_user_pool_id:
+            if not _COGNITO_USER_POOL_ID_PATTERN.fullmatch(
+                self.aws_cognito_user_pool_id
+            ):
+                msg = (
+                    f'Invalid aws_cognito_user_pool_id "{self.aws_cognito_user_pool_id}"'
+                    ': must be an Amazon Cognito user pool ID, "<region>_<identifier>".'
+                )
+                raise ValueError(msg)
+            if not self.aws_cognito_client_ids:
+                msg = (
+                    "aws_cognito_client_ids is required with "
+                    "aws_cognito_user_pool_id: without an application allowlist, "
+                    "a token issued to any application of the pool would be accepted."
+                )
+                raise ValueError(msg)
+        elif (
+            self.aws_cognito_client_ids
+            or self.aws_cognito_required_scopes
+            or self.aws_cognito_accept_id_token
+            or self.aws_cognito_issuer_type != "original"
+        ):
+            msg = (
+                "aws_cognito_user_pool_id is required to configure Amazon Cognito "
+                "authentication."
+            )
+            raise ValueError(msg)
+
+    def _validate_authentication_mode(self) -> None:
+        """Ensure the accepted authentication methods are the configured ones.
+
+        The mode states the intended security posture, so a method it demands
+        must exist and a method it would ignore must not be configured.
+
+        Raises:
+            ValueError: If a configured method contradicts the mode.
+        """
+        api_key_configured = bool(
+            self.api_key
+            or self.api_key_ssm_parameter
+            or self.api_key_secretsmanager_secret
+        )
+        if self.authentication_mode == "api_key":
+            if not api_key_configured:
+                msg = (
+                    'authentication_mode "api_key" requires an API key source '
+                    "(api_key, api_key_ssm_parameter or api_key_secretsmanager_secret)."
+                )
+                raise ValueError(msg)
+            if self.aws_cognito_user_pool_id:
+                msg = (
+                    'authentication_mode "api_key" ignores aws_cognito_user_pool_id, '
+                    'which is configured. Use authentication_mode "any" to accept both.'
+                )
+                raise ValueError(msg)
+        elif self.authentication_mode == "cognito":
+            if not self.aws_cognito_user_pool_id:
+                msg = 'authentication_mode "cognito" requires aws_cognito_user_pool_id.'
+                raise ValueError(msg)
+            if api_key_configured:
+                msg = (
+                    'authentication_mode "cognito" ignores the configured API key '
+                    'source. Use authentication_mode "any" to accept both.'
+                )
+                raise ValueError(msg)
+
     def _validate_unique_routes_prefixes(self) -> None:
         """Ensure non-empty API routes prefixes do not collide across providers.
 
@@ -1891,6 +2053,8 @@ class _Settings(BaseSettings):
         4. Transcribe S3 bucket defaults to main S3 bucket if not specified
         5. When both MCP include/exclude are specified, include is filtered by exclude
         6. Non-empty API routes prefixes must be unique across providers
+        7. The Amazon Cognito configuration is complete
+        8. The accepted authentication methods are the configured ones
 
         Returns:
             Self with validated and defaulted configuration.
@@ -1960,6 +2124,8 @@ class _Settings(BaseSettings):
                 set(self.mcp_include_tools) - set(self.mcp_exclude_tools)
             )
             self.mcp_exclude_tools = None
+        self._validate_cognito()
+        self._validate_authentication_mode()
         return self
 
     def now(self) -> AwareDatetime:

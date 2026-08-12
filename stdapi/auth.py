@@ -1,4 +1,4 @@
-"""API key authentication for API endpoints."""
+"""API key and Amazon Cognito user pool authentication for API endpoints."""
 
 from hashlib import blake2b
 from hmac import compare_digest
@@ -11,8 +11,10 @@ from pydantic import SecretBytes, SecretStr
 from pydantic_core import from_json
 
 from stdapi.api_errors import ApiError
+from stdapi.auth_cognito import CognitoAuthenticator
 from stdapi.aws import CONFIG
 from stdapi.config import AWS_REGION, AWS_SESSION, SETTINGS
+from stdapi.exceptions import ServerError
 from stdapi.monitoring import PRINCIPAL, EventLog, add_server_warning, log_error_details
 
 #: HTTPBearer security scheme for API key authentication
@@ -142,6 +144,15 @@ class AuthenticationHandler:
             )
             raise ValueError(msg) from exc
 
+    @property
+    def enabled(self) -> bool:
+        """Whether an API key is configured.
+
+        Returns:
+            True once an API key was found and hashed at startup.
+        """
+        return self._api_key_hash is not None and self._api_key_salt is not None
+
     def verify_credentials(self, token: SecretStr | None) -> None:
         """Verify authentication for API endpoints.
 
@@ -177,21 +188,54 @@ class AuthenticationHandler:
 #: Global authentication handler instance
 _auth_handler = AuthenticationHandler()
 
+#: Global user pool authenticator instance
+_cognito_authenticator = CognitoAuthenticator()
+
 
 async def initialize_authentication(start_event: EventLog) -> None:
-    """Initialize the global authentication handler.
+    """Initialize the global authentication handlers.
 
     Called once during application startup; records a security warning on
-    *start_event* if authentication ends up disabled.
+    *start_event* if no authentication method is configured at all. A method
+    that is configured but does not end up enabled fails startup instead, so a
+    misconfiguration never resolves into an open deployment.
 
     Args:
         start_event: Startup event log to update if authentication is disabled.
+
+    Raises:
+        ServerError: If a configured API key source resolves to no key, if a
+            configured user pool's signing keys cannot be loaded, or if the
+            method ``authentication_mode`` demands is not enabled.
     """
-    if not await _auth_handler.initialize():
+    api_key_configured = bool(
+        SETTINGS.api_key
+        or SETTINGS.api_key_ssm_parameter
+        or SETTINGS.api_key_secretsmanager_secret
+    )
+    api_key_enabled = await _auth_handler.initialize()
+    if api_key_configured and not api_key_enabled:
+        msg = (
+            "The configured API key source holds an empty API key, which would "
+            "leave the deployment accepting every request unauthenticated"
+        )
+        raise ServerError(msg)
+    user_pool_enabled = await _cognito_authenticator.initialize()
+    mode = SETTINGS.authentication_mode
+    if (mode == "api_key" and not api_key_enabled) or (
+        mode == "cognito" and not user_pool_enabled
+    ):
+        msg = (
+            f"authentication_mode '{mode}' is required, but that authentication "
+            "method is not enabled"
+        )
+        raise ServerError(msg)
+    if not api_key_enabled and not user_pool_enabled:
         add_server_warning(
             start_event,
             "SECURITY risk: Authentication is not enabled "
-            "('api_key', 'api_key_ssm_parameter', 'api_key_secretsmanager_secret' not set)",
+            "('api_key', 'api_key_ssm_parameter', 'api_key_secretsmanager_secret', "
+            "'aws_cognito_user_pool_id' not set)",
         )
 
 
@@ -199,9 +243,14 @@ async def authenticate(
     credentials: HTTPAuthorizationCredentials | None = Depends(_authorization_bearer),
     x_api_key: str | None = Depends(_x_api_key),
 ) -> None:
-    """Verify API key authentication dependency for FastAPI routes.
+    """Verify the request credentials dependency for FastAPI routes.
 
-    No-op when authentication is disabled, allowing all requests.
+    A credential shaped like a signed token is verified against the configured
+    Amazon Cognito user pool and identifies the caller; anything else is
+    compared against the API key, which identifies the deployment rather than a
+    person and so leaves the request with no principal. Both headers carry
+    either kind, ``x-api-key`` taking precedence as it always has. No-op when
+    no authentication method is configured, allowing all requests.
 
     Args:
         credentials: HTTP Bearer token credentials from the Authorization header.
@@ -214,11 +263,25 @@ async def authenticate(
     # the API as a second request running inside the first one's context, which
     # would otherwise inherit a principal this request never authenticated.
     PRINCIPAL.set(None)
-    if x_api_key:
-        token: SecretStr | None = SecretStr(x_api_key)
-    elif credentials:
-        token = SecretStr(credentials.credentials)
+    credential = x_api_key
+    if credentials is not None:
+        credential = credential or credentials.credentials
         credentials.credentials = ""
-    else:
-        token = None
-    _auth_handler.verify_credentials(token)
+    if _cognito_authenticator.enabled:
+        # A signed token carries three segments; an API key shaped like one
+        # merely fails verification and falls back to the comparison below.
+        if credential and credential.count(".") == 2:
+            try:
+                PRINCIPAL.set(await _cognito_authenticator.verify(credential))
+            except ApiError:
+                if not _auth_handler.enabled:
+                    raise
+            else:
+                return
+        if not _auth_handler.enabled:
+            # A credential the user pool did not verify must never reach an
+            # API key comparison that is disabled, as that one accepts anything.
+            log_error_details("Credentials rejected by the user pool")
+            msg = "Unauthorized"
+            raise ApiError(msg, status=401)
+    _auth_handler.verify_credentials(SecretStr(credential) if credential else None)

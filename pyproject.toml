@@ -18,6 +18,8 @@ dependencies = [
     "python-magic",
     "pybase64",
     "pillow",
+    # RS256 verification of user pool access tokens, independent of the mcp extra.
+    "pyjwt[crypto]>=2.10.1",
 ]
 
 [project.optional-dependencies]
@@ -76,8 +78,6 @@ dev = [
 # newer botocore releases work in practice despite the declared ceiling.
 override-dependencies = [
     "botocore>=1.43.30,<1.44",
-    # Strip pyjwt[crypto]: gateway MCP uses API-key auth, no JWT verification.
-    "pyjwt>=2.10.1",
     # Declared by fastapi-mcp but never imported by any shipped code path.
     "rich; sys_platform == 'never'",
     "typer; sys_platform == 'never'",

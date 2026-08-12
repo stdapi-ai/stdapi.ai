@@ -394,12 +394,13 @@ S3 is woven into the entire API surface — not just file storage:
 
 stdapi.ai supports multiple authentication strategies to fit your architecture:
 
-| Method                | How                                                                                                                | Best For                |
-|-----------------------|--------------------------------------------------------------------------------------------------------------------|-------------------------|
-| **API Key**           | `Authorization: Bearer` or `X-API-Key` header; stored in SSM Parameter Store or Secrets Manager (never plain text) | Direct clients, SDKs    |
-| **OIDC / Cognito**    | Delegate to AWS Application Load Balancer or API Gateway                                                           | Web apps, SSO           |
-| **AWS IAM (SigV4)**   | Via API Gateway with IAM authorization                                                                             | Internal AWS services   |
-| **No authentication** | Open access                                                                                                        | Private VPC deployments |
+| Method                    | How                                                                                                                | Best For                     |
+|---------------------------|--------------------------------------------------------------------------------------------------------------------|------------------------------|
+| **API Key**               | `Authorization: Bearer` or `X-API-Key` header; stored in SSM Parameter Store or Secrets Manager (never plain text) | Direct clients, SDKs         |
+| **Cognito user pool JWT** | `Authorization: Bearer` with an Amazon Cognito access token, validated per request                                 | Per-user access, agents      |
+| **OIDC / Cognito**        | Delegate to AWS Application Load Balancer or API Gateway                                                           | Web apps, SSO                |
+| **AWS IAM (SigV4)**       | Via API Gateway with IAM authorization                                                                             | Internal AWS services        |
+| **No authentication**     | Open access                                                                                                        | Private VPC deployments      |
 
 [:octicons-arrow-right-24: Authentication & Security](operations_authentication_security.md)
 

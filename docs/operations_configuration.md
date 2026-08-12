@@ -227,7 +227,7 @@ This section provides a quick reference of all available configuration options. 
 
 ### :material-lock: Authentication { #summary-authentication }
 
-Configure **one** source. If several are set, precedence is `API_KEY` → SSM Parameter Store → Secrets Manager — see [Authentication](#authentication):
+Configure **one** API key source. If several are set, precedence is `API_KEY` → SSM Parameter Store → Secrets Manager — see [Authentication](#authentication):
 
 | Variable                                                          | Default   | Description                                                        |
 |-------------------------------------------------------------------|-----------|--------------------------------------------------------------------|
@@ -235,6 +235,18 @@ Configure **one** source. If several are set, precedence is `API_KEY` → SSM Pa
 | [`API_KEY_SECRETSMANAGER_SECRET`](#api-key-secretsmanager-secret) | None      | AWS Secrets Manager secret name containing API key                 |
 | [`API_KEY_SECRETSMANAGER_KEY`](#api-key-secretsmanager-key)       | `api_key` | JSON key name within Secrets Manager secret                        |
 | [`API_KEY`](#api-key)                                             | None      | Direct API key value (not recommended for production)              |
+| [`AUTHENTICATION_MODE`](#authentication-mode)                     | `any`     | Accepted methods: `any`, `api_key` or `cognito`                    |
+
+Amazon Cognito user pool tokens are an alternative to the API key — see [Amazon Cognito Authentication](#cognito-authentication):
+
+| Variable                                                            | Default    | Description                                                     |
+|---------------------------------------------------------------------|------------|-----------------------------------------------------------------|
+| [`AWS_COGNITO_USER_POOL_ID`](#aws-cognito-user-pool-id)             | None       | User pool whose tokens authenticate clients (enables the method) |
+| [`AWS_COGNITO_CLIENT_IDS`](#aws-cognito-client-ids)                 | None       | App client IDs whose tokens are accepted (required with a pool)  |
+| [`AWS_COGNITO_REQUIRED_SCOPES`](#aws-cognito-required-scopes)       | None       | Scopes a token must all carry                                    |
+| [`AWS_COGNITO_ACCEPT_ID_TOKEN`](#aws-cognito-accept-id-token)       | `false`    | Also accept identity tokens, not only access tokens              |
+| [`AWS_COGNITO_ISSUER_TYPE`](#aws-cognito-issuer-type)               | `original` | Pool issuer configuration: `original` or `updated`               |
+
 
 ### :material-api: API Compatibility { #summary-api-compatibility }
 
@@ -1808,10 +1820,10 @@ The full IAM reference — required Amazon Bedrock permissions, per-feature poli
 
 ## :material-lock: Authentication
 
-stdapi.ai supports three methods for API key authentication.
+stdapi.ai supports three sources for API key authentication, plus Amazon Cognito user pool tokens.
 
-!!! info "Authentication Methods"
-    **Configure exactly one method.** If several are set, the first match in this precedence order is used and the others are ignored:
+!!! info "API Key Sources"
+    **Configure exactly one source.** If several are set, the first match in this precedence order is used and the others are ignored:
 
     1. :material-key: **Direct API key** — `API_KEY` (highest precedence)
     2. :material-database-lock: **SSM Parameter Store** — `API_KEY_SSM_PARAMETER`
@@ -1819,11 +1831,13 @@ stdapi.ai supports three methods for API key authentication.
 
     The methods below are listed in that precedence order. **SSM Parameter Store remains the recommended method for production.**
 
+    :material-account-key: **Amazon Cognito user pool tokens** ([Method 4](#cognito-authentication)) are independent of the API key and can be accepted alongside it, or instead of it — [`AUTHENTICATION_MODE`](#authentication-mode) decides.
+
 !!! warning "Conflicting Configuration"
     Only one combination is rejected at startup: `API_KEY` set together with a Secrets Manager source (`API_KEY_SECRETSMANAGER_SECRET`). Every other combination starts normally and is resolved silently by the precedence order above — the lower-precedence sources are never read.
 
 !!! danger "No Authentication Warning"
-    If no authentication method is configured, the API accepts all requests without authentication and a security warning is logged at startup. This is suitable **only for internal/private deployments**.
+    If neither an API key source nor a user pool is configured, the API accepts all requests without authentication and a security warning is logged at startup. This is suitable **only for internal/private deployments**.
 
 ### Method 1: Direct API Key
 
@@ -1905,6 +1919,111 @@ Example JSON secret structure:
   "api_key": "sk-1234567890abcdef...",
   "other_config": "value"
 }
+```
+
+### Method 4: Amazon Cognito User Pool Tokens { #cognito-authentication }
+
+Accept the bearer tokens issued by an [Amazon Cognito user pool](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools.html) instead of, or alongside, the API key. Each caller gets its own short-lived credential, and the verified caller is the identity [per-user cost attribution](operations_cost_management.md#per-user-attribution) bills against; withdrawing a caller's access takes effect when their current token expires. Clients send the token in the `Authorization: Bearer <token>` or `X-API-Key` header, like an API key. What is validated on every request is described in [Authentication & Security](operations_authentication_security.md#amazon-cognito-user-pool-tokens).
+
+```bash
+export AWS_COGNITO_USER_POOL_ID=eu-west-3_a1b2c3d4e
+export AWS_COGNITO_CLIENT_IDS=1example23456789abcdefghij
+```
+
+!!! warning "Incomplete configuration fails startup"
+    A user pool without `AWS_COGNITO_CLIENT_IDS`, a Cognito setting without a pool, or an `AUTHENTICATION_MODE` that contradicts what is configured, all stop the server at startup with an explicit message — a partially configured pool never degrades into an unauthenticated deployment.
+
+#### `AUTHENTICATION_MODE` { #authentication-mode }
+
+:octicons-package-24: **Purpose**
+:   Which client authentication methods the deployment accepts
+
+:octicons-gear-24: **Default**
+:   `any` — every method that is configured
+
+:octicons-list-unordered-24: **Values**
+:   - `any`: the API key and user pool tokens, whichever is configured
+    - `api_key`: the API key only; startup fails if a user pool is also configured
+    - `cognito`: user pool tokens only; startup fails if an API key source is also configured
+
+```bash
+export AUTHENTICATION_MODE=cognito
+```
+
+#### `AWS_COGNITO_USER_POOL_ID` { #aws-cognito-user-pool-id }
+
+:octicons-package-24: **Purpose**
+:   Identifier of the user pool whose tokens authenticate clients. Setting it enables the method; the pool's AWS Region is read from the identifier itself, and the public signing keys are loaded from that Region at startup.
+
+:octicons-alert-24: **Requirement**
+:   `AWS_COGNITO_CLIENT_IDS` must be set too
+
+:octicons-lock-24: **IAM Permissions Required**
+:   None — the signing keys are public
+
+```bash
+export AWS_COGNITO_USER_POOL_ID=eu-west-3_a1b2c3d4e
+```
+
+#### `AWS_COGNITO_CLIENT_IDS` { #aws-cognito-client-ids }
+
+:octicons-package-24: **Purpose**
+:   Comma-separated app client IDs whose tokens are accepted. A token issued to any other app client of the pool is rejected.
+
+:octicons-alert-24: **Requirement**
+:   Required whenever `AWS_COGNITO_USER_POOL_ID` is set
+
+```bash
+export AWS_COGNITO_CLIENT_IDS=1example23456789abcdefghij,2example3456789abcdefghijk
+```
+
+#### `AWS_COGNITO_REQUIRED_SCOPES` { #aws-cognito-required-scopes }
+
+:octicons-package-24: **Purpose**
+:   Comma-separated OAuth 2.0 scopes a token must **all** carry to be accepted
+
+:octicons-gear-24: **Default**
+:   None — any scope set is accepted
+
+:octicons-alert-24: **Requirement**
+:   Custom scopes exist only on tokens issued by the pool's OAuth 2.0 token endpoint, which needs a [resource server](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools-define-resource-servers.html) and a pool domain. Tokens obtained by signing in with a username and password carry only `aws.cognito.signin.user.admin` and are rejected when a custom scope is required.
+
+```bash
+export AWS_COGNITO_REQUIRED_SCOPES=stdapi/invoke
+```
+
+#### `AWS_COGNITO_ACCEPT_ID_TOKEN` { #aws-cognito-accept-id-token }
+
+:octicons-package-24: **Purpose**
+:   Also accept identity tokens, not only access tokens
+
+:octicons-gear-24: **Default**
+:   `false`
+
+:octicons-workflow-24: **Effect**
+:   Identity tokens describe the signed-in user rather than granting API access, and carry no scopes. Enable only for clients that cannot obtain an access token.
+
+```bash
+export AWS_COGNITO_ACCEPT_ID_TOKEN=true
+```
+
+#### `AWS_COGNITO_ISSUER_TYPE` { #aws-cognito-issuer-type }
+
+:octicons-package-24: **Purpose**
+:   The pool's [issuer configuration](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_IssuerConfigurationType.html), which decides the issuer URL its tokens carry
+
+:octicons-gear-24: **Default**
+:   `original`
+
+:octicons-list-unordered-24: **Values**
+:   - `original`: `https://cognito-idp.<region>.amazonaws.com/<pool-id>`
+    - `updated`: `https://issuer-cognito-idp.<region>.amazonaws.com/<pool-id>`, available on the Essentials and Plus pool tiers
+
+:octicons-alert-24: **Requirement**
+:   Must match the pool's own setting; tokens whose issuer differs are rejected
+
+```bash
+export AWS_COGNITO_ISSUER_TYPE=updated
 ```
 
 ---

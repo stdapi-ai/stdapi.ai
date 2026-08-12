@@ -1,7 +1,7 @@
 ---
 title: Troubleshooting - Common stdapi.ai deployment issues
 description: Fixes for the most common errors encountered when deploying and running stdapi.ai - Terraform failures, 400/401/403/404/429/503 responses, Bedrock throttling, IAM permission errors, S3 bucket errors, VPC connectivity, and more.
-keywords: stdapi.ai troubleshooting, AWS Bedrock errors, Terraform apply failed, 503 ECS service, 401 API key, 403 permission IAM, AccessDeniedException, 404 model not found, ThrottlingException Bedrock, S3 bucket region, ElastiCache capacity, VPC endpoint timeout, podman SELinux, ECONNREFUSED IPv6 service discovery, drop_params ValidationException, ECS task unhealthy restart loop, container healthCheck command, text to speech input too long, speech input limited to 3000 characters, service_tier ignored, guardrail ignored, model parameters ignored, model alias configuration, MODEL_ALIASES validation error, extra inputs are not permitted alias, 413 attachment too large, large image rejected, large PDF rejected, attachments larger than not available, attached files are too large per request, attachment total too large, AWS_S3_REGIONAL_BUCKETS attachment staging, web search returns no results, external_web_access rejected, bedrock-websearch InvokeSearch AccessDenied, web search stale cached results
+keywords: stdapi.ai troubleshooting, AWS Bedrock errors, Terraform apply failed, 503 ECS service, 401 API key, 403 permission IAM, AccessDeniedException, 404 model not found, ThrottlingException Bedrock, S3 bucket region, ElastiCache capacity, VPC endpoint timeout, podman SELinux, ECONNREFUSED IPv6 service discovery, drop_params ValidationException, ECS task unhealthy restart loop, container healthCheck command, text to speech input too long, speech input limited to 3000 characters, service_tier ignored, guardrail ignored, model parameters ignored, model alias configuration, MODEL_ALIASES validation error, extra inputs are not permitted alias, 413 attachment too large, large image rejected, large PDF rejected, attachments larger than not available, attached files are too large per request, attachment total too large, AWS_S3_REGIONAL_BUCKETS attachment staging, web search returns no results, external_web_access rejected, bedrock-websearch InvokeSearch AccessDenied, web search stale cached results, valid Cognito token rejected 401, Cognito JWT unauthorized, aws_cognito_client_ids required, server will not start after enabling Cognito, server will not start after enabling authentication, API key secret is empty, API_KEY_SSM_PARAMETER empty value, AUTHENTICATION_MODE method not enabled, issuer-cognito-idp issuer mismatch, aws.cognito.signin.user.admin scope missing
 ---
 
 # :material-wrench: Troubleshooting
@@ -250,6 +250,49 @@ stdapi.ai translates upstream AWS error codes into standard HTTP responses with 
     - Use `x-api-key: <your-key>` (not `Authorization: Bearer`).
     - Set the base URL to `https://<your-endpoint>/anthropic` (not `/v1`).
     - See [API Overview → Anthropic-Compatible API](api_overview.md#using-the-anthropic-compatible-api).
+
+??? failure "A valid Amazon Cognito token is rejected with 401"
+    The response body is always the same opaque `Unauthorized`; the check that failed is in the server's request log (`error_detail`). Work through the checks in order:
+
+    - **Wrong app client**: the token's app client must be listed in [`AWS_COGNITO_CLIENT_IDS`](operations_configuration.md#aws-cognito-client-ids).
+    - **Wrong token**: an identity token is rejected unless [`AWS_COGNITO_ACCEPT_ID_TOKEN`](operations_configuration.md#aws-cognito-accept-id-token) is enabled. Send the **access** token.
+    - **Wrong issuer**: pools on the Essentials and Plus tiers can issue `https://issuer-cognito-idp.<region>.amazonaws.com/...`. Set [`AWS_COGNITO_ISSUER_TYPE`](operations_configuration.md#aws-cognito-issuer-type) to `updated` for those, and confirm the pool ID matches the pool that minted the token.
+    - **Missing scope**: a token obtained by signing in with a username and password carries only `aws.cognito.signin.user.admin`. Clear [`AWS_COGNITO_REQUIRED_SCOPES`](operations_configuration.md#aws-cognito-required-scopes), or have clients obtain tokens from the pool's OAuth 2.0 token endpoint.
+    - **Expired token**: tokens are accepted up to one minute past expiry only. Refresh the token, and check the container clock if expiry errors are constant.
+    - See [Authentication & Security → Amazon Cognito User Pool Tokens](operations_authentication_security.md#amazon-cognito-user-pool-tokens).
+
+??? failure "The server does not start after enabling authentication"
+    A half-applied credential configuration is refused rather than accepted, so the deployment never runs unauthenticated by accident. The startup log's `error_detail` names the exact rule:
+
+    - **Missing allowlist**: [`AWS_COGNITO_CLIENT_IDS`](operations_configuration.md#aws-cognito-client-ids) is required with a pool.
+    - **Setting without a pool**: any other `AWS_COGNITO_*` variable requires [`AWS_COGNITO_USER_POOL_ID`](operations_configuration.md#aws-cognito-user-pool-id).
+    - **Mode conflict**: [`AUTHENTICATION_MODE`](operations_configuration.md#authentication-mode) must not demand a method that is unconfigured, nor ignore one that is configured — use `any` to accept both.
+    - **Empty API key**: the SSM parameter or Secrets Manager secret named by [`API_KEY_SSM_PARAMETER`](operations_configuration.md#api-key-ssm) or [`API_KEY_SECRETSMANAGER_SECRET`](operations_configuration.md#api-key-secretsmanager-secret) exists but holds an empty value — populate it, or unset the setting to run without an API key deliberately.
+    - **Signing keys unreachable**: the pool's public keys are read at startup over HTTPS. Check the pool ID, and that the task can reach the internet or a suitable endpoint for outbound HTTPS.
+
+??? failure "An MCP client or agent cannot discover how to authenticate"
+    Discovery is off until it is configured, and a client that finds nothing falls back to asking the user for a key.
+
+    - **Nothing published**: `GET /.well-known/oauth-protected-resource` answering `404` means [`OAUTH_RESOURCE_IDENTIFIER`](operations_configuration.md#oauth-resource-identifier) is unset. That is the default, not a fault — set it, together with [`OAUTH_AUTHORIZATION_SERVERS`](operations_configuration.md#oauth-authorization-servers), to turn discovery on.
+    - **Nothing in the challenge**: a `401` carrying a bare `WWW-Authenticate: Bearer` means the same thing. Once configured it also carries `resource_metadata="…"` and, with [`OAUTH_SCOPES_SUPPORTED`](operations_configuration.md#oauth-scopes-supported), `scope="…"`.
+    - **Browser-hosted client**: a client running in a page reads the document cross-origin and needs its origin in [`CORS_ALLOW_ORIGINS`](operations_configuration.md#cors-allow-origins).
+    - **The client asks for `/.well-known/openid-configuration`**: stdapi.ai is a resource server and deliberately does not serve it; the client should follow `authorization_servers` to the issuer's own document.
+    - See [Authentication & Security → Authentication Discovery for Agents](operations_authentication_security.md#authentication-discovery-for-agents).
+
+??? failure "A client reports the protected resource does not match the expected URL"
+    Clients compare the published `resource` against the URL they dialled character by character, so any difference aborts the flow.
+
+    - **Scheme**: set [`OAUTH_RESOURCE_IDENTIFIER`](operations_configuration.md#oauth-resource-identifier) to `https://…` when clients reach the deployment over TLS, even though the container itself listens on plain HTTP behind the load balancer.
+    - **Host**: it must be the public hostname clients use, not the internal service or task address.
+    - **Port**: an explicit `:443` on the client's URL does not match an identifier without one, and vice versa. Drop the default port on both sides.
+    - **Path**: the identifier is an origin. Do not append `/mcp`, `/v1`, or a trailing slash — one document at the root already covers every surface of the deployment.
+
+??? failure "The server does not start after configuring authentication discovery"
+    The three settings describe one document, so an incomplete set is refused rather than published half-formed. The startup log's `error_detail` names the rule:
+
+    - **No authorization server**: [`OAUTH_AUTHORIZATION_SERVERS`](operations_configuration.md#oauth-authorization-servers) is required with [`OAUTH_RESOURCE_IDENTIFIER`](operations_configuration.md#oauth-resource-identifier); a document naming none leaves a client unable to obtain a token.
+    - **Setting without an identifier**: the authorization servers and the scopes describe a document that is not published without [`OAUTH_RESOURCE_IDENTIFIER`](operations_configuration.md#oauth-resource-identifier).
+    - **Malformed value**: the identifier is an origin with no path or query, each issuer is an `https` URL with no query or fragment, and a scope carries no space or quote.
 
 ??? failure "OIDC/Cognito redirect loop or 401 from the ALB"
     Authentication is enforced by the ALB listener, not stdapi.ai.

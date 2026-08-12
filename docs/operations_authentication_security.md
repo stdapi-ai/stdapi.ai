@@ -1,7 +1,7 @@
 ---
 title: Authentication & Security
-description: Configuration guide for authenticating and securing requests to stdapi.ai — API keys via SSM/Secrets Manager, external authentication via AWS ALB/API Gateway, and encryption in transit.
-keywords: API authentication, API key, AWS SSM, Secrets Manager, AWS ALB authentication, API Gateway authorizer, OIDC, Cognito, stdapi.ai security
+description: Configuration guide for authenticating and securing requests to stdapi.ai — API keys via SSM/Secrets Manager, Amazon Cognito user pool tokens, OAuth 2.0 discovery for AI agents, external authentication via AWS ALB/API Gateway, and encryption in transit.
+keywords: API authentication, API key, AWS SSM, Secrets Manager, Amazon Cognito user pool, JWT, bearer token, AWS ALB authentication, API Gateway authorizer, OIDC, OAuth 2.0 discovery, protected resource metadata, WWW-Authenticate, MCP client authentication, stdapi.ai security
 ---
 
 # :material-lock: Authentication & Security
@@ -12,6 +12,9 @@ stdapi.ai provides flexible authentication options and built-in security mechani
 
 - :material-key: __API Key Authentication__
   <br>Securely stored in AWS SSM Parameter Store or Secrets Manager. Mimics OpenAI and Anthropic auth.
+
+- :material-account-key: __Amazon Cognito User Pool Tokens__
+  <br>Per-user and per-application bearer tokens, validated on every request. No key to rotate.
 
 - :material-account-check: __OIDC, Cognito & IAM Identity Center__
   <br>Offload user and workforce identity management to AWS ALB or API Gateway.
@@ -31,9 +34,14 @@ stdapi.ai provides flexible authentication options and built-in security mechani
 | Method | Best for | AWS infrastructure | Enforced by |
 |---|---|---|---|
 | **API Key** | Server-to-server, simple deployments | Any | stdapi.ai |
+| **Amazon Cognito user pool token** | Per-user access, autonomous agents, revocable credentials | Cognito user pool | stdapi.ai |
 | **OIDC / Cognito / IAM Identity Center** | User-facing apps, SSO, workforce identity | ALB or API Gateway | AWS (before request reaches stdapi.ai) |
 | **AWS IAM** | Service-to-service within AWS | API Gateway | AWS (SigV4) |
 | **No Authentication** | Local development, trusted VPC | Any | Network controls only |
+
+The API key and Cognito tokens can be used together: [`AUTHENTICATION_MODE`](operations_configuration.md#authentication-mode) selects which of them a deployment accepts, and defaults to accepting every method that is configured.
+
+When stdapi.ai enforces the credential itself — the API key and Cognito user pool tokens — a rejected request is answered with `401 Unauthorized`, a `WWW-Authenticate: Bearer` challenge, and a body that states nothing beyond `Unauthorized` — the reason is written to the server log only, so the response cannot be used to work out which half of a credential was wrong. That challenge is also where an AI agent starts: see [Authentication Discovery for Agents](#authentication-discovery-for-agents). The edge-enforced methods answer an unauthenticated request themselves, before it reaches stdapi.ai, with whatever their own configuration says — commonly a redirect to the identity provider.
 
 ### :material-key-star: API Key Authentication
 
@@ -57,17 +65,70 @@ For the full list of environment variables and required IAM permissions for each
     - **`api_key_create`** — auto-generate a secure 64-character random key; the generated value is returned as a sensitive Terraform output.
     - **`api_key_ssm_parameter`** / **`api_key_secretsmanager_secret`** — reference an existing SSM parameter or Secrets Manager secret; the module does not create these resources.
 
+### :material-account-key: Amazon Cognito User Pool Tokens
+
+stdapi.ai can accept the bearer tokens issued by an [Amazon Cognito user pool](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools.html) as an alternative to the static API key, validating each one on every request. Each caller — a person or an application — gets its own short-lived credential, so there is no shared key to rotate, and the verified caller becomes the identity [per-user cost attribution](operations_cost_management.md#per-user-attribution) bills against.
+
+Clients send the token exactly as they would send an API key, in either header:
+
+```bash
+curl https://your-gateway.example.com/v1/models \
+  -H "Authorization: Bearer eyJraWQiOi..."
+
+# Anthropic-compatible routes, whose SDK uses its own header
+curl https://your-gateway.example.com/anthropic/v1/models \
+  -H "x-api-key: eyJraWQiOi..." -H "anthropic-version: 2023-06-01"
+```
+
+#### What you configure in AWS
+
+1. **A user pool**, in any Region. Its ID (for example `eu-west-3_a1b2c3d4e`) goes into [`AWS_COGNITO_USER_POOL_ID`](operations_configuration.md#aws-cognito-user-pool-id); the Region is read from the ID itself.
+2. **One or more app clients** in that pool. Their IDs go into [`AWS_COGNITO_CLIENT_IDS`](operations_configuration.md#aws-cognito-client-ids) — a token issued to any other app client is rejected, so this list is required.
+3. **A [pool domain](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools-assign-domain.html)**, which is what gives the pool its OAuth 2.0 authorization and token endpoints. It is needed in two cases: to demand a scope such as `stdapi/invoke` through [`AWS_COGNITO_REQUIRED_SCOPES`](operations_configuration.md#aws-cognito-required-scopes), since custom scopes exist only on tokens those endpoints issue and on a resource server that defines them; and for the [agent discovery flow](#authentication-discovery-for-agents), scope or no scope, since an agent has nowhere to obtain a token otherwise. Machine-to-machine clients use the `client_credentials` grant there.
+
+No IAM permission is involved: the pool's signing keys are public. The task must be able to **reach** them, though — it reads them over HTTPS from `cognito-idp.<region>.amazonaws.com` in the pool's Region at startup, and fails to start if it cannot. Give the task outbound HTTPS to that host: NAT or internet egress, or an [interface VPC endpoint](https://docs.aws.amazon.com/cognito/latest/developerguide/vpc-interface-endpoints.html) for `com.amazonaws.<region>.cognito-idp` in that Region — note that AWS declares a pool with a domain assigned incompatible with that endpoint, so a pool used for scopes or for agent discovery needs the egress path.
+
+!!! danger "The pool decides who can call the gateway"
+    Any identity that can obtain a token from an app client listed in [`AWS_COGNITO_CLIENT_IDS`](operations_configuration.md#aws-cognito-client-ids) can call the API, and its model usage is billed to your account. A Cognito user pool **allows self sign-up by default**, so pointing the gateway at a customer-facing pool without further restriction turns it into an open, self-service one.
+
+    Before enabling it: disable self-registration on the pool (`AllowAdminCreateUserOnly`), or dedicate an app client to the gateway and require one of its resource-server scopes.
+
+#### What stdapi.ai validates
+
+Every request is checked against all of the following, and any failure returns the same `401 Unauthorized` with no detail (the reason is recorded in the server log only):
+
+| Check | Requirement |
+|---|---|
+| **Signature** | RS256, against the pool's published keys. Unsigned (`alg=none`) and symmetric (`HS*`) tokens are always rejected. |
+| **Issuer** | Exactly the configured pool's issuer — see [`AWS_COGNITO_ISSUER_TYPE`](operations_configuration.md#aws-cognito-issuer-type). A token from another pool is rejected. |
+| **Token use** | An access token. Identity tokens are rejected unless [`AWS_COGNITO_ACCEPT_ID_TOKEN`](operations_configuration.md#aws-cognito-accept-id-token) is enabled. |
+| **Application** | The token's app client is in [`AWS_COGNITO_CLIENT_IDS`](operations_configuration.md#aws-cognito-client-ids). |
+| **Validity period** | Not expired, and not used before its start time, with a one-minute tolerance for clock drift. |
+| **Scopes** | All of [`AWS_COGNITO_REQUIRED_SCOPES`](operations_configuration.md#aws-cognito-required-scopes) are present. |
+
+!!! abstract "Signing keys are loaded once, at startup"
+    The pool's public keys are read at startup and kept in memory, so validation adds no network call and no measurable latency to a request. When a pool rotates its keys, the first request carrying a token signed by the new key reloads them, at most once every five minutes — a forged key identifier cannot turn requests into outbound traffic. A deployment that cannot read the keys at startup **fails to start** rather than serving requests it could not authenticate.
+
+!!! warning "Revocation takes effect when the token expires"
+    A token is validated against the pool's published keys and its own claims, without calling the pool, so nothing is checked back with it once it has been issued. Disabling a user, deleting them or signing them out therefore stops the **next** token, not the one already in their hands: that one keeps working until its `exp`, up to the app client's access-token validity (one hour by default, 24 hours at most). Keep that validity short — it is the upper bound on how long a revoked credential stays usable.
+
+!!! warning "Username and password sign-in yields no custom scope"
+    Tokens obtained by signing in directly against the user pool API carry the single scope `aws.cognito.signin.user.admin`. Custom scopes only exist on tokens issued by the pool's OAuth 2.0 token endpoint. Requiring `stdapi/invoke` therefore rejects every client that signs in with a username and password — leave [`AWS_COGNITO_REQUIRED_SCOPES`](operations_configuration.md#aws-cognito-required-scopes) empty unless all your clients use the OAuth 2.0 endpoints.
+
+!!! tip "Both methods, or one"
+    With both a user pool and an API key configured, either credential is accepted: a bearer value shaped like a signed token is validated against the pool, anything else is compared to the API key. Set [`AUTHENTICATION_MODE`](operations_configuration.md#authentication-mode) to `cognito` or `api_key` to accept only one of them — the deployment then refuses to start if the other one is configured too, so a credential is never accepted by accident.
+
 ### :material-account-check: OIDC, Cognito & IAM Identity Center
 
 For user-facing applications or enterprise SSO, you can offload authentication to an OpenID Connect (OIDC) provider, Amazon Cognito, or AWS IAM Identity Center (the AWS-native workforce SSO service for centralized employee and partner access).
 
-When authentication is handled at this layer, requests are fully validated **before they reach stdapi.ai** — the application receives only authenticated, pre-authorized requests.
+When authentication is handled at this layer, requests are fully validated **before they reach stdapi.ai** — the application receives only authenticated, pre-authorized requests. This remains a valid alternative to [validating Cognito tokens in stdapi.ai](#amazon-cognito-user-pool-tokens): choose the edge when you need a hosted sign-in flow or session cookies, and choose in-application validation when clients already hold a bearer token and you want the verified caller to drive [per-user cost attribution](operations_cost_management.md#per-user-attribution).
 
 !!! tip "Trusted by AWS teams — no custom implementation risk"
     Cognito and IAM Identity Center are the same identity systems AWS teams already rely on for console access and internal applications. By delegating authentication to these services, you get MFA, SSO, and fine-grained permission sets without building or maintaining custom user management logic — and without the security risk of a home-grown implementation. See [Eliminate key rotation with AWS native auth](#security-best-practices) for the operational payoff.
 
 !!! info "Terraform Module"
-    The Terraform module does not configure OIDC, Cognito, or IAM Identity Center authentication. These integrations must be set up directly on the ALB or API Gateway.
+    The Terraform module does not configure the ALB or API Gateway integrations described in this section, nor the identity provider itself — these are set up directly on the ALB or API Gateway. Validating Cognito tokens **in stdapi.ai** needs no infrastructure beyond the pool: see [Amazon Cognito User Pool Tokens](#amazon-cognito-user-pool-tokens).
 
 #### via Application Load Balancer (ALB)
 The AWS ALB can authenticate users before forwarding requests to stdapi.ai. This is the most common way to add OIDC or Cognito authentication.
@@ -105,9 +166,9 @@ In certain environments, you may choose to disable application-level authenticat
 - When an upstream proxy handles all security and identity.
 
 #### Configuration
-To disable API key authentication, do **not** configure any API key environment variables (`API_KEY`, `API_KEY_SSM_PARAMETER`, or `API_KEY_SECRETSMANAGER_SECRET`).
+To disable application-level authentication, do **not** configure any API key environment variable (`API_KEY`, `API_KEY_SSM_PARAMETER`, or `API_KEY_SECRETSMANAGER_SECRET`) and no user pool (`AWS_COGNITO_USER_POOL_ID`).
 
-When no API key authentication is configured, stdapi.ai will:
+When no authentication method is configured, stdapi.ai will:
 
 1.  Accept all incoming requests without validating an API key.
 2.  Log a security warning at startup.
@@ -280,7 +341,7 @@ Key practices recommended by AWS:
 !!! tip "Eliminate key rotation with AWS native auth"
     When using API key authentication, rotation requires updating SSM/Secrets Manager and performing a rolling ECS task replacement. This is predictable but adds a deployment step.
 
-    To avoid key rotation entirely, use **OIDC / Cognito / IAM Identity Center** via the ALB — there are no API keys to rotate. Access is controlled through your existing AWS identity provider and can be revoked instantly without touching the deployment.
+    To avoid key rotation entirely, use [**Amazon Cognito user pool tokens**](#amazon-cognito-user-pool-tokens), or **OIDC / Cognito / IAM Identity Center** via the ALB — there are no API keys to rotate, and access is granted and withdrawn in your identity provider without touching the deployment. With tokens validated by stdapi.ai, withdrawing access takes effect when the caller's current token expires: keep the app client's [access-token validity](#amazon-cognito-user-pool-tokens) short.
 
 **IAM & Access Control:**
 
