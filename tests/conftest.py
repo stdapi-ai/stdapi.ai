@@ -35,8 +35,9 @@ import httpx
 import pytest
 from aiobotocore.session import get_session
 from anthropic import Anthropic, AnthropicBedrock
+from anthropic import APIStatusError as AnthropicAPIStatusError
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import APIStatusError, OpenAI
 from PIL import Image as PILImage
 from pybase64 import b64encode
 
@@ -493,6 +494,8 @@ _OPENAI_ORGANIZATION = "tests_stdapi.ai"
 _OPT_IN_MARKERS = ("expensive", "agentic", "slow", "video", "container")
 #: Fallback skip reason for a ``gateway`` marker that names none of its own.
 _GATEWAY_SKIP_REASON = "Exercises a gateway-only capability (official API selected)"
+#: Message every route of an optional API answers when the operator left it unconfigured.
+_FEATURE_DISABLED = "not available on the current server"
 #: Extra attempts a ``retry`` test gets when it names no count of its own.
 _DEFAULT_RERUNS = 2
 #: Seconds between two attempts, long enough for a written cache entry to be visible.
@@ -1041,6 +1044,49 @@ def openai_client(
     return OpenAI(
         base_url=f"{server_url}/v1", max_retries=0, organization=_OPENAI_ORGANIZATION
     )
+
+
+def _skip_when_feature_disabled(
+    error: APIStatusError | AnthropicAPIStatusError, feature: str, setting: str
+) -> None:
+    """Skip the test when *error* is the answer of an API the target does not serve.
+
+    An optional API answers the same "not available on the current server"
+    envelope on every one of its routes when the operator configured none of
+    the resources it needs. That is a deployment choice, not a failure, so the
+    tests exercising it must skip rather than fail everywhere it is off.
+
+    Args:
+        error: Status error the probe request raised.
+        feature: Name of the API, for the skip reason.
+        setting: Setting the operator sets to enable it.
+    """
+    if error.status_code >= 500 and _FEATURE_DISABLED in str(error):
+        pytest.skip(f"The target serves no {feature} (set {setting} to enable it)")
+
+
+@pytest.fixture(scope="session")
+def batches_api(openai_client: OpenAI) -> None:
+    """Skip the test unless the target actually serves the Batch API."""
+    try:
+        openai_client.batches.list(limit=1)
+    except APIStatusError as error:
+        _skip_when_feature_disabled(error, "Batch API", "aws_bedrock_batch_role_arn")
+        raise
+
+
+@pytest.fixture(scope="session")
+def anthropic_batches_api(anthropic_client: Anthropic, is_bedrock_direct: bool) -> None:
+    """Skip the test unless the target actually serves the Message Batches API."""
+    if is_bedrock_direct:
+        pytest.skip("Message Batches API not available on Bedrock")
+    try:
+        anthropic_client.messages.batches.list(limit=1)
+    except AnthropicAPIStatusError as error:
+        _skip_when_feature_disabled(
+            error, "Message Batches API", "aws_bedrock_batch_role_arn"
+        )
+        raise
 
 
 def _sample_cache_file(name: str, model: str, suffix: str) -> Path:

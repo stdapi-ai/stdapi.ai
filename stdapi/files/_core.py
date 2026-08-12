@@ -44,6 +44,7 @@ from stdapi.aws_s3 import (
     BUCKET_TO_REGION,
     S3_TAGGING,
     multipart_copy_parts,
+    put_s3_object,
     require_s3_bucket_for_region,
     track_temporary_s3_objects,
 )
@@ -433,6 +434,39 @@ async def upload_file(
             },
         )
     return _record_from_head(payload, head)
+
+
+async def put_file_content(
+    payload: str,
+    bucket: str,
+    data: bytes | AsyncIterator[bytes],
+    *,
+    filename: str,
+    purpose: str,
+    content_type: str = "application/jsonl",
+) -> None:
+    """Store *data* as the Files API object named by *payload*.
+
+    Unlike :func:`upload_file`, the identifier is chosen by the caller, so a
+    payload derived from something stable names the same object every time and
+    writing it again is harmless.
+
+    Args:
+        payload: Bare 32-char base32 file payload to store the content under.
+        bucket: Bucket the payload's fingerprint names.
+        data: File content as bytes or an async byte-chunk iterator.
+        filename: Filename reported by the Files API.
+        purpose: OpenAI purpose string stored with the object.
+        content_type: MIME type of the content.
+    """
+    await put_s3_object(
+        data,
+        content_type,
+        bucket=bucket,
+        key=file_id_s3_key(payload),
+        content_disposition=f'attachment; filename="{_validate_filename(filename)}"',
+        metadata={"expires-at": "", "purpose": purpose},
+    )
 
 
 async def _get_file_impl(payload: str) -> tuple[FileRecord, str, S3Client]:

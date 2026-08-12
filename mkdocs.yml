@@ -61,6 +61,7 @@ nav:
             - Chat Completions: api_openai_chat_completions.md
             - Completions: api_openai_completions.md
             - Files: api_openai_files.md
+            - Batches: api_openai_batches.md
             - Images Generations: api_openai_images_generations.md
             - Images Edits: api_openai_images_edits.md
             - Images Variations: api_openai_images_variations.md
@@ -73,6 +74,7 @@ nav:
             - Models: api_openai_models.md
           - Anthropic Compatible:
             - Messages: api_anthropic_messages.md
+            - Message Batches: api_anthropic_batches.md
             - Files: api_anthropic_files.md
             - Models: api_anthropic_models.md
           - Cohere Compatible:

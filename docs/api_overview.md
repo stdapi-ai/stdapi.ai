@@ -70,6 +70,8 @@ stdapi.ai provides multiple resources for exploring and testing the API—choose
 | **📁 Files**      | `POST/GET/DELETE /v1/files`       | Upload, list, retrieve, download, delete files                              | [Files →](api_openai_files.md)                         |
 |                   | `POST /v1/uploads`                | Multipart upload sessions for large files                                   | [Files →](api_openai_files.md)                         |
 |                   | `POST /v1/uploads/{id}/parts`, `…/complete`, `…/cancel` | Add parts to, complete, or cancel an upload session   | [Files →](api_openai_files.md)                         |
+| **📦 Batches**    | `POST/GET /v1/batches`            | Run a file of requests asynchronously at the batch price                    | [Batches →](api_openai_batches.md)                     |
+|                   | `POST /v1/batches/{id}/cancel`    | Cancel a running batch                                                      | [Batches →](api_openai_batches.md)                     |
 
 ### :material-magnify: stdapi.ai Native Extensions
 
@@ -87,6 +89,9 @@ stdapi.ai provides multiple resources for exploring and testing the API—choose
 | **📋 Models**   | `GET /anthropic/v1/models`                 | List available models                                         | [Models →](api_anthropic_models.md)     |
 |                 | `GET /anthropic/v1/models/{model_id}`      | Retrieve model details                                        | [Models →](api_anthropic_models.md)     |
 | **📁 Files**    | `POST/GET/DELETE /anthropic/v1/files`      | Upload, list, retrieve, download, delete files                | [Files →](api_anthropic_files.md)       |
+| **📦 Batches**  | `POST/GET/DELETE /anthropic/v1/messages/batches` | Run many message requests asynchronously at the batch price | [Message Batches →](api_anthropic_batches.md) |
+|                 | `GET /anthropic/v1/messages/batches/{id}/results` | Stream a finished batch's results as JSONL             | [Message Batches →](api_anthropic_batches.md) |
+|                 | `POST /anthropic/v1/messages/batches/{id}/cancel` | Cancel a processing batch                              | [Message Batches →](api_anthropic_batches.md) |
 
 ### ![Cohere](styles/logo_cohere.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Cohere-Compatible API
 

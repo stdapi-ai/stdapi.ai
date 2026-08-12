@@ -369,6 +369,98 @@ Video generation itself runs on the core Bedrock asynchronous invocation permiss
 
 ---
 
+## :material-package-variant-closed: Batch Inference (Optional) { #batch-inference }
+
+**Environment Variables**: [`AWS_BEDROCK_BATCH_ROLE_ARN`](operations_configuration.md#aws-bedrock-batch-role-arn), [`AWS_S3_BATCHES_PREFIX`](operations_configuration.md#aws-s3-batches-prefix), [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket), [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets)
+
+The [Batch API](api_openai_batches.md) and the [Message Batches API](api_anthropic_batches.md) run on [Amazon Bedrock batch inference](https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference.html), which needs **two** policies: the server's own, and a service role Amazon Bedrock assumes to read the requests and write the results.
+
+### The Server's Policy
+
+??? example "Batch Inference IAM Policy Statements"
+    ```json
+    {
+      "Sid": "BedrockBatchJobs",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:CreateModelInvocationJob",
+        "bedrock:GetModelInvocationJob",
+        "bedrock:StopModelInvocationJob"
+      ],
+      "Resource": "arn:aws:bedrock:*:<account-id>:model-invocation-job/*"
+    },
+    {
+      "Sid": "BedrockBatchPassRole",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::<account-id>:role/stdapi-ai-batch",
+      "Condition": {
+        "StringEquals": {"iam:PassedToService": "bedrock.amazonaws.com"}
+      }
+    }
+    ```
+
+    Substitute `<account-id>` with your AWS account ID, and the role ARN with the value of `AWS_BEDROCK_BATCH_ROLE_ARN`. The server also needs the [S3 File Storage](#s3-file-storage-optional) permissions on every bucket a batch may use.
+
+### The Service Role
+
+Create a role named by `AWS_BEDROCK_BATCH_ROLE_ARN` whose trust policy lets Amazon Bedrock assume it, scoped to your account and to batch jobs so it cannot be used by another account's jobs:
+
+??? example "Batch Service Role Trust Policy"
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Principal": {"Service": "bedrock.amazonaws.com"},
+          "Action": "sts:AssumeRole",
+          "Condition": {
+            "StringEquals": {"aws:SourceAccount": "<account-id>"},
+            "ArnEquals": {
+              "aws:SourceArn": "arn:aws:bedrock:*:<account-id>:model-invocation-job/*"
+            }
+          }
+        }
+      ]
+    }
+    ```
+
+??? example "Batch Service Role Permissions Policy"
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Sid": "BatchDataAccess",
+          "Effect": "Allow",
+          "Action": ["s3:GetObject", "s3:PutObject"],
+          "Resource": "arn:aws:s3:::<bucket-name>/batches/*"
+        },
+        {
+          "Sid": "BatchDataListing",
+          "Effect": "Allow",
+          "Action": "s3:ListBucket",
+          "Resource": "arn:aws:s3:::<bucket-name>",
+          "Condition": {"StringLike": {"s3:prefix": "batches/*"}}
+        },
+        {
+          "Sid": "BatchModelInvocation",
+          "Effect": "Allow",
+          "Action": "bedrock:InvokeModel",
+          "Resource": [
+            "arn:aws:bedrock:*::foundation-model/*",
+            "arn:aws:bedrock:*:<account-id>:inference-profile/*"
+          ]
+        }
+      ]
+    }
+    ```
+
+    Repeat the S3 statements for each `AWS_S3_REGIONAL_BUCKETS` bucket, and substitute `batches/` with your `AWS_S3_BATCHES_PREFIX`. A cross-region inference profile needs `bedrock:InvokeModel` on **both** the profile and the foundation models behind it — see [Inference Profiles](#bedrock-inference-profiles-and-prompt-routers-optional).
+
+---
+
 ## :material-account-voice: Text-to-Speech (Optional) { #text-to-speech-optional }
 
 **Environment Variables**: [`AWS_POLLY_REGION`](operations_configuration.md#aws-polly-region), [`DEFAULT_TTS_MODEL`](operations_configuration.md#default-tts-model), [`DEFAULT_TTS_LANGUAGE`](operations_configuration.md#default-tts-language), [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket), [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets)
@@ -904,6 +996,7 @@ Required if you configure API authentication. See the [Authentication](operation
 | **Web Search**                                  | `bedrock-websearch:InvokeSearch`<br>`bedrock-websearch:InvokeFetch`<br>`bedrock-websearch:ExternalWebAccess` only when external web access is enabled | `web_search` requests on the OpenAI GPT-5.x family                           |
 | **File Storage**                                | `s3:PutObject`<br>`s3:PutObjectTagging`<br>`s3:GetObject`<br>`s3:DeleteObject`<br>`s3:AbortMultipartUpload`<br>`s3:ListMultipartUploadParts`<br>`s3:ListBucket`<br>`s3:ListBucketMultipartUploads`<br>on every bucket, including each `AWS_S3_REGIONAL_BUCKETS` entry | `AWS_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`                                 |
 | **Video Generation**                            | Core Bedrock invoke permissions (incl. `bedrock:GetAsyncInvoke`, `bedrock:TagResource`)<br>`bedrock:ListAsyncInvokes` and `bedrock:ListTagsForResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) for job listing<br>File Storage S3 permissions on each regional bucket | `AWS_S3_REGIONAL_BUCKETS`                                                    |
+| **Batch Inference**                             | `bedrock:CreateModelInvocationJob`<br>`bedrock:GetModelInvocationJob`<br>`bedrock:StopModelInvocationJob` (on `arn:aws:bedrock:*:*:model-invocation-job/*`)<br>`iam:PassRole` on the batch service role, scoped with `iam:PassedToService: bedrock.amazonaws.com`<br>File Storage S3 permissions on each bucket a batch uses, plus the service role's own policy (see [Batch Inference](#batch-inference)) | `AWS_BEDROCK_BATCH_ROLE_ARN`                                                 |
 | **KMS Encrypted S3 Buckets**                    | `kms:Decrypt`<br>`kms:GenerateDataKey`<br>with `kms:ViaService` condition                                                                                  | If S3 buckets use KMS encryption                                             |
 | **Text-to-Speech**                              | `polly:SynthesizeSpeech`<br>`polly:DescribeVoices`<br>`polly:StartSpeechSynthesisStream` for generative voices above 3,000 characters<br>`polly:StartSpeechSynthesisTask`, `polly:GetSpeechSynthesisTask` and S3 `PutObject`/`GetObject`/`DeleteObject` on each bucket serving a Polly region, for the other voices above 3,000 characters | `AWS_POLLY_REGION`<br>`AWS_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`           |
 | **Speech-to-Text**                              | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`transcribe:TagResource` (on `arn:aws:transcribe:*:*:transcription-job/*`)<br>File Storage S3 permissions on every bucket serving a candidate region | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS` |

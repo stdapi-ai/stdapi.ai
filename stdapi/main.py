@@ -200,6 +200,13 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                         "S3 bucket not configured ('aws_s3_bucket' not set): "
                         "some features are disabled",
                     )
+                elif not SETTINGS.aws_bedrock_batch_role_arn:
+                    add_server_warning(
+                        start_event,
+                        "Batch service role not configured "
+                        "('aws_bedrock_batch_role_arn' not set): "
+                        "the Batch APIs are disabled",
+                    )
                 if deprecated := SETTINGS.deprecated():
                     add_server_warning(
                         start_event,

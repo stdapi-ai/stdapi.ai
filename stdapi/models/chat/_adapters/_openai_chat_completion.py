@@ -1025,7 +1025,7 @@ async def format_response(
     tts_tasks: dict[int, Task[Any]] = {}
     cached_tokens = 0
     cache_write_tokens = 0
-    legacy_function = _LEGACY_FUNCTION.get()
+    legacy_function = _LEGACY_FUNCTION.get(False)
     for index, response in enumerate(responses):
         # OpenAI semantics: prompt_tokens covers the full prompt, cache buckets included.
         cache_read = response["usage"].get("cacheReadInputTokens", 0)
@@ -1295,7 +1295,7 @@ async def format_stream(
         )
     )
 
-    legacy_function = _LEGACY_FUNCTION.get()
+    legacy_function = _LEGACY_FUNCTION.get(False)
     end_state = False
     suppressed_indices: set[int] = set()
     # Bedrock content block index -> contiguous position in the OpenAI tool_calls array

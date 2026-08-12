@@ -166,6 +166,7 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_S3_FILES_PREFIX`](#aws-s3-files-prefix)           | `files/`        | S3 prefix for Files API objects; configure S3 lifecycle policies on this prefix                     |
 | [`AWS_S3_VIDEOS_PREFIX`](#aws-s3-videos-prefix)         | `videos/`       | S3 prefix for generated videos (Videos API); persists until deleted through the API                  |
 | [`AWS_S3_VIDEOS_EXPIRES_AFTER`](#aws-s3-videos-expires-after) | None      | Retention period in seconds for generated videos; sets `Video.expires_at` and blocks expired downloads |
+| [`AWS_S3_BATCHES_PREFIX`](#aws-s3-batches-prefix)       | `batches/`      | S3 prefix for Batch API data (requests, results, batch records); configure lifecycle policies on it   |
 | [`AWS_TRANSCRIBE_S3_BUCKET`](#aws-transcribe-s3-bucket) | `AWS_S3_BUCKET` | S3 bucket for temporary audio transcription files; must be in same region as `AWS_TRANSCRIBE_REGION` |
 
 ### :material-robot: AWS AI Services { #summary-aws-ai-services }
@@ -224,6 +225,7 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_BEDROCK_GUARDRAIL_TRACE`](#aws-bedrock-guardrail-trace)                                     | None    | Guardrails trace level: `disabled`, `enabled`, or `enabled_full`                                    |
 | [`AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE`](#aws-bedrock-allow-guardrail-override)                   | `false` | Allow users to override global guardrail configuration via request headers (security: default off)  |
 | [`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`](#aws-bedrock-session-encryption-key-arn)               | None    | KMS key ARN encrypting Amazon Bedrock session storage (Responses API `store=true`)                     |
+| [`AWS_BEDROCK_BATCH_ROLE_ARN`](#aws-bedrock-batch-role-arn)                                       | None    | Service role Amazon Bedrock assumes to run batch inference jobs; unset disables the Batch APIs        |
 | [`AWS_BEDROCK_USER_ROLE_ARN`](#aws-bedrock-user-role-arn)                                         | None    | Run each end user's model calls under a role session of their own, so AWS reports their spend separately |
 | [`AWS_BEDROCK_USER_ROLE_SESSION_DURATION`](#aws-bedrock-user-role-session-duration)               | `3600`  | Lifetime in seconds of a per-end-user role session (900–3600)                                       |
 | [`AWS_BEDROCK_USER_ROLE_TAG_KEY`](#aws-bedrock-user-role-tag-key)                                 | `user`  | Session tag key carrying the end user identity, for cost allocation and access policies             |
@@ -634,6 +636,26 @@ export AWS_S3_VIDEOS_EXPIRES_AFTER=86400
 ```
 
 When set, the `Video` object reports `expires_at` (job completion time plus this value) and downloading expired video content returns a 404. The server enforces expiry at the API level only; the paired S3 Lifecycle rule performs the physical cleanup.
+
+#### `AWS_S3_BATCHES_PREFIX` { #aws-s3-batches-prefix }
+
+:octicons-package-24: **Purpose**
+:   S3 prefix (folder path) for the data of the [Batch API](api_openai_batches.md) and the [Message Batches API](api_anthropic_batches.md) — the submitted requests, the results, and the batch records themselves
+
+:octicons-gear-24: **Default**
+:   `batches/`
+
+:octicons-alert-24: **Requirement**
+:   Must be non-empty, use only S3-safe characters (alphanumerics plus `! _ . * ' ( ) -` per path segment), and end with a trailing `/` — batches are addressed by prefix, so an empty value would make every stray object at the bucket root a candidate
+
+:octicons-check-circle-24: **Best Practice**
+:   Batch data persists until the batch is deleted — configure an S3 lifecycle rule on this prefix to cap storage costs, and grant [`AWS_BEDROCK_BATCH_ROLE_ARN`](#aws-bedrock-batch-role-arn) read and write access under it
+
+```bash
+export AWS_S3_BATCHES_PREFIX=batches/
+```
+
+Each batch stores its data under a folder of its own below this prefix. Because the output bucket must be in the same region as the model that serves the batch, that data is stored in the [`AWS_S3_REGIONAL_BUCKETS`](#aws-s3-regional-buckets) bucket of the region that served it.
 
 #### `AWS_TRANSCRIBE_S3_BUCKET` { #aws-transcribe-s3-bucket }
 
@@ -3614,6 +3636,30 @@ export AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN=arn:aws:kms:us-east-1:123456789012
 
 !!! info "Orphaned Session Cleanup"
     A session is created independently of the generation it will hold — before it for the Responses API, concurrently with it for Chat Completions — so a crash before the generation is written leaves an empty, orphaned session. Bedrock sessions have no TTL and persist until deleted, so periodically clean up stale sessions (`aws bedrock-agent-runtime list-sessions` plus `delete-session`, or an operator-managed lifecycle policy).
+
+#### `AWS_BEDROCK_BATCH_ROLE_ARN` { #aws-bedrock-batch-role-arn }
+
+:octicons-package-24: **Purpose**
+:   AWS IAM service role that [Amazon Bedrock batch inference](https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference.html) assumes to read a batch's requests and write its results — required to enable the [Batch API](api_openai_batches.md) and the [Message Batches API](api_anthropic_batches.md)
+
+:octicons-database-24: **Type**
+:   String — an IAM role ARN
+
+:octicons-gear-24: **Default**
+:   None — the batch endpoints answer `503` (`529` on the Anthropic-compatible routes) and the server reports the disabled feature in its startup log
+
+:octicons-workflow-24: **Behavior**
+:   The server passes this role when it submits a batch; Amazon Bedrock then reads the requests and writes the results with it. The role must be able to read and write every bucket configured with [`AWS_S3_BUCKET`](#aws-s3-bucket) and [`AWS_S3_REGIONAL_BUCKETS`](#aws-s3-regional-buckets), under [`AWS_S3_BATCHES_PREFIX`](#aws-s3-batches-prefix).
+
+:octicons-check-circle-24: **Validation**
+:   Checked at startup: must be an IAM role ARN (`arn:<partition>:iam::<account-id>:role/<name>`). Leaving it unset is reported as a startup warning, never a failure.
+
+```bash
+export AWS_BEDROCK_BATCH_ROLE_ARN=arn:aws:iam::123456789012:role/stdapi-ai-batch
+```
+
+!!! warning "The role and two IAM policies come first"
+    The role's trust policy must allow `bedrock.amazonaws.com` to assume it, and the server's own role needs `iam:PassRole` on this ARN. See [IAM Permissions](operations_iam_permissions.md#batch-inference) for copyable policies.
 
 #### `AWS_BEDROCK_USER_ROLE_ARN` { #aws-bedrock-user-role-arn }
 

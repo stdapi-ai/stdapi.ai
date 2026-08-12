@@ -932,6 +932,39 @@ class _Settings(BaseSettings):
         ),
     )
 
+    aws_s3_batches_prefix: str = Field(
+        default="batches/",
+        description=(
+            "S3 prefix (folder path) for the Batch API's own data — the "
+            "submitted requests, the results, and the batch records "
+            "themselves.\n\n"
+            "Each batch stores its data under a folder of its own below this "
+            "prefix, in the regional bucket that served it. Configure an S3 "
+            "Lifecycle rule on this prefix to cap storage costs; results stay "
+            "readable for as long as the objects exist.\n\n"
+            "Example: 'batches/' stores objects under s3://bucket/batches/\n"
+            "Example: '' (empty string) is rejected: the prefix must not be "
+            "the bucket root."
+        ),
+    )
+
+    aws_bedrock_batch_role_arn: str | None = Field(
+        default=None,
+        description=(
+            "ARN of the AWS IAM service role that Amazon Bedrock assumes to run "
+            "batch inference jobs. Required to enable the Batch API; the batch "
+            "endpoints answer 503 while it is unset.\n\n"
+            "The role's trust policy must allow 'bedrock.amazonaws.com' to "
+            "assume it, and the role must be able to read from and write to "
+            "every bucket configured with aws_s3_bucket / "
+            "aws_s3_bucket_<region>, under aws_s3_batches_prefix. The server's "
+            "own role needs 'iam:PassRole' on this ARN. See "
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/batch-iam-sr.html\n\n"
+            "Example: 'arn:aws:iam::123456789012:role/stdapi-ai-batch'\n\n"
+            "Unset (default): the Batch API is disabled."
+        ),
+    )
+
     aws_translate_region: RegionName | None = Field(
         default=None,
         description=(
@@ -1937,6 +1970,59 @@ class _Settings(BaseSettings):
                 'not start with "/" or contain "//", must use only S3-safe '
                 "characters (alphanumerics plus ! _ . * ' ( ) -) per path segment, "
                 'and must end with a trailing "/"'
+            )
+            raise ValueError(msg)
+        return value
+
+    @field_validator("aws_s3_batches_prefix")
+    @classmethod
+    def _validate_batches_prefix(cls, value: str) -> str:
+        """Validate the S3 prefix used for Batch API data.
+
+        Batch data is addressed by prefix, so an empty value would put batch
+        records at the bucket root and make every stray object a candidate.
+
+        Args:
+            value: S3 prefix for Batch API data.
+
+        Returns:
+            The validated prefix.
+
+        Raises:
+            ValueError: If the value is empty, starts with "/", contains "//",
+                uses characters outside S3's safe set, or has no trailing "/".
+        """
+        if not _S3_PREFIX_PATTERN.fullmatch(value):
+            msg = (
+                f'Invalid aws_s3_batches_prefix "{value}": must be non-empty, must '
+                'not start with "/" or contain "//", must use only S3-safe '
+                "characters (alphanumerics plus ! _ . * ' ( ) -) per path segment, "
+                'and must end with a trailing "/"'
+            )
+            raise ValueError(msg)
+        return value
+
+    @field_validator("aws_bedrock_batch_role_arn")
+    @classmethod
+    def _validate_batch_role_arn(cls, value: str | None) -> str | None:
+        """Validate the batch service role ARN against the IAM role format.
+
+        A malformed ARN would otherwise only surface once the first batch
+        submission is rejected by AWS.
+
+        Args:
+            value: IAM role ARN, or None to keep the Batch API disabled.
+
+        Returns:
+            The validated ARN.
+
+        Raises:
+            ValueError: If the value is set and is not an IAM role ARN.
+        """
+        if value is not None and not _IAM_ROLE_ARN_PATTERN.fullmatch(value):
+            msg = (
+                f'Invalid aws_bedrock_batch_role_arn "{value}": must be an IAM role '
+                'ARN "arn:<partition>:iam::<account-id>:role/<name>".'
             )
             raise ValueError(msg)
         return value

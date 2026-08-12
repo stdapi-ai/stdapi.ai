@@ -66,6 +66,7 @@ if TYPE_CHECKING:
         ChatCompletion,
         PromptCacheOptions,
         PromptCacheRetention,
+        ServiceTiers,
     )
     from stdapi.types.openai_chat_completions import (
         CompletionCreateParams as ChatCompletionCreateParams,
@@ -142,18 +143,17 @@ class ChatModel(ChatModelBase[Any, Any]):
         """
         return Capability.COUNT_TOKENS
 
-    async def create_completion(
-        self, request: ChatCompletionCreateParams, completion_id: str, created: int
-    ) -> ChatCompletion | EventSourceResponse:
-        """Handle a chat completion request via the OpenAI route.
+    async def build_completion_request(
+        self, request: ChatCompletionCreateParams
+    ) -> tuple[ConverseRequestBaseTypeDef, ServiceTiers | None, int]:
+        """Translate an OpenAI chat completion request into a Converse request.
 
         Args:
             request: OpenAI-format completion request.
-            completion_id: Unique identifier for the completion.
-            created: Unix timestamp of request creation.
 
         Returns:
-            Completed response or streaming ``EventSourceResponse``.
+            Tuple of (Converse request payload, service tier to report to the
+            client, number of choices the request asks for).
         """
         await prefetch_all_content_types()
         cache_ttl = self._cache_ttl(
@@ -206,16 +206,39 @@ class ChatModel(ChatModelBase[Any, Any]):
         )
         self._req_limit_cache_points(system_blocks, tool_config, bedrock_messages)
 
-        bedrock_request = await self._prepare_converse_request(
-            bedrock_messages=bedrock_messages,
-            inference_cfg=inference_cfg,
-            system_blocks=system_blocks,
-            tool_config=tool_config,
-            additional_request_fields=additional_request_fields,
-            service_tier=bedrock_service_tier,
-            output_config=output_config,
-            request_metadata=request_metadata,
+        return (
+            await self._prepare_converse_request(
+                bedrock_messages=bedrock_messages,
+                inference_cfg=inference_cfg,
+                system_blocks=system_blocks,
+                tool_config=tool_config,
+                additional_request_fields=additional_request_fields,
+                service_tier=bedrock_service_tier,
+                output_config=output_config,
+                request_metadata=request_metadata,
+            ),
+            openai_service_tier,
+            choices_count,
         )
+
+    async def create_completion(
+        self, request: ChatCompletionCreateParams, completion_id: str, created: int
+    ) -> ChatCompletion | EventSourceResponse:
+        """Handle a chat completion request via the OpenAI route.
+
+        Args:
+            request: OpenAI-format completion request.
+            completion_id: Unique identifier for the completion.
+            created: Unix timestamp of request creation.
+
+        Returns:
+            Completed response or streaming ``EventSourceResponse``.
+        """
+        (
+            bedrock_request,
+            openai_service_tier,
+            choices_count,
+        ) = await self.build_completion_request(request)
         if request.stream:
             # The invoked-model trace only arrives at stream end: report the router ID.
             return EventSourceResponse(
@@ -340,17 +363,17 @@ class ChatModel(ChatModelBase[Any, Any]):
             openai_service_tier,
         )
 
-    async def create_message(
-        self, request: MessageCreateParams, message_id: str
-    ) -> Message | EventSourceResponse:
-        """Handle a message request via the Anthropic Messages route.
+    async def build_message_request(
+        self, request: MessageCreateParams
+    ) -> tuple[ConverseRequestBaseTypeDef, str | None]:
+        """Translate an Anthropic message request into a Converse request.
 
         Args:
             request: Anthropic-format message creation request.
-            message_id: Stable identifier for the message.
 
         Returns:
-            ``Message`` or streaming ``EventSourceResponse``.
+            Tuple of (Converse request payload, name of the tool the request
+            forces, if any).
         """
         await prefetch_all_content_types()
         (
@@ -408,15 +431,32 @@ class ChatModel(ChatModelBase[Any, Any]):
             else None
         )
 
-        bedrock_request = await self._prepare_converse_request(
-            bedrock_messages=bedrock_messages,
-            inference_cfg=inference_cfg,
-            system_blocks=system_blocks,
-            tool_config=tool_config,
-            additional_request_fields=additional_request_fields,
-            service_tier=service_tier,
-            output_config=output_config,
+        return (
+            await self._prepare_converse_request(
+                bedrock_messages=bedrock_messages,
+                inference_cfg=inference_cfg,
+                system_blocks=system_blocks,
+                tool_config=tool_config,
+                additional_request_fields=additional_request_fields,
+                service_tier=service_tier,
+                output_config=output_config,
+            ),
+            forced_tool,
         )
+
+    async def create_message(
+        self, request: MessageCreateParams, message_id: str
+    ) -> Message | EventSourceResponse:
+        """Handle a message request via the Anthropic Messages route.
+
+        Args:
+            request: Anthropic-format message creation request.
+            message_id: Stable identifier for the message.
+
+        Returns:
+            ``Message`` or streaming ``EventSourceResponse``.
+        """
+        bedrock_request, forced_tool = await self.build_message_request(request)
 
         if request.stream:
             return EventSourceResponse(

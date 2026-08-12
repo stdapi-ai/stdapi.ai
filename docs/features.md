@@ -98,6 +98,7 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 | `/v1/models`                                   | Model discovery & listing                                               | Amazon Bedrock                               |
 | `/v1/files`                                    | File upload, listing, metadata, download, deletion                      | Amazon S3                                 |
 | `/v1/uploads`                                  | Multipart upload sessions for large files                               | Amazon S3                                 |
+| [`/v1/batches`](api_openai_batches.md)         | Asynchronous bulk inference at the discounted batch price               | Amazon Bedrock batch inference               |
 
 **Anthropic-Compatible:**
 
@@ -108,6 +109,7 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 | `/v1/models`                | Model discovery & listing                          | Amazon Bedrock                               |
 | `/v1/models/{model_id}`     | Model details                                      | Amazon Bedrock                               |
 | `/v1/files`                 | File upload, listing, metadata, download, deletion | Amazon S3                                 |
+| [`/v1/messages/batches`](api_anthropic_batches.md) | Asynchronous bulk messages at the discounted batch price | Amazon Bedrock batch inference   |
 
 !!! note "Route prefix"
     Anthropic-compatible routes are prefixed with `/anthropic` by default (e.g., `/anthropic/v1/messages`). The prefix is configurable via `ANTHROPIC_ROUTES_PREFIX`.
