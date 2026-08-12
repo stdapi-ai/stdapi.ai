@@ -1,4 +1,4 @@
-"""Request/stream log finalization in stdapi.monitoring: usage, cost and error capture.
+"""Request log in stdapi.monitoring: usage, cost, error capture and caller identity.
 
 Everything here runs in-process against a seeded price index and patched
 Bedrock seams, so the token counts, currencies and log levels asserted below are
@@ -7,6 +7,7 @@ exact rather than indicative.
 Ref: stdapi/monitoring.py:_finalize_usage
      stdapi/monitoring.py:log_request_event
      stdapi/monitoring.py:_rebuild_and_log_stream
+     stdapi/monitoring.py:resolve_request_identity
 """
 
 from asyncio import create_task, sleep
@@ -18,23 +19,30 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from botocore.exceptions import ClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
+from pydantic import SecretStr
 from sse_starlette import ServerSentEvent
 from starlette.requests import Request as StarletteRequest
 
+import stdapi.auth
 from stdapi import monitoring, usage
 from stdapi.api_errors import ApiError
 from stdapi.api_providers.openai import TAG_OPENAI
+from stdapi.auth import AuthenticationHandler, authenticate
 from stdapi.config import SETTINGS
 from stdapi.models import ModelBase
 from stdapi.monitoring import (
+    PRINCIPAL,
     REQUEST,
     REQUEST_ID,
     REQUEST_LOG,
     EventLog,
+    Principal,
     SseHandledStreamError,
     _finalize_usage,
+    build_metadata,
     log_background_event,
     log_request_event,
+    resolve_request_identity,
 )
 from stdapi.pricing import Dimension
 from stdapi.usage import get_model_state, record_bedrock_usage
@@ -42,7 +50,7 @@ from tests._helpers import make_event_log
 from tests.conftest import set_test_price
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterable, Generator
+    from collections.abc import AsyncGenerator, AsyncIterable, Callable, Generator
     from typing import Any
 
     from types_aiobotocore_bedrock_runtime.type_defs import ConverseStreamOutputTypeDef
@@ -1020,3 +1028,184 @@ class TestBackgroundEventLog:
         (written_log,) = written
         assert written_log["level"] == "info"
         assert "error_detail" not in written_log
+
+
+@pytest.fixture
+def bind_principal() -> Generator[Callable[[Principal], None]]:
+    """Bind a verified caller to the request context for the test's duration.
+
+    The binding is undone by value rather than by token: an async test body runs
+    in its own copy of the context, so a token taken there cannot be reset here.
+
+    Yields:
+        Callable binding its argument as the current request's principal.
+    """
+
+    def _bind(principal: Principal) -> None:
+        PRINCIPAL.set(principal)
+
+    yield _bind
+    PRINCIPAL.set(None)
+
+
+@pytest.fixture
+def request_id() -> Generator[str]:
+    """Bind a request ID for code that stamps it onto an outgoing call.
+
+    Yields:
+        The bound request ID.
+    """
+    token = REQUEST_ID.set("req-identity")
+    yield "req-identity"
+    REQUEST_ID.reset(token)
+
+
+@pytest.fixture
+async def api_key_authentication(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Install a global authentication handler accepting only ``good-key``."""
+    monkeypatch.setattr(SETTINGS, "api_key", SecretStr("good-key"))
+    monkeypatch.setattr(SETTINGS, "api_key_ssm_parameter", None)
+    monkeypatch.setattr(SETTINGS, "api_key_secretsmanager_secret", None)
+    handler = AuthenticationHandler()
+    assert await handler.initialize()
+    monkeypatch.setattr(stdapi.auth, "_auth_handler", handler)
+
+
+@pytest.mark.usefixtures("request_log")
+class TestRequestIdentity:
+    """Which identity a request is attributed to, and where that identity may appear.
+
+    A verified caller outranks the identifier the request body declares, because
+    the first is what the gateway checked and the second is what the caller
+    chose. The record itself stays in the request context: a log event is
+    JSON-encoded to stdout field by field, so anything bound onto it is
+    published to the operator's log stream.
+
+    Ref: stdapi/monitoring.py:resolve_request_identity
+         stdapi/monitoring.py:build_metadata
+         stdapi/auth.py:authenticate
+    """
+
+    async def test_no_identity_when_the_request_declares_none(self) -> None:
+        """A request with neither a verified caller nor a declared user has no identity."""
+        assert resolve_request_identity() is None
+
+    async def test_falls_back_to_the_identifier_the_client_declared(
+        self, request_log: dict[str, Any]
+    ) -> None:
+        """Without a verified caller, the client-supplied user identifier is used."""
+        request_log["request_user_id"] = "user-42"
+
+        assert resolve_request_identity() == "user-42"
+
+    async def test_verified_caller_outranks_the_declared_identifier(
+        self, request_log: dict[str, Any], bind_principal: Callable[[Principal], None]
+    ) -> None:
+        """A verified caller is attributed over the identifier the request declares."""
+        request_log["request_user_id"] = "user-42"
+        bind_principal(Principal(subject="sub-123", username="alice"))
+
+        assert resolve_request_identity() == "sub-123"
+
+    @pytest.mark.usefixtures("request_id")
+    async def test_metadata_attributes_the_invocation_to_the_verified_caller(
+        self, request_log: dict[str, Any], bind_principal: Callable[[Principal], None]
+    ) -> None:
+        """The verified caller reaches request metadata, sanitized like any identity.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
+        """
+        request_log["request_user_id"] = "user-42"
+        bind_principal(Principal(subject="sub<123>"))
+
+        metadata = build_metadata({"caller": "app"})
+
+        assert metadata["stdapi-ai.user_id"] == "sub123"
+        assert metadata["caller"] == "app"
+
+    @pytest.mark.usefixtures("request_id")
+    async def test_metadata_keeps_the_declared_identifier_without_a_verified_caller(
+        self, request_log: dict[str, Any]
+    ) -> None:
+        """An unauthenticated deployment attributes invocations exactly as before."""
+        request_log["request_user_id"] = "user-42"
+
+        assert build_metadata()["stdapi-ai.user_id"] == "user-42"
+
+    def test_the_verified_caller_never_reaches_the_emitted_log_event(
+        self,
+        bind_principal: Callable[[Principal], None],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """No part of the caller record is published to the log stream.
+
+        The record carries credential details -- a subject, a user name, the
+        client it authenticated with -- that the request log is not the place
+        for; only the identity fields already published stay published.
+        """
+        bind_principal(
+            Principal(
+                subject="sub-123",
+                username="alice",
+                client_id="client-abc",
+                scopes=frozenset({"chat.write"}),
+            )
+        )
+        capsys.readouterr()
+
+        with log_request_event(_make_request()) as log:
+            log["request_user_id"] = "user-42"
+
+        written = capsys.readouterr().out
+        assert "sub-123" not in written
+        assert "alice" not in written
+        assert "client-abc" not in written
+        assert "chat.write" not in written
+        assert loads(written.strip().splitlines()[-1])["request_user_id"] == "user-42"
+
+    @pytest.mark.usefixtures("api_key_authentication")
+    async def test_an_api_key_authenticates_without_identifying_a_caller(
+        self, request_log: dict[str, Any], bind_principal: Callable[[Principal], None]
+    ) -> None:
+        """A valid API key is the deployment's credential, not a person's.
+
+        Nothing is attributed to it: the identity stays the one the request
+        itself declares.
+        """
+        request_log["request_user_id"] = "user-42"
+        bind_principal(Principal(subject="outer-user"))
+
+        await authenticate(credentials=None, x_api_key="good-key")
+
+        assert resolve_request_identity() == "user-42"
+
+    async def test_authentication_drops_a_caller_from_an_enclosing_request(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        bind_principal: Callable[[Principal], None],
+    ) -> None:
+        """A request served inside another request's context never inherits its caller.
+
+        A tool call reaches the API as a second request running in the first
+        one's context, so each request derives its own identity instead of
+        inheriting one it never verified.
+        """
+        monkeypatch.setattr(stdapi.auth, "_auth_handler", AuthenticationHandler())
+        bind_principal(Principal(subject="outer-user"))
+
+        await authenticate(credentials=None, x_api_key=None)
+
+        assert resolve_request_identity() is None
+
+    @pytest.mark.usefixtures("api_key_authentication")
+    async def test_a_rejected_credential_leaves_no_identity(
+        self, bind_principal: Callable[[Principal], None]
+    ) -> None:
+        """A request that fails authentication carries no identity at all."""
+        bind_principal(Principal(subject="outer-user"))
+
+        with pytest.raises(ApiError) as exc_info:
+            await authenticate(credentials=None, x_api_key="wrong-key")
+
+        assert exc_info.value.status == 401
+        assert resolve_request_identity() is None

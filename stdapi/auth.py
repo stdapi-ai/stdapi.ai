@@ -13,7 +13,7 @@ from pydantic_core import from_json
 from stdapi.api_errors import ApiError
 from stdapi.aws import CONFIG
 from stdapi.config import AWS_REGION, AWS_SESSION, SETTINGS
-from stdapi.monitoring import EventLog, add_server_warning, log_error_details
+from stdapi.monitoring import PRINCIPAL, EventLog, add_server_warning, log_error_details
 
 #: HTTPBearer security scheme for API key authentication
 _authorization_bearer = HTTPBearer(auto_error=False)
@@ -210,6 +210,10 @@ async def authenticate(
     Raises:
         ApiError: 401 if authentication is required but missing/invalid.
     """
+    # Set before anything can fail, and on every request: a tool call reaches
+    # the API as a second request running inside the first one's context, which
+    # would otherwise inherit a principal this request never authenticated.
+    PRINCIPAL.set(None)
     if x_api_key:
         token: SecretStr | None = SecretStr(x_api_key)
     elif credentials:

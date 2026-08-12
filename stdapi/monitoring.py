@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager, nullcontext, suppress
 from contextvars import ContextVar
+from dataclasses import dataclass
 from re import compile as re_compile
 from time import perf_counter_ns
 from traceback import format_exception
@@ -144,6 +145,26 @@ class EventLog(TypedDict):
     # Request-level cost total per currency, as exact plain-decimal text
     cost: NotRequired[dict[str, str]]
 
+
+@dataclass(frozen=True, slots=True)
+class Principal:
+    """Caller whose credentials the gateway verified for the current request.
+
+    Attributes:
+        subject: Stable identifier of the caller, used to attribute the request.
+        username: Human-readable name of the caller, when the credential carries one.
+        client_id: Application the caller authenticated through, when known.
+        scopes: Permissions granted to the credential.
+    """
+
+    subject: str
+    username: str | None = None
+    client_id: str | None = None
+    scopes: frozenset[str] = frozenset()
+
+
+#: Verified caller of the current request; None when no identity was authenticated.
+PRINCIPAL: ContextVar[Principal | None] = ContextVar("principal", default=None)
 
 #: Request ID (x-request-id header)
 REQUEST_ID: ContextVar[str] = ContextVar("request_id")
@@ -880,6 +901,25 @@ async def log_request_sse_stream_event(
         )
 
 
+def resolve_request_identity() -> str | None:
+    """Return the identity the current request is attributed to.
+
+    A verified caller outranks the identifier the request declares: the first is
+    what the gateway checked, the second is what the caller chose. Callers
+    sanitize the result for the destination they send it to.
+
+    Returns:
+        The verified caller's subject, else the identifier the request declared,
+        else None.
+
+    Raises:
+        LookupError: If called outside a request context with no verified caller.
+    """
+    if (principal := PRINCIPAL.get()) is not None:
+        return principal.subject
+    return REQUEST_LOG.get().get("request_user_id")
+
+
 def build_metadata(
     existing: Mapping[str, str] | None = None, *, apn: bool = False
 ) -> dict[str, str]:
@@ -904,7 +944,7 @@ def build_metadata(
     }
     metadata["stdapi-ai.request_id"] = REQUEST_ID.get()
     metadata["stdapi-ai.server_id"] = server.SERVER_NAME
-    if (user_id := REQUEST_LOG.get().get("request_user_id")) and (
+    if (user_id := resolve_request_identity()) and (
         user_id := _METADATA_VALUE_STRIP_RE.sub("", user_id)[:256]
     ):
         metadata["stdapi-ai.user_id"] = user_id
