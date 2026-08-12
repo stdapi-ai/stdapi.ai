@@ -341,3 +341,50 @@ class TestMarengoRequestShapes:
 
         v2_request = self._model(MARANGO_V2)._build_v2_request("text", "hello", evil)  # noqa: SLF001
         assert v2_request == {"inputType": "text", "inputText": "hello", "harmless": 1}
+
+
+@pytest.mark.local
+class TestMarengoStorageThreshold:
+    """Media too big for the request body is embedded from storage instead.
+
+    The body limit applies to the request Bedrock receives, and media travels in
+    it base64-encoded — a third larger than the file itself. Weighing the file
+    instead of its encoded form leaves a whole band of inputs inlined into a
+    body the backend refuses.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-marengo-3.html
+         stdapi/models/embedding/twelvelabs_marengo_embed.py:_needs_s3
+    """
+
+    @staticmethod
+    def _remote(declared_size: int) -> Any:  # noqa: ANN401
+        """Build a remote input whose origin declares *declared_size* bytes.
+
+        Returns:
+            An ``InputFileUrl`` that resolves its metadata without a request.
+        """
+        from stdapi.input_file import InputFileUrl  # noqa: PLC0415
+
+        value = InputFileUrl("https://example.com/clip.mp4", content_type="video/mp4")
+        source = value._source  # noqa: SLF001
+        source._filename = None  # noqa: SLF001
+        source._size = declared_size  # noqa: SLF001
+        return value
+
+    async def test_media_that_only_fits_undecoded_is_read_from_storage(self) -> None:
+        """A file under the body limit whose base64 form is over it goes to storage."""
+        from stdapi.models.embedding.twelvelabs_marengo_embed import (  # noqa: PLC0415
+            _needs_s3,
+        )
+
+        # 20,000,000 bytes weigh 26,666,668 once base64-encoded.
+        assert await _needs_s3(self._remote(20_000_000), force_s3_data=False)
+
+    async def test_media_that_fits_encoded_travels_in_the_request(self) -> None:
+        """A file whose base64 form is still under the limit stays inline."""
+        from stdapi.models.embedding.twelvelabs_marengo_embed import (  # noqa: PLC0415
+            _needs_s3,
+        )
+
+        # 18,000,000 bytes weigh 24,000,000 once base64-encoded.
+        assert not await _needs_s3(self._remote(18_000_000), force_s3_data=False)

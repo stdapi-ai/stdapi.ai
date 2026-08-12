@@ -211,6 +211,7 @@ Access every model available on Amazon Bedrock through a single, consistent API 
 - Streaming via Server-Sent Events with real-time token delivery
 - Reasoning content blocks (`thinking`, `reasoning_content`) for supported models
 - Web search results as context (`search_result` content blocks)
+- Image, document, audio and video attachments on multimodal models — see [Attachment Size](#attachment-size) for how large ones are carried
 
 ### :material-image: Images
 
@@ -262,13 +263,34 @@ Access every model available on Amazon Bedrock through a single, consistent API 
 - File storage via the Files API — upload once, reference by ID across multiple requests
 - Multipart uploads for large files via the Uploads API (S3 native multipart)
 - File expiry with configurable TTL (1 hour – 30 days)
+- Large PDFs and other documents are carried by reference where the model supports it — see [Attachment Size](#attachment-size)
 
 ### :material-video: Video
 
 - Text-to-video and image-to-video generation (Amazon Nova Reel, Luma Ray 2) via the OpenAI Videos API
 - Asynchronous job workflow — create, list, poll, download, delete — with stateless job tracking
-- Video input in chat completions for supported models (e.g., Amazon Nova)
+- Video input in chat completions for supported models (e.g., Amazon Nova) — long clips follow the [Attachment Size](#attachment-size) policy
 - S3 URLs as direct video input for multimodal embeddings
+
+### :material-paperclip: Attachment Size
+
+On chat completions, messages and responses served by Amazon Bedrock (Bedrock Mantle models excepted), every attachment — an image, document, audio or video sent as base64, a data URI, an HTTPS URL, an `s3://` URI or a Files API ID — is measured before the request is built, and the way it reaches the model is chosen from that size:
+
+| Attachment size                          | How it is sent                                                                   |
+|------------------------------------------|----------------------------------------------------------------------------------|
+| Within the model's inline capacity       | Embedded in the request                                                          |
+| Above it, model reads that kind of attachment from storage | Staged in your S3 bucket and referenced; the request is answered normally |
+| Above it, model reads it inline only     | Refused with `413`, stating the size that model accepts                          |
+
+Two limits apply: the largest single attachment, and the largest total of attachments in one request. Models differ in both, and in which kinds they read from storage, so the same attachment can be inline for one model and staged for another; nothing in the request changes either way. The Amazon Nova families read images, documents and video from storage and TwelveLabs Pegasus reads video, while every other model reads its attachments from inside the request.
+
+An attachment already in S3 — an `s3://` URI, or a Files API ID sent in a `file_id` field — skips the measurement on a model that reads that kind from storage: it is referenced as it stands, whatever its size. Every other attachment is measured, including one referenced through the `file-id:` URI scheme: above the model's inline capacity it is staged and referenced when the model reads that kind from storage, and refused with `413` when the model reads that kind inline only.
+
+Staging needs an [S3 bucket for the region serving the request](operations_configuration.md#aws-s3-regional-buckets), and a request whose attachment was staged is served by that one region rather than failing over to another — exactly like a request that names an `s3://` input itself.
+
+Measurement uses the size the source declares — the payload length, or the `Content-Length` of an HTTPS URL; a URL that declares none is sent inline whatever its real size. [`MAX_INPUT_FILE_SIZE`](operations_configuration.md#max-input-file-size) caps every attachment read or staged for a model, inline or not.
+
+Bedrock Mantle-served models, image editing and variations, transcription and the embeddings routes keep their own input handling and are not covered by this policy.
 
 ### :material-vector-polyline: Embeddings
 
@@ -360,6 +382,7 @@ S3 is woven into the entire API surface — not just file storage:
 - **Multimodal embeddings** — Pass `s3://` URLs directly; oversized base64 payloads auto-uploaded and invoked asynchronously
 - **Regional buckets** — One bucket per Bedrock region; S3 region routing is automatic
 - **Transfer Acceleration** — Faster downloads via generated HTTP links
+- **Large attachments** — An attachment past what a model reads inline is staged in S3 automatically and referenced, wherever the model reads that kind from storage, so a request that would otherwise be refused is answered unchanged
 
 ---
 

@@ -6,6 +6,7 @@ from stdapi.api_errors import ApiError
 from stdapi.aws import AWS_ENVIRONMENT
 from stdapi.aws_bedrock import usage_from_amazon_bedrock_invocation_metrics
 from stdapi.aws_s3 import put_s3_object
+from stdapi.input_file import InlineMediaLimits
 from stdapi.models.chat._default import ChatModel as _BaseChatModel
 from stdapi.utils import b64encode
 
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
     )
 
     from stdapi.aws_bedrock import BedrockInvocationTypeDef, ConverseRequestBaseTypeDef
+    from stdapi.input_file import BedrockMediaType
 
     #: Pegasus FinishReason type.
     _FinishReason = Literal["stop", "length"]
@@ -39,8 +41,11 @@ if TYPE_CHECKING:
         stopReason: _FinishReason | Literal[""]  # noqa: N815
 
 
-#: Maximum raw-byte size for inline base64 video (Pegasus limit: 25 MB base64 string ≈ 18.75 MB raw).
-_PEGASUS_INLINE_BYTES: int = 25 * 1024 * 1024 * 3 // 4  # 18_874_368
+#: Largest base64 video string Pegasus accepts inside the request.
+_PEGASUS_INLINE_BASE64: int = 25 * 1024 * 1024
+
+#: The same limit in raw bytes, for a video whose size was unknown when the transport was chosen.
+_PEGASUS_INLINE_BYTES: int = _PEGASUS_INLINE_BASE64 * 3 // 4  # 18_874_368
 
 #: Maps Pegasus finish/stop reason strings to Bedrock Converse stop reasons.
 _STOP_MAP: dict[_FinishReason, StopReasonType] = {
@@ -166,6 +171,17 @@ class ChatModel(_BaseChatModel):
 
     #: System prompts are silently ignored; Pegasus has no system parameter.
     SYSTEM_PROMPT_SUPPORTED: ClassVar[bool] = False
+
+    #: Pegasus reads its video from storage, which is how a long one is sent at all.
+    S3_LOCATION_MEDIA_TYPES: ClassVar[frozenset[BedrockMediaType]] = frozenset(
+        {"video"}
+    )
+
+    #: Pegasus refuses an inline video past a 25 MiB base64 string.
+    INLINE_MEDIA_LIMITS: ClassVar[InlineMediaLimits] = InlineMediaLimits(
+        max_file_base64_size=_PEGASUS_INLINE_BASE64,
+        max_total_base64_size=_PEGASUS_INLINE_BASE64,
+    )
 
     async def _build_pegasus_body(
         self, request: ConverseRequestBaseTypeDef, region: RegionName

@@ -15,8 +15,14 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from stdapi.aws import AWS_ENVIRONMENT
+from stdapi.input_file import (
+    _CURRENT_INPUT_FILES,
+    InputFile,
+    plan_bedrock_media_transport,
+)
 from stdapi.models import InvokeResult
 from stdapi.models.chat.twelvelabs_pegasus import (
+    _PEGASUS_INLINE_BASE64,
     _PEGASUS_INLINE_BYTES,
     _STOP_MAP,
     ChatModel,
@@ -334,6 +340,44 @@ class TestPegasusMediaSource:
         assert uploaded == [(len(raw), "video/mp4", True)], (
             "the staged object must be marked temporary so it is reaped"
         )
+
+
+class TestPegasusInlineMediaLimits:
+    """Pegasus declares its inline video limit, so the shared policy decides for it.
+
+    The transport of an attachment is chosen once per request, before a region is
+    picked: a model that keeps its limit to itself gets a video left inline that
+    it then has to stage mid-call, in whatever region the attempt landed on.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus.html
+         stdapi/models/chat/twelvelabs_pegasus.py:ChatModel
+    """
+
+    @staticmethod
+    async def _plan(base64_length: int) -> bool:
+        """Register a video attachment and choose its transport for Pegasus.
+
+        Returns:
+            Whether the video has to be staged.
+        """
+        token = _CURRENT_INPUT_FILES.set([])
+        try:
+            file = InputFile(f"data:video/mp4;base64,{'A' * base64_length}")
+            await file.to_bedrock_content_block()
+            return await plan_bedrock_media_transport(
+                ChatModel.INLINE_MEDIA_LIMITS,
+                s3_location_media_types=ChatModel.S3_LOCATION_MEDIA_TYPES,
+            )
+        finally:
+            _CURRENT_INPUT_FILES.reset(token)
+
+    async def test_a_video_at_the_limit_travels_in_the_request(self) -> None:
+        """A 25 MiB base64 string is the largest video Pegasus reads inline."""
+        assert not await self._plan(_PEGASUS_INLINE_BASE64)
+
+    async def test_a_longer_video_is_staged_before_the_region_is_chosen(self) -> None:
+        """One base64 quad past the limit routes the video to storage."""
+        assert await self._plan(_PEGASUS_INLINE_BASE64 + 4)
 
 
 class TestPegasusStreamTranslation:

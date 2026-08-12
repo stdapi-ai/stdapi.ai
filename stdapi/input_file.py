@@ -1,9 +1,11 @@
 """Unified input file handling for all source types."""
 
 from abc import ABC, abstractmethod
-from asyncio import Semaphore, TaskGroup
+from asyncio import Event, Semaphore, TaskGroup
 from contextvars import ContextVar
+from dataclasses import dataclass
 from enum import IntEnum
+from operator import itemgetter
 from re import IGNORECASE
 from re import compile as compile_regex
 from tempfile import NamedTemporaryFile
@@ -39,11 +41,13 @@ from stdapi.aws_s3 import (
 )
 from stdapi.config import DOWNLOAD_TIMEOUT, SETTINGS
 from stdapi.files import file_id_s3_key, parse_file_id, resolve_file_bucket
+from stdapi.monitoring import log_error_details
 from stdapi.security import ssrf_blocked_status, ssrf_safe_connector
 from stdapi.server import HTTP_CLIENT_HEADERS
 from stdapi.types import FILE_ID_PATTERN
 from stdapi.utils import (
     b64_decoded_len,
+    b64_encoded_len,
     b64decode,
     b64encode,
     parse_content_disposition_filename,
@@ -52,7 +56,7 @@ from stdapi.utils import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Iterable
+    from collections.abc import AsyncIterator, Awaitable, Iterable
 
     from aiohttp import ClientResponse
     from pydantic import GetCoreSchemaHandler, GetJsonSchemaHandler
@@ -69,8 +73,9 @@ if TYPE_CHECKING:
         VideoBlockTypeDef,
     )
 
-    #: Media type literal for Bedrock content blocks.
-    _BedrockMediaType = Literal["image", "document", "video", "audio"]
+
+#: Media type literal for Bedrock content blocks.
+type BedrockMediaType = Literal["image", "document", "video", "audio"]
 
 #: Truncation length when representing base64 content in logs / repr.
 _B64_REPR_LIMIT: int = 24
@@ -102,7 +107,7 @@ def _magic_detect(data: bytes) -> str:
 
 
 #: Number of base64 characters needed for magic-based MIME detection.
-_MAGIC_PREFIX_SIZE_BASE64 = ((_MAGIC_PREFIX_SIZE + 2) // 3) * 4
+_MAGIC_PREFIX_SIZE_BASE64 = b64_encoded_len(_MAGIC_PREFIX_SIZE)
 
 #: S3 virtual-hosted style URL pattern.
 _S3_VIRTUAL_HOST_RE = compile_regex(
@@ -179,6 +184,27 @@ _BEDROCK_DOCUMENT_FORMATS: frozenset[str] = frozenset(
 #: Regex to sanitize document names for Bedrock (only [a-zA-Z0-9_\- ] allowed).
 _BEDROCK_DOC_NAME_RE = compile_regex(r"[^a-zA-Z0-9_\- ]+")
 
+#: Largest base64 media payload a Converse request was observed to accept (31998668 accepted, 32000000 refused).
+CONVERSE_INLINE_BASE64_LIMIT: int = 31_998_668
+
+
+@dataclass(frozen=True, slots=True)
+class InlineMediaLimits:
+    """How much media a model accepts inline, measured base64-encoded.
+
+    Bedrock meters an inline media block on its base64 length, not on the
+    decoded content, and refuses the whole request past either bound.  Both
+    default to the ceiling shared by every family measured so far; a family with
+    a tighter one declares it (``ModelBase.INLINE_MEDIA_LIMITS``).
+    """
+
+    #: Largest base64-encoded size of a single inline media block.
+    max_file_base64_size: int = CONVERSE_INLINE_BASE64_LIMIT
+
+    #: Largest base64-encoded size of all inline media blocks of one request.
+    max_total_base64_size: int = CONVERSE_INLINE_BASE64_LIMIT
+
+
 #: Tracks InputFile instances created during the current request context.
 _CURRENT_INPUT_FILES: ContextVar[list[InputFile]] = ContextVar("_current_input_files")
 
@@ -212,6 +238,11 @@ class _FileOrigin(IntEnum):
     UPLOAD = 4
     FILE_ID = 5
 
+
+#: Origins whose object already sits in an S3 bucket, so it is referenced rather than measured.
+_ALREADY_STORED_ORIGINS: frozenset[_FileOrigin] = frozenset(
+    {_FileOrigin.S3_URI, _FileOrigin.FILE_ID}
+)
 
 #: Origins that represent URL-like references rather than inline content.
 _URL_ONLY_ORIGINS: frozenset[_FileOrigin] = frozenset(
@@ -267,6 +298,14 @@ class _FileSource(ABC):
             await self._resolve_metadata()
         return self._size
 
+    async def get_base64_size(self) -> int:
+        """Return the size the content occupies once base64-encoded.
+
+        Returns:
+            The base64-encoded size in bytes, 0 when the origin declares none.
+        """
+        return b64_encoded_len(await self.get_size())
+
     async def get_filename(self) -> str | None:
         """Return a filename derived from the source.
 
@@ -315,12 +354,12 @@ class _FileSource(ABC):
         Raises:
             ApiError: When the file exceeds ``max_input_file_size`` (413).
         """
-        await self._enforce_size_limit()
+        await self.enforce_size_limit()
         data = await self._read()
         self._metadata_from_bytes(data)
         return data
 
-    async def _enforce_size_limit(self) -> None:
+    async def enforce_size_limit(self) -> None:
         """Reject the input when its resolved size exceeds the configured maximum.
 
         Raises:
@@ -659,6 +698,33 @@ class _HttpSource(_FileSource):
                 raise ApiError(msg, status=413)
         return bytes(chunks)
 
+    async def _stream_capped(self, resp: ClientResponse) -> AsyncIterator[bytes]:
+        """Yield the response body in chunks, enforcing the configured size limit.
+
+        The declared ``Content-Length`` is attacker-controlled, so staging to S3
+        counts the bytes actually received rather than trusting the header.
+
+        Args:
+            resp: The streaming HTTP response.
+
+        Yields:
+            Body chunks, in order.
+
+        Raises:
+            ApiError: When the body exceeds ``max_input_file_size`` (413).
+        """
+        limit = SETTINGS.max_input_file_size
+        received = 0
+        async for chunk in resp.content.iter_chunked(UPLOAD_CHUNK_SIZE):
+            if limit:
+                received += len(chunk)
+                if received > limit:
+                    msg = (
+                        f"Input file exceeds the maximum allowed size of {limit} bytes."
+                    )
+                    raise ApiError(msg, status=413)
+            yield chunk
+
     async def to_s3(
         self,
         region: RegionName,
@@ -690,7 +756,7 @@ class _HttpSource(_FileSource):
         async with self._client_session() as session, session.get(self._url) as resp:
             resp.raise_for_status()
             return await put_s3_object(
-                read_chunks(resp.content, UPLOAD_CHUNK_SIZE),
+                self._stream_capped(resp),
                 content_type,
                 region=region,
                 bucket=bucket,
@@ -729,6 +795,19 @@ class _DataUriSource(_FileSource):
             raise ApiError(msg)
         self._size = b64_decoded_len(self._value, self._data_start)
 
+    async def get_base64_size(self) -> int:
+        """Return the size the content occupies once base64-encoded.
+
+        The payload is already base64: its length is read from the string the
+        caller sent, so sizing it costs neither a decode nor a metadata lookup.
+
+        Returns:
+            The base64-encoded size in bytes.
+        """
+        if hasattr(self, "_value"):
+            return len(self._value) - self._data_start
+        return await super().get_base64_size()
+
     async def _read(self) -> bytes:
         """Decode the base64 payload of the data URI.
 
@@ -756,7 +835,7 @@ class _DataUriSource(_FileSource):
         Returns:
             The base64-encoded file content.
         """
-        await self._enforce_size_limit()
+        await self.enforce_size_limit()
         try:
             return self._value[self._value.index(",") + 1 :]
         finally:
@@ -770,7 +849,7 @@ class _DataUriSource(_FileSource):
         Returns:
             A data URI string like ``data:image/png;base64,...``.
         """
-        await self._enforce_size_limit()
+        await self.enforce_size_limit()
         try:
             return self._value
         finally:
@@ -801,6 +880,19 @@ class _Base64Source(_FileSource):
         self._filename = None
         self._size = b64_decoded_len(self._value)
 
+    async def get_base64_size(self) -> int:
+        """Return the size the content occupies once base64-encoded.
+
+        The payload is already base64: its length is read from the string the
+        caller sent, so sizing it costs neither a decode nor a metadata lookup.
+
+        Returns:
+            The base64-encoded size in bytes.
+        """
+        if hasattr(self, "_value"):
+            return len(self._value)
+        return await super().get_base64_size()
+
     async def _read(self) -> bytes:
         """Decode the full base64 string.
 
@@ -828,7 +920,7 @@ class _Base64Source(_FileSource):
         Returns:
             The base64-encoded file content.
         """
-        await self._enforce_size_limit()
+        await self.enforce_size_limit()
         try:
             return self._value
         finally:
@@ -842,7 +934,7 @@ class _Base64Source(_FileSource):
         Returns:
             A data URI string like ``data:image/png;base64,...``.
         """
-        await self._enforce_size_limit()
+        await self.enforce_size_limit()
         try:
             return f"data:{await self.get_content_type() or 'application/octet-stream'};base64,{self._value}"
         finally:
@@ -958,11 +1050,25 @@ class InputFile:
         }
     )
 
-    __slots__ = ("_bedrock_source", "_is_document", "_origin", "_source")
+    __slots__ = (
+        "_bedrock_error",
+        "_bedrock_media_type",
+        "_bedrock_resolved",
+        "_bedrock_source",
+        "_bedrock_to_s3",
+        "_bedrock_upload_region",
+        "_origin",
+        "_source",
+    )
 
     _origin: _FileOrigin
     _source: _FileSource
     _bedrock_source: ImageSourceTypeDef
+    _bedrock_media_type: BedrockMediaType
+    _bedrock_to_s3: bool
+    _bedrock_resolved: Event
+    _bedrock_error: BaseException
+    _bedrock_upload_region: RegionName
 
     def __new__(
         cls, value: UploadFile | str, *, content_type: str | None = None
@@ -1187,6 +1293,26 @@ class InputFile:
         """
         return await self._source.get_size()
 
+    async def get_base64_size(self) -> int:
+        """Resolve and return the size the content occupies once base64-encoded.
+
+        This is the size the payload has on the wire, and the one every backend
+        inline limit is expressed against.  It is derived from the payload
+        length or the declared size, never by encoding the content.
+
+        Returns:
+            The base64-encoded size in bytes, 0 when the origin declares none.
+        """
+        return await self._source.get_base64_size()
+
+    async def enforce_size_limit(self) -> None:
+        """Reject the input when its resolved size exceeds the configured maximum.
+
+        Raises:
+            ApiError: When the size exceeds ``max_input_file_size`` (413).
+        """
+        await self._source.enforce_size_limit()
+
     async def to_bytes(self) -> bytes:
         """Return the full file content as bytes.
 
@@ -1256,7 +1382,7 @@ class InputFile:
 
     async def to_bedrock_content_block(
         self,
-        media_type: _BedrockMediaType | None = None,
+        media_type: BedrockMediaType | None = None,
         content_type: str | None = None,
         filename: str | None = None,
         context: str | None = None,
@@ -1279,14 +1405,17 @@ class InputFile:
             content_type = await self.get_content_type()
         media_type_from_mime, _, format_from_mime = content_type.partition("/")
         self._bedrock_source: ImageSourceTypeDef = {}
+        self._bedrock_to_s3 = False
         match media_type or media_type_from_mime:
             case "image":
+                self._bedrock_media_type = "image"
                 image_block: ImageBlockTypeDef = {
                     "format": format_from_mime,  # type: ignore[typeddict-item]
                     "source": self._bedrock_source,
                 }
                 return {"image": image_block}
             case "video":
+                self._bedrock_media_type = "video"
                 video_block: VideoBlockTypeDef = {
                     "format": MIME_TYPES_TO_VIDEO_TYPE.get(
                         format_from_mime,
@@ -1296,6 +1425,7 @@ class InputFile:
                 }
                 return {"video": video_block}
             case "audio":
+                self._bedrock_media_type = "audio"
                 audio_block: AudioBlockTypeDef = {
                     "format": MIME_TYPES_TO_AUDIO_TYPE.get(
                         format_from_mime,
@@ -1313,7 +1443,7 @@ class InputFile:
                         f"Unsupported document type: {await self.get_content_type()!r}."
                     )
                     raise ApiError(msg)
-                self._is_document = True
+                self._bedrock_media_type = "document"
                 document_source: DocumentSourceTypeDef = self._bedrock_source  # type: ignore[assignment]
                 document_block: DocumentBlockTypeDef = {
                     "format": bedrock_format,  # type: ignore[typeddict-item]
@@ -1333,29 +1463,56 @@ class InputFile:
         region: RegionName,
         *,
         to_s3: bool | None = None,
-        document_s3_location: bool = True,
+        s3_location_media_types: frozenset[BedrockMediaType] = frozenset(),
     ) -> None:
         """Populate the partial Bedrock content block for this file with final content.
 
         No-op if ``to_bedrock_content_block`` has not been called first.
+        Resolves the block once even when called concurrently, and returns only
+        once the content is in place.
 
         Args:
             region: Target AWS region.
-            to_s3: S3 routing override; None auto-selects based on file origin.
-            document_s3_location: Whether the target model supports ``s3Location``
-                for document content blocks.  When ``False``, documents are always
-                sent as inline bytes regardless of origin.
+            to_s3: S3 routing override; None keeps the transport chosen by
+                :func:`plan_bedrock_media_transport` and the file origin.
+            s3_location_media_types: Media kinds the target model reads from an
+                ``s3Location``.  Any other kind is always sent as inline bytes,
+                whatever its origin.
+
+        Raises:
+            BaseException: Whatever reading or storing the content raised, in
+                every call sharing the block.
         """
-        if hasattr(self, "_bedrock_source"):
-            is_document = getattr(self, "_is_document", False)
-            use_s3 = to_s3 or (to_s3 is None and self._origin == _FileOrigin.S3_URI)
-            if use_s3 and (not is_document or document_s3_location):
-                self._bedrock_source["s3Location"] = {
-                    "uri": (await self.to_s3(region)).uri
-                }
+        if not hasattr(self, "_bedrock_source"):
+            # The calls of one request (one per requested choice) share these
+            # blocks: wait for the content rather than reading or uploading the
+            # file a second time, which the consumed source cannot serve anyway.
+            if (resolved := getattr(self, "_bedrock_resolved", None)) is not None:
+                await resolved.wait()
+                if (error := getattr(self, "_bedrock_error", None)) is not None:
+                    # The block was never filled: fail with what the call that
+                    # claimed it failed with, rather than sending an empty source.
+                    raise error
+            return
+        # Claimed before the first await, so exactly one call does the work.
+        source = self._bedrock_source
+        del self._bedrock_source
+        self._bedrock_resolved = resolved = Event()
+        try:
+            use_s3 = (
+                to_s3
+                if to_s3 is not None
+                else (self._bedrock_to_s3 or self._origin in _ALREADY_STORED_ORIGINS)
+            )
+            if use_s3 and self._bedrock_media_type in s3_location_media_types:
+                source["s3Location"] = {"uri": (await self.to_s3(region)).uri}
             else:
-                self._bedrock_source["bytes"] = await self.to_bytes()
-            del self._bedrock_source
+                source["bytes"] = await self.to_bytes()
+        except BaseException as error:
+            self._bedrock_error = error
+            raise
+        finally:
+            resolved.set()
 
     def __repr__(self) -> str:
         """Return representation of this InputFile.
@@ -1501,7 +1658,7 @@ def get_s3_input_regions() -> dict[RegionName, int]:
     return regions
 
 
-async def _gather_bounded(coroutines: Iterable[Awaitable[object]]) -> None:
+async def _gather_bounded[T](coroutines: Iterable[Awaitable[T]]) -> list[T]:
     """Await *coroutines* with bounded concurrency.
 
     Caps the number of simultaneously running tasks (via
@@ -1510,17 +1667,24 @@ async def _gather_bounded(coroutines: Iterable[Awaitable[object]]) -> None:
 
     Args:
         coroutines: Awaitables to run.
+
+    Returns:
+        Their results, in the order the awaitables were given.
     """
     semaphore = Semaphore(SETTINGS.max_concurrent_input_downloads)
 
-    async def _run(coroutine: Awaitable[object]) -> None:
-        """Await the coroutine under the download concurrency semaphore."""
+    async def _run(coroutine: Awaitable[T]) -> T:
+        """Await the coroutine under the download concurrency semaphore.
+
+        Returns:
+            Whatever the coroutine returned.
+        """
         async with semaphore:
-            await coroutine
+            return await coroutine
 
     async with TaskGroup() as task_group:
-        for coroutine in coroutines:
-            task_group.create_task(_run(coroutine))
+        tasks = [task_group.create_task(_run(coroutine)) for coroutine in coroutines]
+    return [task.result() for task in tasks]
 
 
 async def prefetch_all_content_types() -> None:
@@ -1531,21 +1695,185 @@ async def prefetch_all_content_types() -> None:
         )
 
 
+async def plan_bedrock_media_transport(
+    limits: InlineMediaLimits,
+    *,
+    s3_location_media_types: frozenset[BedrockMediaType] = frozenset(),
+) -> bool:
+    """Choose inline bytes or a stored reference for every pending media block.
+
+    Runs once per request, before the region is chosen, because a stored
+    reference is only readable from the region it was written to.  Sizing is
+    done on the base64 form — what the payload weighs on the wire, and what the
+    limits are expressed against — read from the caller's payload without
+    decoding or copying it.  A file the model cannot read from storage and
+    cannot carry inline is refused here, while the request is still cheap to
+    reject.
+
+    Args:
+        limits: Inline media limits declared by the target model.
+        s3_location_media_types: Media kinds the target model reads from an
+            ``s3Location``; the others can only travel inline.
+
+    Returns:
+        ``True`` when at least one file has to be uploaded, meaning the request
+        must be pinned to a region with storage configured.
+
+    Raises:
+        ApiError: When media too large to travel inline cannot be stored either,
+            or when what has to be stored exceeds ``max_input_file_size`` (413).
+    """
+    tracked = _CURRENT_INPUT_FILES.get(())
+    # A concurrent call of the same request (one per requested choice) may have
+    # resolved the blocks already; its decision still governs the region.
+    uploads = any(getattr(file, "_bedrock_to_s3", False) for file in tracked)
+    pending = [file for file in tracked if hasattr(file, "_bedrock_source")]
+    if not pending:
+        return uploads
+    sizes = await _gather_bounded(file.get_base64_size() for file in pending)
+
+    inline_total = 0
+    movable: list[tuple[int, InputFile]] = []
+    for file, size in zip(pending, sizes, strict=True):
+        storable = file._bedrock_media_type in s3_location_media_types  # noqa: SLF001
+        if storable and file._origin in _ALREADY_STORED_ORIGINS:  # noqa: SLF001
+            # Already stored: referenced as-is, and never counted as inline.
+            continue
+        if size > limits.max_file_base64_size:
+            if not storable:
+                raise _too_large_error(limits.max_file_base64_size, total=False)
+            file._bedrock_to_s3 = uploads = True  # noqa: SLF001
+            continue
+        inline_total += size
+        if storable:
+            movable.append((size, file))
+
+    if inline_total > limits.max_total_base64_size:
+        # The largest payloads clear the most room for the fewest uploads.
+        for size, file in sorted(movable, key=itemgetter(0), reverse=True):
+            file._bedrock_to_s3 = uploads = True  # noqa: SLF001
+            inline_total -= size
+            if inline_total <= limits.max_total_base64_size:
+                break
+        else:
+            raise _too_large_error(limits.max_total_base64_size, total=True)
+
+    await _enforce_stored_size_limit(pending)
+    return uploads
+
+
+async def _enforce_stored_size_limit(files: list[InputFile]) -> None:
+    """Apply the configured input size limit to the files about to be stored.
+
+    Storing streams the payload without ever reading it whole, so the limit has
+    to be applied before that happens rather than on a read that never comes.
+
+    Args:
+        files: The files the transport plan just weighed.
+
+    Raises:
+        ApiError: When one of them exceeds ``max_input_file_size`` (413).
+    """
+    if not SETTINGS.max_input_file_size:
+        return
+    for file in files:
+        if file._bedrock_to_s3:  # noqa: SLF001
+            await file.enforce_size_limit()
+
+
+def _too_large_error(base64_limit: int, *, total: bool) -> ApiError:
+    """Build the caller-facing error for media that cannot travel inline.
+
+    Args:
+        base64_limit: The exceeded limit, base64-encoded size in bytes.
+        total: Whether the limit covers the whole request rather than one file.
+
+    Returns:
+        The error to raise, stating the size the model accepts.
+    """
+    accepted = base64_limit * 3 // 4
+    msg = (
+        f"The attached files are too large: this model accepts at most {accepted} "
+        "bytes of attachments per request. Send fewer or smaller files."
+        if total
+        else f"An attached file is too large: this model accepts at most {accepted} "
+        "bytes per file. Send a smaller file."
+    )
+    return ApiError(msg, status=413)
+
+
+def pin_bedrock_upload_region(region: RegionName) -> RegionName:
+    """Pin this request's staged media to *region*, or return the region already pinned.
+
+    Every call of one request (one per requested choice) selects a region on its
+    own, while the media is staged once: only the first region chosen can read
+    it back, so the later calls have to follow it.
+
+    Args:
+        region: The region this call selected.
+
+    Returns:
+        The region the request's staged media is pinned to.
+    """
+    staged: list[InputFile] = []
+    for file in _CURRENT_INPUT_FILES.get(()):
+        if not getattr(file, "_bedrock_to_s3", False):
+            continue
+        if hasattr(file, "_bedrock_upload_region"):
+            return file._bedrock_upload_region  # noqa: SLF001
+        staged.append(file)
+    for file in staged:
+        file._bedrock_upload_region = region  # noqa: SLF001
+    return region
+
+
+def inline_media_storage_error(limits: InlineMediaLimits) -> ApiError:
+    """Build the caller-facing error for media too large to travel inline, with no storage.
+
+    Both bounds are quoted because either one can be what forced the staging:
+    the caller cannot act on a per-file size when it is the request total that
+    is over.
+
+    Args:
+        limits: Inline media limits declared by the target model.
+
+    Returns:
+        The error to raise, stating the sizes the server can serve without
+        storage; the missing setting is named in the server log only.
+    """
+    log_error_details(
+        "No S3 bucket configured (aws_s3_bucket, aws_s3_regional_buckets) for the "
+        "regions serving this model: large media inputs are refused"
+    )
+    per_file = limits.max_file_base64_size * 3 // 4
+    per_request = limits.max_total_base64_size * 3 // 4
+    msg = (
+        f"Attachments larger than {per_file} bytes, or totalling more than "
+        f"{per_request} bytes in one request, are not available on the current "
+        "server. Please contact the administrator to enable them, or send fewer "
+        "or smaller files."
+    )
+    return ApiError(msg, status=413)
+
+
 async def resolve_all_bedrock_content_blocks(
-    region: RegionName, *, to_s3: bool | None = None, document_s3_location: bool = True
+    region: RegionName,
+    *,
+    to_s3: bool | None = None,
+    s3_location_media_types: frozenset[BedrockMediaType] = frozenset(),
 ) -> None:
     """Resolve all pending Bedrock content blocks for the current request context.
 
     Args:
         region: Target AWS region.
         to_s3: S3 routing override passed to each resolve_bedrock_content_block call.
-        document_s3_location: Passed to each resolve_bedrock_content_block call; set
-            to ``False`` for models that do not support ``s3Location`` for documents.
+        s3_location_media_types: Passed to each resolve_bedrock_content_block call;
+            the media kinds the target model reads from an ``s3Location``.
     """
     if input_files := _CURRENT_INPUT_FILES.get([]):
         await _gather_bounded(
             input_file.resolve_bedrock_content_block(
-                region, to_s3=to_s3, document_s3_location=document_s3_location
+                region, to_s3=to_s3, s3_location_media_types=s3_location_media_types
             )
             for input_file in input_files
         )

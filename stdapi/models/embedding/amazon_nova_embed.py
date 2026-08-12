@@ -336,16 +336,18 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             media_type: _MediaTypes = "text"
             file_format = "plain"
             size = len(value)
+            oversized = size > _TEXT_SIZE_LIMIT
         else:
             size = await value.get_size()
             media_type, file_format = await value.get_content_type_tuple()  # type: ignore[assignment]
+            # Media travels base64-encoded, so the limit applies to that size.
+            oversized = (
+                size > _TEXT_SIZE_LIMIT
+                if media_type == "text"
+                else await value.get_base64_size() > BEDROCK_BODY_SIZE_LIMIT
+            )
 
-        if (
-            force_s3_data
-            or (isinstance(value, InputFile) and value.is_s3)
-            or size
-            > (_TEXT_SIZE_LIMIT if media_type == "text" else BEDROCK_BODY_SIZE_LIMIT)
-        ):
+        if force_s3_data or (isinstance(value, InputFile) and value.is_s3) or oversized:
             # Large file or already S3 file requires to be passed using S3
             region = await self.select_region(s3_required=True)
             val: str | S3Object = await (

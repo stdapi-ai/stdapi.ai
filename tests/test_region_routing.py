@@ -2045,7 +2045,9 @@ class TestResolveBedrockContentBlocksS3:
         try:
             f = InputFile(s3_file.uri)
             block = await f.to_bedrock_content_block(content_type=s3_file.content_type)
-            await resolve_all_bedrock_content_blocks(s3_file.region, to_s3=True)
+            await resolve_all_bedrock_content_blocks(
+                s3_file.region, to_s3=True, s3_location_media_types=frozenset({"image"})
+            )
         finally:
             _CURRENT_INPUT_FILES.reset(token)
 

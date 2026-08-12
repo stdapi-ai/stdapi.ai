@@ -51,7 +51,14 @@ from stdapi.aws_s3 import (
 )
 from stdapi.config import SETTINGS, ModelAliasConfig
 from stdapi.exceptions import ServerError
-from stdapi.input_file import get_s3_input_regions, resolve_all_bedrock_content_blocks
+from stdapi.input_file import (
+    InlineMediaLimits,
+    get_s3_input_regions,
+    inline_media_storage_error,
+    pin_bedrock_upload_region,
+    plan_bedrock_media_transport,
+    resolve_all_bedrock_content_blocks,
+)
 from stdapi.models.capabilities import ROUTE_CAPABILITIES, Capability
 from stdapi.models.deprecation import DEPRECATED_MODELS
 from stdapi.models.pricing_overrides import (
@@ -111,6 +118,7 @@ if TYPE_CHECKING:
     )
 
     from stdapi.aws_bedrock import BedrockTokenUsage, ConverseRequestBaseTypeDef
+    from stdapi.input_file import BedrockMediaType
 
     class _ModelCache(TypedDict):
         """Model cache configuration."""
@@ -527,8 +535,11 @@ class ModelBase[RequestT, ResponseT]:
     #: Regex to extract model alias from model ID
     ALIAS_MATCHER: ClassVar[Pattern[str] | None] = None
 
-    #: Whether the model supports ``s3Location`` for document content blocks in the Bedrock Converse API.
-    S3_LOCATION_DOCUMENT_SUPPORTED: ClassVar[bool] = True
+    #: Media kinds the model reads from an ``s3Location`` in a Bedrock Converse content block.
+    S3_LOCATION_MEDIA_TYPES: ClassVar[frozenset[BedrockMediaType]] = frozenset()
+
+    #: How much media the model accepts inline in one Bedrock Converse request.
+    INLINE_MEDIA_LIMITS: ClassVar[InlineMediaLimits] = InlineMediaLimits()
 
     #: Whether InvokeModel natively accepts the guardrail configuration kwargs.
     NATIVE_GUARDRAIL_SUPPORTED: ClassVar[bool] = True
@@ -925,7 +936,7 @@ class ModelBase[RequestT, ResponseT]:
             region: AWS region to target.
         """
         await resolve_all_bedrock_content_blocks(
-            region, document_s3_location=self.S3_LOCATION_DOCUMENT_SUPPORTED
+            region, s3_location_media_types=self.S3_LOCATION_MEDIA_TYPES
         )
         latency, perf_service_tier = PERFORMANCE_CONFIG_VAR.get((None, None))
         if prompt := BEDROCK_PROMPT_VAR.get(None):
@@ -1150,13 +1161,36 @@ class ModelBase[RequestT, ResponseT]:
     async def _converse_candidate_regions(self) -> list[RegionName]:
         """Return the candidate regions of a Converse call.
 
+        Media too large to travel inline is uploaded while the request is
+        prepared, and Bedrock only reads an object stored in its own region, so
+        a request carrying any is pinned to a single region with storage
+        configured — failover would hand the next region a reference it cannot
+        read.
+
         Returns:
-            The model's candidate regions, or only the prompt's region when the
-            request is served by a Prompt Management prompt (its ARN is
-            region-bound, so failover elsewhere cannot work).
+            The model's candidate regions, or a single region when the request
+            is served by a Prompt Management prompt (its ARN is region-bound, so
+            failover elsewhere cannot work) or carries media to upload.
+
+        Raises:
+            ApiError: When media must be uploaded but no candidate region has
+                storage configured (413).
         """
+        uploads = await plan_bedrock_media_transport(
+            self.INLINE_MEDIA_LIMITS,
+            s3_location_media_types=self.S3_LOCATION_MEDIA_TYPES,
+        )
         if prompt := BEDROCK_PROMPT_VAR.get(None):
+            if uploads and get_s3_bucket_for_region(prompt.region) is None:
+                raise inline_media_storage_error(self.INLINE_MEDIA_LIMITS)
             return [prompt.region]
+        if uploads:
+            model = await get_model_details(self._model_id)
+            if not any(map(get_s3_bucket_for_region, model.regions)):
+                raise inline_media_storage_error(self.INLINE_MEDIA_LIMITS)
+            return [
+                pin_bedrock_upload_region(await self.select_region(s3_required=True))
+            ]
         return await compute_candidate_regions(self._model_id)
 
     async def converse(

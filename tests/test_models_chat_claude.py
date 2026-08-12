@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
+from stdapi.config import SETTINGS
 from stdapi.models.chat import get_chat_model
 from stdapi.models.chat._anthropic_claude import _STUB_INPUT_SCHEMAS
 from stdapi.models.chat._default import ChatModel
@@ -23,6 +24,11 @@ from stdapi.types.anthropic_messages import (
     MessageParam,
     TextBlockParam,
     ToolResultBlockParam,
+)
+from tests.test_input_file import (
+    _allowed_bucket,
+    _stub_s3_read,
+    input_files,  # noqa: F401
 )
 
 if TYPE_CHECKING:
@@ -1091,3 +1097,39 @@ class TestCreateMessageCachePointLimiting:
             "a model without tool caching, exactly as create_completion and "
             "create_response already do"
         )
+
+
+class TestStoredAttachments:
+    """Claude reads every attachment from the request body, never from storage.
+
+    Bedrock refuses a stored reference for Claude, for images as well as for
+    documents, so an attachment the caller supplied as an ``s3://`` URI has to be
+    fetched and embedded instead of forwarded as a reference.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ImageSource.html
+         stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel
+    """
+
+    @pytest.mark.usefixtures("input_files")
+    async def test_a_stored_image_is_embedded_in_the_request(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An ``s3://`` image reaches Claude as inline content, not as a reference."""
+        from stdapi.input_file import (  # noqa: PLC0415
+            InputFile,
+            _S3Source,
+            resolve_all_bedrock_content_blocks,
+        )
+
+        bucket = _allowed_bucket(monkeypatch)
+        monkeypatch.setattr(SETTINGS, "max_input_file_size", 0)
+        monkeypatch.setattr(_S3Source, "_read", _stub_s3_read)
+        model = _claude_model("anthropic.claude-haiku-4-5-20251001-v1:0")
+
+        file = InputFile(f"s3://{bucket}/photo.png", content_type="image/png")
+        block = await file.to_bedrock_content_block()
+        await resolve_all_bedrock_content_blocks(
+            "us-east-1", s3_location_media_types=model.S3_LOCATION_MEDIA_TYPES
+        )
+
+        assert block["image"]["source"] == {"bytes": b"PNGDATA"}

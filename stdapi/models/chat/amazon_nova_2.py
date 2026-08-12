@@ -3,6 +3,10 @@
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
+from stdapi.models.chat._amazon_nova import (
+    NOVA_INLINE_MEDIA_LIMITS,
+    NOVA_S3_LOCATION_MEDIA_TYPES,
+)
 from stdapi.models.chat._default import ChatModel as _BaseChatModel
 from stdapi.monitoring import log_error_details
 from stdapi.types.anthropic_messages import (
@@ -60,6 +64,8 @@ class ChatModel(_BaseChatModel):
 
     MATCHER = "amazon.nova-2-"
     PROMPT_CACHING_SUPPORTED = True
+    S3_LOCATION_MEDIA_TYPES = NOVA_S3_LOCATION_MEDIA_TYPES
+    INLINE_MEDIA_LIMITS = NOVA_INLINE_MEDIA_LIMITS
     SUPPORTED_SYSTEM_TOOLS = frozenset({"nova_grounding", "nova_code_interpreter"})
     CANONICAL_TO_BEDROCK_TOOL_MAP = MappingProxyType(
         {"web_search": "nova_grounding", "code_execution": "nova_code_interpreter"}

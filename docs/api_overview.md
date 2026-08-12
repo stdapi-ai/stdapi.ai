@@ -11,6 +11,9 @@ stdapi.ai provides OpenAI-, Anthropic-, and Cohere-compatible APIs backed by Ama
 !!! tip "One catalog, discovered automatically"
     Amazon Bedrock, Bedrock Mantle, Amazon Polly, Amazon Transcribe and Amazon Comprehend all surface as **models in a single catalog**. stdapi.ai discovers them from your AWS account at startup — there is no model list to declare or maintain, and a model AWS adds appears without a configuration change. They are interchangeable by name on a shared endpoint: [`GET /v1/models`](api_openai_models.md) lists them together, [`GET /search_models`](api_search_models.md) filters them by capability, and the endpoint routes to whichever AWS service backs the model you named — `POST /v1/audio/transcriptions` reaches Amazon Transcribe or a Bedrock audio model, and `POST /v1/moderations` reaches Bedrock Guardrails or Amazon Comprehend, from the same request.
 
+!!! tip "Attachments, however large"
+    Every multimodal route takes its images, documents, audio and video as base64, a data URI, an HTTPS URL, an `s3://` URI or a Files API ID. On chat completions, messages and responses served by Amazon Bedrock — Bedrock Mantle models excepted — an attachment past what the chosen model reads inside a request is delivered by reference instead, with no change to the request, wherever that model reads that kind of attachment from storage; the models that read it inline only refuse it with `413`, stating the size they accept. See [Attachment Size](features.md#attachment-size).
+
 ## :material-book-open-variant: Documentation & Tooling
 
 stdapi.ai provides multiple resources for exploring and testing the API—choose the one that fits your workflow:

@@ -254,7 +254,6 @@ class AnthropicClaudeChatModel(_BaseChatModel):
         {"anthropic-beta": ("anthropic_beta", lambda v: v.split(","))}
     )
     SIMPLIFIED_CACHE_MANAGEMENT = True
-    S3_LOCATION_DOCUMENT_SUPPORTED = False
 
     #: Required ``anthropic_beta`` flag per Anthropic server tool canonical name.
     TOOL_BETA_FLAGS: ClassVar[MappingProxyType[ServerTools, str]]

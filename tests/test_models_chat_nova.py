@@ -12,10 +12,23 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Convers
      stdapi/models/chat/amazon_nova_2.py:ChatModel._prepare_converse_request
 """
 
-from typing import TYPE_CHECKING
+from asyncio import gather
+from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from stdapi.api_errors import ApiError
+from stdapi.aws_bedrock import BEDROCK_PROMPT_VAR, BedrockPrompt
+from stdapi.aws_s3 import S3Object
+from stdapi.config import SETTINGS
+from stdapi.input_file import (
+    InlineMediaLimits,
+    InputFile,
+    plan_bedrock_media_transport,
+    resolve_all_bedrock_content_blocks,
+)
+from stdapi.models import ModelDetails
 from stdapi.models.chat.amazon_nova_2 import ChatModel
 from stdapi.types.anthropic_messages import (
     CodeExecutionResultBlock,
@@ -25,9 +38,14 @@ from stdapi.types.anthropic_messages import (
     CodeExecutionToolResultErrorParam,
     TextBlockParam,
 )
+from tests._helpers import red_png_b64
+from tests.test_input_file import input_files  # noqa: F401
 
 if TYPE_CHECKING:
+    from openai import OpenAI
+    from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_bedrock_runtime.type_defs import (
+        ContentBlockTypeDef,
         InferenceConfigurationTypeDef,
     )
 
@@ -35,8 +53,36 @@ if TYPE_CHECKING:
 
 pytestmark = [pytest.mark.local, pytest.mark.usefixtures("request_log")]
 
+#: Model this module drives; the cheapest Nova 2 generation.
+_MODEL_ID = "amazon.nova-2-lite-v1:0"
+
 #: Model instance used across tests; construction is side-effect free.
-_MODEL = ChatModel("amazon.nova-2-lite-v1:0")
+_MODEL = ChatModel(_MODEL_ID)
+
+
+async def _stub_upload(*_args: object, **_kwargs: object) -> S3Object:
+    """Stand in for staging an attachment, without touching AWS.
+
+    Returns:
+        A fixed object reference.
+    """
+    return S3Object(bucket="a-bucket", key="staged")
+
+
+def _model_details(regions: list[str]) -> Any:  # noqa: ANN401
+    """Build the minimal model details the region selection reads.
+
+    Returns:
+        Model details available in *regions*.
+    """
+    return ModelDetails(
+        id=_MODEL_ID,
+        name=_MODEL_ID,
+        provider="Amazon",
+        input_modalities=["TEXT", "IMAGE"],
+        output_modalities=["TEXT"],
+        regions=regions,  # type: ignore[arg-type]
+    )
 
 
 class TestPrepareConverseRequestReasoningMaxTokens:
@@ -309,4 +355,264 @@ class TestCodeInterpreterRoundTrip:
                 TextBlockParam(type="text", text="hi")
             )
             is None
+        )
+
+
+@pytest.mark.usefixtures("input_files")
+class TestInlineMediaTransport:
+    """Amazon Nova reads an oversized attachment from storage instead of the request.
+
+    Nova refuses a single media block past 25,000,000 base64 bytes while accepting
+    the same content by reference, so the gateway stages what is too large and
+    pins the request to a region that can serve it — a reference is only readable
+    from the region it was written to.
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/modalities-document.html
+         stdapi/models/chat/_amazon_nova.py:NOVA_INLINE_MEDIA_LIMITS
+         stdapi/models/__init__.py:ModelBase._converse_candidate_regions
+    """
+
+    @staticmethod
+    async def _attach(base64_length: int) -> ContentBlockTypeDef:
+        """Register an image attachment of *base64_length* base64 bytes.
+
+        Returns:
+            Its pending Bedrock content block.
+        """
+        file = InputFile(f"data:image/png;base64,{'A' * base64_length}")
+        return await file.to_bedrock_content_block()
+
+    async def test_an_attachment_at_the_limit_travels_in_the_request(self) -> None:
+        """25,000,000 base64 bytes is the largest single block Nova accepts inline."""
+        await self._attach(25_000_000)
+
+        assert not await plan_bedrock_media_transport(
+            _MODEL.INLINE_MEDIA_LIMITS,
+            s3_location_media_types=_MODEL.S3_LOCATION_MEDIA_TYPES,
+        )
+
+    async def test_an_attachment_past_the_limit_is_read_from_storage(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One base64 quad past the limit is enough to route the attachment to storage."""
+        monkeypatch.setattr(InputFile, "to_s3", _stub_upload)
+        block = await self._attach(25_000_004)
+
+        assert await plan_bedrock_media_transport(
+            _MODEL.INLINE_MEDIA_LIMITS,
+            s3_location_media_types=_MODEL.S3_LOCATION_MEDIA_TYPES,
+        )
+
+        await resolve_all_bedrock_content_blocks(
+            "us-east-1", s3_location_media_types=_MODEL.S3_LOCATION_MEDIA_TYPES
+        )
+        assert "s3Location" in block["image"]["source"]
+
+    async def test_a_document_past_the_limit_is_read_from_storage(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An oversized PDF is staged too, not only an oversized image.
+
+        Nova reads documents from storage as it reads images, and a document is
+        the attachment most likely to be over the limit. Were that kind dropped
+        from what the model declares, this attachment would be refused with a
+        413 instead of being staged.
+
+        Ref: stdapi/models/chat/_amazon_nova.py:NOVA_S3_LOCATION_MEDIA_TYPES
+        """
+        monkeypatch.setattr(InputFile, "to_s3", _stub_upload)
+        file = InputFile(f"data:application/pdf;base64,{'A' * 25_000_004}")
+        block = await file.to_bedrock_content_block(filename="report.pdf")
+
+        assert await plan_bedrock_media_transport(
+            _MODEL.INLINE_MEDIA_LIMITS,
+            s3_location_media_types=_MODEL.S3_LOCATION_MEDIA_TYPES,
+        )
+
+        await resolve_all_bedrock_content_blocks(
+            "us-east-1", s3_location_media_types=_MODEL.S3_LOCATION_MEDIA_TYPES
+        )
+        assert "s3Location" in block["document"]["source"]
+
+    async def test_a_request_with_staged_media_is_pinned_to_one_region(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only the region holding the staged attachment can serve the request.
+
+        The block is resolved once, so a second candidate region would be handed a
+        reference written elsewhere, which the model cannot read.
+        """
+        monkeypatch.setattr(InputFile, "to_s3", _stub_upload)
+        await self._attach(25_000_004)
+
+        with (
+            patch(
+                "stdapi.models.get_model_details",
+                new=AsyncMock(return_value=_model_details(["us-east-1", "us-west-2"])),
+            ),
+            patch(
+                "stdapi.models.get_s3_bucket_for_region",
+                side_effect=lambda region: (
+                    "a-bucket" if region == "us-west-2" else None
+                ),
+            ),
+        ):
+            assert await _MODEL._converse_candidate_regions() == ["us-west-2"]  # noqa: SLF001
+
+    async def test_every_choice_of_a_request_targets_the_pinned_region(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A request asking for several choices sends them all to one region.
+
+        Each choice is a Converse call selecting a region of its own, and region
+        routing hands successive calls different ones — but the attachment is
+        staged in only one of them, so the later calls must follow the first.
+        """
+        monkeypatch.setattr(InputFile, "to_s3", _stub_upload)
+        await self._attach(25_000_004)
+        rotation = iter(["us-east-1", "us-west-2"])
+
+        with (
+            patch(
+                "stdapi.models.get_model_details",
+                new=AsyncMock(return_value=_model_details(["us-east-1", "us-west-2"])),
+            ),
+            patch("stdapi.models.get_s3_bucket_for_region", return_value="a-bucket"),
+            patch.object(
+                ChatModel,
+                "select_region",
+                new=AsyncMock(side_effect=lambda **_kwargs: next(rotation)),
+            ),
+        ):
+            candidates = await gather(
+                _MODEL._converse_candidate_regions(),  # noqa: SLF001
+                _MODEL._converse_candidate_regions(),  # noqa: SLF001
+            )
+
+        assert list(candidates) == [["us-east-1"], ["us-east-1"]], (
+            "the second choice must not be sent to the region the first did not stage in"
+        )
+
+    @pytest.mark.parametrize("from_a_prompt", [False, True])
+    async def test_media_no_region_can_store_is_refused_with_the_size_it_accepts(
+        self, from_a_prompt: bool
+    ) -> None:
+        """With nowhere to stage it, the caller is told the size that does fit.
+
+        The message must state what the server accepts rather than reporting an
+        unrelated feature as unavailable, which is what the caller can act on.
+        A request served by a stored prompt is bound to that prompt's region, so
+        it is refused on the same terms when that one region cannot store either.
+
+        Ref: stdapi/models/__init__.py:ModelBase._converse_candidate_regions
+        """
+        await self._attach(25_000_004)
+        token = (
+            BEDROCK_PROMPT_VAR.set(
+                BedrockPrompt(
+                    arn="arn:aws:bedrock:us-east-1:111111111111:prompt/PROMPT",
+                    region="us-east-1",
+                    model_id=_MODEL_ID,
+                )
+            )
+            if from_a_prompt
+            else None
+        )
+
+        try:
+            with (
+                patch(
+                    "stdapi.models.get_model_details",
+                    new=AsyncMock(return_value=_model_details(["us-east-1"])),
+                ),
+                patch("stdapi.models.get_s3_bucket_for_region", return_value=None),
+                pytest.raises(ApiError) as exc,
+            ):
+                await _MODEL._converse_candidate_regions()  # noqa: SLF001
+        finally:
+            if token is not None:
+                BEDROCK_PROMPT_VAR.reset(token)
+
+        assert exc.value.status == 413
+        message = str(exc.value)
+        assert "18750000 bytes" in message
+        assert "Async invocation" not in message
+
+
+@pytest.mark.xdist_group("nova_2_inline_media_limits")
+class TestStagedAttachmentRoundTrip:
+    """An attachment too large to travel inline still reaches the model intact.
+
+    The gateway's own tests can only show which transport was chosen; whether the
+    model then reads the attachment is a property of the backend, and a reference
+    it cannot read is refused outright rather than answered.  Billing the same
+    number of prompt tokens as the inline request is what shows the same picture
+    arrived: the model's limit is lowered here so a one-pixel image is enough to
+    trigger the staging, and the answer's wording is deliberately not asserted.
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/modalities-image.html
+         stdapi/input_file.py:plan_bedrock_media_transport
+    """
+
+    @staticmethod
+    def _describe(client: OpenAI) -> Any:  # noqa: ANN401
+        """Ask the model about a one-pixel image.
+
+        Returns:
+            The chat completion.
+        """
+        return client.chat.completions.create(
+            model=_MODEL_ID,
+            max_tokens=16,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{red_png_b64()}"
+                            },
+                        },
+                        {"type": "text", "text": "What is this? Reply in one word."},
+                    ],
+                }
+            ],
+        )
+
+    def test_a_staged_image_reaches_the_model_whole(
+        self, monkeypatch: pytest.MonkeyPatch, openai_client: OpenAI
+    ) -> None:
+        """The staged request is answered, and billed exactly like the inline one."""
+        if not SETTINGS.aws_s3_bucket:
+            pytest.skip("aws_s3_bucket not configured — an attachment cannot be staged")
+        inline = self._describe(openai_client)
+        assert inline.usage is not None
+
+        staged: list[str] = []
+        inline_to_s3 = InputFile.to_s3
+
+        async def _spy(file: InputFile, region: RegionName) -> S3Object:
+            """Record the staged object, then stage it for real.
+
+            Returns:
+                The staged object reference.
+            """
+            staged.append((obj := await inline_to_s3(file, region)).uri)
+            return obj
+
+        monkeypatch.setattr(
+            ChatModel,
+            "INLINE_MEDIA_LIMITS",
+            InlineMediaLimits(max_file_base64_size=8, max_total_base64_size=8),
+        )
+        monkeypatch.setattr(InputFile, "to_s3", _spy)
+
+        completion = self._describe(openai_client)
+
+        assert staged, "the over-limit attachment must be staged, not sent inline"
+        assert completion.choices[0].message.content
+        assert completion.usage is not None
+        assert completion.usage.prompt_tokens == inline.usage.prompt_tokens, (
+            "the staged attachment must reach the model as the inline one does"
         )

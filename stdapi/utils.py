@@ -521,6 +521,18 @@ def b64_decoded_len(value: str, prefix_len: int = 0) -> int:
     )
 
 
+def b64_encoded_len(size: int) -> int:
+    """Calculate the length of the base64 encoding of *size* bytes.
+
+    Args:
+        size: Length in bytes of the content to encode.
+
+    Returns:
+        The length of the padded base64 representation.
+    """
+    return (size + 2) // 3 * 4
+
+
 #: PIL image formats
 _PilImageFormats = Literal["JPEG", "WEBP", "PNG"]
 

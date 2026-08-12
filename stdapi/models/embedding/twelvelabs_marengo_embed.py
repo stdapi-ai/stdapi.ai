@@ -204,6 +204,27 @@ class _Response(TypedDict):
     data: list[_ResponseData]
 
 
+async def _needs_s3(value: InputFileUrl, *, force_s3_data: bool) -> bool:
+    """Whether *value* has to reach the model from S3 rather than in the request.
+
+    Media travels base64-encoded in the request body, so that is the size the
+    body limit applies to.
+
+    Args:
+        value: The media input.
+        force_s3_data: Requested explicitly by the caller.
+
+    Returns:
+        ``True`` when the input is already stored, too large to inline, or the
+        caller asked for it.
+    """
+    return (
+        force_s3_data
+        or value.is_s3
+        or await value.get_base64_size() > BEDROCK_BODY_SIZE_LIMIT
+    )
+
+
 class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
     """TwelveLabs Marengo embedding model."""
 
@@ -494,11 +515,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         return (
             await self.select_region(s3_required=True)
             if isinstance(value, InputFileUrl)
-            and (
-                force_s3_data
-                or value.is_s3
-                or await value.get_size() > BEDROCK_BODY_SIZE_LIMIT
-            )
+            and await _needs_s3(value, force_s3_data=force_s3_data)
             else None
         )
 
@@ -574,13 +591,6 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             return value
         return await (
             value.to_s3(region=region)
-            if (
-                (
-                    force_s3_data
-                    or value.is_s3
-                    or await value.get_size() > BEDROCK_BODY_SIZE_LIMIT
-                )
-                and region
-            )
+            if region and await _needs_s3(value, force_s3_data=force_s3_data)
             else value.to_base64()
         )

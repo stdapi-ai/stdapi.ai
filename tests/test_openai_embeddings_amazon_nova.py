@@ -605,3 +605,98 @@ class TestAmazonNovaSegmentedEmbedding:
                 "detailLevel": "DOCUMENT_IMAGE",
             }
         }
+
+
+@pytest.mark.local
+class TestAmazonNovaStorageThreshold:
+    """Media too big for the request body is embedded from storage instead.
+
+    The body limit applies to the request Bedrock receives, and media travels in
+    it base64-encoded — a third larger than the file itself. Weighing the file
+    instead of its encoded form leaves a whole band of inputs inlined into a
+    body the backend refuses.
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
+         stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel._embed
+    """
+
+    @staticmethod
+    def _remote(declared_size: int) -> Any:  # noqa: ANN401
+        """Build a remote input whose origin declares *declared_size* bytes.
+
+        Returns:
+            An ``InputFile`` that resolves its metadata without a request.
+        """
+        from stdapi.input_file import InputFile  # noqa: PLC0415
+
+        value = InputFile("https://example.com/photo.png", content_type="image/png")
+        source = value._source  # noqa: SLF001
+        source._filename = None  # noqa: SLF001
+        source._size = declared_size  # noqa: SLF001
+        return value
+
+    @staticmethod
+    def _stub_transports(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+        """Stub the region choice, the upload and the invocation.
+
+        Returns:
+            The list the stubbed invocation appends the value it was given to.
+        """
+        from stdapi.aws_s3 import S3Object  # noqa: PLC0415
+        from stdapi.input_file import InputFile  # noqa: PLC0415
+        from stdapi.models.embedding.amazon_nova_embed import (  # noqa: PLC0415
+            EmbeddingModel,
+        )
+
+        sent: list[Any] = []
+
+        async def _select_region(_self: Any, **_kwargs: Any) -> str:  # noqa: ANN401
+            return "us-east-1"
+
+        async def _to_s3(_self: Any, **_kwargs: Any) -> S3Object:  # noqa: ANN401
+            return S3Object(bucket="a-bucket", key="staged")
+
+        async def _to_base64(_self: Any) -> str:  # noqa: ANN401
+            return "AAAA"
+
+        async def _embed_single(_self: Any, *, value: Any, **_kwargs: Any) -> Any:  # noqa: ANN401
+            sent.append(value)
+
+        monkeypatch.setattr(EmbeddingModel, "select_region", _select_region)
+        monkeypatch.setattr(EmbeddingModel, "_embed_single", _embed_single)
+        monkeypatch.setattr(InputFile, "to_s3", _to_s3)
+        monkeypatch.setattr(InputFile, "to_base64", _to_base64)
+        return sent
+
+    async def _embed(self, monkeypatch: pytest.MonkeyPatch, declared_size: int) -> Any:  # noqa: ANN401
+        """Run the transport decision over an input of *declared_size* bytes.
+
+        Returns:
+            The value handed to the invocation: a reference or inline base64.
+        """
+        from stdapi.models.embedding.amazon_nova_embed import (  # noqa: PLC0415
+            EmbeddingModel,
+        )
+
+        sent = self._stub_transports(monkeypatch)
+        await EmbeddingModel(NOVA_V1)._embed(  # noqa: SLF001
+            self._remote(declared_size), {"embeddingPurpose": "GENERIC_INDEX"}, {}
+        )
+        (value,) = sent
+        return value
+
+    async def test_media_that_only_fits_undecoded_is_read_from_storage(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A file under the body limit whose base64 form is over it goes to storage."""
+        from stdapi.aws_s3 import S3Object  # noqa: PLC0415
+
+        # 20,000,000 bytes weigh 26,666,668 once base64-encoded.
+        assert isinstance(await self._embed(monkeypatch, 20_000_000), S3Object)
+
+    async def test_media_that_fits_encoded_travels_in_the_request(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A file whose base64 form is still under the limit stays inline."""
+        # 18,000,000 bytes weigh 24,000,000 once base64-encoded.
+        assert await self._embed(monkeypatch, 18_000_000) == "AAAA"

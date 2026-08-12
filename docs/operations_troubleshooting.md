@@ -1,7 +1,7 @@
 ---
 title: Troubleshooting - Common stdapi.ai deployment issues
 description: Fixes for the most common errors encountered when deploying and running stdapi.ai - Terraform failures, 400/401/403/404/429/503 responses, Bedrock throttling, IAM permission errors, S3 bucket errors, VPC connectivity, and more.
-keywords: stdapi.ai troubleshooting, AWS Bedrock errors, Terraform apply failed, 503 ECS service, 401 API key, 403 permission IAM, AccessDeniedException, 404 model not found, ThrottlingException Bedrock, S3 bucket region, ElastiCache capacity, VPC endpoint timeout, podman SELinux, ECONNREFUSED IPv6 service discovery, drop_params ValidationException, ECS task unhealthy restart loop, container healthCheck command, text to speech input too long, speech input limited to 3000 characters, service_tier ignored, guardrail ignored, model parameters ignored, model alias configuration, MODEL_ALIASES validation error, extra inputs are not permitted alias
+keywords: stdapi.ai troubleshooting, AWS Bedrock errors, Terraform apply failed, 503 ECS service, 401 API key, 403 permission IAM, AccessDeniedException, 404 model not found, ThrottlingException Bedrock, S3 bucket region, ElastiCache capacity, VPC endpoint timeout, podman SELinux, ECONNREFUSED IPv6 service discovery, drop_params ValidationException, ECS task unhealthy restart loop, container healthCheck command, text to speech input too long, speech input limited to 3000 characters, service_tier ignored, guardrail ignored, model parameters ignored, model alias configuration, MODEL_ALIASES validation error, extra inputs are not permitted alias, 413 attachment too large, large image rejected, large PDF rejected, attachments larger than not available, attached files are too large per request, attachment total too large, AWS_S3_REGIONAL_BUCKETS attachment staging, web search returns no results, external_web_access rejected, bedrock-websearch InvokeSearch AccessDenied, web search stale cached results
 ---
 
 # :material-wrench: Troubleshooting
@@ -198,8 +198,11 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     - If ECS runs in a private subnet without VPC endpoints, confirm the NAT gateway / route table is configured.
 
 ??? failure "`413 Payload Too Large` — request or file rejected as oversized"
-    Either the application-level file-size cap or an edge control rejected the request.
+    Either an attachment exceeds what the chosen model reads, the application-level file-size cap, or an edge control rejected the request.
 
+    - `Attachments larger than … are not available on the current server` means the attachment is too large to travel inside the request and there is nowhere to stage it: no region able to serve that model has an S3 bucket. Set [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) for the first region of `AWS_BEDROCK_REGIONS` and an [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets) entry for every other region that may serve the model — the server log names the one that was missing. The same request succeeds unchanged once a bucket exists.
+    - `An attached file is too large: this model accepts at most … bytes per file` means that model only reads attachments sent inside the request. Send a smaller file, or choose a model that reads attachments from storage — see [Attachment Size](features.md#attachment-size).
+    - `The attached files are too large: this model accepts at most … bytes of attachments per request` means the same, for the request as a whole: each file fits on its own, but their total does not. Split them across several requests, or choose a model that reads attachments from storage.
     - Check [`MAX_INPUT_FILE_SIZE`](operations_configuration.md#max-input-file-size) — it caps the bytes of any single file loaded into memory for model input; disabled by default, so if it's set and the error appears, raise it or reduce the input size.
     - If the deployment sits behind the Terraform module's WAF (`alb_waf_enabled=true`), check for a `SizeConstraintStatement` rule on the request body — see [Request Size & Resource Limits](operations_authentication_security.md#request-size-resource-limits).
     - If fronted by Amazon API Gateway instead of an ALB, remember its hard 10 MB payload limit.

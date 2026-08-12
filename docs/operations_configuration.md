@@ -200,6 +200,8 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_BEDROCK_MANTLE_SERVICE_HEADER`](#bedrock-mantle-service-header)       | `false`               | Honor the `x-stdapi-service: bedrock-mantle` request header to route dual-homed models through Mantle per request |
 | [`AWS_BEDROCK_MANTLE_PROJECT`](#bedrock-mantle-project)                     | None                  | Default Bedrock Project/Workspace ID applied to Mantle requests for cost tracking and observability  |
 | [`AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE`](#bedrock-allow-mantle-project-override) | `false`     | Allow requests to override the configured Mantle project via the `OpenAI-Project` / `anthropic-workspace` header |
+| [`AWS_BEDROCK_EXTERNAL_WEB_ACCESS`](#bedrock-external-web-access)           | `false`               | Let the built-in web search tool reach the public web instead of the Amazon Bedrock web index        |
+| [`AWS_BEDROCK_ALLOW_EXTERNAL_WEB_ACCESS_OVERRIDE`](#bedrock-allow-external-web-access-override) | `false` | Allow requests to override external web access with the tool's `external_web_access` field  |
 
 ### :material-shield-check: Bedrock Advanced { #summary-bedrock-advanced }
 
@@ -632,7 +634,7 @@ export AWS_TRANSCRIBE_S3_BUCKET=my-transcribe-temp-eu-west-1
 #### `AWS_S3_REGIONAL_BUCKETS` { #aws-s3-regional-buckets }
 
 :octicons-package-24: **Purpose**
-:   Region-specific S3 buckets for Bedrock async and batch inference operations
+:   Region-specific S3 buckets for Bedrock async and batch inference operations, and for staging attachments too large to travel inside a request
 
 :octicons-gear-24: **Default**
 :   Empty (no regional buckets configured)
@@ -653,8 +655,9 @@ export AWS_S3_REGIONAL_BUCKETS='{"us-east-1": "my-bedrock-temp-us-east-1", "eu-w
     - Using Bedrock async inference API
     - Using Bedrock batch inference API
     - Working with models that require regional S3 storage
+    - Accepting chat, messages or responses requests with [large attachments](features.md#attachment-size), or embedding requests with large inputs — those are staged in the bucket of the region serving the request, which then serves that request alone without failing over
 
-    If not specified for a region where async/batch operations are attempted, those operations may fail.
+    If not specified for a region where async/batch operations are attempted, those operations may fail. Requests carrying an attachment larger than the model reads inline are refused with `413` when no region able to serve the model has a bucket.
 
 !!! success "Automatic Fallback"
     For the first region in `AWS_BEDROCK_REGIONS` (your primary region), if no regional bucket is specified, the service automatically falls back to `AWS_S3_BUCKET`. You only need to configure regional buckets for additional regions beyond your primary one.
@@ -1201,6 +1204,42 @@ export AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE=true
 
 !!! note "Bedrock Mantle only"
     These headers apply **only** to models served by the Amazon Bedrock Mantle endpoint; classic `bedrock-runtime` models ignore them.
+
+#### `AWS_BEDROCK_EXTERNAL_WEB_ACCESS` { #bedrock-external-web-access }
+
+:octicons-package-24: **Purpose**
+:   Let the built-in [web search tool](api_openai_responses.md#openai-gpt-web-search) reach the public web
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false`
+
+:octicons-workflow-24: **Behavior**
+:   When `false`, searches are answered from the Amazon Bedrock web index and cache: the request content stays inside the AWS boundary, and answers are still current and still carry source citations. When `true`, searches may retrieve content from the public web, which requires the `bedrock-websearch:ExternalWebAccess` IAM permission on the credentials this server uses — without it a search silently falls back to the index and the model reports that it could not reach the web. See [Web Search on Amazon Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html).
+
+```bash
+export AWS_BEDROCK_EXTERNAL_WEB_ACCESS=true
+```
+
+#### `AWS_BEDROCK_ALLOW_EXTERNAL_WEB_ACCESS_OVERRIDE` { #bedrock-allow-external-web-access-override }
+
+:octicons-package-24: **Purpose**
+:   Allow a request to override [`AWS_BEDROCK_EXTERNAL_WEB_ACCESS`](#bedrock-external-web-access) with the web search tool's `external_web_access` field
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false`
+
+:octicons-workflow-24: **Behavior**
+:   When `true`, a request that sets `external_web_access` on its `web_search` tool decides for that request. When `false`, a request that sets it to anything other than the configured value is rejected with `400` rather than being silently overridden; a request that omits the field always gets the configured value.
+
+```bash
+export AWS_BEDROCK_ALLOW_EXTERNAL_WEB_ACCESS_OVERRIDE=true
+```
 
 #### `AWS_BEDROCK_MODEL_REGION_RESTRICT` { #bedrock-model-region-restrict }
 
@@ -2664,6 +2703,7 @@ export MAX_INPUT_FILE_SIZE=26214400
 
     - :material-file-code: Base64 and `data:` URI inputs
     - :material-download: HTTP(S) and S3 sources downloaded and read for model input
+    - :material-database-arrow-up: [Attachments too large to travel inside a request](features.md#attachment-size), on the size their source declares, before they are staged
 
     Requests exceeding the limit are rejected with **HTTP 413** before the content is fully decoded or downloaded. For downloads, the body is streamed and aborted as soon as the limit is exceeded, so a spoofed `Content-Length` cannot bypass it.
 
