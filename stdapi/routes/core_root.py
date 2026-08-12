@@ -30,18 +30,58 @@ class PingResponse:
     status: str = "Healthy"
 
 
+#: Public API reference, used where an absolute documentation URL is required.
+_API_REFERENCE_URL = "https://stdapi.ai/api_reference/"
+
 #: Welcome message payload for root endpoint
 _WELCOME = {
     "message": "Welcome to the stdapi.ai API! Documentation is available at "
     + (
         "/docs"
         if SETTINGS.enable_docs
-        else ("/redoc" if SETTINGS.enable_redoc else "https://stdapi.ai/api_reference/")
+        else ("/redoc" if SETTINGS.enable_redoc else _API_REFERENCE_URL)
     )
 }
 
 _mcp_streamable = SETTINGS.enable_mcp_streamable_http
 _mcp_sse = SETTINGS.enable_mcp_sse
+
+#: Path RFC 9728 reserves for the protected resource metadata of a root-mounted API.
+OAUTH_METADATA_PATH = "/.well-known/oauth-protected-resource"
+
+#: Link relation naming the metadata document; RFC 9264 requires a URI for an extension one.
+_OAUTH_RELATION = "https://www.rfc-editor.org/rfc/rfc9728"
+
+_oauth_resource = SETTINGS.oauth_resource_identifier
+_oauth_scopes = SETTINGS.oauth_scopes_supported
+
+#: RFC 9728 protected resource metadata; None when no resource identifier is configured.
+_OAUTH_METADATA: dict[str, Any] | None = (
+    {
+        "resource": _oauth_resource,
+        "authorization_servers": SETTINGS.oauth_authorization_servers,
+        # RFC 9728 section 3.2 requires zero-valued members to be omitted.
+        **({"scopes_supported": _oauth_scopes} if _oauth_scopes else {}),
+        "bearer_methods_supported": ["header"],
+        "resource_name": EDITION_TITLE,
+        "resource_documentation": _API_REFERENCE_URL,
+    }
+    if _oauth_resource
+    else None
+)
+
+#: Challenge (RFC 6750) carried by every 401, pointing at the metadata when it is published.
+WWW_AUTHENTICATE_CHALLENGE = "Bearer" + (
+    " "
+    + ", ".join(
+        [
+            f'resource_metadata="{_oauth_resource}{OAUTH_METADATA_PATH}"',
+            *([f'scope="{" ".join(_oauth_scopes)}"'] if _oauth_scopes else []),
+        ]
+    )
+    if _oauth_resource
+    else ""
+)
 
 #: Link header value for agent discovery (RFC 8288), None if no resources available
 _LINK_HEADER: str | None = (
@@ -61,6 +101,11 @@ _LINK_HEADER: str | None = (
             (
                 '</.well-known/mcp/server-card.json>; rel="mcp-server-card"'
                 if _mcp_streamable or _mcp_sse
+                else None
+            ),
+            (
+                f'<{OAUTH_METADATA_PATH}>; rel="{_OAUTH_RELATION}"'
+                if _OAUTH_METADATA is not None
                 else None
             ),
         ]
@@ -98,6 +143,11 @@ _API_CATALOG: dict[str, Any] = {
             **(
                 {"mcp-server-card": [{"href": "/.well-known/mcp/server-card.json"}]}
                 if _mcp_streamable or _mcp_sse
+                else {}
+            ),
+            **(
+                {_OAUTH_RELATION: [{"href": OAUTH_METADATA_PATH}]}
+                if _OAUTH_METADATA is not None
                 else {}
             ),
         }
@@ -150,6 +200,19 @@ _API_CATALOG_RESPONSE = JSONResponse(
     _API_CATALOG, media_type="application/linkset+json"
 )
 
+#: Seconds a client may reuse the protected resource metadata (RFC 9728 section 7.10).
+_OAUTH_METADATA_MAX_AGE = 3600
+
+#: Pre-rendered response for the protected resource metadata, None when not published.
+_OAUTH_METADATA_RESPONSE: JSONResponse | None = (
+    JSONResponse(
+        _OAUTH_METADATA,
+        headers={"cache-control": f"public, max-age={_OAUTH_METADATA_MAX_AGE}"},
+    )
+    if _OAUTH_METADATA is not None
+    else None
+)
+
 
 @router.get("/")
 async def root() -> JSONResponse:
@@ -172,6 +235,27 @@ async def api_catalog() -> JSONResponse:
         Linkset document with Content-Type application/linkset+json.
     """
     return _API_CATALOG_RESPONSE
+
+
+@router.get(OAUTH_METADATA_PATH)
+async def oauth_protected_resource() -> JSONResponse:
+    """OAuth 2.0 Protected Resource Metadata (RFC 9728) for agent authentication.
+
+    Names the authorization servers that issue tokens for this API, the scopes
+    those tokens need and how to present them, so an AI agent can authenticate
+    without having been configured for this deployment first. Its address is
+    also carried by the challenge on every 401 response.
+
+    Returns:
+        Protected resource metadata document, or 404 when no public URL is
+        configured for this deployment.
+    """
+    if _OAUTH_METADATA_RESPONSE is None:
+        return JSONResponse(
+            {"error": "OAuth 2.0 protected resource metadata is not configured"},
+            status_code=404,
+        )
+    return _OAUTH_METADATA_RESPONSE
 
 
 @router.get("/.well-known/mcp/server-card.json")

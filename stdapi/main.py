@@ -70,6 +70,7 @@ from stdapi.pricing import (
 )
 from stdapi.region_routing import measure_region_latencies, quota_retry_after
 from stdapi.routes import discover_routers
+from stdapi.routes.core_root import WWW_AUTHENTICATE_CHALLENGE
 from stdapi.server import SERVER_VERSION
 from stdapi.utils import JSONResponse, hide_security_details
 
@@ -284,6 +285,9 @@ if SETTINGS.cors_allow_origins:
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
+        # Not a CORS-safelisted response header, so a browser-hosted client only
+        # sees the authentication challenge when it is exposed explicitly.
+        expose_headers=["www-authenticate"],
     )
 
 
@@ -300,6 +304,21 @@ def set_retry_after_header(request: Request, response: Response) -> None:
     """
     if response.status_code == 429 and (seconds := quota_retry_after(request)):
         response.headers["retry-after"] = str(seconds)
+
+
+def set_www_authenticate_header(response: Response) -> None:
+    """Attach the ``www-authenticate`` challenge to an unauthenticated response.
+
+    A 401 without a challenge leaves a client no way to learn which credential
+    the API expects, which is what an agent needs to authenticate on its own.
+    The challenge is the same on every 401, so it never reveals whether a
+    credential was missing or merely wrong.
+
+    Args:
+        response: Outgoing response object.
+    """
+    if response.status_code == 401:
+        response.headers["www-authenticate"] = WWW_AUTHENTICATE_CHALLENGE
 
 
 @app.middleware("http")
@@ -346,6 +365,7 @@ async def _middleware(
             set_log_fields(request, log)
         set_response_headers(request, response, log["execution_time_ms"])
         set_retry_after_header(request, response)
+        set_www_authenticate_header(response)
         if CLEANUPS.get():
             response.background = BackgroundTask(run_scheduled_cleanups, log["id"])
     response.headers["server"] = "stdapi.ai"

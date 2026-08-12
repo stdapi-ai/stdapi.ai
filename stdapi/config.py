@@ -73,6 +73,20 @@ _KMS_KEY_ARN_PATTERN = re.compile(
 #: Amazon Cognito user pool ID format: the pool's AWS Region, then its identifier.
 _COGNITO_USER_POOL_ID_PATTERN = re.compile(r"^[a-z]{2}[a-z-]*-[0-9]+_[A-Za-z0-9]+$")
 
+#: URL host: a registered name or a bracketed IP literal, with an optional port.
+_URL_HOST = r"(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._~%!$&'()*+,;=-]+)(?::[0-9]+)?"
+
+#: Origin URL format: scheme and host only, the form an OAuth resource identifier takes.
+_ORIGIN_URL_PATTERN = re.compile(rf"^https?://{_URL_HOST}$")
+
+#: OAuth 2.0 issuer identifier format: an "https" URL with no query or fragment (RFC 8414).
+_ISSUER_URL_PATTERN = re.compile(
+    rf"^https://{_URL_HOST}(?:/[A-Za-z0-9._~%!$&'()*+,;=:@/-]*)?$"
+)
+
+#: OAuth 2.0 scope token format: printable ASCII without space, quote or backslash (RFC 6749).
+_OAUTH_SCOPE_PATTERN = re.compile(r"^[\x21\x23-\x5B\x5D-\x7E]+$")
+
 #: Built-in set of ``anthropic_beta`` flags known to be supported by AWS Bedrock.
 _ANTHROPIC_BETA_BEDROCK_FLAGS: frozenset[str] = frozenset(
     {
@@ -995,6 +1009,61 @@ class _Settings(BaseSettings):
         ),
     )
 
+    oauth_resource_identifier: str | None = Field(
+        default=None,
+        description=(
+            "Public URL clients use to reach this API. Setting it publishes an "
+            "OAuth 2.0 protected resource metadata document at "
+            "'<url>/.well-known/oauth-protected-resource' and puts that address "
+            "in the challenge every 401 response carries, so an AI agent can "
+            "discover where to obtain a token instead of being configured for "
+            "this deployment beforehand.\n\n"
+            "Clients compare the value against the URL they dialled character "
+            "by character, so it must be the exact origin they use: scheme and "
+            "host, an explicit port only when it is not the default one for the "
+            "scheme, and no path, query or fragment.\n\n"
+            "Requires oauth_authorization_servers. If not specified, no "
+            "metadata document is published and 401 responses only state that a "
+            "bearer token is expected.\n"
+            "Example: 'https://api.example.com'"
+        ),
+    )
+
+    oauth_authorization_servers: Annotated[list[str], NoDecode] = Field(
+        default=[],
+        description=(
+            "Issuer URLs of the OAuth 2.0 authorization servers that issue "
+            "tokens for this API, as a comma-separated list, published in its "
+            "protected resource metadata. A client reads each issuer's own "
+            "metadata to find where to sign in, so this deployment never has to "
+            "describe the sign-in flow itself.\n\n"
+            "An Amazon Cognito user pool issues "
+            "'https://cognito-idp.<region>.amazonaws.com/<pool-id>', or "
+            "'https://issuer-cognito-idp.<region>.amazonaws.com/<pool-id>' when "
+            "the pool uses the updated issuer (see aws_cognito_issuer_type). A "
+            "load balancer or API gateway authenticating in front of this "
+            "server publishes the issuer of whichever provider it uses.\n\n"
+            "Required when oauth_resource_identifier is set.\n"
+            "Example: 'https://cognito-idp.eu-west-3.amazonaws.com/eu-west-3_a1b2c3d4e'"
+        ),
+    )
+
+    oauth_scopes_supported: Annotated[list[str], NoDecode] = Field(
+        default=[],
+        description=(
+            "OAuth 2.0 scopes a token needs to call this API, as a "
+            "comma-separated list. Published in the protected resource metadata "
+            "and requested in the 401 challenge, so a client asks its "
+            "authorization server for the right scopes on its first attempt.\n\n"
+            "Set it to the same value as aws_cognito_required_scopes when an "
+            "Amazon Cognito user pool authenticates clients.\n\n"
+            "Requires oauth_resource_identifier. If not specified, no scope is "
+            "advertised and the client asks for whatever its own configuration "
+            "names.\n"
+            "Example: 'stdapi/invoke'"
+        ),
+    )
+
     otel_enabled: bool = Field(
         default=False,
         description=(
@@ -1659,6 +1728,8 @@ class _Settings(BaseSettings):
         "aws_bedrock_mantle_preferred_models",
         "aws_cognito_client_ids",
         "aws_cognito_required_scopes",
+        "oauth_authorization_servers",
+        "oauth_scopes_supported",
         mode="before",
     )
     @classmethod
@@ -1944,6 +2015,110 @@ class _Settings(BaseSettings):
             raise ValueError(msg) from error
         return value
 
+    @field_validator("oauth_resource_identifier")
+    @classmethod
+    def _validate_oauth_resource_identifier(cls, value: str | None) -> str | None:
+        """Validate the public URL published as the OAuth resource identifier.
+
+        The value is compared character by character by clients and is embedded
+        in a quoted header parameter, so a path, a query, or any character that
+        could close the quoted string is rejected rather than escaped.
+
+        Args:
+            value: Public origin URL of this deployment, or None.
+
+        Returns:
+            The URL without its trailing slash, or None.
+
+        Raises:
+            ValueError: If the value is not an absolute "http"/"https" origin.
+        """
+        if value is None:
+            return None
+        origin = value.rstrip("/")
+        if not _ORIGIN_URL_PATTERN.fullmatch(origin):
+            msg = (
+                f'Invalid oauth_resource_identifier "{value}": must be the '
+                'absolute URL clients dial, with no path, e.g. "https://api.example.com".'
+            )
+            raise ValueError(msg)
+        return origin
+
+    @field_validator("oauth_authorization_servers")
+    @classmethod
+    def _validate_oauth_authorization_servers(cls, value: list[str]) -> list[str]:
+        """Validate the published authorization server issuer URLs.
+
+        Args:
+            value: Issuer URLs of the authorization servers.
+
+        Returns:
+            The issuer URLs without their trailing slash.
+
+        Raises:
+            ValueError: If an entry is not an "https" URL free of query and fragment.
+        """
+        issuers = [item.rstrip("/") for item in value]
+        for issuer in issuers:
+            if not _ISSUER_URL_PATTERN.fullmatch(issuer):
+                msg = (
+                    f'Invalid oauth_authorization_servers entry "{issuer}": must '
+                    'be an "https" issuer URL with no query or fragment, e.g. '
+                    '"https://cognito-idp.eu-west-3.amazonaws.com/eu-west-3_a1b2c3d4e".'
+                )
+                raise ValueError(msg)
+        return issuers
+
+    @field_validator("oauth_scopes_supported")
+    @classmethod
+    def _validate_oauth_scopes_supported(cls, value: list[str]) -> list[str]:
+        """Validate the published OAuth 2.0 scopes.
+
+        Args:
+            value: Scopes a token needs to call this API.
+
+        Returns:
+            The scopes, unchanged.
+
+        Raises:
+            ValueError: If a scope is not an RFC 6749 scope token.
+        """
+        for scope in value:
+            if not _OAUTH_SCOPE_PATTERN.fullmatch(scope):
+                msg = (
+                    f'Invalid oauth_scopes_supported entry "{scope}": an OAuth '
+                    "2.0 scope carries no space, double quote or backslash."
+                )
+                raise ValueError(msg)
+        return value
+
+    def _validate_oauth(self) -> None:
+        """Ensure the OAuth 2.0 discovery configuration is complete.
+
+        A resource identifier with no authorization server would publish a
+        document telling clients nothing about where to obtain a token, and the
+        remaining settings describe a document that is not published at all.
+
+        Raises:
+            ValueError: If the discovery configuration is incomplete.
+        """
+        if self.oauth_resource_identifier:
+            if not self.oauth_authorization_servers:
+                msg = (
+                    "oauth_authorization_servers is required with "
+                    "oauth_resource_identifier: metadata naming no authorization "
+                    "server leaves a client unable to obtain a token, and is read "
+                    "by some clients as this server being its own authorization "
+                    "server."
+                )
+                raise ValueError(msg)
+        elif self.oauth_authorization_servers or self.oauth_scopes_supported:
+            msg = (
+                "oauth_resource_identifier is required to publish OAuth 2.0 "
+                "protected resource metadata."
+            )
+            raise ValueError(msg)
+
     def _validate_cognito(self) -> None:
         """Ensure the Amazon Cognito user pool configuration is complete.
 
@@ -2055,6 +2230,7 @@ class _Settings(BaseSettings):
         6. Non-empty API routes prefixes must be unique across providers
         7. The Amazon Cognito configuration is complete
         8. The accepted authentication methods are the configured ones
+        9. The OAuth 2.0 discovery configuration is complete
 
         Returns:
             Self with validated and defaulted configuration.
@@ -2126,6 +2302,7 @@ class _Settings(BaseSettings):
             self.mcp_exclude_tools = None
         self._validate_cognito()
         self._validate_authentication_mode()
+        self._validate_oauth()
         return self
 
     def now(self) -> AwareDatetime:

@@ -475,9 +475,10 @@ stdapi.ai is a drop-in replacement in hundreds of applications and tools. Change
 
 AI agents can automatically discover the API's capabilities through standardized RFC 8288 Link headers and an API catalog:
 
-- **Link headers** — Root endpoint (`/`) includes `Link` response headers advertising available resources (`rel="service-desc"`, `rel="service-doc"`) when documentation endpoints are enabled, and `rel="mcp-server-card"` when MCP is enabled
-- **API catalog** at `/.well-known/api-catalog` — RFC 9727 machine-readable catalog (RFC 9264 Linkset format) listing the OpenAPI schema, documentation, and MCP server card
+- **Link headers** — Root endpoint (`/`) includes `Link` response headers advertising available resources (`rel="service-desc"`, `rel="service-doc"`) when documentation endpoints are enabled, `rel="mcp-server-card"` when MCP is enabled, and the protected resource metadata when authentication discovery is configured
+- **API catalog** at `/.well-known/api-catalog` — RFC 9727 machine-readable catalog (RFC 9264 Linkset format) listing the OpenAPI schema, documentation, MCP server card, and protected resource metadata
 - **MCP server card** at `/.well-known/mcp/server-card.json` — SEP-1649 server card advertising available MCP transports and capabilities; active when MCP is enabled
+- **Protected resource metadata** at `/.well-known/oauth-protected-resource` — RFC 9728 document naming the authorization servers that issue tokens for this deployment and the scopes those tokens need, so an agent can authenticate itself; its address is also carried by the `WWW-Authenticate` challenge on every `401`. Active once [`OAUTH_RESOURCE_IDENTIFIER`](operations_configuration.md#oauth-resource-identifier) is set — see [Authentication Discovery for Agents](operations_authentication_security.md#authentication-discovery-for-agents)
 
 Set `ENABLE_OPENAPI_JSON=true` to activate schema-based agent discovery — this exposes the machine-readable OpenAPI schema at `/openapi.json` and populates the Link headers and API catalog. `ENABLE_DOCS` and `ENABLE_REDOC` also enable it as a side effect, but those UIs are human-facing and not needed by agents.
 

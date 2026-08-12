@@ -202,6 +202,7 @@ LOGGING_PATHS_IGNORE: frozenset[str] = frozenset(
         "/redoc",
         "/.well-known/api-catalog",
         "/.well-known/mcp/server-card.json",
+        "/.well-known/oauth-protected-resource",
         "/robots.txt",
     }
 )

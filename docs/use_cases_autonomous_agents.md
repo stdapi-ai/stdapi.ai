@@ -1,7 +1,7 @@
 ---
 title: Autonomous Agent CLIs - Hermes and OpenClaw on Amazon Bedrock
 description: Run autonomous agent CLIs like Hermes and OpenClaw against Amazon Bedrock models through stdapi.ai. Configure wire-format transports and Anthropic prompt-caching breakpoints.
-keywords: autonomous agent AWS Bedrock, Hermes agent AWS, hermes-agent AWS Bedrock, OpenClaw AWS Bedrock, AI agent CLI AWS, Anthropic prompt caching agent, agent transport configuration
+keywords: autonomous agent AWS Bedrock, Hermes agent AWS, hermes-agent AWS Bedrock, OpenClaw AWS Bedrock, AI agent CLI AWS, Anthropic prompt caching agent, agent transport configuration, agent authentication discovery, OAuth 2.0 protected resource metadata
 ---
 
 # :material-robot-excited: Autonomous Agent CLIs
@@ -49,6 +49,35 @@ flowchart LR
     - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md) or [run locally with Docker](operations_getting_started_local.md)
     - ✓ **Your stdapi.ai URL** - e.g., `https://api.example.com` or `http://localhost:8000` for local
     - ✓ **Your API key** - From Terraform output or configuration (optional for local development)
+
+---
+
+## :material-compass-outline: Bootstrapping Authentication
+
+An agent handed a key in an environment variable is ready to go. An agent handed only a URL is not — and that is the common case for an MCP client, a marketplace agent, or anything a user points at a gateway it has never seen. stdapi.ai answers that case with the standard OAuth 2.0 discovery flow, so the agent works out the rest by itself:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Agent
+    participant G as stdapi.ai
+    participant I as Authorization server
+    A->>G: Request without a token
+    G-->>A: 401 + WWW-Authenticate: Bearer resource_metadata="…", scope="…"
+    A->>G: GET /.well-known/oauth-protected-resource
+    G-->>A: authorization_servers, scopes_supported
+    A->>I: Read the issuer's own metadata, then sign in
+    I-->>A: Access token
+    A->>G: Retry with Authorization: Bearer <token>
+    G-->>A: 200
+```
+
+The agent never needs to be told which identity provider you use, where its endpoints are, or which scopes to request — every one of those comes out of step 2 and 4. Enable it by setting [`OAUTH_RESOURCE_IDENTIFIER`](operations_configuration.md#oauth-resource-identifier) and [`OAUTH_AUTHORIZATION_SERVERS`](operations_configuration.md#oauth-authorization-servers) on the deployment.
+
+!!! info "The agent still needs a client identity"
+    Discovery tells the agent *where* to authenticate; the authorization server decides *who* may. With an Amazon Cognito user pool, register the agent as an app client in the pool and give it that client ID — Cognito supports neither dynamic client registration nor client-id metadata documents, so it cannot be skipped.
+
+Full walkthrough and the exact document served: [Authentication Discovery for Agents](operations_authentication_security.md#authentication-discovery-for-agents).
 
 ---
 

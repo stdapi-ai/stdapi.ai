@@ -683,3 +683,153 @@ class TestBedrockRegionDetection:
             match=r"No AWS region specified in environment or configuration\.",
         ):
             _Settings(aws_bedrock_regions="")  # type: ignore[arg-type]
+
+
+class TestOAuthDiscoverySettings:
+    """The three settings publishing OAuth 2.0 protected resource metadata.
+
+    The resource identifier is compared character by character by clients and
+    is embedded in a quoted ``WWW-Authenticate`` parameter, so its shape is
+    validated at startup rather than repaired per request.
+
+    Ref: https://www.rfc-editor.org/rfc/rfc9728#section-3.3
+         stdapi/config.py:_Settings._validate_oauth
+    """
+
+    def test_resource_identifier_keeps_its_exact_form(self) -> None:
+        """A bare origin is published unchanged, and a trailing slash is dropped.
+
+        RFC 9728 section 3.3 compares the published value against the URL the
+        client inserted the well-known suffix into, so a normalised form (the
+        slash a URL type would append) would be rejected by a strict client.
+        """
+        settings = _Settings(
+            oauth_resource_identifier="https://api.example.com",
+            oauth_authorization_servers="https://issuer.example.com/pool",  # type: ignore[arg-type]
+        )
+        assert settings.oauth_resource_identifier == "https://api.example.com"
+
+        slashed = _Settings(
+            oauth_resource_identifier="https://api.example.com/",
+            oauth_authorization_servers="https://issuer.example.com/pool",  # type: ignore[arg-type]
+        )
+        assert slashed.oauth_resource_identifier == "https://api.example.com"
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "http://localhost:8000",
+            "https://[2001:db8::1]:8443",
+            "https://api.example.com",
+        ],
+    )
+    def test_resource_identifier_accepts_every_origin_form(self, value: str) -> None:
+        """A port, a plain-HTTP local deployment and an IP literal are all origins."""
+        settings = _Settings(
+            oauth_resource_identifier=value,
+            oauth_authorization_servers="https://issuer.example.com/pool",  # type: ignore[arg-type]
+        )
+        assert settings.oauth_resource_identifier == value
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "api.example.com",
+            "https://api.example.com/v1",
+            "https://api.example.com?x=1",
+            'https://api.example.com" ,realm="x',
+            "ftp://api.example.com",
+        ],
+    )
+    def test_resource_identifier_rejects_anything_but_an_origin(
+        self, value: str
+    ) -> None:
+        """A relative URL, a path, a query or a quote in the value fails startup.
+
+        The last two matter beyond tidiness: the value is interpolated into a
+        quoted header parameter, so a double quote would let the setting inject
+        further challenge parameters.
+        """
+        with pytest.raises(ValidationError, match="Invalid oauth_resource_identifier"):
+            _Settings(
+                oauth_resource_identifier=value,
+                oauth_authorization_servers="https://issuer.example.com/pool",  # type: ignore[arg-type]
+            )
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "http://issuer.example.com/pool",
+            "https://issuer.example.com/pool?x=1",
+            "https://issuer.example.com/pool#f",
+            "issuer.example.com",
+        ],
+    )
+    def test_authorization_server_must_be_an_https_issuer(self, value: str) -> None:
+        """RFC 8414 issuer identifiers use "https" and carry no query or fragment."""
+        with pytest.raises(
+            ValidationError, match="Invalid oauth_authorization_servers entry"
+        ):
+            _Settings(
+                oauth_resource_identifier="https://api.example.com",
+                oauth_authorization_servers=value,  # type: ignore[arg-type]
+            )
+
+    @pytest.mark.parametrize("value", ['sco"pe', "scope with space", "back\\slash"])
+    def test_scope_rejects_characters_a_challenge_cannot_carry(
+        self, value: str
+    ) -> None:
+        """A scope is an RFC 6749 token, so it cannot close the quoted parameter."""
+        with pytest.raises(
+            ValidationError, match="Invalid oauth_scopes_supported entry"
+        ):
+            _Settings(
+                oauth_resource_identifier="https://api.example.com",
+                oauth_authorization_servers="https://issuer.example.com/pool",  # type: ignore[arg-type]
+                oauth_scopes_supported=value,  # type: ignore[arg-type]
+            )
+
+    def test_resource_identifier_requires_an_authorization_server(self) -> None:
+        """Publishing a document that names no authorization server fails startup.
+
+        Such a document leaves a client unable to obtain a token, and the
+        TypeScript MCP client reads the omission as this server being its own
+        authorization server.
+        """
+        with pytest.raises(
+            ValidationError, match="oauth_authorization_servers is required"
+        ):
+            _Settings(
+                oauth_resource_identifier="https://api.example.com",
+                oauth_authorization_servers="",  # type: ignore[arg-type]
+            )
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("oauth_authorization_servers", "https://issuer.example.com/pool"),
+            ("oauth_scopes_supported", "stdapi/invoke"),
+        ],
+    )
+    def test_the_other_settings_require_a_resource_identifier(
+        self, field: str, value: str
+    ) -> None:
+        """Describing a document that is never published fails startup instead."""
+        with pytest.raises(
+            ValidationError, match="oauth_resource_identifier is required"
+        ):
+            _Settings(oauth_resource_identifier=None, **{field: value})  # type: ignore[arg-type]
+
+    def test_unset_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """With nothing configured no document is described, which is the default."""
+        for name in (
+            "oauth_resource_identifier",
+            "oauth_authorization_servers",
+            "oauth_scopes_supported",
+        ):
+            monkeypatch.delenv(name, raising=False)
+            monkeypatch.delenv(name.upper(), raising=False)
+        settings = _Settings()
+        assert settings.oauth_resource_identifier is None
+        assert settings.oauth_authorization_servers == []
+        assert settings.oauth_scopes_supported == []

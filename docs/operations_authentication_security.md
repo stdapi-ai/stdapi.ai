@@ -16,6 +16,9 @@ stdapi.ai provides flexible authentication options and built-in security mechani
 - :material-account-key: __Amazon Cognito User Pool Tokens__
   <br>Per-user and per-application bearer tokens, validated on every request. No key to rotate.
 
+- :material-compass-outline: __Authentication Discovery for Agents__
+  <br>Publish where tokens come from, so an agent authenticates itself with no prior configuration.
+
 - :material-account-check: __OIDC, Cognito & IAM Identity Center__
   <br>Offload user and workforce identity management to AWS ALB or API Gateway.
 
@@ -117,6 +120,54 @@ Every request is checked against all of the following, and any failure returns t
 
 !!! tip "Both methods, or one"
     With both a user pool and an API key configured, either credential is accepted: a bearer value shaped like a signed token is validated against the pool, anything else is compared to the API key. Set [`AUTHENTICATION_MODE`](operations_configuration.md#authentication-mode) to `cognito` or `api_key` to accept only one of them — the deployment then refuses to start if the other one is configured too, so a credential is never accepted by accident.
+
+### :material-compass-outline: Authentication Discovery for Agents
+
+An AI agent that meets an API it has never been configured for has one thing to go on: the `401 Unauthorized` it just received. stdapi.ai answers that request with everything the agent needs to obtain a credential on its own — the standard discovery flow behind MCP client authentication.
+
+**Name the public URL and the token issuer, and the discovery surface turns on:**
+
+| Setting | Value |
+|---|---|
+| [`OAUTH_RESOURCE_IDENTIFIER`](operations_configuration.md#oauth-resource-identifier) | The public URL clients dial, exactly as they dial it — for example `https://api.example.com` |
+| [`OAUTH_AUTHORIZATION_SERVERS`](operations_configuration.md#oauth-authorization-servers) | The issuer URL of whatever issues your tokens |
+| [`OAUTH_SCOPES_SUPPORTED`](operations_configuration.md#oauth-scopes-supported) | Optional, but set it to the same value as [`AWS_COGNITO_REQUIRED_SCOPES`](operations_configuration.md#aws-cognito-required-scopes) whenever a scope is required: an agent that is not told which scope to ask for obtains a token without it and is refused on every retry |
+
+**What an agent then sees:**
+
+```console
+$ curl -i https://api.example.com/v1/models
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer resource_metadata="https://api.example.com/.well-known/oauth-protected-resource", scope="stdapi/invoke"
+
+$ curl https://api.example.com/.well-known/oauth-protected-resource
+{
+  "resource": "https://api.example.com",
+  "authorization_servers": ["https://cognito-idp.eu-west-3.amazonaws.com/eu-west-3_a1b2c3d4e"],
+  "scopes_supported": ["stdapi/invoke"],
+  "bearer_methods_supported": ["header"],
+  "resource_name": "stdapi.ai (Community Edition)",
+  "resource_documentation": "https://stdapi.ai/api_reference/"
+}
+```
+
+From there the agent reads the authorization server's own metadata, signs in, and retries the request with a bearer token. The document is public and unauthenticated by design — it is read by a client that has no credential yet — and contains nothing beyond the issuer URL you configured. It is also cacheable, and it is advertised from the [API catalog and the root `Link` header](features.md#agent-discovery), so an agent that starts from either entry point finds it without a 401.
+
+!!! info "Both the API and the MCP server are covered"
+    The identifier names the deployment's origin, which every surface shares: an MCP client connecting to `/mcp` or `/sse`, and an SDK calling `/v1/…`, all match the same published resource. Only one document is served, at the root.
+
+!!! warning "`/.well-known/openid-configuration` is deliberately not served"
+    stdapi.ai is a **resource server**, not an authorization server: it validates tokens, it does not issue them. Mirroring or redirecting the authorization server's own discovery document would create a second, staler copy of something the issuer already publishes authoritatively. Agents reach it through `authorization_servers` instead — which is exactly what the standard flow does.
+
+!!! warning "Amazon Cognito needs a pre-registered app client"
+    A Cognito user pool publishes neither a dynamic client registration endpoint nor client-id metadata document support, so an agent cannot register itself. Create the app client in the pool and give the agent its client ID (and secret, for confidential clients) ahead of time. Discovery still saves the agent everything else: the issuer, the endpoints, and the scopes.
+
+    The pool also needs a [domain](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools-assign-domain.html): its authorization and token endpoints exist only once one is assigned, so without it the issuer's own discovery document names no endpoint the agent can obtain a token from, and the flow dead-ends after the 401.
+
+!!! tip "Browser-hosted clients need CORS"
+    A client running in a browser reads this document cross-origin. Add its origin to [`CORS_ALLOW_ORIGINS`](operations_configuration.md#cors-allow-origins), which it also needs for the API calls that follow.
+
+    With a CORS origin configured, the gateway also marks `WWW-Authenticate` as readable cross-origin, so a page-hosted client reads the metadata URL and the advertised scope straight off the `401`. Without one, the browser hides that header and the client falls back to the default well-known path, losing the scope the challenge carries.
 
 ### :material-account-check: OIDC, Cognito & IAM Identity Center
 

@@ -1,4 +1,4 @@
-"""Unauthenticated discovery endpoints: /, /.well-known/api-catalog, the MCP server card and /robots.txt.
+"""Unauthenticated discovery endpoints: /, the well-known documents, the MCP server card and /robots.txt.
 
 Every payload in this module is built once at import time from ``SETTINGS``, so
 each test derives its expectation from the settings rather than from the
@@ -10,6 +10,7 @@ Ref: stdapi/routes/core_root.py
 from typing import TYPE_CHECKING
 
 import pytest
+from pydantic import SecretStr
 
 from stdapi.config import SETTINGS
 
@@ -26,7 +27,35 @@ _EXPECTED_DOC_TARGET = (
 #: Whether at least one MCP transport is enabled, which gates the server card.
 _MCP_ENABLED = SETTINGS.enable_mcp_streamable_http or SETTINGS.enable_mcp_sse
 
+#: Path RFC 9728 reserves for the protected resource metadata of a root-mounted API.
+_OAUTH_METADATA_PATH = "/.well-known/oauth-protected-resource"
+
+#: Whether the protected resource metadata document is published at all.
+_OAUTH_ENABLED = bool(SETTINGS.oauth_resource_identifier)
+
+#: Link relation naming the metadata document; RFC 9264 requires an extension one to be a URI.
+_OAUTH_RELATION = "https://www.rfc-editor.org/rfc/rfc9728"
+
 pytestmark = pytest.mark.local
+
+
+@pytest.fixture
+def enforced_auth_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """Client with no credentials, against an app whose API key check is armed.
+
+    The app lifespan is what normally hashes the configured key, so a handler is
+    installed directly instead: every request then reaches the real middleware
+    and is refused, without the AWS startup a live client would perform.
+    """
+    from starlette.testclient import TestClient  # noqa: PLC0415
+
+    import stdapi.auth  # noqa: PLC0415
+    from stdapi.main import app  # noqa: PLC0415
+
+    handler = stdapi.auth.AuthenticationHandler()
+    handler._hash_api_key(SecretStr("armed-key"))  # noqa: SLF001
+    monkeypatch.setattr(stdapi.auth, "_auth_handler", handler)
+    return TestClient(app)
 
 
 class TestRoot:
@@ -77,7 +106,7 @@ class TestRoot:
         assert bad_key.json() == anonymous.json()
 
     def test_link_header_absent_when_features_disabled(
-        self, test_client: TestClient
+        self, app_client: TestClient
     ) -> None:
         """GET / advertises exactly the enabled discovery resources in its ``Link`` header.
 
@@ -98,11 +127,14 @@ class TestRoot:
                 '</.well-known/mcp/server-card.json>; rel="mcp-server-card"'
                 if _MCP_ENABLED
                 else None,
+                f'<{_OAUTH_METADATA_PATH}>; rel="{_OAUTH_RELATION}"'
+                if _OAUTH_ENABLED
+                else None,
             )
             if part is not None
         ]
 
-        response = test_client.get("/")
+        response = app_client.get("/")
         if not expected_parts:
             assert "link" not in response.headers
         else:
@@ -139,7 +171,7 @@ class TestApiCatalog:
         assert entry["anchor"] == "/.well-known/api-catalog"
 
     def test_linkset_optional_sections_match_settings(
-        self, test_client: TestClient
+        self, app_client: TestClient
     ) -> None:
         """service-desc, service-doc and mcp-server-card appear only for enabled features.
 
@@ -147,7 +179,7 @@ class TestApiCatalog:
         from ``_API_CATALOG``, so a wrong href or a relation advertised for a
         disabled feature fails the test.
         """
-        (entry,) = test_client.get("/.well-known/api-catalog").json()["linkset"]
+        (entry,) = app_client.get("/.well-known/api-catalog").json()["linkset"]
 
         if SETTINGS.enable_openapi_json:
             assert entry["service-desc"] == [
@@ -172,6 +204,11 @@ class TestApiCatalog:
             ]
         else:
             assert "mcp-server-card" not in entry
+
+        if _OAUTH_ENABLED:
+            assert entry[_OAUTH_RELATION] == [{"href": _OAUTH_METADATA_PATH}]
+        else:
+            assert _OAUTH_RELATION not in entry
 
 
 class TestMcpServerCard:
@@ -317,3 +354,371 @@ class TestErrorsOnLogExemptPaths:
         response = test_client.delete("/health")
         assert response.status_code == 405
         assert response.json()["error"]
+
+
+class TestOAuthProtectedResource:
+    """GET /.well-known/oauth-protected-resource serves RFC 9728 metadata.
+
+    The document is what lets an agent that has never been configured for this
+    deployment find out where to obtain a token. It is built once at import
+    time, so every expectation below is derived from ``SETTINGS`` instead of
+    being read back from the module constant.
+
+    Ref: https://www.rfc-editor.org/rfc/rfc9728.html
+         stdapi/routes/core_root.py:oauth_protected_resource
+    """
+
+    def test_reflects_configuration(self, app_client: TestClient) -> None:
+        """The document is 200 when a resource identifier is set, and 404 otherwise."""
+        response = app_client.get(_OAUTH_METADATA_PATH)
+        if _OAUTH_ENABLED:
+            assert response.status_code == 200
+        else:
+            assert response.status_code == 404
+            assert response.json() == {
+                "error": "OAuth 2.0 protected resource metadata is not configured"
+            }
+
+    def test_json_content_type(self, app_client: TestClient) -> None:
+        """RFC 9728 section 3.2 requires ``application/json`` on the 200 response."""
+        if not _OAUTH_ENABLED:
+            pytest.skip("No OAuth resource identifier configured")
+        response = app_client.get(_OAUTH_METADATA_PATH)
+        assert response.status_code == 200
+        assert "application/json" in response.headers["content-type"]
+
+    def test_members_match_settings(self, app_client: TestClient) -> None:
+        """Every published member comes from the settings that describe the deployment.
+
+        ``resource`` is compared verbatim: RFC 9728 section 3.3 has the client
+        compare it against the identifier it inserted the well-known suffix
+        into, character by character, so a normalised or slash-suffixed value
+        would be rejected.
+
+        The member set is pinned as well: the document is served unauthenticated
+        to anyone, so a member added later — a pool identifier, a client
+        identifier, a JWKS location — would disclose the deployment's identity
+        configuration to the whole internet.
+        """
+        if not _OAUTH_ENABLED:
+            pytest.skip("No OAuth resource identifier configured")
+        from stdapi.metering import EDITION_TITLE  # noqa: PLC0415
+
+        body = app_client.get(_OAUTH_METADATA_PATH).json()
+
+        assert set(body) == {
+            "resource",
+            "authorization_servers",
+            "bearer_methods_supported",
+            "resource_name",
+            "resource_documentation",
+        } | ({"scopes_supported"} if SETTINGS.oauth_scopes_supported else set())
+        assert body["resource"] == SETTINGS.oauth_resource_identifier
+        assert not body["resource"].endswith("/")
+        assert body["authorization_servers"] == SETTINGS.oauth_authorization_servers
+        assert body["bearer_methods_supported"] == ["header"]
+        assert body["resource_name"] == EDITION_TITLE
+        assert body["resource_documentation"] == "https://stdapi.ai/api_reference/"
+        if SETTINGS.oauth_scopes_supported:
+            assert body["scopes_supported"] == SETTINGS.oauth_scopes_supported
+        else:
+            assert "scopes_supported" not in body
+
+    def test_resource_ignores_the_request_origin(
+        self, app_client: TestClient, enforced_auth_client: TestClient
+    ) -> None:
+        """A spoofed ``Host`` never changes the resource, nor the URL the challenge names.
+
+        The identifier is the deployment's own; deriving it from the request
+        would let anyone who can set the header publish an origin of their
+        choosing and collect the tokens an agent then sends there.
+        """
+        if not _OAUTH_ENABLED:
+            pytest.skip("No OAuth resource identifier configured")
+        spoofed = {"Host": "attacker.example"}
+
+        body = app_client.get(_OAUTH_METADATA_PATH, headers=spoofed).json()
+        assert body["resource"] == SETTINGS.oauth_resource_identifier
+
+        challenged = enforced_auth_client.get("/v1/models", headers=spoofed)
+        assert challenged.status_code == 401
+        challenge = challenged.headers["www-authenticate"]
+        assert SETTINGS.oauth_resource_identifier in challenge
+        assert "attacker.example" not in challenge
+
+    def test_no_zero_valued_member_is_published(self, app_client: TestClient) -> None:
+        """RFC 9728 section 3.2: "Parameters with zero values MUST be omitted"."""
+        if not _OAUTH_ENABLED:
+            pytest.skip("No OAuth resource identifier configured")
+        response = app_client.get(_OAUTH_METADATA_PATH)
+        assert response.status_code == 200
+        body = response.json()
+        assert "resource" in body
+        assert all(value for value in body.values()), body
+
+    def test_cacheable(self, app_client: TestClient) -> None:
+        """RFC 9728 section 7.10 asks for a cache lifetime on the document."""
+        if not _OAUTH_ENABLED:
+            pytest.skip("No OAuth resource identifier configured")
+        cache_control = app_client.get(_OAUTH_METADATA_PATH).headers["cache-control"]
+        assert "max-age=" in cache_control
+
+    def test_no_auth_required(self, enforced_auth_client: TestClient) -> None:
+        """Credentials never change the document, and it never answers 401.
+
+        Bootstrapping starts from a 401, so a client reads this document with no
+        usable credential in hand; requiring one would make it unreachable. The
+        client here faces an armed API key check — proven by the authenticated
+        route refusing it — so the document is read exactly as a credential-less
+        agent reads it against a deployment that enforces authentication.
+
+        Ref: stdapi/auth.py:authenticate
+        """
+        assert enforced_auth_client.get("/v1/models").status_code == 401
+
+        anonymous = enforced_auth_client.get(_OAUTH_METADATA_PATH)
+        bad_key = enforced_auth_client.get(
+            _OAUTH_METADATA_PATH, headers={"Authorization": "Bearer wrong-key"}
+        )
+        assert anonymous.status_code != 401
+        assert bad_key.status_code == anonymous.status_code
+        assert bad_key.json() == anonymous.json()
+
+    def test_accepted_by_the_mcp_client_sdk(self, app_client: TestClient) -> None:
+        """The served document validates against the model a real MCP client parses it with.
+
+        The SDK requires at least one ``authorization_servers`` entry, so this
+        pins conformance to the client rather than to our reading of the RFC.
+
+        Ref: mcp/shared/auth.py:ProtectedResourceMetadata
+        """
+        if not _OAUTH_ENABLED:
+            pytest.skip("No OAuth resource identifier configured")
+        from mcp.shared.auth import ProtectedResourceMetadata  # noqa: PLC0415
+
+        metadata = ProtectedResourceMetadata.model_validate_json(
+            app_client.get(_OAUTH_METADATA_PATH).content
+        )
+        assert len(metadata.authorization_servers) >= 1
+
+    def test_resource_covers_the_urls_clients_dial(
+        self, app_client: TestClient
+    ) -> None:
+        """The published ``resource`` matches the MCP endpoints an agent connects to.
+
+        Both SDKs compare the origin exactly and require the published resource
+        to be a prefix of the dialled URL, so an origin-level identifier has to
+        cover ``/mcp`` and ``/sse`` while still rejecting another host. The value
+        is read out of the served document, so publishing a path-bearing or
+        rewritten identifier fails here.
+
+        Ref: mcp/shared/auth_utils.py:check_resource_allowed
+        """
+        if not _OAUTH_ENABLED:
+            pytest.skip("No OAuth resource identifier configured")
+        from mcp.shared.auth_utils import check_resource_allowed  # noqa: PLC0415
+
+        resource = app_client.get(_OAUTH_METADATA_PATH).json()["resource"]
+        for path in ("", "/mcp", "/sse", "/v1/models"):
+            assert check_resource_allowed(
+                requested_resource=f"{resource}{path}", configured_resource=resource
+            )
+        assert not check_resource_allowed(
+            requested_resource="https://elsewhere.example.com/mcp",
+            configured_resource=resource,
+        )
+
+    def test_absent_when_no_resource_identifier_is_configured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With the identifier unset the route answers 404 and the catalog drops the link.
+
+        A hollow document is worse than none: the TypeScript MCP SDK treats a
+        missing ``authorization_servers`` as "the gateway is its own
+        authorization server" and walks the user to a URL that does not exist,
+        while a 404 is the one status both SDKs' fallback chains handle.
+
+        Every payload is built at import time, so the module is re-executed
+        under the unset setting -- as a private copy rather than a reload, which
+        would replace the live application's own payloads with these.
+        """
+        from importlib.util import find_spec, module_from_spec  # noqa: PLC0415
+
+        from fastapi import FastAPI  # noqa: PLC0415
+        from starlette.testclient import TestClient  # noqa: PLC0415
+
+        monkeypatch.setattr(SETTINGS, "oauth_resource_identifier", None)
+        spec = find_spec("stdapi.routes.core_root")
+        assert spec is not None
+        assert spec.loader is not None
+        unconfigured = module_from_spec(spec)
+        spec.loader.exec_module(unconfigured)
+
+        assert unconfigured.WWW_AUTHENTICATE_CHALLENGE == "Bearer"
+        app = FastAPI()
+        app.include_router(unconfigured.router)
+        client = TestClient(app)
+
+        response = client.get(_OAUTH_METADATA_PATH)
+        assert response.status_code == 404
+        assert response.json() == {
+            "error": "OAuth 2.0 protected resource metadata is not configured"
+        }
+        catalog = client.get("/.well-known/api-catalog").json()
+        assert _OAUTH_RELATION not in catalog["linkset"][0]
+        assert "oauth-protected-resource" not in (
+            client.get("/").headers.get("link") or ""
+        )
+
+
+class TestWwwAuthenticateChallenge:
+    """Every 401 carries the ``WWW-Authenticate`` challenge an agent bootstraps from.
+
+    RFC 9110 section 15.5.2 makes the header mandatory on a 401, and RFC 9728
+    section 5.1 puts the metadata location in it. The challenge is uniform: it
+    never says why a credential was refused, so a missing and a wrong one stay
+    indistinguishable.
+
+    Ref: https://www.rfc-editor.org/rfc/rfc9110.html#section-15.5.2
+         stdapi/main.py:set_www_authenticate_header
+    """
+
+    #: A route that authenticates, and one that does not exist on any surface.
+    _AUTHENTICATED_PATH = "/v1/models"
+
+    #: Each MCP mount, the method its 401 is met on, and whether it is enabled here.
+    _MCP_MOUNTS = (
+        ("/mcp", "POST", SETTINGS.enable_mcp_streamable_http),
+        ("/sse", "GET", SETTINGS.enable_mcp_sse),
+    )
+
+    @staticmethod
+    def _expected_challenge() -> str:
+        """Rebuild the challenge from the settings the deployment was given."""
+        if not _OAUTH_ENABLED:
+            return "Bearer"
+        metadata_url = f"{SETTINGS.oauth_resource_identifier}{_OAUTH_METADATA_PATH}"
+        parameters = [f'resource_metadata="{metadata_url}"']
+        if SETTINGS.oauth_scopes_supported:
+            parameters.append(f'scope="{" ".join(SETTINGS.oauth_scopes_supported)}"')
+        return f"Bearer {', '.join(parameters)}"
+
+    def test_missing_and_wrong_credentials_get_the_same_challenge(
+        self, enforced_auth_client: TestClient
+    ) -> None:
+        """A 401 always carries the challenge, and it is identical either way.
+
+        RFC 6750 section 3 asks a 401 for a credential-less request to carry no
+        ``error`` code; keeping it off both responses is also what stops the
+        header from telling a prober whether a key exists.
+        """
+        expected = self._expected_challenge()
+
+        missing = enforced_auth_client.get(self._AUTHENTICATED_PATH)
+        wrong = enforced_auth_client.get(
+            self._AUTHENTICATED_PATH, headers={"Authorization": "Bearer wrong-key"}
+        )
+
+        assert missing.status_code == 401
+        assert wrong.status_code == 401
+        assert missing.headers["www-authenticate"] == expected
+        assert wrong.headers["www-authenticate"] == expected
+        assert "error=" not in expected
+
+    @pytest.mark.parametrize(("path", "method", "enabled"), _MCP_MOUNTS)
+    def test_carried_by_the_mcp_transport_too(
+        self, enforced_auth_client: TestClient, path: str, method: str, enabled: bool
+    ) -> None:
+        """Each MCP mount answers 401 with the same challenge as the REST routes.
+
+        An MCP client only ever meets the gateway through its mount, so a
+        challenge missing here leaves it with nothing to bootstrap from. Both
+        mounts are checked against ``LOGGING_PATHS_IGNORE`` whatever the enabled
+        transports are: an exempt path skips the setter entirely, which is how a
+        mount would lose its challenge without any route changing.
+
+        Ref: stdapi/monitoring.py:LOGGING_PATHS_IGNORE
+        """
+        from stdapi.monitoring import LOGGING_PATHS_IGNORE  # noqa: PLC0415
+
+        assert path not in LOGGING_PATHS_IGNORE
+        if not enabled:
+            pytest.skip(f"The MCP transport mounted on {path} is disabled")
+
+        response = enforced_auth_client.request(
+            method,
+            path,
+            json=(
+                {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+                if method == "POST"
+                else None
+            ),
+            headers={"Accept": "application/json, text/event-stream"},
+        )
+
+        assert response.status_code == 401
+        assert response.headers["www-authenticate"] == self._expected_challenge()
+
+    def test_absent_on_responses_that_are_not_401(
+        self, enforced_auth_client: TestClient
+    ) -> None:
+        """A 404 carries no challenge, so the header stays a credential signal.
+
+        The path is deliberately one that is not log-exempt: an exempt path
+        never reaches the setter, so it could not police the status guard.
+        """
+        response = enforced_auth_client.get("/v1/does-not-exist")
+        assert response.status_code == 404
+        assert "www-authenticate" not in response.headers
+
+    def test_readable_by_a_browser_hosted_client(
+        self, enforced_auth_client: TestClient
+    ) -> None:
+        """A cross-origin 401 marks the challenge as readable by the browser.
+
+        ``www-authenticate`` is not a CORS-safelisted response header, so a
+        client running in a page — an allowed origin included — reads ``null``
+        from it unless the response names it as exposed, and loses both the
+        metadata location and the scopes it has to ask a token for.
+
+        Ref: https://www.rfc-editor.org/rfc/rfc9728.html
+        """
+        if not SETTINGS.cors_allow_origins:
+            pytest.skip("No CORS origin is allowed in this environment")
+
+        response = enforced_auth_client.get(
+            self._AUTHENTICATED_PATH, headers={"Origin": "https://client.example"}
+        )
+
+        assert response.status_code == 401
+        exposed = {
+            header.strip().lower()
+            for header in response.headers["access-control-expose-headers"].split(",")
+        }
+        assert "www-authenticate" in exposed
+
+    def test_read_by_the_mcp_client_sdk(self, enforced_auth_client: TestClient) -> None:
+        """A real MCP client extracts the metadata URL and the scopes from the header.
+
+        The parameter values must be quoted: RFC 9110's ``tchar`` set excludes
+        ``:`` and ``/``, and the SDK's deprecated extractor only matches the
+        quoted form.
+
+        Ref: mcp/client/auth/utils.py:extract_resource_metadata_from_www_auth
+        """
+        if not _OAUTH_ENABLED:
+            pytest.skip("No OAuth resource identifier configured")
+        from mcp.client.auth.utils import (  # noqa: PLC0415
+            extract_resource_metadata_from_www_auth,
+            extract_scope_from_www_auth,
+        )
+
+        response = enforced_auth_client.get(self._AUTHENTICATED_PATH)
+
+        assert extract_resource_metadata_from_www_auth(response) == (
+            f"{SETTINGS.oauth_resource_identifier}{_OAUTH_METADATA_PATH}"
+        )
+        if SETTINGS.oauth_scopes_supported:
+            assert extract_scope_from_www_auth(response) == " ".join(
+                SETTINGS.oauth_scopes_supported
+            )

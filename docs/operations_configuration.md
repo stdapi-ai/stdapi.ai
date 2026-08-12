@@ -247,6 +247,13 @@ Amazon Cognito user pool tokens are an alternative to the API key — see [Amazo
 | [`AWS_COGNITO_ACCEPT_ID_TOKEN`](#aws-cognito-accept-id-token)       | `false`    | Also accept identity tokens, not only access tokens              |
 | [`AWS_COGNITO_ISSUER_TYPE`](#aws-cognito-issuer-type)               | `original` | Pool issuer configuration: `original` or `updated`               |
 
+Publishing where tokens come from lets an AI agent authenticate itself — see [Authentication Discovery](#oauth-discovery):
+
+| Variable                                                              | Default | Description                                                          |
+|-----------------------------------------------------------------------|---------|----------------------------------------------------------------------|
+| [`OAUTH_RESOURCE_IDENTIFIER`](#oauth-resource-identifier)             | None    | Public URL clients dial (publishes the discovery document)           |
+| [`OAUTH_AUTHORIZATION_SERVERS`](#oauth-authorization-servers)         | None    | Issuer URLs of the authorization servers (required with the above)   |
+| [`OAUTH_SCOPES_SUPPORTED`](#oauth-scopes-supported)                   | None    | Scopes a token needs, advertised to clients                          |
 
 ### :material-api: API Compatibility { #summary-api-compatibility }
 
@@ -2024,6 +2031,60 @@ export AWS_COGNITO_ACCEPT_ID_TOKEN=true
 
 ```bash
 export AWS_COGNITO_ISSUER_TYPE=updated
+```
+
+### Authentication Discovery for Agents { #oauth-discovery }
+
+Publishes, at `/.well-known/oauth-protected-resource`, where clients obtain a token, and points every `401 Unauthorized` at that document. An AI agent — or any MCP client — can then authenticate against this deployment without having been configured for it first. See [Authentication Discovery for Agents](operations_authentication_security.md#authentication-discovery-for-agents) for the full flow.
+
+Nothing is published until `OAUTH_RESOURCE_IDENTIFIER` is set. The document is public and unauthenticated, since a client reads it before it has any credential.
+
+#### `OAUTH_RESOURCE_IDENTIFIER` { #oauth-resource-identifier }
+
+:octicons-package-24: **Purpose**
+:   Public URL clients use to reach this deployment, published as the identity of the protected resource
+
+:octicons-gear-24: **Default**
+:   None — no discovery document is published, and `401` responses only state that a bearer token is expected
+
+:octicons-alert-24: **Requirement**
+:   Must be the exact origin clients dial — scheme and host, an explicit port only when it is not the default one for the scheme, and no path, query or fragment. Clients compare it character by character against the URL they used, so `https://api.example.com` and `https://api.example.com:443` are not interchangeable. Requires `OAUTH_AUTHORIZATION_SERVERS`.
+
+```bash
+export OAUTH_RESOURCE_IDENTIFIER=https://api.example.com
+```
+
+#### `OAUTH_AUTHORIZATION_SERVERS` { #oauth-authorization-servers }
+
+:octicons-package-24: **Purpose**
+:   Issuer URLs of the OAuth 2.0 authorization servers that issue tokens for this deployment, comma-separated
+
+:octicons-gear-24: **Default**
+:   None
+
+:octicons-workflow-24: **Effect**
+:   A client reads each issuer's own metadata to find where to sign in, so this deployment never describes the sign-in flow itself. An [Amazon Cognito user pool](https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-tokens-verifying-a-jwt.html) issues `https://cognito-idp.<region>.amazonaws.com/<pool-id>`, or `https://issuer-cognito-idp.<region>.amazonaws.com/<pool-id>` when [`AWS_COGNITO_ISSUER_TYPE`](#aws-cognito-issuer-type) is `updated`. A load balancer or API gateway authenticating in front of stdapi.ai publishes the issuer of whichever provider it uses.
+
+:octicons-alert-24: **Requirement**
+:   Each entry is an `https` URL with no query or fragment. Required when `OAUTH_RESOURCE_IDENTIFIER` is set.
+
+```bash
+export OAUTH_AUTHORIZATION_SERVERS=https://cognito-idp.eu-west-3.amazonaws.com/eu-west-3_a1b2c3d4e
+```
+
+#### `OAUTH_SCOPES_SUPPORTED` { #oauth-scopes-supported }
+
+:octicons-package-24: **Purpose**
+:   Scopes a token needs to call this API, comma-separated
+
+:octicons-gear-24: **Default**
+:   None — no scope is advertised, and a client asks for whatever its own configuration names
+
+:octicons-workflow-24: **Effect**
+:   Advertised both in the discovery document and in the `401` challenge, so a client asks its authorization server for the right scopes on its first attempt. Set it to the same value as [`AWS_COGNITO_REQUIRED_SCOPES`](#aws-cognito-required-scopes) when a user pool authenticates clients.
+
+```bash
+export OAUTH_SCOPES_SUPPORTED=stdapi/invoke
 ```
 
 ---

@@ -266,6 +266,13 @@ environ.update(
         # Ensure all optional features are enabled so their tests can run.
         "aws_bedrock_allow_application_inference_profile_arn": "true",
         "aws_bedrock_allow_prompt_router_arn": "true",
+        # OAuth 2.0 discovery: publishes the protected resource metadata document
+        # and puts its location in the challenge every 401 carries.
+        "oauth_resource_identifier": "https://gateway.tests.stdapi.ai",
+        "oauth_authorization_servers": (
+            "https://cognito-idp.eu-west-3.amazonaws.com/eu-west-3_tEsTpOoL1"
+        ),
+        "oauth_scopes_supported": "stdapi/invoke",
         # Ensure invalid inputs in tests are detected.
         "strict_input_validation": "true",
         # Avoid "too many reqsuests" error with Pytest xdist and many CPU

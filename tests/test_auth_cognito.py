@@ -29,6 +29,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from jwt import encode as jwt_encode
 from jwt.utils import base64url_encode, to_base64url_uint
 from pydantic import SecretStr, ValidationError
+from starlette.testclient import TestClient
 
 import stdapi.auth
 import stdapi.auth_cognito
@@ -38,6 +39,7 @@ from stdapi.auth_cognito import CognitoAuthenticator
 from stdapi.config import SETTINGS, _Settings
 from stdapi.exceptions import ServerError
 from stdapi.monitoring import PRINCIPAL, Principal
+from stdapi.routes import core_models
 from tests._helpers import make_event_log
 
 if TYPE_CHECKING:
@@ -1697,3 +1699,91 @@ class TestCredentialDispatch:
         await authenticate(credentials=credentials, x_api_key=None)
 
         assert credentials.credentials == ""
+
+
+class TestUnauthorizedResponse:
+    """What a client actually receives when a token is refused.
+
+    Ref: stdapi/main.py:set_www_authenticate_header
+         stdapi/utils.py:hide_security_details
+    """
+
+    @pytest.fixture
+    async def client(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        make_authenticator: Callable[..., Coroutine[Any, Any, Harness]],
+    ) -> TestClient:
+        """Lifespan-free client whose only authentication method is the user pool."""
+        from stdapi.main import app  # noqa: PLC0415
+
+        harness = await make_authenticator()
+        monkeypatch.setattr(stdapi.auth, "_auth_handler", AuthenticationHandler())
+        monkeypatch.setattr(
+            stdapi.auth, "_cognito_authenticator", harness.authenticator
+        )
+        return TestClient(app)
+
+    @pytest.mark.parametrize(
+        ("path", "headers"),
+        [
+            ("/v1/models", {}),
+            ("/anthropic/v1/models", {"anthropic-version": "2023-06-01"}),
+        ],
+    )
+    def test_rejected_token_answers_an_opaque_challenge(
+        self,
+        client: TestClient,
+        foreign_key: RSAPrivateKey,
+        path: str,
+        headers: dict[str, str],
+    ) -> None:
+        """Both envelopes answer 401, a bearer challenge, and no reason at all.
+
+        The challenge may carry discovery parameters (see
+        ``TestWwwAuthenticateChallenge``), but never an ``error`` code: that is
+        what would tell a prober which half of the credential was wrong.
+
+        Ref: https://www.rfc-editor.org/rfc/rfc9110.html#name-401-unauthorized
+             stdapi/main.py:set_www_authenticate_header
+        """
+        response = client.get(
+            path,
+            headers={
+                **headers,
+                "Authorization": f"Bearer {mint(access_claims(), foreign_key)}",
+            },
+        )
+
+        assert response.status_code == 401
+        challenge = response.headers["www-authenticate"]
+        assert challenge == "Bearer" or challenge.startswith("Bearer ")
+        assert "error=" not in challenge
+        assert "Unauthorized" in response.text
+        assert "signature" not in response.text.lower()
+
+    def test_valid_token_reaches_the_route(
+        self,
+        client: TestClient,
+        signing_keys: dict[str, RSAPrivateKey],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An authenticated route answers normally with a valid token, and sends no challenge.
+
+        Ref: https://www.rfc-editor.org/rfc/rfc9110.html
+             stdapi/main.py:set_www_authenticate_header
+        """
+
+        async def _no_models() -> bool:
+            return False
+
+        monkeypatch.setattr(core_models, "initialize_bedrock_models", _no_models)
+        response = client.get(
+            "/search_models",
+            headers={
+                "Authorization": f"Bearer {mint(access_claims(), signing_keys[ACCESS_KID])}"
+            },
+        )
+
+        assert response.status_code == 200
+        assert "www-authenticate" not in response.headers
