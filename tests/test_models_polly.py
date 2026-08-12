@@ -10,10 +10,20 @@ from shutil import which
 from typing import TYPE_CHECKING
 
 import pytest
+from aws_sdk_polly.models import (
+    AudioEvent,
+    StartSpeechSynthesisStreamActionStreamCloseStreamEvent,
+    StartSpeechSynthesisStreamEventStreamAudioEvent,
+    StartSpeechSynthesisStreamEventStreamStreamClosedEvent,
+    StreamClosedEvent,
+    ValidationException,
+    ValidationExceptionReason,
+)
 from botocore.exceptions import ClientError, ParamValidationError
 from httpx import ASGITransport, AsyncClient
 
 import stdapi.aws
+import stdapi.aws_bidi
 import stdapi.aws_s3
 from stdapi import usage
 from stdapi.api_errors import ApiError
@@ -24,12 +34,15 @@ from stdapi.models.audio import amazon_polly, get_audio_model
 from stdapi.models.audio.amazon_polly import (
     _engine_voice_regions,
     _PollyExtraParams,
-    _requires_synthesis_job,
     _select_voice,
+    _stream_text_events,
+    _synthesis_transport,
     initialize_polly_models,
 )
 from stdapi.monitoring import REQUEST_LOG, EventLog
+from stdapi.pricing import Dimension
 from tests._helpers import make_client_error, make_model_details
+from tests.test_aws_bidi import FakeDuplexStream
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapping
@@ -1038,45 +1051,102 @@ class TestSynthesizeSpeechTextType:
 
 
 class TestLongInputSelection:
-    """_requires_synthesis_job: which inputs the synchronous call cannot serve.
+    """_synthesis_transport: which way each input is synthesized.
 
-    Both limits are real and independent: 3,000 billed characters and 6,000
-    total, SSML tags counting only towards the second. A selector keyed on
-    ``len(input)`` alone would push a tag-heavy but short document through the
-    slower path, and let a 3,001-character one fail against Polly instead.
-    The job limits belong to a server able to run a job: where none can run,
-    the only limit that exists is the single call's.
+    Both single-call limits are real and independent: 3,000 billed characters
+    and 6,000 total, SSML tags counting only towards the second. A selector
+    keyed on ``len(input)`` alone would push a tag-heavy but short document
+    through a slower path, and let a 3,001-character one fail against Polly
+    instead. Above them the answer depends on what the deployment can do:
+    incremental synthesis has no storage requirement but a bounded duration,
+    a job needs a bucket, and where neither can run the only limit that exists
+    is the single call's.
 
     Ref: https://docs.aws.amazon.com/polly/latest/dg/limits.html
-         stdapi/models/audio/amazon_polly.py:_requires_synthesis_job
+         https://docs.aws.amazon.com/polly/latest/dg/bidirectional-streaming-choosing.html
+         stdapi/models/audio/amazon_polly.py:_synthesis_transport
     """
 
     def test_input_at_the_billed_limit_stays_synchronous(self) -> None:
         """3,000 billed characters is accepted by SynthesizeSpeech itself."""
-        assert _requires_synthesis_job("a" * 3000, "text", job_available=True) is False
+        assert (
+            _synthesis_transport(
+                "a" * 3000, "text", streamable=True, job_available=True
+            )
+            == "call"
+        )
 
-    def test_input_above_the_billed_limit_needs_a_task(self) -> None:
+    def test_input_above_the_billed_limit_needs_another_path(self) -> None:
         """One character more than the billed limit is rejected by SynthesizeSpeech."""
-        assert _requires_synthesis_job("a" * 3001, "text", job_available=True) is True
+        assert (
+            _synthesis_transport(
+                "a" * 3001, "text", streamable=False, job_available=True
+            )
+            == "job"
+        )
+
+    def test_a_streamable_long_input_is_streamed_rather_than_scheduled(self) -> None:
+        """Incremental synthesis is preferred to a job: audio starts immediately."""
+        assert (
+            _synthesis_transport(
+                "a" * 3001, "text", streamable=True, job_available=True
+            )
+            == "stream"
+        )
+
+    def test_a_streamable_input_needs_no_storage(self) -> None:
+        """A deployment with no bucket still serves a long streamable input."""
+        assert (
+            _synthesis_transport(
+                "a" * 3001, "text", streamable=True, job_available=False
+            )
+            == "stream"
+        )
 
     def test_ssml_tags_are_not_billed_characters(self) -> None:
         """A document billed under the limit stays synchronous despite its tags."""
         document = f"<speak>{'<break time="1s"/>' * 100}{'a' * 2900}</speak>"
 
         assert len(document) > 3000, "the raw document must exceed the billed limit"
-        assert _requires_synthesis_job(document, "ssml", job_available=True) is False
+        assert (
+            _synthesis_transport(document, "ssml", streamable=False, job_available=True)
+            == "call"
+        )
 
     def test_ssml_above_the_total_limit_needs_a_task(self) -> None:
         """Tags alone can exceed the 6,000-character total limit."""
         document = f"<speak>hi{'<break time="1s"/>' * 340}</speak>"
 
         assert len(document) > 6000
-        assert _requires_synthesis_job(document, "ssml", job_available=True) is True
+        assert (
+            _synthesis_transport(document, "ssml", streamable=False, job_available=True)
+            == "job"
+        )
+
+    def test_beyond_one_stream_the_input_is_scheduled_instead(self) -> None:
+        """A stream lasts ten minutes, so longer text goes back to a job."""
+        assert (
+            _synthesis_transport(
+                "a" * 20_001, "text", streamable=True, job_available=True
+            )
+            == "job"
+        )
+
+    def test_at_the_stream_limit_the_input_is_still_streamed(self) -> None:
+        """The boundary itself is served incrementally."""
+        assert (
+            _synthesis_transport(
+                "a" * 20_000, "text", streamable=True, job_available=True
+            )
+            == "stream"
+        )
 
     def test_input_above_the_task_billed_limit_is_rejected(self) -> None:
         """Beyond 100,000 billed characters, the error states the limit."""
         with pytest.raises(ApiError) as excinfo:
-            _requires_synthesis_job("a" * 100_001, "text", job_available=True)
+            _synthesis_transport(
+                "a" * 100_001, "text", streamable=False, job_available=True
+            )
 
         assert excinfo.value.status == 400
         assert "100,000" in str(excinfo.value)
@@ -1087,25 +1157,113 @@ class TestLongInputSelection:
 
         assert len(document) > 200_000
         with pytest.raises(ApiError) as excinfo:
-            _requires_synthesis_job(document, "ssml", job_available=True)
+            _synthesis_transport(document, "ssml", streamable=False, job_available=True)
 
         assert excinfo.value.status == 400
         assert "200,000" in str(excinfo.value)
 
     @pytest.mark.parametrize("length", [3001, 100_001], ids=["above_call", "above_job"])
     def test_without_a_job_only_the_single_call_limit_exists(self, length: int) -> None:
-        """No job means no job limit: both bands name the 3,000-character one.
+        """No job and no stream means no other limit: both bands name 3,000.
 
         A server that cannot run a job never accepts 100,000 characters, so
         quoting that limit would advertise a length it always rejects.
         """
         with pytest.raises(ApiError) as excinfo:
-            _requires_synthesis_job("a" * length, "text", job_available=False)
+            _synthesis_transport(
+                "a" * length, "text", streamable=False, job_available=False
+            )
 
         message = str(excinfo.value)
         assert excinfo.value.status == 400
         assert "3,000" in message
         assert "100,000" not in message
+
+    def test_a_streamable_input_beyond_one_stream_names_the_stream_limit(self) -> None:
+        """With no job to fall back on, the rejection states what does fit."""
+        with pytest.raises(ApiError) as excinfo:
+            _synthesis_transport(
+                "a" * 20_001, "text", streamable=True, job_available=False
+            )
+
+        message = str(excinfo.value)
+        assert excinfo.value.status == 400
+        assert "20,000" in message
+        assert "3,000" not in message, "this input may be far longer than one call"
+
+
+class TestStreamTextEvents:
+    """_stream_text_events: how one input becomes the events a stream carries.
+
+    Each event carries at most the same 3,000 billed / 6,000 total characters
+    a single call takes, and an SSML document may not span events, so the
+    speed envelope is rebuilt around every chunk. Polly reassembles the text
+    itself, so a chunk boundary does not have to be a sentence boundary.
+
+    Ref: https://docs.aws.amazon.com/polly/latest/dg/bidirectional-streaming-lifecycle.html
+         stdapi/models/audio/amazon_polly.py:_stream_text_events
+    """
+
+    def test_short_text_is_sent_as_one_plain_event(self) -> None:
+        """Text within a single event's limit is not split."""
+        (event,) = _stream_text_events("Hello there.", 1.0)
+
+        assert event.text == "Hello there."
+        assert event.text_type == "text"
+
+    def test_long_text_is_split_into_events_within_the_event_limit(self) -> None:
+        """Every event stays under the per-event limit, and nothing is lost."""
+        text = "hello world. " * 1000  # 13,000 characters
+
+        events = _stream_text_events(text, 1.0)
+
+        assert len(events) > 1
+        assert all(len(event.text) <= 3000 for event in events)
+        assert "".join(event.text for event in events) == text
+
+    def test_chunks_break_on_a_space_rather_than_inside_a_word(self) -> None:
+        """A word split across events would be pronounced as two."""
+        text = "antidisestablishmentarianism " * 200  # 5,800 characters
+
+        events = _stream_text_events(text, 1.0)
+
+        assert len(events) == 2
+        assert all(
+            word == "antidisestablishmentarianism"
+            for event in events
+            for word in event.text.split()
+        ), "a chunk boundary must not cut a word in half"
+        assert "".join(event.text for event in events) == text
+
+    def test_text_without_a_break_point_is_split_at_the_limit(self) -> None:
+        """An unbreakable run must still be sent, not rejected."""
+        events = _stream_text_events("a" * 4000, 1.0)
+
+        assert [len(event.text) for event in events] == [3000, 1000]
+
+    def test_a_chunk_that_opens_with_markup_is_still_plain_text(self) -> None:
+        """Only the caller's own document is SSML, never a chunk boundary's text.
+
+        A chunk starting on a literal ``<speak>`` inside prose would otherwise
+        be sent as a document and rejected as malformed markup.
+        """
+        text = "word " * 599 + "<speak>and the rest is prose"
+
+        events = _stream_text_events(text, 1.0)
+
+        assert len(events) > 1
+        assert all(event.text_type == "text" for event in events)
+        assert "".join(event.text for event in events) == text
+
+    def test_a_speed_envelope_is_rebuilt_around_every_chunk(self) -> None:
+        """Each event is a self-contained SSML document, as the stream requires."""
+        events = _stream_text_events("hello world. " * 1000, 1.5)
+
+        assert len(events) > 1
+        for event in events:
+            assert event.text_type == "ssml"
+            assert event.text.startswith('<speak><prosody rate="150%">')
+            assert event.text.endswith("</prosody></speak>")
 
 
 #: Task identifier the stubbed asynchronous synthesis answers with.
@@ -1555,3 +1713,357 @@ class TestSynthesisJobPath:
         )
         assert "polly" not in error["message"].lower()
         assert not client.fetched, "a task that never started has no audio to serve"
+
+
+def _billed_characters() -> int:
+    """Return the character count of the request's single Polly usage record."""
+    (record,) = usage.USAGE.get().values()
+    return record.quantities[Dimension.INPUT_CHARACTERS]
+
+
+class _FakeBidiPollyClient:
+    """Fake bidirectional Polly client returning one scripted duplex stream."""
+
+    def __init__(self, stream: FakeDuplexStream) -> None:
+        self.stream = stream
+        self.inputs: list[Any] = []
+
+    async def start_speech_synthesis_stream(self, input: Any) -> FakeDuplexStream:  # noqa: A002, ANN401
+        """Record the synthesis parameters and hand out the scripted stream."""
+        self.inputs.append(input)
+        return self.stream
+
+
+def _audio(payload: bytes) -> StartSpeechSynthesisStreamEventStreamAudioEvent:
+    """Build one audio event carrying *payload*."""
+    return StartSpeechSynthesisStreamEventStreamAudioEvent(
+        AudioEvent(audio_chunk=payload)
+    )
+
+
+def _closed(characters: int) -> StartSpeechSynthesisStreamEventStreamStreamClosedEvent:
+    """Build the trailing event Polly bills the session with."""
+    return StartSpeechSynthesisStreamEventStreamStreamClosedEvent(
+        StreamClosedEvent(request_characters=characters)
+    )
+
+
+def _validation_error(message: str) -> ValidationException:
+    """Build the modeled rejection a stream fails with."""
+    return ValidationException(
+        message=message, reason=ValidationExceptionReason("other")
+    )
+
+
+@pytest.fixture
+async def stub_bidi_polly(
+    monkeypatch: pytest.MonkeyPatch, _request_context: None
+) -> Callable[[FakeDuplexStream], _FakeBidiPollyClient]:
+    """Register generative ``Joanna`` in both regions, with no bucket anywhere.
+
+    Returns:
+        Factory binding a fake bidirectional client serving *stream* in every
+        region, and returning it for request assertions.
+    """
+    _patch_voices(
+        monkeypatch,
+        {
+            ("generative", "us-east-1"): {"Joanna"},
+            ("generative", "eu-west-1"): {"Joanna"},
+        },
+    )
+    await initialize_polly_models()
+    amazon_polly._VOICES_BY_NAME_LOWER["joanna"] = "Joanna"  # noqa: SLF001
+    monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
+    monkeypatch.setattr(SETTINGS, "aws_s3_regional_buckets", {})
+
+    def _bind(stream: FakeDuplexStream) -> _FakeBidiPollyClient:
+        client = _FakeBidiPollyClient(stream)
+        monkeypatch.setattr(
+            stdapi.aws_bidi,
+            "_BIDI_CLIENTS",
+            {"polly": {"us-east-1": client, "eu-west-1": client}},
+        )
+        return client
+
+    return _bind
+
+
+class TestStreamedSynthesis:
+    """AudioModel.tts: a long generative input is synthesized incrementally.
+
+    StartSpeechSynthesisStream returns audio as it is produced, needs no
+    storage, and reports what it billed only in its closing event. It accepts
+    the generative engine alone and cannot produce speech marks, so every
+    other long input keeps the path it had.
+
+    Ref: https://docs.aws.amazon.com/polly/latest/dg/bidirectional-streaming-lifecycle.html
+         https://docs.aws.amazon.com/polly/latest/APIReference/API_StartSpeechSynthesisStream.html
+         stdapi/models/audio/amazon_polly.py:_synthesize_streamed_text
+    """
+
+    async def test_audio_is_streamed_and_billed_from_the_closing_event(
+        self, stub_bidi_polly: Callable[[FakeDuplexStream], _FakeBidiPollyClient]
+    ) -> None:
+        """Every audio chunk is served, and the session's own count is billed."""
+        text = "hello world. " * 300  # 3,900 characters
+        stub_bidi_polly(
+            FakeDuplexStream(
+                events=[_audio(b"chunk-1"), _audio(b"chunk-2"), _closed(len(text))]
+            )
+        )
+
+        response = await get_audio_model("amazon.polly-generative").tts(
+            text=text, voice="Joanna", resp_format="mp3"
+        )
+        audio = b"".join([chunk async for chunk in response["audio_stream"]])
+
+        assert audio == b"chunk-1chunk-2"
+        (key,) = usage.USAGE.get()
+        assert key.model == "amazon.polly-generative"
+        assert _billed_characters() == len(text)
+        assert response["input_tokens"] == len(text)
+
+    async def test_the_synthesis_parameters_travel_in_the_stream_request(
+        self, stub_bidi_polly: Callable[[FakeDuplexStream], _FakeBidiPollyClient]
+    ) -> None:
+        """Voice, engine, format and the extra parameters open the stream."""
+        client = stub_bidi_polly(FakeDuplexStream(events=[_closed(3001)]))
+
+        response = await get_audio_model("amazon.polly-generative").tts(
+            text="a" * 3001,
+            voice="Joanna",
+            resp_format="ogg",
+            extra_params={"LexiconNames": ["mylex"], "SampleRate": 16000},
+        )
+        await response["audio_stream"].aclose()
+
+        (request,) = client.inputs
+        assert request.engine == "generative"
+        assert request.voice_id == "Joanna"
+        assert request.output_format == "ogg_vorbis"
+        assert request.sample_rate == "16000"
+        assert request.lexicon_names == ["mylex"]
+
+    async def test_the_text_is_sent_then_the_input_half_closed(
+        self, stub_bidi_polly: Callable[[FakeDuplexStream], _FakeBidiPollyClient]
+    ) -> None:
+        """Polly ends a session on a close event followed by an input half-close.
+
+        Without the half-close the service keeps waiting for the next input
+        event and drops the session five seconds later, truncating the audio.
+        """
+        text = "hello world. " * 500  # 6,500 characters
+        stream = FakeDuplexStream(events=[_audio(b"a"), _closed(len(text))])
+        stub_bidi_polly(stream)
+
+        response = await get_audio_model("amazon.polly-generative").tts(
+            text=text, voice="Joanna", resp_format="mp3"
+        )
+        assert b"".join([chunk async for chunk in response["audio_stream"]]) == b"a"
+
+        sent = stream.input_stream.sent
+        assert len(sent) == 4, "three text events and one close event"
+        assert "".join(event.value.text for event in sent[:-1]) == text
+        assert isinstance(
+            sent[-1], StartSpeechSynthesisStreamActionStreamCloseStreamEvent
+        )
+        assert stream.input_stream.closed >= 1, "the input stream must be half-closed"
+
+    async def test_a_failure_after_the_first_chunk_still_bills_what_was_sent(
+        self, stub_bidi_polly: Callable[[FakeDuplexStream], _FakeBidiPollyClient]
+    ) -> None:
+        """A failed session sends no closing event, yet Polly billed the text."""
+        text = "a" * 3001
+        stub_bidi_polly(
+            FakeDuplexStream(
+                events=[_audio(b"partial")],
+                receive_error=_validation_error("Invalid SSML request"),
+            )
+        )
+
+        response = await get_audio_model("amazon.polly-generative").tts(
+            text=text, voice="Joanna", resp_format="mp3"
+        )
+        audio_stream = response["audio_stream"]
+        delivered = await anext(audio_stream)
+        with pytest.raises(ApiError) as excinfo:
+            await anext(audio_stream)
+
+        assert delivered == b"partial", "audio produced before the failure is delivered"
+        assert excinfo.value.status == 400
+        assert "Invalid SSML" not in str(excinfo.value), (
+            "the backend message must not reach the caller"
+        )
+        assert _billed_characters() == len(text)
+
+    async def test_text_that_could_not_be_sent_ends_the_response_in_an_error(
+        self, stub_bidi_polly: Callable[[FakeDuplexStream], _FakeBidiPollyClient]
+    ) -> None:
+        """Audio missing its text is a failure, never a shorter recording.
+
+        The service closes the session on the text it did receive, so the
+        response would otherwise end cleanly on a fraction of the input.
+        """
+        stub_bidi_polly(
+            FakeDuplexStream(
+                events=[_audio(b"partial"), _closed(11)],
+                send_error=_validation_error("Invalid inbound event"),
+            )
+        )
+
+        response = await get_audio_model("amazon.polly-generative").tts(
+            text="a" * 3001, voice="Joanna", resp_format="mp3"
+        )
+        with pytest.raises(ApiError) as excinfo:
+            assert [chunk async for chunk in response["audio_stream"]]
+
+        assert excinfo.value.status == 400
+        assert usage.USAGE.get(), "the characters the service did accept are billed"
+
+    async def test_a_client_leaving_early_still_bills_the_session(
+        self, stub_bidi_polly: Callable[[FakeDuplexStream], _FakeBidiPollyClient]
+    ) -> None:
+        """Abandoning the audio does not cancel what Polly already synthesized."""
+        text = "a" * 3001
+        stub_bidi_polly(FakeDuplexStream(events=[_audio(b"first"), _audio(b"second")]))
+
+        response = await get_audio_model("amazon.polly-generative").tts(
+            text=text, voice="Joanna", resp_format="mp3"
+        )
+        stream = response["audio_stream"]
+        assert await anext(stream) == b"first"
+        await stream.aclose()
+
+        assert _billed_characters() == len(text)
+
+    async def test_a_rejected_stream_is_a_caller_error_not_a_broken_response(
+        self, stub_bidi_polly: Callable[[FakeDuplexStream], _FakeBidiPollyClient]
+    ) -> None:
+        """A request the service refuses fails before any byte is promised."""
+        stub_bidi_polly(
+            FakeDuplexStream(open_error=_validation_error("Invalid VoiceId parameter"))
+        )
+
+        with pytest.raises(ApiError) as excinfo:
+            await get_audio_model("amazon.polly-generative").tts(
+                text="a" * 3001, voice="Joanna", resp_format="mp3"
+            )
+
+        assert excinfo.value.status == 400
+        assert "VoiceId" not in str(excinfo.value)
+        assert not usage.USAGE.get(), "nothing was synthesized"
+
+    async def test_a_stream_that_cannot_open_falls_back_to_a_job(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        stub_bidi_polly: Callable[[FakeDuplexStream], _FakeBidiPollyClient],
+        pending_cleanups: list[Awaitable[None]],
+        fake_clock: list[float],
+    ) -> None:
+        """Where a job can run, an unavailable stream is not a failed request.
+
+        A deployment upgraded without the new permission keeps working: the
+        request is served the way it was before, once.
+        """
+        stub_bidi_polly(
+            FakeDuplexStream(open_error=_validation_error("not authorized"))
+        )
+        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", "primary-bucket")
+        monkeypatch.setattr(
+            stdapi.aws_s3, "BUCKET_TO_REGION", {"primary-bucket": "us-east-1"}
+        )
+        job_client = _StubSynthesisJobClient(["completed"])
+
+        def _get_client(service: str, region: str | None = None) -> object:
+            job_client.clients.append((service, region))
+            return job_client
+
+        for module in (amazon_polly, stdapi.aws, stdapi.aws_s3):
+            monkeypatch.setattr(module, "get_client", _get_client)
+
+        response = await get_audio_model("amazon.polly-generative").tts(
+            text="a" * 3001, voice="Joanna", resp_format="mp3"
+        )
+        audio = b"".join([chunk async for chunk in response["audio_stream"]])
+
+        assert audio == b"long-audio"
+        assert len(job_client.requests) == 1
+        assert fake_clock == []
+        assert len(usage.USAGE.get()) == 1, "the abandoned stream must bill nothing"
+        assert _billed_characters() == 3001, "the job's own count is the billed one"
+        for cleanup in pending_cleanups:
+            await cleanup
+
+    async def test_a_non_generative_long_input_is_never_streamed(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        stub_synthesis_job: Callable[
+            [_StubSynthesisJobClient], _StubSynthesisJobClient
+        ],
+        pending_cleanups: list[Awaitable[None]],
+        fake_clock: list[float],
+    ) -> None:
+        """Only the generative engine streams, so the others keep the job path."""
+        stream = FakeDuplexStream(events=[_closed(3001)])
+        monkeypatch.setattr(
+            stdapi.aws_bidi,
+            "_BIDI_CLIENTS",
+            {"polly": {"us-east-1": _FakeBidiPollyClient(stream)}},
+        )
+        client = stub_synthesis_job(_StubSynthesisJobClient(["completed"]))
+
+        response = await get_audio_model("amazon.polly-neural").tts(
+            text="a" * 3001, voice="Joanna", resp_format="mp3"
+        )
+        audio = b"".join([chunk async for chunk in response["audio_stream"]])
+
+        assert audio == b"long-audio"
+        assert client.requests, "the job path must still serve the request"
+        assert not stream.input_stream.sent, "no stream may have been opened"
+        for cleanup in pending_cleanups:
+            await cleanup
+
+    async def test_speech_marks_are_never_streamed(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        stub_bidi_polly: Callable[[FakeDuplexStream], _FakeBidiPollyClient],
+    ) -> None:
+        """Timing marks are not an audio format a stream can produce.
+
+        The stream's ``OutputFormat`` has no ``json`` member, so a speech-marks
+        request that is too long for one call is rejected with the length it
+        accepts rather than silently served as audio.
+        """
+        stream = FakeDuplexStream(events=[_closed(3001)])
+        stub_bidi_polly(stream)
+
+        with pytest.raises(ApiError) as excinfo:
+            await get_audio_model("amazon.polly-generative").tts(
+                text="a" * 3001,
+                voice="Joanna",
+                resp_format="mp3",
+                extra_params={"SpeechMarkTypes": ["word"]},
+            )
+
+        assert excinfo.value.status == 400
+        assert "3,000" in str(excinfo.value)
+        assert not stream.input_stream.sent
+
+    async def test_a_caller_ssml_document_is_never_split_across_events(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        stub_bidi_polly: Callable[[FakeDuplexStream], _FakeBidiPollyClient],
+    ) -> None:
+        """An SSML document must be self-contained, so a long one cannot stream."""
+        stream = FakeDuplexStream(events=[_closed(3001)])
+        stub_bidi_polly(stream)
+        document = f"<speak>{'a' * 3001}</speak>"
+
+        with pytest.raises(ApiError) as excinfo:
+            await get_audio_model("amazon.polly-generative").tts(
+                text=document, voice="Joanna", resp_format="mp3"
+            )
+
+        assert excinfo.value.status == 400
+        assert not stream.input_stream.sent

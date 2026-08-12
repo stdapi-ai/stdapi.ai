@@ -243,7 +243,7 @@ Access every model available on Amazon Bedrock through a single, consistent API 
 - Output formats: MP3, PCM, Opus, AAC, FLAC, OGG Vorbis
 - Speed control (0.2× to 2.0×)
 - Automatic language detection via Amazon Comprehend
-- Long input — up to 100,000 characters per request, 24× OpenAI's limit ([S3 bucket required](api_openai_audio_speech.md#long-input))
+- Long input — up to 100,000 characters per request, 24× OpenAI's limit ([20,000 with a generative voice, which speaks it as the audio is delivered; an S3 bucket beyond that](api_openai_audio_speech.md#long-input))
 
 **Speech-to-Text (Amazon Transcribe):**
 

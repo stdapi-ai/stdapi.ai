@@ -1,15 +1,30 @@
 """Amazon Polly TTS model implementation."""
 
-from asyncio import gather, sleep
-from contextlib import contextmanager
+from asyncio import CancelledError, create_task, gather, sleep
+from contextlib import contextmanager, suppress
 from re import compile as re_compile
 from time import monotonic
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
+from aws_sdk_polly.models import (
+    CloseStreamEvent,
+    Engine,
+    LanguageCode,
+    OutputFormat,
+    StartSpeechSynthesisStreamActionStreamCloseStreamEvent,
+    StartSpeechSynthesisStreamActionStreamTextEvent,
+    StartSpeechSynthesisStreamEventStreamAudioEvent,
+    StartSpeechSynthesisStreamEventStreamStreamClosedEvent,
+    StartSpeechSynthesisStreamInput,
+    TextEvent,
+    TextType,
+    VoiceId,
+)
 from botocore.exceptions import BotoCoreError, ClientError, ParamValidationError
 
 from stdapi.api_errors import ApiError, UnsupportedModelError
 from stdapi.aws import call_with_region_failover, get_client, service_regions
+from stdapi.aws_bidi import BidiSession, open_bidi_stream
 from stdapi.aws_s3 import (
     get_s3_bucket_for_region,
     s3_key_from_uri,
@@ -36,8 +51,10 @@ from stdapi.usage import record_comprehend_usage, record_polly_usage
 from stdapi.utils import format_language_code, validation_error_handler
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Generator
+    from collections.abc import AsyncGenerator, Awaitable, Generator, Sequence
+    from typing import Any
 
+    from smithy_core.aio.eventstream import DuplexEventStream
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_comprehend.client import ComprehendClient
     from types_aiobotocore_comprehend.type_defs import (
@@ -109,6 +126,20 @@ _MAX_BILLED_CHARACTERS = 3000
 #: Total characters (SSML markup included) a single synthesis call accepts
 _MAX_CHARACTERS = 6000
 
+#: Billed characters one ten-minute incremental synthesis renders, with margin
+_STREAM_MAX_BILLED_CHARACTERS = 20_000
+
+#: Engine synthesizing text incrementally; the others reject the operation
+_STREAM_ENGINE: EngineType = "generative"
+
+#: Opening tag of a document the caller wrote, which is synthesized unchanged
+_SSML_DOCUMENT_PREFIX = "<speak>"
+
+#: Event ending the text a stream carries, before its input half is closed
+_CLOSE_STREAM_EVENT = StartSpeechSynthesisStreamActionStreamCloseStreamEvent(
+    CloseStreamEvent()
+)
+
 #: Billed characters (SSML markup excluded) a synthesis job accepts
 _JOB_MAX_BILLED_CHARACTERS = 100_000
 
@@ -132,6 +163,13 @@ _LONG_INPUT_UNAVAILABLE = (
     f"'input' is limited to {_MAX_BILLED_CHARACTERS:,} characters "
     f"({_MAX_CHARACTERS:,} including SSML markup) on this server. Split the text "
     "into shorter requests, or contact the administrator to enable longer inputs."
+)
+
+#: Answer to an input longer than one incremental synthesis renders
+_STREAM_INPUT_TOO_LONG = (
+    f"'input' is limited to {_STREAM_MAX_BILLED_CHARACTERS:,} characters for this "
+    "voice on this server. Split the text into shorter requests, or contact the "
+    "administrator to enable longer inputs."
 )
 
 #: Supported Polly models
@@ -379,6 +417,19 @@ async def _detect_language(text: str) -> LanguageCodeType:
     return SETTINGS.default_tts_language  # type: ignore[return-value]
 
 
+def _prosody_document(text: str, speed: float) -> str:
+    """Wrap text in the SSML document carrying a non-default speaking rate.
+
+    Args:
+        text: Text to speak at that rate.
+        speed: Speed multiplier for speech.
+
+    Returns:
+        A self-contained SSML document.
+    """
+    return f'<speak><prosody rate="{int(speed * 100)}%">{text}</prosody></speak>'
+
+
 def _prepare_text_for_speech(input_text: str, speed: float) -> tuple[str, TextTypeType]:
     """Prepare text for speech synthesis with speed adjustment.
 
@@ -389,12 +440,10 @@ def _prepare_text_for_speech(input_text: str, speed: float) -> tuple[str, TextTy
     Returns:
         Tuple of (processed_text, text_type)
     """
-    if input_text.startswith("<speak>"):
+    if input_text.startswith(_SSML_DOCUMENT_PREFIX):
         return input_text, "ssml"
     if speed != 1.0:
-        return (
-            f'<speak><prosody rate="{int(speed * 100)}%">{input_text}</prosody></speak>'
-        ), "ssml"
+        return _prosody_document(input_text, speed), "ssml"
     return input_text, "text"
 
 
@@ -445,28 +494,32 @@ def _handle_polly_error(
         raise ApiError(msg) from error
 
 
-def _requires_synthesis_job(
-    text: str, text_type: TextTypeType, *, job_available: bool
-) -> bool:
-    """Return whether the text is longer than a single synthesis call accepts.
+def _synthesis_transport(
+    text: str, text_type: TextTypeType, *, streamable: bool, job_available: bool
+) -> Literal["call", "stream", "job"]:
+    """Return how the text is synthesized: in one call, incrementally, or as a job.
 
     Polly limits a single call to 3,000 billed characters and 6,000 in total,
     counting SSML markup towards the second only, so the decision is made on
-    the final text and both limits are checked.
+    the final text and both limits are checked. Beyond them, incremental
+    synthesis comes first: it returns audio as it is produced and needs no
+    storage, where a job returns nothing until it completes and writes to a
+    bucket. Only its ten-minute duration sends the longest inputs back to a job.
 
     Args:
         text: Text as it is sent for synthesis.
         text_type: Whether that text is plain text or an SSML document.
+        streamable: Whether this voice and this text can be synthesized
+            incrementally.
         job_available: Whether a region able to serve the request can also
             store a job's audio.
 
     Returns:
-        True when the text has to be synthesized as a job.
+        The transport to synthesize the text with.
 
     Raises:
-        ApiError: The text is longer than this server synthesizes: longer than
-            a job accepts, or longer than a single call accepts when no job can
-            run, so the rejection always names the limit actually enforced.
+        ApiError: The text is longer than this server synthesizes, the
+            rejection naming the limit actually enforced.
     """
     # Counted by subtracting the markup, which never copies the document itself.
     billed = (
@@ -475,8 +528,12 @@ def _requires_synthesis_job(
         else len(text)
     )
     if billed <= _MAX_BILLED_CHARACTERS and len(text) <= _MAX_CHARACTERS:
-        return False
+        return "call"
+    if streamable and billed <= _STREAM_MAX_BILLED_CHARACTERS:
+        return "stream"
     if not job_available:
+        if streamable:
+            raise ApiError(_STREAM_INPUT_TOO_LONG)
         log_error_details(
             "No S3 bucket configured (aws_s3_bucket, aws_s3_regional_buckets) for "
             f"the speech synthesis regions: inputs over {_MAX_BILLED_CHARACTERS} "
@@ -489,7 +546,7 @@ def _requires_synthesis_job(
             f"({_JOB_MAX_CHARACTERS:,} including SSML markup)."
         )
         raise ApiError(msg)
-    return True
+    return "job"
 
 
 def _synthesis_job_candidates(
@@ -652,6 +709,207 @@ async def _synthesize_long_text(
     return await _synthesis_job_audio(region, bucket, key), input_tokens
 
 
+def _stream_text_events(text: str, speed: float) -> list[TextEvent]:
+    """Split text into the events one incremental synthesis carries.
+
+    An event takes what a single call takes, so longer text is cut on a space
+    to keep words whole -- Polly reassembles the text itself, so a cut needs no
+    sentence boundary. A speed envelope is rebuilt around every chunk, because
+    an SSML document may not span events. Only text no caller wrote as a
+    document reaches here, so a chunk is spoken as written whatever it contains.
+
+    Args:
+        text: Plain text to synthesize, as the caller sent it.
+        speed: Speech speed multiplier.
+
+    Returns:
+        The text events to send, in order.
+    """
+    events = []
+    spoken_as_written = speed == 1.0
+    text_type = TextType("text" if spoken_as_written else "ssml")
+    start = 0
+    while start < len(text):
+        end = start + _MAX_BILLED_CHARACTERS
+        if end >= len(text):
+            chunk = text[start:]
+        else:
+            cut = text.rfind(" ", start, end)
+            chunk = text[start : end if cut == -1 else cut + 1]
+        start += len(chunk)
+        events.append(
+            TextEvent(
+                text=chunk if spoken_as_written else _prosody_document(chunk, speed),
+                text_type=text_type,
+            )
+        )
+    return events
+
+
+async def _send_speech_text(
+    session: BidiSession[Any, Any], events: Sequence[TextEvent]
+) -> None:
+    """Send the whole text, then end the input half of the stream.
+
+    Polly ends a session five seconds after the last input event, and its close
+    event does not stop that timer: closing the input half is what tells the
+    service the text is complete, and what lets it return the rest of the audio.
+
+    Args:
+        session: The open synthesis session.
+        events: The text events to send, in order.
+    """
+    for event in events:
+        await session.send(StartSpeechSynthesisStreamActionStreamTextEvent(event))
+    await session.send(_CLOSE_STREAM_EVENT)
+    await session.close_input()
+
+
+async def _stream_speech_audio(
+    stream_input: StartSpeechSynthesisStreamInput,
+    events: Sequence[TextEvent],
+    characters: int,
+    engine: EngineType,
+    regions: list[RegionName],
+) -> AsyncGenerator[bytes]:
+    """Synthesize text incrementally, yielding audio as it is produced.
+
+    Args:
+        stream_input: Synthesis parameters the stream is opened with.
+        events: The text events to send, in order.
+        characters: Billed characters the events carry, billed when the session
+            ends without reporting its own count.
+        engine: Polly engine, for usage attribution.
+        regions: Candidate regions, in priority order.
+
+    Yields:
+        An empty chunk once the service accepted the request, then every audio
+        chunk it produces. The marker is what makes a rejected request a caller
+        error instead of a response body that stops after one byte.
+
+    Raises:
+        ApiError: No region accepted the request, or the session failed before
+            the whole text had been spoken.
+    """
+
+    async def _open(
+        client: Any,  # noqa: ANN401
+        _region: RegionName,
+    ) -> DuplexEventStream[Any, Any, Any]:
+        """Open the synthesis stream on one region's client."""
+        stream: DuplexEventStream[
+            Any, Any, Any
+        ] = await client.start_speech_synthesis_stream(input=stream_input)
+        return stream
+
+    async with open_bidi_stream("polly", regions, _open) as session:
+        yield b""
+        billed: int | None = None
+        sender = create_task(_send_speech_text(session, events))
+        try:
+            async for event in session:
+                if isinstance(event, StartSpeechSynthesisStreamEventStreamAudioEvent):
+                    if chunk := event.value.audio_chunk:
+                        yield chunk
+                elif isinstance(
+                    event, StartSpeechSynthesisStreamEventStreamStreamClosedEvent
+                ):
+                    billed = event.value.request_characters
+            # Sending ends before the service closes the session, so an error
+            # here is one that truncated the audio: it must not be swallowed.
+            await sender
+        finally:
+            if not sender.done():
+                sender.cancel()
+            # Awaited on every path, including the one that already failed:
+            # a send error nobody retrieves is reported by asyncio at
+            # collection time instead, long after the request it belongs to.
+            with suppress(CancelledError, Exception):
+                await sender
+            if billed is None:
+                log_error_details(
+                    "The speech synthesis stream ended without reporting its "
+                    f"usage: billing the {characters} characters sent.",
+                    level="warning",
+                )
+            record_polly_usage(
+                characters if billed is None else billed, engine, region=session.region
+            )
+
+
+async def _synthesize_streamed_text(
+    request: SynthesizeSpeechInputTypeDef,
+    text: str,
+    speed: float,
+    sample_rate: int | None,
+    model_id: str,
+    engine: EngineType,
+    voice_id: str,
+    candidates: list[tuple[RegionName, str]],
+) -> tuple[AsyncGenerator[bytes], int]:
+    """Synthesize text incrementally, as a job where no stream can be opened.
+
+    The fallback covers a deployment whose permissions or region do not offer
+    the operation: the request is then served the way it was before it existed,
+    and only a deployment that cannot run a job either sees the failure.
+
+    Args:
+        request: Synthesis request, as built for a single call.
+        text: Text to synthesize, as the caller sent it.
+        speed: Speech speed multiplier.
+        sample_rate: Requested sample rate in Hz, None for the format default.
+        model_id: Model ID, for error messages.
+        engine: Polly engine.
+        voice_id: Selected voice ID.
+        candidates: (region, bucket) pairs a job could run in, possibly empty.
+
+    Returns:
+        The audio stream, and the billed character count.
+
+    Raises:
+        ApiError: The request is not one Polly accepts, or no stream could be
+            opened and no job can serve the request.
+    """
+    audio = _stream_speech_audio(
+        StartSpeechSynthesisStreamInput(
+            engine=Engine(engine),
+            voice_id=VoiceId(voice_id),
+            output_format=OutputFormat(request["OutputFormat"]),
+            sample_rate=None if sample_rate is None else str(sample_rate),
+            language_code=(
+                LanguageCode(language)
+                if (language := request.get("LanguageCode"))
+                else None
+            ),
+            lexicon_names=request.get("LexiconNames"),
+        ),
+        _stream_text_events(text, speed),
+        len(text),
+        engine,
+        _engine_voice_regions(engine, voice_id),
+    )
+    try:
+        # Nothing has been promised to the caller yet: the marker resolves once
+        # the service answered, which is the last point a failure can be a
+        # clean error and be retried elsewhere.
+        await anext(audio)
+    except ApiError as error:
+        if not candidates:
+            raise
+        log_error_details(
+            f"Incremental speech synthesis unavailable ({error}): "
+            "synthesizing as a job instead.",
+            level="warning",
+        )
+        return await _synthesize_long_text(
+            request, model_id, engine, voice_id, candidates
+        )
+    # The count the response reports, known now; what Polly bills is its own
+    # normalisation of the same text (a paragraph break counts once), which is
+    # only known when the session ends and is what the usage record carries.
+    return audio, len(text)
+
+
 async def _synthesize_text(
     request: SynthesizeSpeechInputTypeDef,
     model_id: str,
@@ -768,6 +1026,17 @@ class AudioModel(AudioModelBase[None, None]):
         engine = _engine_from_model(self.model.id)
         voice_id, language = await _select_voice(text, voice, engine)
         log["voice_id"] = voice_id
+        streamable = (
+            engine == _STREAM_ENGINE
+            # Timing marks are not an audio format a stream produces, and a
+            # document the caller wrote must stay whole inside one event.
+            and not speech_marks
+            and not text.startswith(_SSML_DOCUMENT_PREFIX)
+            # A voice a stream rejects would fail without naming the voices
+            # that do exist, which the other paths do.
+            and voice_id in _VOICES_BY_ENGINE.get(engine, ())
+        )
+        plain_text = text
         text, text_type = _prepare_text_for_speech(text, speed)
 
         request: SynthesizeSpeechInputTypeDef = {
@@ -793,14 +1062,28 @@ class AudioModel(AudioModelBase[None, None]):
         # Resolved before the length check, so an input no region can store is
         # rejected with the length this server accepts, not with the job limit.
         candidates = _synthesis_job_candidates(engine, voice_id)
-        if _requires_synthesis_job(text, text_type, job_available=bool(candidates)):
-            body, input_tokens = await _synthesize_long_text(
-                request, self.model.id, engine, voice_id, candidates
-            )
-        else:
-            body, input_tokens = await _synthesize_text(
-                request, self.model.id, engine, voice_id
-            )
+        match _synthesis_transport(
+            text, text_type, streamable=streamable, job_available=bool(candidates)
+        ):
+            case "stream":
+                body, input_tokens = await _synthesize_streamed_text(
+                    request,
+                    plain_text,
+                    speed,
+                    sample_rate,
+                    self.model.id,
+                    engine,
+                    voice_id,
+                    candidates,
+                )
+            case "job":
+                body, input_tokens = await _synthesize_long_text(
+                    request, self.model.id, engine, voice_id, candidates
+                )
+            case _:
+                body, input_tokens = await _synthesize_text(
+                    request, self.model.id, engine, voice_id
+                )
 
         if encoding:
             # channels/sample_rate only apply to the raw-pcm source: _ffmpeg_args

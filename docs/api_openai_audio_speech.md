@@ -45,7 +45,7 @@ Generate natural-sounding speech from text with Amazon Polly through an OpenAI-c
 | **Input**                   |                                          |                                                                 |
 | Plain text                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Standard text input                                             |
 | SSML markup                 | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Fine-grained speech control                                     |
-| Long input                  | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Up to 100,000 characters, 24× OpenAI's limit — [requires a bucket](#long-input) |
+| Long input                  | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Up to 100,000 characters, 24× OpenAI's limit — [20,000 with a generative voice, 100,000 with a bucket](#long-input) |
 | **Output Formats**          |                                          |                                                                 |
 | MP3                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Native Polly format                                             |
 | PCM                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 24 kHz per OpenAI's contract; resampled from Polly's native rate |
@@ -85,7 +85,7 @@ Generate natural-sounding speech from text with Amazon Polly through an OpenAI-c
 | `amazon.polly-standard`   | Standard     | Lowest cost, widest language coverage              |
 | `amazon.polly-neural`     | Neural       | Higher-quality, natural-sounding voices            |
 | `amazon.polly-long-form`  | Long-form    | Expressive voices for narration-length content     |
-| `amazon.polly-generative` | Generative   | Most human-like, conversational voices             |
+| `amazon.polly-generative` | Generative   | Most human-like, conversational voices; speaks [long input](#long-input) with no bucket |
 
 Each engine supports a different subset of voices and languages — see the [Polly voice list](https://docs.aws.amazon.com/polly/latest/dg/voicelist.html) for details. OpenAI voice names work with every model through automatic language detection and voice selection, or specify any Polly voice ID directly for 60+ voices across 30+ languages.
 
@@ -134,10 +134,14 @@ Each engine supports a different subset of voices and languages — see the [Pol
 
 ### Long Input
 
-A single request accepts up to **3,000 characters** (6,000 including SSML markup, which is not billed). Beyond that, Amazon Polly synthesizes the audio into an S3 bucket co-located with the serving region, so longer input requires a bucket in a region that can serve the request: a [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets) entry for that region, or [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) when the region is the first [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) entry — the only region `AWS_S3_BUCKET` covers. With [`AWS_POLLY_REGION`](operations_configuration.md#aws-polly-region) pinned to any other region, a regional-bucket entry is the only option. The audio object is written under [`AWS_S3_TMP_PREFIX`](operations_configuration.md#aws-s3-tmp-prefix) and deleted once the request ends. On a request that ends before Amazon Polly has finished — a timeout, a failure, or a client that disconnected — the deletion is issued while the synthesis is still running, so an object written after it is **not** removed by the request: the recommended lifecycle rule on that prefix is what expires it, and it must be in place.
+A single request accepts up to **3,000 characters** (6,000 including SSML markup, which is not billed). Beyond that, how the audio is produced depends on the voice.
+
+**Generative voices** (`amazon.polly-generative`) speak up to **20,000 characters** without any further configuration, and the audio starts arriving while the rest is still being spoken. Two cases keep the behaviour described below instead: an `input` written as an SSML document, and a request using `SpeechMarkTypes`.
+
+**Every other voice**, and generative input longer than 20,000 characters, is synthesized into an S3 bucket co-located with the serving region, so longer input requires a bucket in a region that can serve the request: a [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets) entry for that region, or [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) when the region is the first [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) entry — the only region `AWS_S3_BUCKET` covers. With [`AWS_POLLY_REGION`](operations_configuration.md#aws-polly-region) pinned to any other region, a regional-bucket entry is the only option. The audio object is written under [`AWS_S3_TMP_PREFIX`](operations_configuration.md#aws-s3-tmp-prefix) and deleted once the request ends. On a request that ends before Amazon Polly has finished — a timeout, a failure, or a client that disconnected — the deletion is issued while the synthesis is still running, so an object written after it is **not** removed by the request: the recommended lifecycle rule on that prefix is what expires it, and it must be in place.
 
 - **With a bucket configured**: up to **100,000 characters** (200,000 including SSML markup), against OpenAI's 4,096-character limit. Expect roughly one extra second per 1,000 characters, bounded by [`AI_RESPONSE_TIMEOUT`](operations_configuration.md#ai-response-timeout).
-- **Without one**: every request above 3,000 characters is rejected, however long, with that same 3,000-character limit — the length the server does accept — so callers can split their text.
+- **Without one**: a generative voice still speaks up to 20,000 characters; every other request above 3,000 characters is rejected, however long, with the length the server does accept — so callers can split their text.
 
 !!! tip "Same response either way"
     Nothing else changes: the response is the complete audio file in the requested `response_format`, and `stream_format: "sse"` still delivers `speech.audio.delta` events.

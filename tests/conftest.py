@@ -327,6 +327,7 @@ MODEL_MAPPINGS = {
         "transcription_stream": "amazon.transcribe",
         "transcription_diarize": "amazon.transcribe",
         "speech_standard": "amazon.polly-standard",
+        "speech_generative": "amazon.polly-generative",
         "chat": "amazon.nova-micro-v1:0",
         "completion": "amazon.nova-micro-v1:0",
         "chat_vision": "amazon.nova-lite-v1:0",
@@ -356,6 +357,7 @@ MODEL_MAPPINGS = {
         "transcription_stream": "gpt-4o-mini-transcribe",
         "transcription_diarize": "gpt-4o-transcribe-diarize",
         "speech_standard": "tts-1",
+        "speech_generative": "tts-1",
         "chat": "gpt-5-nano",
         "completion": "gpt-3.5-turbo-instruct",
         "chat_vision": "gpt-5-nano",
@@ -699,6 +701,12 @@ def transcription_diarize_model(models: dict[str, str]) -> str:
 def speech_standard_model(models: dict[str, str]) -> str:
     """Model for text-to-speech using the standard (non-neural) engine."""
     return models["speech_standard"]
+
+
+@pytest.fixture(scope="session")
+def speech_generative_model(models: dict[str, str]) -> str:
+    """Model for text-to-speech with the voices that stream long inputs."""
+    return models["speech_generative"]
 
 
 @pytest.fixture(scope="session")

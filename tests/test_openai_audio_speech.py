@@ -142,6 +142,57 @@ class TestAudioSpeech:
             "the audio is no longer than the first 3000 characters spoken"
         )
 
+    @pytest.mark.local
+    @pytest.mark.slow
+    def test_a_generative_voice_serves_an_input_beyond_the_call_limit(
+        self,
+        test_client: TestClient,
+        speech_generative_model: str,
+        api_key: str,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """A long generative input is synthesized as one whole mp3, billed once.
+
+        Generative voices produce audio while the text is still being
+        synthesized, so an input over the 3,000-character single-call limit
+        needs neither storage nor a second request. The billed count comes
+        from the synthesis itself, and it is the whole text: Polly normalises
+        whitespace before counting (a paragraph break counts once), so it is
+        the input's length less a handful of characters, never a fraction of it.
+
+        Ref: https://docs.aws.amazon.com/polly/latest/dg/bidirectional-streaming-choosing.html
+             stdapi/models/audio/amazon_polly.py:_synthesize_streamed_text
+        """
+        with (SAMPLES_DIR / "lorem_ipsum.txt").open() as file:
+            input_text = file.read(3050)  # over the single-call limit
+        capfd.readouterr()
+
+        response = test_client.post(
+            "/v1/audio/speech",
+            # A Polly voice name skips the Comprehend detection call, leaving
+            # the synthesis as the only billed unit of the request.
+            json={
+                "model": speech_generative_model,
+                "voice": "Joanna",
+                "input": input_text,
+            },
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"] == "audio/mpeg"
+        _assert_is_mp3(response.content)
+        (entry,) = logged_usage_entries(
+            capfd.readouterr().out, service="polly", operation="/v1/audio/speech"
+        )
+        assert entry["model"] == speech_generative_model
+        assert 3000 < entry["input_characters"] <= len(input_text), (
+            "one record for more than one call's worth of text, none of it lost"
+        )
+        assert len(input_text) - entry["input_characters"] <= 10, (
+            "only the whitespace Polly normalises away may be missing"
+        )
+
     @pytest.mark.image
     @pytest.mark.gateway("Amazon Polly is not available on the official OpenAI API")
     @pytest.mark.retry(
