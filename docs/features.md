@@ -98,6 +98,7 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 | `/v1/models`                                   | Model discovery & listing                                               | Amazon Bedrock                               |
 | `/v1/files`                                    | File upload, listing, metadata, download, deletion                      | Amazon S3                                 |
 | `/v1/uploads`                                  | Multipart upload sessions for large files                               | Amazon S3                                 |
+| [`/v1/vector_stores`](api_openai_vector_stores.md) | Managed semantic search over your own files                         | Amazon S3 Vectors, Amazon Bedrock embeddings |
 | [`/v1/batches`](api_openai_batches.md)         | Asynchronous bulk inference at the discounted batch price               | Amazon Bedrock batch inference               |
 
 **Anthropic-Compatible:**
@@ -388,6 +389,7 @@ Enabled by default; regions, routing preferences, the per-request Mantle routing
 
 S3 is woven into the entire API surface — not just file storage:
 
+- **Vector Stores API** — Managed semantic search at `/v1/vector_stores`: attach a text file, it is chunked, embedded and indexed in the background, then searched by meaning with attribute filters and per-passage scores
 - **Files API** — Full CRUD at `/v1/files` with no artificial size limit (up to S3's ~5 TB), optional expiry, S3 Lifecycle backstop; file IDs work across both OpenAI and Anthropic endpoints
 - **Multipart uploads** — `/v1/uploads` backed by S3 native multipart; stream large files without buffering
 - **Direct `s3://` image references** — Use `s3://bucket/key` in chat completions and Anthropic Messages; the gateway reads from S3 via IAM role — no pre-signed URLs

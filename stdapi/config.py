@@ -965,6 +965,84 @@ class _Settings(BaseSettings):
         ),
     )
 
+    aws_s3_vectors_bucket: str | None = Field(
+        default=None,
+        description=(
+            "Name of the Amazon S3 vector bucket backing the Vector Stores "
+            "API. Required to enable it; the vector store endpoints answer 503 "
+            "while it is unset.\n\n"
+            "Create the bucket yourself (it is a distinct resource type from a "
+            "general purpose bucket) and grant the server the s3vectors "
+            "permissions on it. See "
+            "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors.html\n\n"
+            "The vector store bookkeeping is stored in aws_s3_bucket under "
+            "aws_s3_vector_stores_prefix, so both settings must be set.\n\n"
+            "Example: 'my-llm-vectors-us-east-1'\n\n"
+            "Unset (default): the Vector Stores API is disabled."
+        ),
+    )
+
+    aws_s3_vectors_region: RegionName | None = Field(
+        default=None,
+        description=(
+            "AWS region holding aws_s3_vectors_bucket. A vector bucket is a "
+            "regional resource and its indexes are only reachable in that "
+            "region, so this setting has no failover.\n\n"
+            "Example: 'us-east-1'\n\n"
+            "Unset (default): the first aws_bedrock_regions entry."
+        ),
+    )
+
+    aws_s3_vector_stores_prefix: str = Field(
+        default="vector_stores/",
+        description=(
+            "S3 prefix (folder path) in aws_s3_bucket for the Vector Stores "
+            "API's own records — the stores, their attached files and their "
+            "file batches.\n\n"
+            "Example: 'vector_stores/' stores objects under "
+            "s3://bucket/vector_stores/\n"
+            "Example: '' (empty string) stores them at bucket root "
+            "(not recommended)"
+        ),
+    )
+
+    vector_store_embedding_model: str = Field(
+        default="amazon.titan-embed-text-v2:0",
+        description=(
+            "Model used to embed the files indexed into a vector store, and "
+            "the queries searched against them.\n\n"
+            "The model is frozen on each store when it is created, so changing "
+            "this setting only affects stores created afterwards; existing "
+            "stores keep answering with the model they were created with.\n\n"
+            "Example: 'amazon.titan-embed-text-v2:0'"
+        ),
+    )
+
+    vector_store_chunk_size_tokens: int = Field(
+        default=800,
+        ge=100,
+        le=4096,
+        description=(
+            "Default chunk size, in tokens, for files indexed into a vector "
+            "store without an explicit chunking_strategy. A request's own "
+            "chunking_strategy always wins.\n\n"
+            "Tokens are approximated from the text length, and a chunk is "
+            "additionally capped by what the configured embedding model "
+            "accepts in one input."
+        ),
+    )
+
+    vector_store_chunk_overlap_tokens: int = Field(
+        default=400,
+        ge=0,
+        description=(
+            "Default number of tokens shared between consecutive chunks, for "
+            "files indexed into a vector store without an explicit "
+            "chunking_strategy. Must not exceed half of "
+            "vector_store_chunk_size_tokens."
+        ),
+    )
+
     aws_translate_region: RegionName | None = Field(
         default=None,
         description=(
@@ -2437,6 +2515,29 @@ class _Settings(BaseSettings):
                 raise ValueError(msg)
             seen_prefixes[prefix] = field_name
 
+    def _validate_vector_stores(self) -> None:
+        """Ensure the Vector Stores API is configured completely or not at all.
+
+        Raises:
+            ValueError: If the vector bucket is set without an application
+                bucket to hold the records, or the default chunk overlap
+                exceeds half the default chunk size.
+        """
+        if self.aws_s3_vectors_bucket and not self.aws_s3_bucket:
+            msg = (
+                "aws_s3_vectors_bucket requires aws_s3_bucket: the vector store "
+                "records are stored there."
+            )
+            raise ValueError(msg)
+        if self.vector_store_chunk_overlap_tokens > (
+            self.vector_store_chunk_size_tokens // 2
+        ):
+            msg = (
+                "vector_store_chunk_overlap_tokens must not exceed half of "
+                "vector_store_chunk_size_tokens."
+            )
+            raise ValueError(msg)
+
     @model_validator(mode="after")
     def _validate(self) -> Self:
         """Perform cross-field validation and apply configuration defaults.
@@ -2451,6 +2552,7 @@ class _Settings(BaseSettings):
         7. The Amazon Cognito configuration is complete
         8. The accepted authentication methods are the configured ones
         9. The OAuth 2.0 discovery configuration is complete
+        10. The Vector Stores API is configured completely or not at all
 
         Returns:
             Self with validated and defaulted configuration.
@@ -2462,6 +2564,7 @@ class _Settings(BaseSettings):
             self.enable_openapi_json or self.enable_docs or self.enable_redoc
         )
         self._validate_unique_routes_prefixes()
+        self._validate_vector_stores()
         if (
             self.aws_bedrock_guardrail_identifier
             and not self.aws_bedrock_guardrail_version

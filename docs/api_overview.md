@@ -70,6 +70,9 @@ stdapi.ai provides multiple resources for exploring and testing the API—choose
 | **📁 Files**      | `POST/GET/DELETE /v1/files`       | Upload, list, retrieve, download, delete files                              | [Files →](api_openai_files.md)                         |
 |                   | `POST /v1/uploads`                | Multipart upload sessions for large files                                   | [Files →](api_openai_files.md)                         |
 |                   | `POST /v1/uploads/{id}/parts`, `…/complete`, `…/cancel` | Add parts to, complete, or cancel an upload session   | [Files →](api_openai_files.md)                         |
+| **🔎 Vector Stores** | `POST/GET/DELETE /v1/vector_stores` | Create, list, retrieve, update, delete a searchable file collection       | [Vector Stores →](api_openai_vector_stores.md)         |
+|                   | `POST /v1/vector_stores/{id}/search` | Search the indexed files by meaning                                        | [Vector Stores →](api_openai_vector_stores.md)         |
+|                   | `POST/GET/DELETE /v1/vector_stores/{id}/files`, `…/file_batches` | Attach, list, read and detach the indexed files          | [Vector Stores →](api_openai_vector_stores.md)         |
 | **📦 Batches**    | `POST/GET /v1/batches`            | Run a file of requests asynchronously at the batch price                    | [Batches →](api_openai_batches.md)                     |
 |                   | `POST /v1/batches/{id}/cancel`    | Cancel a running batch                                                      | [Batches →](api_openai_batches.md)                     |
 
@@ -154,6 +157,22 @@ When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, s
 | `openai_files_get`               | `GET /v1/files/{file_id}`                   |
 | `openai_files_delete`            | `DELETE /v1/files/{file_id}`                |
 | `openai_file_content`            | `GET /v1/files/{file_id}/content`           |
+| `openai_vector_store_create`     | `POST /v1/vector_stores`                    |
+| `openai_vector_store_list`       | `GET /v1/vector_stores`                     |
+| `openai_vector_store_get`        | `GET /v1/vector_stores/{vector_store_id}`   |
+| `openai_vector_store_update`     | `POST /v1/vector_stores/{vector_store_id}`  |
+| `openai_vector_store_delete`     | `DELETE /v1/vector_stores/{vector_store_id}` |
+| `openai_vector_store_search`     | `POST /v1/vector_stores/{vector_store_id}/search` |
+| `openai_vector_store_file_create` | `POST /v1/vector_stores/{vector_store_id}/files` |
+| `openai_vector_store_file_list`  | `GET /v1/vector_stores/{vector_store_id}/files` |
+| `openai_vector_store_file_get`   | `GET /v1/vector_stores/{vector_store_id}/files/{file_id}` |
+| `openai_vector_store_file_update` | `POST /v1/vector_stores/{vector_store_id}/files/{file_id}` |
+| `openai_vector_store_file_delete` | `DELETE /v1/vector_stores/{vector_store_id}/files/{file_id}` |
+| `openai_vector_store_file_content` | `GET /v1/vector_stores/{vector_store_id}/files/{file_id}/content` |
+| `openai_vector_store_file_batch_create` | `POST /v1/vector_stores/{vector_store_id}/file_batches` |
+| `openai_vector_store_file_batch_get` | `GET /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}` |
+| `openai_vector_store_file_batch_cancel` | `POST /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/cancel` |
+| `openai_vector_store_file_batch_file_list` | `GET /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/files` |
 | `openai_upload`                  | `POST /v1/uploads`                          |
 | `openai_upload_part`             | `POST /v1/uploads/{upload_id}/parts`        |
 | `openai_upload_complete`         | `POST /v1/uploads/{upload_id}/complete`     |

@@ -1066,6 +1066,20 @@ def _skip_when_feature_disabled(
 
 
 @pytest.fixture(scope="session")
+def vector_stores_api(openai_client: OpenAI) -> None:
+    """Skip the test unless the target actually serves the Vector Stores API.
+
+    The target is asked rather than this process's settings read, so the answer
+    is also true for a deployed gateway and for the official API.
+    """
+    try:
+        openai_client.vector_stores.list(limit=1)
+    except APIStatusError as error:
+        _skip_when_feature_disabled(error, "Vector Stores API", "aws_s3_vectors_bucket")
+        raise
+
+
+@pytest.fixture(scope="session")
 def batches_api(openai_client: OpenAI) -> None:
     """Skip the test unless the target actually serves the Batch API."""
     try:

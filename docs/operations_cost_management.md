@@ -187,6 +187,14 @@ Requests sent through the [Batch API](api_openai_batches.md) or the [Message Bat
 
 Usage is recorded **once per batch**, when the batch reaches a terminal state and its totals are read — not per request. The entry therefore appears on whichever read observed the end of the batch, which is a poll rather than the call that created it. A batch that is cancelled before its requests run records nothing.
 
+### Vector Stores { #vector-stores }
+
+Indexing a file into a [vector store](api_openai_vector_stores.md) costs one embedding call per passage, and a search costs one per query. Those calls are recorded and priced like any other embedding usage, against the model in [`VECTOR_STORE_EMBEDDING_MODEL`](operations_configuration.md#vector-store-embedding-model) — a large file is many passages, so the cost of an attach scales with the file, not with the request.
+
+Indexing runs after the response is sent, so its usage is reported on a `background` log event of its own rather than on the request that started it. Correlate the two through the `id` field they share.
+
+The **storage and request charges of the vector storage itself are not recorded**: like the bytes the [Files API](api_openai_files.md) stores, they appear on your AWS bill and not in the usage log. Read them from AWS Cost Explorer, filtered on Amazon S3 Vectors — the service holding [`AWS_S3_VECTORS_BUCKET`](operations_configuration.md#aws-s3-vectors-bucket).
+
 ### Long-Context Pricing
 
 Some 1M-context-capable models (currently Claude Sonnet 4, via the `context-1m` `anthropic-beta` flag) are billed by AWS at a higher rate — roughly double for input-side tokens — when a call's prompt (input + cache read/write tokens) exceeds 200K tokens. stdapi.ai detects this per model call and prices the whole call at the published long-context rate, reporting it with `"context": "long"` in the usage entry. When AWS publishes no long-context rate for a model, the standard rate is used as the best available estimate.

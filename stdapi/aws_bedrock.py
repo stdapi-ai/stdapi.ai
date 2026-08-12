@@ -219,7 +219,10 @@ AWS_ERROR_MAP: dict[str, tuple[int, str]] = {
         },
         (401, "authentication_error"),
     ),
-    **dict.fromkeys({"ResourceNotFoundException"}, (404, "not_found_error")),
+    **dict.fromkeys(
+        {"ResourceNotFoundException", "NotFoundException"}, (404, "not_found_error")
+    ),
+    **dict.fromkeys({"ConflictException"}, (409, "invalid_request_error")),
     **dict.fromkeys(
         {"ValidationException", "BadRequestException", "EntityTooSmall", "InvalidPart"},
         (400, "invalid_request_error"),

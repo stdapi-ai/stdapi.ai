@@ -339,6 +339,44 @@ Required for storing generated images, audio files, documents, and videos. See [
 
 ---
 
+## :material-magnify: Vector Stores (Optional) { #vector-stores-optional }
+
+**Environment Variables**: [`AWS_S3_VECTORS_BUCKET`](operations_configuration.md#aws-s3-vectors-bucket), [`AWS_S3_VECTORS_REGION`](operations_configuration.md#aws-s3-vectors-region), [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket)
+
+Required by the [Vector Stores API](api_openai_vector_stores.md). The indexed content lives in an [Amazon S3 vector bucket](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors.html) you create; the stores' own records live in the general purpose bucket under [`AWS_S3_VECTOR_STORES_PREFIX`](operations_configuration.md#aws-s3-vector-stores-prefix) and are covered by the [S3 File Storage](#s3-file-storage-optional) statements above.
+
+??? example "Vector Stores IAM Policy Statements"
+    ```json
+    {
+      "Sid": "VectorStoreIndexes",
+      "Effect": "Allow",
+      "Action": [
+        "s3vectors:CreateIndex",
+        "s3vectors:DeleteIndex",
+        "s3vectors:GetIndex",
+        "s3vectors:PutVectors",
+        "s3vectors:GetVectors",
+        "s3vectors:QueryVectors",
+        "s3vectors:DeleteVectors"
+      ],
+      "Resource": [
+        "arn:aws:s3vectors:REGION:ACCOUNT_ID:bucket/AWS_S3_VECTORS_BUCKET_VALUE",
+        "arn:aws:s3vectors:REGION:ACCOUNT_ID:bucket/AWS_S3_VECTORS_BUCKET_VALUE/index/*"
+      ]
+    }
+    ```
+
+    !!! info "Replace the Placeholders"
+        Replace `AWS_S3_VECTORS_BUCKET_VALUE` with your [`AWS_S3_VECTORS_BUCKET`](operations_configuration.md#aws-s3-vectors-bucket) value, `REGION` with [`AWS_S3_VECTORS_REGION`](operations_configuration.md#aws-s3-vectors-region), and `ACCOUNT_ID` with your account. The bucket ARN itself is needed for the index actions; the index ARN pattern covers the per-store indexes the gateway creates and deletes.
+
+    !!! note "The bucket is yours to create"
+        The gateway never creates or deletes the vector bucket, only the indexes inside it, so no bucket-level create or delete action is granted.
+
+    !!! note "Records live in the general purpose bucket"
+        Grant the [S3 File Storage](#s3-file-storage-optional) statements on [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) as well: the stores, their attached files and their batches are JSON objects there.
+
+---
+
 ## :material-video: Video Generation (Optional) { #video-generation-optional }
 
 **Environment Variables**: [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets)
@@ -997,6 +1035,7 @@ Required if you configure API authentication. See the [Authentication](operation
 | **File Storage**                                | `s3:PutObject`<br>`s3:PutObjectTagging`<br>`s3:GetObject`<br>`s3:DeleteObject`<br>`s3:AbortMultipartUpload`<br>`s3:ListMultipartUploadParts`<br>`s3:ListBucket`<br>`s3:ListBucketMultipartUploads`<br>on every bucket, including each `AWS_S3_REGIONAL_BUCKETS` entry | `AWS_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`                                 |
 | **Video Generation**                            | Core Bedrock invoke permissions (incl. `bedrock:GetAsyncInvoke`, `bedrock:TagResource`)<br>`bedrock:ListAsyncInvokes` and `bedrock:ListTagsForResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) for job listing<br>File Storage S3 permissions on each regional bucket | `AWS_S3_REGIONAL_BUCKETS`                                                    |
 | **Batch Inference**                             | `bedrock:CreateModelInvocationJob`<br>`bedrock:GetModelInvocationJob`<br>`bedrock:StopModelInvocationJob` (on `arn:aws:bedrock:*:*:model-invocation-job/*`)<br>`iam:PassRole` on the batch service role, scoped with `iam:PassedToService: bedrock.amazonaws.com`<br>File Storage S3 permissions on each bucket a batch uses, plus the service role's own policy (see [Batch Inference](#batch-inference)) | `AWS_BEDROCK_BATCH_ROLE_ARN`                                                 |
+| **Vector Stores**                               | `s3vectors:CreateIndex`<br>`s3vectors:DeleteIndex`<br>`s3vectors:GetIndex`<br>`s3vectors:PutVectors`<br>`s3vectors:GetVectors`<br>`s3vectors:QueryVectors`<br>`s3vectors:DeleteVectors` (on the vector bucket and its indexes)<br>File Storage S3 permissions on `AWS_S3_BUCKET` for the stores' records | `AWS_S3_VECTORS_BUCKET`<br>`AWS_S3_VECTORS_REGION`                           |
 | **KMS Encrypted S3 Buckets**                    | `kms:Decrypt`<br>`kms:GenerateDataKey`<br>with `kms:ViaService` condition                                                                                  | If S3 buckets use KMS encryption                                             |
 | **Text-to-Speech**                              | `polly:SynthesizeSpeech`<br>`polly:DescribeVoices`<br>`polly:StartSpeechSynthesisStream` for generative voices above 3,000 characters<br>`polly:StartSpeechSynthesisTask`, `polly:GetSpeechSynthesisTask` and S3 `PutObject`/`GetObject`/`DeleteObject` on each bucket serving a Polly region, for the other voices above 3,000 characters | `AWS_POLLY_REGION`<br>`AWS_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`           |
 | **Speech-to-Text**                              | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`transcribe:TagResource` (on `arn:aws:transcribe:*:*:transcription-job/*`)<br>File Storage S3 permissions on every bucket serving a candidate region | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS` |

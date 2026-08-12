@@ -97,6 +97,15 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
     MATCHER = "cohere.embed-"
 
+    #: Characters a v3 text input accepts; longer texts are rejected, never truncated.
+    _V3_MAX_INPUT_CHARACTERS = 2048
+
+    @property
+    def max_input_characters(self) -> int:
+        """Characters accepted in one text input, or 0 when none is documented."""
+        # Only v3 documents a ceiling; later versions must not inherit it.
+        return self._V3_MAX_INPUT_CHARACTERS if "-v3" in self._model_id else 0
+
     async def embed_text(
         self,
         inputs: list[InputFileUrl | str],

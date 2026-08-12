@@ -653,16 +653,23 @@ def _format_params(
 
 
 @contextmanager
-def log_background_event(event: str, request_id: str) -> Generator[EventLog]:
+def log_background_event(
+    event: str, request_id: str, *, record_usage: bool = False
+) -> Generator[EventLog]:
     """Context manager to log a background event.
 
     Args:
         event: Event type label.
         request_id: Unique identifier for the associated request.
+        record_usage: Install a usage scope of the event's own, so what the
+            work bills is reported here. Without it, usage recorded after the
+            originating request's log was finalized is discarded.
 
     Yields:
         Mutable event log dict populated during execution.
     """
+    usage_token = init_usage() if record_usage else None
+    model_state_token = init_model_state() if record_usage else None
     span_context = (
         otel_manager.start_span(
             "background",
@@ -694,6 +701,10 @@ def log_background_event(event: str, request_id: str) -> Generator[EventLog]:
         raise
     finally:
         log["execution_time_ms"] = (perf_counter_ns() - start) // 1000000
+        if usage_token is not None and model_state_token is not None:
+            _finalize_usage_safely(log)
+            USAGE.reset(usage_token)
+            MODEL_STATE.reset(model_state_token)
         _attach_aws_api_calls(log)
         write_log_event(log)
 

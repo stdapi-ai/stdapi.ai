@@ -167,6 +167,12 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_S3_VIDEOS_PREFIX`](#aws-s3-videos-prefix)         | `videos/`       | S3 prefix for generated videos (Videos API); persists until deleted through the API                  |
 | [`AWS_S3_VIDEOS_EXPIRES_AFTER`](#aws-s3-videos-expires-after) | None      | Retention period in seconds for generated videos; sets `Video.expires_at` and blocks expired downloads |
 | [`AWS_S3_BATCHES_PREFIX`](#aws-s3-batches-prefix)       | `batches/`      | S3 prefix for Batch API data (requests, results, batch records); configure lifecycle policies on it   |
+| [`AWS_S3_VECTORS_BUCKET`](#aws-s3-vectors-bucket)       | None            | Amazon S3 vector bucket backing the Vector Stores API; unset disables it                             |
+| [`AWS_S3_VECTORS_REGION`](#aws-s3-vectors-region)       | First Bedrock region | Region holding `AWS_S3_VECTORS_BUCKET`; the vector bucket has no failover                       |
+| [`AWS_S3_VECTOR_STORES_PREFIX`](#aws-s3-vector-stores-prefix) | `vector_stores/` | S3 prefix for the Vector Stores API records (stores, attached files, batches)                  |
+| [`VECTOR_STORE_EMBEDDING_MODEL`](#vector-store-embedding-model) | `amazon.titan-embed-text-v2:0` | Model embedding the indexed files and the search queries                    |
+| [`VECTOR_STORE_CHUNK_SIZE_TOKENS`](#vector-store-chunk-size-tokens) | `800`   | Default chunk size for files indexed without an explicit `chunking_strategy`                         |
+| [`VECTOR_STORE_CHUNK_OVERLAP_TOKENS`](#vector-store-chunk-overlap-tokens) | `400` | Default chunk overlap; must not exceed half the chunk size                                 |
 | [`AWS_TRANSCRIBE_S3_BUCKET`](#aws-transcribe-s3-bucket) | `AWS_S3_BUCKET` | S3 bucket for temporary audio transcription files; must be in same region as `AWS_TRANSCRIBE_REGION` |
 
 ### :material-robot: AWS AI Services { #summary-aws-ai-services }
@@ -656,6 +662,108 @@ export AWS_S3_BATCHES_PREFIX=batches/
 ```
 
 Each batch stores its data under a folder of its own below this prefix. Because the output bucket must be in the same region as the model that serves the batch, that data is stored in the [`AWS_S3_REGIONAL_BUCKETS`](#aws-s3-regional-buckets) bucket of the region that served it.
+
+#### Vector Stores { #vector-stores-optional }
+
+The [Vector Stores API](api_openai_vector_stores.md) needs an [Amazon S3 vector bucket](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors.html) — a resource type of its own, created separately from a general purpose bucket — plus the general purpose bucket in [`AWS_S3_BUCKET`](#aws-s3-bucket), which holds the stores' records. The vector store endpoints answer `503` until both are configured.
+
+#### `AWS_S3_VECTORS_BUCKET` { #aws-s3-vectors-bucket }
+
+:octicons-package-24: **Purpose**
+:   Name of the Amazon S3 vector bucket that holds the indexed content of every vector store
+
+:octicons-gear-24: **Default**
+:   None — the [Vector Stores API](api_openai_vector_stores.md) is disabled
+
+:octicons-alert-24: **Requirement**
+:   Requires [`AWS_S3_BUCKET`](#aws-s3-bucket), which holds the vector store records; startup fails if only the vector bucket is set. The gateway's role needs the [Vector Stores permissions](operations_iam_permissions.md#vector-stores-optional) on it
+
+```bash
+export AWS_S3_VECTORS_BUCKET=my-llm-vectors-us-east-1
+```
+
+Create the bucket yourself, then let the gateway create and delete the indexes inside it — one per vector store, removed when the store is deleted or expires.
+
+#### `AWS_S3_VECTORS_REGION` { #aws-s3-vectors-region }
+
+:octicons-package-24: **Purpose**
+:   AWS region holding [`AWS_S3_VECTORS_BUCKET`](#aws-s3-vectors-bucket)
+
+:octicons-gear-24: **Default**
+:   The first [`AWS_BEDROCK_REGIONS`](#aws-bedrock-regions) entry
+
+:octicons-alert-24: **Requirement**
+:   Must be the bucket's own region. A vector bucket is a regional resource whose content is only reachable there, so this setting has no failover: if the region is unreachable, so is the [Vector Stores API](api_openai_vector_stores.md)
+
+```bash
+export AWS_S3_VECTORS_REGION=us-east-1
+```
+
+#### `AWS_S3_VECTOR_STORES_PREFIX` { #aws-s3-vector-stores-prefix }
+
+:octicons-package-24: **Purpose**
+:   S3 prefix (folder path) in [`AWS_S3_BUCKET`](#aws-s3-bucket) for the [Vector Stores API](api_openai_vector_stores.md) records — the stores, their attached files and their file batches
+
+:octicons-gear-24: **Default**
+:   `vector_stores/`
+
+:octicons-check-circle-24: **Best Practice**
+:   Keep it distinct from the other prefixes so a lifecycle rule written for one never reaches the records of another; these records are the stores themselves, so no expiration rule belongs on this prefix
+
+```bash
+export AWS_S3_VECTOR_STORES_PREFIX=vector_stores/
+```
+
+#### `VECTOR_STORE_EMBEDDING_MODEL` { #vector-store-embedding-model }
+
+:octicons-package-24: **Purpose**
+:   Model that turns the indexed files and the search queries into vectors
+
+:octicons-gear-24: **Default**
+:   `amazon.titan-embed-text-v2:0`
+
+:octicons-alert-24: **Requirement**
+:   Must be an embedding model available in your configured regions — see [Embeddings API](api_openai_embeddings.md)
+
+```bash
+export VECTOR_STORE_EMBEDDING_MODEL=amazon.titan-embed-text-v2:0
+```
+
+Each vector store records the model it was created with and keeps using it, so changing this setting only affects stores created afterwards. Existing stores keep answering exactly as before.
+
+#### `VECTOR_STORE_CHUNK_SIZE_TOKENS` { #vector-store-chunk-size-tokens }
+
+:octicons-package-24: **Purpose**
+:   Default chunk size, in tokens, for files indexed without an explicit `chunking_strategy`
+
+:octicons-gear-24: **Default**
+:   `800` — the same default the upstream API applies
+
+:octicons-alert-24: **Requirement**
+:   Between `100` and `4096`
+
+```bash
+export VECTOR_STORE_CHUNK_SIZE_TOKENS=800
+```
+
+A request's own `chunking_strategy` always wins, and a store created with one applies it to every file later attached without one. Chunk sizes are approximate — see [Chunking](api_openai_vector_stores.md#chunking).
+
+#### `VECTOR_STORE_CHUNK_OVERLAP_TOKENS` { #vector-store-chunk-overlap-tokens }
+
+:octicons-package-24: **Purpose**
+:   Default number of tokens shared between consecutive chunks, for files indexed without an explicit `chunking_strategy`
+
+:octicons-gear-24: **Default**
+:   `400` — the same default the upstream API applies
+
+:octicons-alert-24: **Requirement**
+:   Must not exceed half of [`VECTOR_STORE_CHUNK_SIZE_TOKENS`](#vector-store-chunk-size-tokens); startup fails otherwise
+
+```bash
+export VECTOR_STORE_CHUNK_OVERLAP_TOKENS=400
+```
+
+More overlap keeps a sentence split across two chunks findable from either one, at the cost of more chunks to embed and store.
 
 #### `AWS_TRANSCRIBE_S3_BUCKET` { #aws-transcribe-s3-bucket }
 

@@ -1,12 +1,19 @@
 ---
 title: RAG Pipelines - Amazon Bedrock Embeddings and Reranking
-description: Build retrieval-augmented generation pipelines on Amazon Bedrock with stdapi.ai. Configure Haystack, or any OpenAI- and Cohere-compatible framework, for embeddings, two-stage reranking, and generation through one endpoint.
-keywords: RAG AWS Bedrock, retrieval augmented generation, Haystack AWS Bedrock, Cohere rerank AWS, semantic search Bedrock, embeddings AWS Bedrock, two-stage retrieval, vector search reranking
+description: Build retrieval-augmented generation on Amazon Bedrock with stdapi.ai. Use the managed Vector Stores API, or wire Haystack and any OpenAI- and Cohere-compatible framework to embeddings, two-stage reranking, and generation through one endpoint.
+keywords: RAG AWS Bedrock, retrieval augmented generation, managed vector store, Vector Stores API, Haystack AWS Bedrock, Cohere rerank AWS, semantic search Bedrock, embeddings AWS Bedrock, two-stage retrieval, vector search reranking
 ---
 
 # :material-magnify: RAG Pipelines Integration
 
 Build retrieval-augmented generation and semantic search pipelines on Amazon Bedrock through stdapi.ai's OpenAI-compatible embeddings and Cohere-compatible reranking—one deployment serving every stage of the pipeline.
+
+There are two ways to do it, and they share the same deployment:
+
+- **Managed** — attach your files to a [vector store](api_openai_vector_stores.md) and search it. Chunking, embedding, indexing and retrieval are the gateway's job; you write no pipeline.
+- **Assembled** — keep your own framework and vector database, and use stdapi.ai for the embedding, reranking and generation calls.
+
+Start managed, and move to the assembled pipeline when you need a retrieval strategy of your own.
 
 ## :material-information-outline: About Retrieval-Augmented Generation
 
@@ -23,6 +30,9 @@ stdapi.ai serves all three from Amazon Bedrock through standard, unmodified clie
 ## :material-help-circle-outline: Why RAG + stdapi.ai?
 
 <div class="grid cards" markdown>
+
+- :material-database-search: __Managed Vector Stores__
+  <br>Attach a file to a [vector store](api_openai_vector_stores.md) and search it by meaning—no chunker, embedder or vector database to run.
 
 - :material-swap-horizontal: __Two Dialects, One Deployment__
   <br>Point your embedder and chat model at the OpenAI-compatible `/v1` route, and your reranker at the Cohere-compatible `/cohere` route—no separate services to run.
@@ -45,13 +55,48 @@ flowchart LR
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
+## :material-database-search: Managed Retrieval with Vector Stores { #managed-retrieval }
+
+Upload your files, attach them to a vector store, and search it. Nothing else runs.
+
+!!! example "Index and search"
+    ```python
+    import time
+
+    from openai import OpenAI
+
+    client = OpenAI(base_url="https://YOUR_STDAPI_URL/v1", api_key="YOUR_API_KEY")
+
+    uploaded = client.files.create(file=open("handbook.txt", "rb"), purpose="assistants")
+    store = client.vector_stores.create(name="handbook", file_ids=[uploaded.id])
+
+    # Indexing is asynchronous: wait until the store reports it finished.
+    while client.vector_stores.retrieve(store.id).status == "in_progress":
+        time.sleep(2)
+
+    for result in client.vector_stores.search(
+        store.id, query="How much parental leave do I get?"
+    ):
+        print(result.score, result.filename, result.content[0].text)
+    ```
+
+    Feed the returned passages to a chat model as context and you have a complete RAG loop in a dozen lines. Tag files with `attributes` to scope a search to a department, a product or a language.
+
+Only **text** files can be indexed — convert PDFs and office documents first, with the [document parsing](#document-parsing) stage below. See the [Vector Stores API](api_openai_vector_stores.md) for chunking, filters, expiration and the storage it needs in your account.
+
+---
+
+## :material-hammer-screwdriver: Assembling Your Own Pipeline { #assembled-pipeline }
+
+The rest of this page wires stdapi.ai into a pipeline you build yourself, with your own vector database and retrieval strategy.
+
 ## :material-check-circle: Prerequisites
 
 !!! info "What You'll Need"
     - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md) or [run locally with Docker](operations_getting_started_local.md)
     - ✓ **Your stdapi.ai URL** - e.g., `https://api.example.com`
     - ✓ **Your API key** - From Terraform output or configuration
-    - ✓ **A vector store** - stdapi.ai serves embeddings and reranking; the vectors themselves live in your framework's own store (in-memory, pgvector, Qdrant, and others all work)
+    - ✓ **A vector store** - for the assembled pipeline only: stdapi.ai serves embeddings and reranking, and the vectors live in your framework's own store (in-memory, pgvector, Qdrant, and others all work). [Managed retrieval](#managed-retrieval) needs none.
 
 ---
 
@@ -59,7 +104,7 @@ flowchart LR
 
 Every RAG framework that speaks the OpenAI and Cohere SDKs follows the same pattern: the embedder and the generator take the OpenAI-compatible `/v1` base URL, and the reranker takes the Cohere-compatible `/cohere` base URL.
 
-### :material-file-document-outline: Document Parsing
+### :material-file-document-outline: Document Parsing { #document-parsing }
 
 Before embedding, a RAG pipeline needs plain text out of PDFs and office documents. [Docling Serve](https://github.com/docling-project/docling-serve) converts them to Markdown/JSON over an HTTP API — deploy it as the ingestion stage in front of the embedder below, not as a standalone gateway showcase.
 
@@ -173,6 +218,7 @@ The same two-route pattern—OpenAI-compatible `/v1` for embedding and generatio
 
 <div class="grid cards" markdown>
 
+- :material-database-search: [**Vector Stores API**](api_openai_vector_stores.md) — The managed retrieval half of this page
 - :material-rocket-launch: [**Getting Started**](operations_getting_started.md) — Deploy stdapi.ai to AWS with Terraform
 - :material-docker: [**Local Development**](operations_getting_started_local.md) — Run stdapi.ai locally with Docker
 - :material-puzzle: [**More Use Cases**](use_cases.md) — Explore other integrations and tools

@@ -63,6 +63,11 @@ class EmbeddingModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
     #: InvokeModel rejects native guardrail kwargs; ApplyGuardrail covers the route.
     NATIVE_GUARDRAIL_SUPPORTED: ClassVar[bool] = False
 
+    @property
+    def max_input_characters(self) -> int:
+        """Characters accepted in one text input, or 0 when none is documented."""
+        return 0
+
     @abstractmethod
     async def embed_text(
         self,

@@ -153,6 +153,13 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                     ("s3", region)
                     for region in SETTINGS.aws_s3_accepted_buckets.values()
                 ),
+                # A vector bucket is a regional resource whose indexes are only
+                # reachable in its own region: one client, no failover.
+                *(
+                    (("s3vectors", SETTINGS.aws_s3_vectors_region),)
+                    if SETTINGS.aws_s3_vectors_bucket
+                    else ()
+                ),
             )
         ):
             # Bidirectional stream clients are not botocore clients, but they
