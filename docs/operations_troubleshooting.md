@@ -207,6 +207,14 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     - If the deployment sits behind the Terraform module's WAF (`alb_waf_enabled=true`), check for a `SizeConstraintStatement` rule on the request body — see [Request Size & Resource Limits](operations_authentication_security.md#request-size-resource-limits).
     - If fronted by Amazon API Gateway instead of an ALB, remember its hard 10 MB payload limit.
 
+??? failure "Web search returns nothing, stale results, or `external_web_access` is rejected"
+    The built-in [web search tool](api_openai_responses.md#openai-gpt-web-search) is gated by both an IAM permission and a server setting, and each failure looks different.
+
+    - **The model answers from its training data and says it could not search**: the task role is missing `bedrock-websearch:InvokeSearch` / `bedrock-websearch:InvokeFetch`. Add them — see [Web Search IAM](operations_iam_permissions.md#web-search-iam). The request itself still succeeds, so this shows up as a weak answer rather than an error.
+    - **`400` on `external_web_access`**: the request asked for a value the server does not allow. By default searches stay inside the AWS boundary; set [`AWS_BEDROCK_EXTERNAL_WEB_ACCESS`](operations_configuration.md#bedrock-external-web-access) to change what the server does, or [`AWS_BEDROCK_ALLOW_EXTERNAL_WEB_ACCESS_OVERRIDE`](operations_configuration.md#bedrock-allow-external-web-access-override) to let requests choose.
+    - **External web access was enabled but results still look cached**: `bedrock-websearch:ExternalWebAccess` is missing from the task role, so the search falls back to the Amazon Bedrock web index.
+    - **The tool is rejected outright**: web search is served on `/v1/responses` for the OpenAI GPT-5.x family, in `us-east-1`, `us-east-2` and `us-west-2`. On `/v1/messages` and `/v1/chat/completions` it is not available for these models.
+
 ??? failure "`503`/`504`/`408` — request times out mid-stream on long generations"
     A slow or hung generation exceeded a timeout somewhere between the model and the client. The status code tells you where: `503` comes from stdapi.ai's own gateway timeout; `504`/`408` come from an edge or proxy timeout in front of it.
 

@@ -25,10 +25,12 @@ from stdapi.aws_bedrock_mantle import (
     invoke,
     invoke_stream,
     mantle_request_headers,
+    response_web_search_queries,
     usage_from_chat_completion,
     usage_from_message,
     usage_from_response,
     validate_pruning_extras,
+    web_search_queries,
 )
 from stdapi.config import SETTINGS
 from stdapi.models import MANTLE_MODELS, route_and_execute, set_effective_region
@@ -44,7 +46,7 @@ from stdapi.region_routing import REGION_ROUTER
 from stdapi.types.anthropic_messages import Message
 from stdapi.types.openai_chat_completions import ChatCompletion
 from stdapi.types.openai_responses import Response
-from stdapi.usage import record_bedrock_usage
+from stdapi.usage import record_bedrock_usage, record_web_search_usage
 from stdapi.utils import hide_security_details, to_json_str
 
 if TYPE_CHECKING:
@@ -331,6 +333,12 @@ class ChatModel(ChatModelBase[Any, Any]):
         self._record_usage(
             api, raw.get("usage") or {}, serving_region, raw.get("service_tier")
         )
+        if api == "responses":
+            # Web search is billed per query, separately from the tokens, and
+            # the usage block never reports it.
+            record_web_search_usage(
+                response_web_search_queries(raw), region=serving_region
+            )
         if api == "chat_completions":
             convert.rename_reasoning_field(raw, exclude=exclude_reasoning)
         if api != inbound:
@@ -504,6 +512,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             Unmodified upstream events.
         """
         seen_id = False
+        queries = 0
         input_usage: dict[str, Any] = {}
         last_usage: tuple[Mapping[str, Any], str | None] | None = None
         try:
@@ -516,6 +525,8 @@ class ChatModel(ChatModelBase[Any, Any]):
                 if parsed is not None:
                     if api == "responses" and not seen_id:
                         seen_id = self._tap_response_id(parsed, region, rewrites)
+                    if _may_carry_web_search(api, data):
+                        queries += _event_web_search_queries(event, parsed)
                     if _may_carry_usage(data):
                         last_usage = (
                             self._tap_usage(api, event, parsed, input_usage, region)
@@ -523,6 +534,8 @@ class ChatModel(ChatModelBase[Any, Any]):
                         )
                 yield event, data
         finally:
+            # An abandoned stream still bills the searches it already completed.
+            record_web_search_usage(queries, region=region)
             if last_usage is not None:
                 usage, tier = last_usage
                 self._record_usage("chat_completions", usage, region, tier)
@@ -877,6 +890,19 @@ def _may_carry_usage(data: str) -> bool:
     )
 
 
+def _may_carry_web_search(api: MantleApi, data: str) -> bool:
+    """Whether a raw SSE data payload may complete a web search output item.
+
+    Args:
+        api: Upstream Mantle API shape of the stream.
+        data: Raw SSE data payload.
+
+    Returns:
+        True when the payload mentions a web search output item.
+    """
+    return api == "responses" and '"web_search_call"' in data
+
+
 def _needs_parse(api: MantleApi, data: str, *, seen_id: bool) -> bool:
     """Whether an observed stream event's data payload needs parsing.
 
@@ -886,11 +912,33 @@ def _needs_parse(api: MantleApi, data: str, *, seen_id: bool) -> bool:
         seen_id: Whether the native response id was already captured.
 
     Returns:
-        True when the event may carry an unseen Responses id or a usage block.
+        True when the event may carry an unseen Responses id, a usage block or
+        a completed web search item.
     """
-    return (api == "responses" and not seen_id and '"id"' in data) or _may_carry_usage(
-        data
+    return (
+        (api == "responses" and not seen_id and '"id"' in data)
+        or _may_carry_usage(data)
+        or _may_carry_web_search(api, data)
     )
+
+
+def _event_web_search_queries(event: str | None, parsed: dict[str, Any]) -> int:
+    """Count the billed web search queries a completed output item performed.
+
+    Only the item's terminal event is counted: it is the first one carrying
+    the full query list, and it arrives before the usage event that ends the
+    stream.
+
+    Args:
+        event: SSE event name, if any.
+        parsed: Parsed SSE data payload.
+
+    Returns:
+        Number of billed queries carried by this event.
+    """
+    if event != "response.output_item.done":
+        return 0
+    return web_search_queries(parsed.get("item") or {})
 
 
 def _try_loads(data: str) -> dict[str, Any] | None:

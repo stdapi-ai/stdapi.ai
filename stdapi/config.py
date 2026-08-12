@@ -523,6 +523,36 @@ class _Settings(BaseSettings):
         ),
     )
 
+    aws_bedrock_external_web_access: bool = Field(
+        default=False,
+        description=(
+            "Allow the built-in web search tool to reach the external web. Searches "
+            "are answered from the Amazon Bedrock web index and cache either way, "
+            "and answers are current and carry source citations.\n\n"
+            "AWS documents that retrieval is served entirely from that index and "
+            "cache today, so no request data leaves the AWS boundary even when this "
+            "is enabled, and that a future release may allow live external "
+            "retrieval, at which point request data may leave it. Enabling this is "
+            "therefore a decision taken in advance about behaviour that can change.\n\n"
+            "Enabling it also requires the 'bedrock-websearch:ExternalWebAccess' IAM "
+            "permission on the credentials this server uses. Each action is "
+            "authorized only when a model actually attempts it, and a denied call "
+            "does not fail the request. "
+            "See https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html\n\n"
+            "Defaults to False."
+        ),
+    )
+
+    aws_bedrock_allow_external_web_access_override: bool = Field(
+        default=False,
+        description=(
+            "Allow users to override aws_bedrock_external_web_access at request level "
+            "with the web search tool's 'external_web_access' field. When disabled, a "
+            "request that sets the field to anything other than the configured value is "
+            "rejected instead of being silently overridden. Defaults to False."
+        ),
+    )
+
     aws_s3_accepted_buckets: dict[str, RegionName] = Field(
         default={},
         description=(

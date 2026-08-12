@@ -27,6 +27,7 @@ from stdapi.config import SETTINGS
 from stdapi.models.deprecation import DEPRECATED_MODELS
 from stdapi.models.moderation import GUARDRAIL_CHECKS_MODERATION_MODEL
 from stdapi.pricing import (
+    WEB_SEARCH_MODEL,
     Dimension,
     Price,
     PriceKey,
@@ -2448,6 +2449,96 @@ class TestGuardrailsIngestion:
         ]
 
 
+class TestWebSearchIngestion:
+    """The built-in web search row and its synthetic model key.
+
+    AWS publishes one flat per-query rate that carries no ``model``
+    attribute, because the same rate applies to every model that can call the
+    tool. Without a synthetic key the row resolves to no model at all and web
+    search spend is reported as free.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
+         https://aws.amazon.com/bedrock/pricing/
+         stdapi/pricing.py:_bedrock_synthetic_model
+         stdapi/usage.py:record_web_search_usage
+    """
+
+    @staticmethod
+    def _ingest(usagetype: str, region: str) -> dict[PriceKey, Price]:
+        """Ingest one published web search row and return the price index."""
+        results: dict[PriceKey, Price] = {}
+        item = json.dumps(
+            _price_item(
+                {"regionCode": region, "usagetype": usagetype, "operation": ""},
+                unit="Queries",
+                price="0.0120000000",
+            )
+        )
+        _ingest_price_list_item(item, Service.BEDROCK, region, "USD", results, {}, [])
+        return results
+
+    def test_web_search_row_prices_the_web_search_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The published row resolves to the key the recorder bills against."""
+        region = "us-east-1"
+        results = self._ingest("USE1-Bedrock-Websearch-Queries", region)
+        assert list(results) == [
+            PriceKey(
+                Service.BEDROCK,
+                normalize_model_key(WEB_SEARCH_MODEL),
+                region,
+                Dimension.GROUNDING_REQUESTS,
+                "standard",
+            )
+        ]
+
+        monkeypatch.setattr(pricing._state, "price_index", results)  # noqa: SLF001
+        price = resolve_price(
+            Service.BEDROCK, WEB_SEARCH_MODEL, region, Dimension.GROUNDING_REQUESTS
+        )
+        assert price is not None
+        assert price.amount == Decimal("0.012")
+
+    def test_a_mantle_segment_would_put_the_rate_out_of_reach(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A "mantle" usagetype segment keys the rate under the other service.
+
+        The tool is only reachable through Mantle-served models, so a row named
+        ``...-Mantle-Websearch-Queries`` is the plausible alternative spelling
+        -- and it would key under the Mantle service while
+        ``record_web_search_usage`` records under Bedrock's, leaving every query
+        unpriced with nothing failing. The live catalog test is the authority on
+        the string AWS actually publishes.
+
+        Ref: stdapi/pricing.py:_bedrock_api_service
+             stdapi/pricing.py:_bedrock_synthetic_model
+             tests/test_pricing.py:test_live_price_catalog_ingests_cleanly
+        """
+        results = self._ingest("USE1-Bedrock-Mantle-Websearch-Queries", "us-east-1")
+        assert list(results) == [
+            PriceKey(
+                Service.BEDROCK_MANTLE,
+                normalize_model_key(WEB_SEARCH_MODEL),
+                "us-east-1",
+                Dimension.GROUNDING_REQUESTS,
+                "standard",
+            )
+        ]
+
+        monkeypatch.setattr(pricing._state, "price_index", results)  # noqa: SLF001
+        assert (
+            resolve_price(
+                Service.BEDROCK,
+                WEB_SEARCH_MODEL,
+                "us-east-1",
+                Dimension.GROUNDING_REQUESTS,
+            )
+            is None
+        )
+
+
 class TestUsagetypeTokenFallbackTierSuffixes:
     """Native rows with no inferenceType/featuretype at all (xai.grok's "mantle" usagetype schema).
 
@@ -4607,6 +4698,8 @@ _SYNTHETIC_MODEL_PROBES: Final[tuple[tuple[Service, str, Dimension], ...]] = (
         Dimension.TEXT_UNITS,
     ),
     (Service.BEDROCK, GUARDRAIL_CHECKS_MODERATION_MODEL, Dimension.TEXT_UNITS),
+    # The built-in web search tool's one flat per-query rate.
+    (Service.BEDROCK, WEB_SEARCH_MODEL, Dimension.GROUNDING_REQUESTS),
     (Service.POLLY, "amazon.polly-standard", Dimension.INPUT_CHARACTERS),
     (Service.POLLY, "amazon.polly-neural", Dimension.INPUT_CHARACTERS),
     (Service.POLLY, "amazon.polly-long-form", Dimension.INPUT_CHARACTERS),

@@ -247,6 +247,31 @@ Required for [`AWS_BEDROCK_MANTLE_ENABLED`](operations_configuration.md#bedrock-
 
 ---
 
+## :material-web: Web Search (Optional) { #web-search-iam }
+
+**Environment Variables**: none (enabled by a `web_search` tool in a request)
+
+Required for the built-in [web search tool](api_openai_responses.md#openai-gpt-web-search) on the OpenAI GPT-5.x family, whichever settings are in use. Each action is authorized only when the model actually attempts that call, and a denied call does not fail the request: AWS documents the model continuing with the information it already has and telling you it could not retrieve enough current information ([Identity and access management for Web Search](https://docs.aws.amazon.com/bedrock/latest/userguide/security-web-search.html)).
+
+Add `bedrock-websearch:ExternalWebAccess` on top when a request can reach external web access — that is, when [`AWS_BEDROCK_EXTERNAL_WEB_ACCESS`](operations_configuration.md#bedrock-external-web-access) is enabled, or when [`AWS_BEDROCK_ALLOW_EXTERNAL_WEB_ACCESS_OVERRIDE`](operations_configuration.md#bedrock-allow-external-web-access-override) lets a client ask for it per request. Leaving it out is what keeps every search inside the AWS boundary.
+
+??? example "Web Search IAM Policy Statement"
+    ```json
+    {
+      "Sid": "BedrockWebSearch",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock-websearch:InvokeSearch",
+        "bedrock-websearch:InvokeFetch"
+      ],
+      "Resource": "*"
+    }
+    ```
+
+    `InvokeSearch` and `InvokeFetch` are authorized on AWS-owned tool resources (`arn:aws:bedrock-websearch:<region>:aws:tool/<name>`), which `"*"` covers; the AWS managed policies instead scope them to `arn:aws:bedrock-websearch:*:*:*`, and either form grants the same searches. `ExternalWebAccess` is a permission-only action with no resource of its own, so grant it with `"*"`. Web search runs in the Region that served the model call, in the [Regions where the tool is offered](api_openai_responses.md#openai-gpt-web-search); scope the statement with an `aws:RequestedRegion` condition to pin which Regions may run searches. See [Identity and access management for Web Search](https://docs.aws.amazon.com/bedrock/latest/userguide/security-web-search.html) and [Actions, resources, and condition keys](https://docs.aws.amazon.com/service-authorization/latest/reference/list_bedrock-websearch.html).
+
+---
+
 ## :material-database: S3 File Storage (Optional)
 
 **Environment Variables**: [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket), [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets)
@@ -280,7 +305,7 @@ Required for storing generated images, audio files, documents, and videos. See [
     ```
 
     !!! info "Replace Bucket Name"
-        Replace `AWS_S3_BUCKET_VALUE` with the value of your [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) environment variable. Repeat both statements for each [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets) bucket — they serve video generation, asynchronous embeddings (TwelveLabs Marengo, Amazon Nova), and [Speech-to-Text](#speech-to-text-optional) failover, and the Files API looks up objects across every configured bucket.
+        Replace `AWS_S3_BUCKET_VALUE` with the value of your [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) environment variable. Repeat both statements for each [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets) bucket — they serve video generation, asynchronous embeddings (TwelveLabs Marengo, Amazon Nova), [large attachments](features.md#attachment-size) on any multimodal route, and [Speech-to-Text](#speech-to-text-optional) failover, and the Files API looks up objects across every configured bucket.
 
     !!! note "Multipart Uploads"
         Large files are uploaded and copied with the multipart API. Its `CreateMultipartUpload`, `UploadPart`, `UploadPartCopy`, and `CompleteMultipartUpload` operations have no dedicated IAM actions — they are authorized by `s3:PutObject` — which is why only the abort and listing actions appear above.
@@ -775,6 +800,7 @@ Required if you configure API authentication. See the [Authentication](operation
 | **Bedrock Guardrails & Moderations**            | `bedrock:ApplyGuardrail`                                                                                                                                   | `AWS_BEDROCK_GUARDRAIL_IDENTIFIER`                                           |
 | **Stored Responses & Chat Completions**         | Bedrock session permissions (`bedrock:CreateSession`, `bedrock:GetSession`, `bedrock:*Invocation*`, `bedrock:ListSessions`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:TagResource`, `bedrock:ListTagsForResource` on sessions) | `store=true` requests and stored-completion listings                         |
 | **Bedrock Mantle**                              | `bedrock-mantle:CreateInference`<br>`bedrock-mantle:GetInference`<br>`bedrock-mantle:DeleteInference`<br>`bedrock-mantle:ListModels`<br>`bedrock-mantle:GetModel`<br>`bedrock-mantle:CancelInference` (on `arn:aws:bedrock-mantle:*:*:project/*`)<br>`bedrock-mantle:CallWithBearerToken` | `AWS_BEDROCK_MANTLE_ENABLED=true`                                            |
+| **Web Search**                                  | `bedrock-websearch:InvokeSearch`<br>`bedrock-websearch:InvokeFetch`<br>`bedrock-websearch:ExternalWebAccess` only when external web access is enabled | `web_search` requests on the OpenAI GPT-5.x family                           |
 | **File Storage**                                | `s3:PutObject`<br>`s3:PutObjectTagging`<br>`s3:GetObject`<br>`s3:DeleteObject`<br>`s3:AbortMultipartUpload`<br>`s3:ListMultipartUploadParts`<br>`s3:ListBucket`<br>`s3:ListBucketMultipartUploads`<br>on every bucket, including each `AWS_S3_REGIONAL_BUCKETS` entry | `AWS_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`                                 |
 | **Video Generation**                            | Core Bedrock invoke permissions (incl. `bedrock:GetAsyncInvoke`, `bedrock:TagResource`)<br>`bedrock:ListAsyncInvokes` and `bedrock:ListTagsForResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) for job listing<br>File Storage S3 permissions on each regional bucket | `AWS_S3_REGIONAL_BUCKETS`                                                    |
 | **KMS Encrypted S3 Buckets**                    | `kms:Decrypt`<br>`kms:GenerateDataKey`<br>with `kms:ViaService` condition                                                                                  | If S3 buckets use KMS encryption                                             |

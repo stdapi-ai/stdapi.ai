@@ -1217,7 +1217,7 @@ export AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE=true
 :   `false`
 
 :octicons-workflow-24: **Behavior**
-:   When `false`, searches are answered from the Amazon Bedrock web index and cache: the request content stays inside the AWS boundary, and answers are still current and still carry source citations. When `true`, searches may retrieve content from the public web, which requires the `bedrock-websearch:ExternalWebAccess` IAM permission on the credentials this server uses — without it a search silently falls back to the index and the model reports that it could not reach the web. See [Web Search on Amazon Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html).
+:   Controls whether the built-in web search tool may reach the external web. Searches are answered from the Amazon Bedrock web index and cache either way, and answers are current and carry source citations. AWS [documents](https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html) that retrieval is served entirely from that index and cache today, so no request data leaves the AWS boundary even when this is enabled, and that a future release may allow live external retrieval — at which point request data may leave it. Enabling it is therefore a decision taken in advance about behaviour that can change. It also requires the `bedrock-websearch:ExternalWebAccess` IAM permission on the credentials this server uses; each action is authorized only when a model actually attempts it, and a denied call does not fail the request.
 
 ```bash
 export AWS_BEDROCK_EXTERNAL_WEB_ACCESS=true

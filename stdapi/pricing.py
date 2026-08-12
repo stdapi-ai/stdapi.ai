@@ -225,6 +225,7 @@ def _generic_usagetype_dimension(usagetype: str) -> Dimension | None:
 #: usagetype substring to dimension for inferenceType-less native rows (ordered).
 _USAGETYPE_FALLBACK_DIMENSIONS: Final[tuple[tuple[str, Dimension], ...]] = (
     ("novagrounding", Dimension.GROUNDING_REQUESTS),
+    ("websearchqueries", Dimension.GROUNDING_REQUESTS),
     ("inputstandardimage", Dimension.INPUT_IMAGES),
     ("inputdocumentimage", Dimension.INPUT_IMAGES),
     ("inputaudiosecond", Dimension.INPUT_SECONDS),
@@ -803,6 +804,12 @@ def _extract_price(
 #: Prefix shared by every synthetic Bedrock Guardrails model.
 GUARDRAIL_MODEL_PREFIX: Final = "amazon.bedrock-runtime-guardrail"
 
+#: Synthetic model the built-in web search tool's per-query rate is billed against.
+WEB_SEARCH_MODEL: Final = "amazon.bedrock-web-search"
+
+#: usagetype fragment identifying the model-less Bedrock web search rows.
+_WEB_SEARCH_USAGETYPE_FRAGMENT: Final = "websearchqueries"
+
 #: Guardrails usagetype fragment to the policy slug it prices (ordered).
 _GUARDRAIL_POLICY_SLUGS: Final[tuple[tuple[str, str], ...]] = (
     ("contentpolicy", "content"),
@@ -868,6 +875,21 @@ def _guardrail_model(usagetype: str) -> str:
     return ""
 
 
+def _bedrock_synthetic_model(usagetype: str) -> str:
+    """Build the synthetic model a model-less Bedrock row bills against.
+
+    Args:
+        usagetype: The usagetype attribute.
+
+    Returns:
+        The synthetic model string, or "" when the row names no model-less
+        operation this app bills for.
+    """
+    if _WEB_SEARCH_USAGETYPE_FRAGMENT in _normalize_usagetype(usagetype):
+        return WEB_SEARCH_MODEL
+    return _guardrail_model(usagetype)
+
+
 def _synthesize_service_model_key(
     our_service: Service, attrs: Mapping[str, Any]
 ) -> str:
@@ -876,7 +898,9 @@ def _synthesize_service_model_key(
     Polly/Translate/Transcribe/Comprehend have no `model` attribute; matching
     them requires reconstructing the exact synthetic model string from
     `engine` (Polly) or `operation` (Translate/Transcribe/Comprehend). Bedrock
-    Guardrails rows have none either -- see :func:`_guardrail_model`.
+    Guardrails rows have none either -- see :func:`_guardrail_model` -- and
+    neither does the built-in web search, whose one flat per-query rate applies
+    to every model that can call it.
 
     Args:
         our_service: The Service this price-list entry belongs to.
@@ -888,7 +912,7 @@ def _synthesize_service_model_key(
     """
     match our_service:
         case Service.BEDROCK:
-            return _guardrail_model(attrs.get("usagetype", ""))
+            return _bedrock_synthetic_model(attrs.get("usagetype", ""))
         case Service.POLLY:
             engine = attrs.get("engine", "")
             return f"amazon.polly-{engine.lower()}" if engine else ""

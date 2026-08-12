@@ -24,6 +24,7 @@ from pydantic import ValidationError
 from stdapi import usage
 from stdapi.config import SETTINGS, _Settings
 from stdapi.pricing import (
+    WEB_SEARCH_MODEL,
     Dimension,
     Service,
     guardrail_policy_model,
@@ -42,6 +43,7 @@ from stdapi.usage import (
     record_polly_usage,
     record_transcribe_usage,
     record_translate_usage,
+    record_web_search_usage,
 )
 from tests.conftest import set_test_price
 
@@ -1308,6 +1310,53 @@ class TestGuardrailPolicyPricing:
         record_guardrail_policy_usage(
             {"automatedReasoningPolicies": 7}, region="us-east-1"
         )
+        assert usage.USAGE.get() == {}
+
+
+class TestWebSearchUsage:
+    """Built-in web search billed per query, beside the model's own tokens.
+
+    One flat published rate covers every model that can call the tool, so the
+    queries are recorded on their own key: folding them into the model's token
+    record would look for a per-model web search rate that does not exist.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
+         stdapi/usage.py:record_web_search_usage
+    """
+
+    def test_queries_are_billed_on_their_own_record(self) -> None:
+        """The searches cost their own line, on top of the invocation's tokens."""
+        set_test_price(
+            "testmodel",
+            "us-east-1",
+            Dimension.INPUT_TOKENS,
+            "0.000001",
+            "USD",
+            service=Service.BEDROCK_MANTLE,
+        )
+        set_test_price(
+            normalize_model_key(WEB_SEARCH_MODEL),
+            "us-east-1",
+            Dimension.GROUNDING_REQUESTS,
+            "0.012",
+            "USD",
+        )
+        record_bedrock_usage(
+            "testmodel",
+            service=Service.BEDROCK_MANTLE,
+            region="us-east-1",
+            input_tokens=1000,
+        )
+        record_web_search_usage(3, region="us-east-1")
+        assert compute_costs() == []
+        records = {key.model: record for key, record in usage.USAGE.get().items()}
+        assert records[WEB_SEARCH_MODEL].cost == Decimal("0.036")
+        assert records[WEB_SEARCH_MODEL].service == Service.BEDROCK
+        assert records["testmodel"].cost == Decimal("0.001")
+
+    def test_a_turn_without_a_search_records_nothing(self) -> None:
+        """No search means no usage record at all, not a zero-quantity one."""
+        record_web_search_usage(0, region="us-east-1")
         assert usage.USAGE.get() == {}
 
 

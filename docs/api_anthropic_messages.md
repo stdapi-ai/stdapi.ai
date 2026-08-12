@@ -414,7 +414,7 @@ curl -X POST "$BASE/v1/messages" \
 - **No search filtering on non-Claude models**: Amazon's `systemTool` grounding has no equivalent for `allowed_domains`, `blocked_domains`, `max_uses`, or `user_location`. Requests to a system-tool web search model (e.g. Amazon Nova 2) that set any of these fields are rejected with a `400 Bad Request` rather than silently running an unfiltered search. Anthropic Claude models forward these fields natively and are unaffected.
 
 !!! note "Model Compatibility"
-    Requesting `web_search` on a model that does not support it will return a `400 Bad Request` error.
+    Requesting `web_search` on a model that does not support it will return a `400 Bad Request` error. The OpenAI GPT-5.x family runs web search on the [Responses API](api_openai_responses.md#openai-gpt-web-search) instead: its results are reported as `web_search_call` items and `url_citation` annotations, which have no equivalent in an Anthropic `web_search_tool_result` block, so this endpoint rejects the tool rather than answering with a different shape.
 
 ##### Code Interpreter
 
@@ -496,7 +496,7 @@ curl -X POST "$BASE/v1/messages" \
 The following Anthropic server tools are **not supported** via the classic Bedrock (Converse) path:
 
 - `code_execution` — Code execution sandbox
-- `web_search` — Web search (only available on Amazon Nova models via `nova_grounding`)
+- `web_search` — Web search (available on Amazon Nova models via `nova_grounding`; the OpenAI GPT-5.x family offers it on [`/v1/responses`](api_openai_responses.md#openai-gpt-web-search) only)
 - `web_fetch` — Web page fetching
 - `tool_search` — Tool search
 - `container_upload` — Container file upload

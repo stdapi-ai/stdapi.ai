@@ -137,7 +137,7 @@ Generate model responses with Amazon Bedrock foundation models through an OpenAI
 </div>
 
 !!! note "Bedrock Mantle passthrough"
-    On [Mantle](features.md#bedrock-mantle-models) models served natively by the upstream Responses API, the parameters that the Converse path accepts but ignores — `background`, `include` (values other than `reasoning.encrypted_content`), `stream_options`, `reasoning.summary`, `text.verbosity`, `client_metadata`, `top_logprobs` — and the hosted tools (`file_search`, `code_interpreter`, `computer`, `mcp`, `image_generation`) are forwarded verbatim upstream: the upstream API decides whether they take effect or return a clean error. The `web_search` tool runs in cache-only mode (`external_web_access` is forced off).
+    On [Mantle](features.md#bedrock-mantle-models) models served natively by the upstream Responses API, the parameters that the Converse path accepts but ignores — `background`, `include` (values other than `reasoning.encrypted_content`), `stream_options`, `reasoning.summary`, `text.verbosity`, `client_metadata`, `top_logprobs` — and the hosted tools (`file_search`, `code_interpreter`, `computer`, `mcp`, `image_generation`) are forwarded verbatim upstream: the upstream API decides whether they take effect or return a clean error. `web_search` is the exception: on every Mantle model its `external_web_access` field is set by the server, and unless the deployment allows the override, a request that asks for a different value is rejected with a `400` — see [OpenAI GPT web search](#openai-gpt-web-search), where the tool is served natively.
 
 ## Model Support
 
@@ -573,12 +573,71 @@ curl -X POST "$BASE/v1/responses" \
       content. When streaming, each citation also emits a
       `response.output_text.annotation.added` event as it arrives.
 
-    Amazon Bedrock does not report character positions, so `start_index` and
-    `end_index` are approximated to the length of the generated text at the
-    time the citation arrived.
+    On Nova models, Amazon Bedrock does not report character positions, so
+    `start_index` and `end_index` are approximated to the length of the
+    generated text at the time the citation arrived. The OpenAI GPT-5.x family
+    reports its own spans — see
+    [OpenAI GPT Web Search](#openai-gpt-web-search).
 
 !!! warning "Region Compatibility"
     `web_search` is available on Amazon Nova 2 and Nova Premier models, in US regions only. Not available on EU inference profiles.
+
+#### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI GPT Web Search
+
+The OpenAI GPT-5.x family answers `web_search` with the search tool built into
+Amazon Bedrock. The model decides when a question needs current information,
+runs one or more queries, and grounds its answer in what it finds.
+
+```bash
+curl -X POST "$BASE/v1/responses" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "openai.gpt-5.6-luna",
+    "input": "What are the most significant AWS launches announced this month?",
+    "tools": [{"type": "web_search"}]
+  }'
+```
+
+Each search appears as a `web_search_call` output item, and every grounded
+statement carries a `url_citation` annotation on the assistant message's
+`output_text` content, whose `start_index` and `end_index` delimit the answer
+text it supports. When streaming, the lifecycle arrives as
+`response.web_search_call.in_progress` / `.searching` / `.completed`, and each
+citation as a `response.output_text.annotation.added` event.
+
+!!! info "External web access"
+    Searches are answered from the Amazon Bedrock web index and cache, and
+    results are current and cited either way.
+    [`AWS_BEDROCK_EXTERNAL_WEB_ACCESS`](operations_configuration.md#bedrock-external-web-access)
+    controls whether a search *may* reach the external web, and it takes the
+    `bedrock-websearch:ExternalWebAccess` permission as well — see
+    [Web Search IAM](operations_iam_permissions.md#web-search-iam).
+
+    AWS
+    [documents](https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html)
+    that retrieval is served entirely from that index and cache today, so no
+    request data leaves the AWS boundary even when the permission is granted, and
+    that a future release may allow live external retrieval — at which point
+    request data may leave it. Enabling this is therefore an advance decision
+    about behaviour that can change: leave it off unless you intend that.
+
+    A request may only set the tool's `external_web_access` field to something
+    other than the configured value when
+    [`AWS_BEDROCK_ALLOW_EXTERNAL_WEB_ACCESS_OVERRIDE`](operations_configuration.md#bedrock-allow-external-web-access-override)
+    is enabled; otherwise the request is rejected with a `400`.
+
+!!! warning "Availability and cost"
+    Web search is available on the OpenAI GPT-5.x models in `us-east-1`,
+    `us-east-2` and `us-west-2`. Each search runs in the Region that served the
+    model call and is never routed to another Region, so keep one of the three
+    in [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions):
+    a model served from anywhere else cannot search.
+
+    It is billed per query on top of the model's
+    tokens — see [Built-in tool pricing](operations_cost_management.md#built-in-tool-pricing).
+    It is offered on this endpoint only: requesting the equivalent server tool
+    on `/v1/messages` returns a `400`.
 
 #### :material-image: Image Generation
 

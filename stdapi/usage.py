@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Final, Literal, TypedDict
 
 from stdapi.config import SETTINGS
 from stdapi.pricing import (
+    WEB_SEARCH_MODEL,
     CacheTtlBucket,
     ContextLength,
     Dimension,
@@ -655,6 +656,26 @@ def record_guardrail_policy_usage(
                 region,
                 quantities={dimension: units},
             )
+
+
+def record_web_search_usage(queries: int, *, region: str = "") -> None:
+    """Record built-in web search usage performed during a model invocation.
+
+    AWS publishes one flat per-query rate covering every model that can call
+    the tool, so the queries are billed against their own synthetic model
+    rather than the model that issued them.
+
+    Args:
+        queries: Number of web search queries the invocation performed.
+        region: Region that served the call.
+    """
+    if queries > 0:
+        _record_usage(
+            Service.BEDROCK,
+            WEB_SEARCH_MODEL,
+            region,
+            quantities={Dimension.GROUNDING_REQUESTS: queries},
+        )
 
 
 def record_polly_usage(

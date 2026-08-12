@@ -334,6 +334,7 @@ Configure multiple AWS regions to draw on more than one Bedrock quota and to kee
 | **Prompt Routers**                 | Bedrock prompt routers for intelligent model selection                                                                 |
 | **Cross-Region Inference**         | Geography-pinned (US, EU, APAC) and global profiles with data residency control                                        |
 | **System Tools (Nova)**            | Web grounding with URL citations; code interpreter                                                                     |
+| **Web Search (OpenAI GPT)**        | Built-in web search with source citations on `/v1/responses`, billed per query                                          |
 | **Claude Server Tools**            | Bash, text editor, computer use (Claude 3.5+), memory (Claude 3.7+)                                                    |
 | **Extra Model Parameters**         | Any model-specific parameter forwarded via `extra_body` or top-level field                                             |
 
@@ -346,7 +347,8 @@ stdapi.ai serves models from the **Amazon Bedrock Mantle** endpoint alongside th
 - **Region failover** — Region failover and quota backoff work exactly like classic Bedrock region routing; requests chained via `previous_response_id` are pinned to their origin region
 - **No static secrets** — Mantle access uses the same AWS credential chain as the rest of the server; there is no separate API key to issue, store or rotate
 - **Native stored conversations** — `/v1/responses` with `store`, `previous_response_id`, and `GET`/`DELETE /v1/responses/{id}` use Mantle's native server-side storage: 30-day retention, region-local, project-scoped
-- **Usage & billing** — Token usage (including cached tokens and standard/flex/priority service tiers) is recorded and priced at bedrock-mantle rates, like all other models
+- **Usage & billing** — Token usage (including cached tokens and standard/flex/priority service tiers) is recorded and priced at bedrock-mantle rates, like all other models; built-in web search queries are recorded and priced beside them
+- **Built-in web search** — The OpenAI GPT-5.x family grounds answers in current web content with source citations on `/v1/responses`, inside the AWS boundary by default
 
 Enabled by default; regions, routing preferences, the per-request Mantle routing header, and required IAM permissions are covered in the [Bedrock Mantle configuration](operations_configuration.md#bedrock-mantle-enabled) and [IAM](operations_configuration.md#bedrock-mantle-iam) sections — without the required permissions, Mantle models are simply not listed and a warning is logged at startup.
 
@@ -358,7 +360,7 @@ Enabled by default; regions, routing preferences, the per-request Mantle routing
 | **Other open-weight models** (Gemma, Qwen, GLM, Mistral, DeepSeek, MiniMax, Kimi, Nemotron, Palmyra) | Chat Completions             |
 
 !!! note "Limitations & conversion details"
-    Bedrock Guardrails and cross-region inference profiles do not apply to Mantle-served requests, and the server-side `web_search` tool runs in cache-only mode. API-shape conversion preserves the core request semantics (messages, tools, sampling, streaming, usage); parameters with no equivalent in the serving API are dropped or adapted. The exact parameter tables, response-ID specifics, and per-route limitations are on the API pages: [chat completions](api_openai_chat_completions.md#bedrock-mantle), [responses](api_openai_responses.md#model-support), [messages](api_anthropic_messages.md#bedrock-mantle), and [legacy completions](api_openai_completions.md#feature-compatibility).
+    Bedrock Guardrails and cross-region inference profiles do not apply to Mantle-served requests, and the built-in [`web_search` tool](api_openai_responses.md#openai-gpt-web-search) is served on `/v1/responses` only. API-shape conversion preserves the core request semantics (messages, tools, sampling, streaming, usage); parameters with no equivalent in the serving API are dropped or adapted. The exact parameter tables, response-ID specifics, and per-route limitations are on the API pages: [chat completions](api_openai_chat_completions.md#bedrock-mantle), [responses](api_openai_responses.md#model-support), [messages](api_anthropic_messages.md#bedrock-mantle), and [legacy completions](api_openai_completions.md#feature-compatibility).
 
 [:octicons-arrow-right-24: Bedrock Mantle Configuration](operations_configuration.md#bedrock-mantle-enabled)
 
@@ -380,9 +382,9 @@ S3 is woven into the entire API surface — not just file storage:
 - **Direct `s3://` image references** — Use `s3://bucket/key` in chat completions and Anthropic Messages; the gateway reads from S3 via IAM role — no pre-signed URLs
 - **Files API in image operations** — Reference uploaded files by `file_id` in image edits and variations
 - **Multimodal embeddings** — Pass `s3://` URLs directly; oversized base64 payloads auto-uploaded and invoked asynchronously
+- **Large attachments** — An attachment past what a model reads inline is staged in S3 automatically and referenced, wherever the model reads that kind from storage, so a request that would otherwise be refused is answered unchanged
 - **Regional buckets** — One bucket per Bedrock region; S3 region routing is automatic
 - **Transfer Acceleration** — Faster downloads via generated HTTP links
-- **Large attachments** — An attachment past what a model reads inline is staged in S3 automatically and referenced, wherever the model reads that kind from storage, so a request that would otherwise be refused is answered unchanged
 
 ---
 

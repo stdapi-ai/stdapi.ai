@@ -23,7 +23,7 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from anthropic import BadRequestError as AnthropicBadRequestError
@@ -41,6 +41,7 @@ pytestmark = [pytest.mark.xdist_group("mantle_live"), pytest.mark.gateway]
 
 if TYPE_CHECKING:
     from anthropic import Anthropic
+    from openai.types.responses import WebSearchToolParam
     from starlette.testclient import TestClient as TestClientType
 
 #: Cheap chat-completions-only Mantle model on the legacy /v1 surface.
@@ -745,6 +746,234 @@ class TestMantleResponses:
         assert _default._LEARNED_SURFACE[_GEMMA4] == "/openai/v1"  # noqa: SLF001
 
 
+def _url_citations(annotations: list[Any]) -> list[dict[str, Any]]:
+    """Keep the ``url_citation`` annotations of one output text part."""
+    dumped = [
+        annotation if isinstance(annotation, dict) else annotation.model_dump()
+        for annotation in annotations
+    ]
+    return [
+        annotation for annotation in dumped if annotation.get("type") == "url_citation"
+    ]
+
+
+def _billed_queries(output: list[dict[str, Any]]) -> int:
+    """Count the queries a response's search calls ran, as AWS meters them.
+
+    Written out rather than reusing the gateway helper, so the test still
+    disagrees with an implementation that counted tool calls or page reads.
+    """
+    total = 0
+    for item in output:
+        action = item.get("action") or {}
+        if item.get("type") != "web_search_call" or action.get("type") != "search":
+            continue
+        if queries := action.get("queries"):
+            total += len(queries)
+        elif action.get("query"):
+            total += 1
+    return total
+
+
+class TestMantleWebSearch:
+    """The built-in web search tool on the OpenAI GPT family.
+
+    Web search is a Responses-API tool: the model decides when a question needs
+    current information, runs one or more queries against the Amazon Bedrock
+    web index, and grounds its answer with ``url_citation`` annotations. AWS
+    meters it per query, separately from the invocation's tokens, so a turn
+    that searched must produce a second usage record.
+
+    Whether the search may leave the AWS boundary is an operator setting; the
+    default keeps every query inside it.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
+         https://developers.openai.com/api/docs/guides/tools-web-search
+         stdapi/models/chat/_mantle/_convert.py:_apply_external_web_access
+         stdapi/aws_bedrock_mantle.py:web_search_queries
+    """
+
+    #: A question no model can answer from its training data alone.
+    _PROMPT = (
+        "Search the web: which announcements did AWS publish most recently "
+        "about Amazon Bedrock? Answer in two sentences, with sources."
+    )
+
+    #: Web search is billed on its own synthetic model, under the Bedrock service.
+    _SEARCH_USAGE_SERVICE = "bedrock-runtime"
+
+    #: Synthetic model the per-query rate is recorded against.
+    _SEARCH_USAGE_MODEL = "amazon.bedrock-web-search"
+
+    @pytest.mark.expensive
+    @pytest.mark.retry("the model decides whether a question needs a web search")
+    def test_luna_web_search_cites_sources_and_bills_each_query(
+        self,
+        openai_client: OpenAI,
+        test_client: TestClientType | None,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """A grounded answer carries search calls, citations and a per-query charge.
+
+        The upstream usage block reports tokens only, so the queries have to be
+        counted off the output items; billing them per tool call or per page
+        read would report a different number. The search and citation
+        assertions run on every target: a deployment whose role lacks the web
+        search permissions answers ungrounded instead of failing, so this is
+        the only check that catches it remotely.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
+             stdapi/models/chat/_mantle/_default.py:ChatModel._serve_validated
+        """
+        capfd.readouterr()
+        response = openai_client.responses.create(
+            model=_LUNA,
+            input=self._PROMPT,
+            tools=[{"type": "web_search"}],
+            max_output_tokens=_LUNA_MAX_TOKENS,
+        )
+        output = response.model_dump()["output"]
+        searches = [item for item in output if item["type"] == "web_search_call"]
+        assert searches, "The grounded answer must report its search calls"
+        assert all(search["status"] == "completed" for search in searches)
+
+        citations = [
+            citation
+            for item in output
+            if item["type"] == "message"
+            for part in item["content"]
+            if part["type"] == "output_text"
+            for citation in _url_citations(part["annotations"])
+        ]
+        assert citations, "A grounded answer must carry its source citations"
+        assert all(citation["url"] for citation in citations)
+        assert all(
+            citation["start_index"] < citation["end_index"] for citation in citations
+        )
+        if test_client is None:
+            return
+
+        entries = logged_usage_entries(
+            capfd.readouterr().out,
+            service=self._SEARCH_USAGE_SERVICE,
+            model=self._SEARCH_USAGE_MODEL,
+        )
+        assert len(entries) == 1, "Web search must be billed exactly once"
+        assert entries[0]["grounding_requests"] == _billed_queries(output)
+
+    @pytest.mark.expensive
+    @pytest.mark.retry("the model decides whether a question needs a web search")
+    def test_luna_streamed_web_search_reports_progress_and_bills(
+        self,
+        openai_client: OpenAI,
+        test_client: TestClientType | None,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """A streamed search reports its lifecycle, its citations and its cost.
+
+        The query list only arrives on the item's terminal event, ahead of the
+        usage event, so a stream is billed from there rather than from the
+        completed response. Only the billing assertions need the in-process
+        app; the lifecycle and citation ones run against a deployment too.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
+             stdapi/models/chat/_mantle/_default.py:_event_web_search_queries
+        """
+        capfd.readouterr()
+        events = list(
+            openai_client.responses.create(
+                model=_LUNA,
+                input=self._PROMPT,
+                tools=[{"type": "web_search"}],
+                max_output_tokens=_LUNA_MAX_TOKENS,
+                stream=True,
+            )
+        )
+        dumped = [event.model_dump() for event in events]
+        types = [event["type"] for event in dumped]
+        assert "response.web_search_call.in_progress" in types
+        assert "response.web_search_call.searching" in types
+        assert "response.web_search_call.completed" in types
+        assert types.index("response.web_search_call.in_progress") < types.index(
+            "response.web_search_call.completed"
+        )
+
+        finished = [
+            event["item"]
+            for event in dumped
+            if event["type"] == "response.output_item.done"
+            and event["item"]["type"] == "web_search_call"
+        ]
+        assert finished, "Each search call must be reported as a finished item"
+        assert all(item["action"]["type"] for item in finished)
+
+        annotations = [
+            event["annotation"]
+            for event in dumped
+            if event["type"] == "response.output_text.annotation.added"
+        ]
+        assert _url_citations(annotations), "Streamed answers must cite their sources"
+        if test_client is None:
+            return
+
+        entries = logged_usage_entries(
+            capfd.readouterr().out,
+            service=self._SEARCH_USAGE_SERVICE,
+            model=self._SEARCH_USAGE_MODEL,
+        )
+        assert len(entries) == 1, "Web search must be billed exactly once"
+        assert entries[0]["grounding_requests"] == _billed_queries(finished)
+
+    def test_luna_external_web_access_request_rejected_by_default(
+        self, openai_client: OpenAI
+    ) -> None:
+        """Asking for external web access a server forbids fails before any search.
+
+        The default configuration keeps every query inside the AWS boundary, and
+        the request is refused rather than silently answered from the index.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
+             stdapi/config.py:Settings.aws_bedrock_external_web_access
+        """
+        with pytest.raises(BadRequestError) as bad_request:
+            openai_client.responses.create(
+                model=_LUNA,
+                input="Say OK.",
+                # external_web_access is an Amazon Bedrock extension of the tool.
+                tools=[
+                    cast(
+                        "WebSearchToolParam",
+                        {"type": "web_search", "external_web_access": True},
+                    )
+                ],
+                max_output_tokens=_LUNA_MAX_TOKENS,
+            )
+        assert bad_request.value.status_code == 400
+        assert "external_web_access" in str(bad_request.value)
+
+    def test_luna_anthropic_web_search_tool_rejected(
+        self, anthropic_client: Anthropic
+    ) -> None:
+        """Web search is not offered on the Anthropic Messages route for this family.
+
+        Anthropic's contract returns the search results themselves in
+        ``web_search_tool_result`` blocks, which this model never reports, so
+        the tool is refused instead of answered with a different shape.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
+             stdapi/models/chat/_mantle/_convert.py:_chat_tools_from_anthropic
+        """
+        with pytest.raises(AnthropicBadRequestError) as bad_request:
+            anthropic_client.messages.create(
+                model=_LUNA,
+                max_tokens=32,
+                messages=[{"role": "user", "content": "Say OK."}],
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+            )
+        assert bad_request.value.status_code == 400
+        assert "server tools are not available" in str(bad_request.value)
+
+
 class TestMantleMessages:
     """Anthropic Messages route served by Mantle, natively and via conversions.
 
@@ -901,7 +1130,7 @@ class TestMantleMessages:
                 tools=[{"type": "web_search_20250305", "name": "web_search"}],
             )
         assert bad_request.value.status_code == 400
-        assert "server tools are not supported" in str(bad_request.value)
+        assert "server tools are not available" in str(bad_request.value)
 
     @pytest.mark.slow
     def test_luna_converted_to_responses(self, anthropic_client: Anthropic) -> None:

@@ -47,11 +47,13 @@ from stdapi.aws_bedrock_mantle import (
     decode_mantle_response_id,
     encode_mantle_response_id,
     mantle_request_headers,
+    response_web_search_queries,
     set_mantle_project,
     usage_from_chat_completion,
     usage_from_message,
     usage_from_response,
     validate_pruning_extras,
+    web_search_queries,
 )
 from stdapi.config import AWS_SESSION, SETTINGS, _Settings
 from stdapi.models import MANTLE_MODELS, MANTLE_SERVICE, ModelDetails
@@ -1250,6 +1252,138 @@ class TestObserveStreamChatCompletionsUsage:
         assert records[0]["total_tokens"] == 8
 
 
+#: Web search output items as the Responses API reports them, one turn's worth.
+_WEB_SEARCH_ITEMS: list[dict[str, Any]] = [
+    {
+        "type": "web_search_call",
+        "id": "ws_1",
+        "status": "completed",
+        "action": {
+            "type": "search",
+            "query": "who won",
+            "queries": ["who won", "final score"],
+        },
+    },
+    {
+        "type": "web_search_call",
+        "id": "ws_2",
+        "status": "completed",
+        "action": {"type": "search", "query": "who won 2026"},
+    },
+    {
+        "type": "web_search_call",
+        "id": "ws_3",
+        "status": "completed",
+        "action": {"type": "open_page", "url": "https://example.invalid/report"},
+    },
+    {"type": "message", "id": "msg_1", "role": "assistant", "content": []},
+]
+
+
+class TestWebSearchQueryCounting:
+    """Built-in web search is metered per query, not per tool call.
+
+    One tool call may run several queries at once, and page reads are a
+    separate operation with no published per-query rate, so neither counting
+    the output items nor counting the tool calls matches what AWS bills.
+
+    Every observed item reported ``status: "completed"``; whether a refused
+    search (no ``bedrock-websearch:InvokeSearch`` permission) still reports the
+    queries it attempted is unverified, so the count deliberately reads the
+    action rather than the status.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
+         https://aws.amazon.com/bedrock/pricing/
+         stdapi/aws_bedrock_mantle.py:web_search_queries
+    """
+
+    @pytest.mark.parametrize(
+        ("index", "expected"), [(0, 2), (1, 1), (2, 0), (3, 0)], ids=str
+    )
+    def test_item_query_counts(self, index: int, expected: int) -> None:
+        """Each output item contributes the number of queries it actually ran."""
+        assert web_search_queries(_WEB_SEARCH_ITEMS[index]) == expected
+
+    def test_response_totals_every_search_call(self) -> None:
+        """A complete response sums the queries of all its search calls."""
+        assert response_web_search_queries({"output": _WEB_SEARCH_ITEMS}) == 3
+
+    def test_response_without_web_search_counts_nothing(self) -> None:
+        """A turn that ran no search records no billable query."""
+        assert response_web_search_queries({"output": [_WEB_SEARCH_ITEMS[-1]]}) == 0
+
+
+class TestObserveStreamWebSearchUsage:
+    """Streamed web search queries are billed from the item's terminal event.
+
+    The query list is only complete on ``response.output_item.done``, which
+    arrives before the usage event that ends the stream, so counting there
+    bills a stream exactly like the equivalent non-streaming turn.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
+         stdapi/models/chat/_mantle/_default.py:_event_web_search_queries
+    """
+
+    @staticmethod
+    def _capture(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, str]]:
+        """Patch ``record_web_search_usage``, capturing (queries, region)."""
+        calls: list[tuple[int, str]] = []
+        monkeypatch.setattr(
+            mantle_default,
+            "record_web_search_usage",
+            lambda queries, *, region: calls.append((queries, region)),
+        )
+        return calls
+
+    async def test_streamed_queries_billed_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only the terminal item event counts: not the added one, not the recap.
+
+        A real stream repeats every output item in the ``response.completed``
+        payload, so counting anything but ``response.output_item.done`` would
+        bill each search twice.
+        """
+        calls = self._capture(monkeypatch)
+        model = mantle_default.ChatModel("test.web-search-model")
+        events: list[SseEvent] = [
+            ("response.created", dumps({"response": {"id": "resp_native1"}}))
+        ]
+        for item in _WEB_SEARCH_ITEMS:
+            events.append(("response.output_item.added", dumps({"item": item})))
+            events.append(("response.output_item.done", dumps({"item": item})))
+        events.append(
+            (
+                "response.completed",
+                dumps(
+                    {"response": {"id": "resp_native1", "output": _WEB_SEARCH_ITEMS}}
+                ),
+            )
+        )
+        async for _ in model._observe_stream(  # noqa: SLF001
+            "responses", _fake_stream(events), "us-east-1", {}
+        ):
+            pass
+        assert calls == [(3, "us-east-1")]
+
+    async def test_abandoned_stream_still_bills_the_searches_it_ran(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A stream cut short after a search still records that search."""
+        calls = self._capture(monkeypatch)
+        model = mantle_default.ChatModel("test.web-search-model")
+        events: list[SseEvent] = [
+            ("response.output_item.done", dumps({"item": _WEB_SEARCH_ITEMS[0]})),
+            ("response.output_text.delta", dumps({"delta": "partial"})),
+        ]
+        stream = model._observe_stream(  # noqa: SLF001
+            "responses", _fake_stream(events), "us-east-1", {}
+        )
+        await anext(stream)
+        await stream.aclose()
+        assert calls == [(2, "us-east-1")]
+
+
 class TestObserveStreamMalformedFrames:
     """Malformed relayed frames are tolerated instead of crashing the stream.
 
@@ -1344,6 +1478,49 @@ class TestServeValidatedBilling:
         assert out["object"] == "chat.completion"
         assert out["choices"][0]["message"]["content"] == "hi"
         assert out["usage"]["prompt_tokens"] == 10
+
+    async def test_web_search_queries_billed_beside_the_tokens(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Web search is billed per query on top of the turn's tokens.
+
+        The upstream usage block never reports the searches, so a turn billed
+        from tokens alone under-reports its real cost.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
+             stdapi/models/chat/_mantle/_default.py:ChatModel._serve_validated
+        """
+        raw = {
+            "id": "resp_ws1",
+            "object": "response",
+            "created_at": 123,
+            "model": "test.model",
+            "status": "completed",
+            "output": _WEB_SEARCH_ITEMS,
+            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        }
+
+        async def fake_serve(
+            self: mantle_default.ChatModel,  # noqa: ARG001
+            inbound: str,  # noqa: ARG001
+            payload: dict[str, Any],  # noqa: ARG001
+            *,
+            stream: bool,  # noqa: ARG001
+            region: str | None = None,  # noqa: ARG001
+        ) -> tuple[str, str, dict[str, Any]]:
+            return "responses", "us-west-2", raw
+
+        monkeypatch.setattr(mantle_default.ChatModel, "_serve", fake_serve)
+        _capture_usage_records(monkeypatch)
+        searches: list[tuple[int, str]] = []
+        monkeypatch.setattr(
+            mantle_default,
+            "record_web_search_usage",
+            lambda queries, *, region: searches.append((queries, region)),
+        )
+        model = mantle_default.ChatModel("test.serve-model")
+        await model._serve_validated("responses", {"input": "hi"})  # noqa: SLF001
+        assert searches == [(3, "us-west-2")]
 
 
 def _capture_log_response_params(monkeypatch: pytest.MonkeyPatch) -> list[object]:

@@ -368,7 +368,12 @@ class WebSearchTool(BaseModelRequest):
         default=None, description="User's approximate location."
     )
     external_web_access: bool | None = Field(
-        default=None, description="Allow external web access."
+        default=None,
+        description=(
+            "Let the search reach the public web instead of a cached index. "
+            "Omit it to use the server's configured value; setting a different "
+            "one is rejected unless the server allows it per request."
+        ),
     )
 
 
@@ -401,7 +406,12 @@ class WebSearchPreviewTool(BaseModelRequest):
         default=None, description="User's location."
     )
     external_web_access: bool | None = Field(
-        default=None, description="Allow external web access."
+        default=None,
+        description=(
+            "Let the search reach the public web instead of a cached index. "
+            "Omit it to use the server's configured value; setting a different "
+            "one is rejected unless the server allows it per request."
+        ),
     )
 
 

@@ -189,6 +189,8 @@ Some 1M-context-capable models (currently Claude Sonnet 4, via the `context-1m` 
 
 Amazon Nova's built-in grounding tool (`web_search` → `nova_grounding`, supported by Nova 2 and Nova Premier) is billed by AWS per grounding request, on top of token usage. stdapi.ai counts grounding invocations in the model response and reports them as `grounding_requests`, priced from the model's published per-request rate.
 
+The Amazon Bedrock web search tool the OpenAI GPT-5.x family uses on [`/v1/responses`](api_openai_responses.md#openai-gpt-web-search) is billed per query at one flat rate — the same for every model — in every Region where that tool is available. Because AWS publishes it without a model, it is reported on its own usage entry under the model `amazon.bedrock-web-search`, also as `grounding_requests`, beside the invocation's own token entry. A single turn may run several queries, and one tool call may issue more than one, so the count comes from the queries the response reports rather than from the number of tool calls; page reads have no published per-query rate and are not counted.
+
 ### Image Pricing Granularity
 
 Some image-generation models (currently: Amazon Titan Image Generator G1/V2 and Nova Canvas) are priced by AWS per resolution/quality combination, not a flat per-image rate. stdapi.ai automatically prices these per-image, based on the actual requested size and quality, falling back to a flat per-image rate for models where this isn't wired up yet (e.g. Stability). No configuration needed — this is purely additive precision with no accuracy trade-off.

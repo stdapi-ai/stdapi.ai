@@ -842,6 +842,41 @@ def usage_from_message(usage: Mapping[str, Any]) -> UsageKwargs:
     }
 
 
+def web_search_queries(item: Mapping[str, Any]) -> int:
+    """Count the billed web-search queries one response output item performed.
+
+    AWS meters the built-in web search per query, and one search call may run
+    several at once. Page reads (``open_page``/``find_in_page``) are a separate
+    unmetered operation, so only search actions count.
+
+    Args:
+        item: One Responses API output item.
+
+    Returns:
+        Number of billed queries, or 0 for any other output item.
+    """
+    if item.get("type") != "web_search_call":
+        return 0
+    action = item.get("action") or {}
+    if action.get("type") != "search":
+        return 0
+    if queries := action.get("queries"):
+        return len(queries) if isinstance(queries, list) else 1
+    return 1 if action.get("query") else 0
+
+
+def response_web_search_queries(response: Mapping[str, Any]) -> int:
+    """Count the billed web-search queries a complete Responses payload performed.
+
+    Args:
+        response: Complete Responses API response.
+
+    Returns:
+        Total number of billed queries across every output item.
+    """
+    return sum(web_search_queries(item) for item in response.get("output") or ())
+
+
 #: Stored-response native ID -> serving OpenAI routing surface (bounded LRU).
 _SURFACE_CACHE: dict[str, Surface] = {}
 
