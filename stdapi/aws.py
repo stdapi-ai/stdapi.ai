@@ -8,6 +8,7 @@ from hashlib import blake2b
 from json import dumps as _std_dumps
 from logging import getLogger
 from os import environ
+from sys import modules
 from typing import TYPE_CHECKING, Any, Final, NotRequired, Self, TypedDict
 
 from aiobotocore.config import AioConfig
@@ -349,7 +350,7 @@ class AWSConnectionManager:
                 # New service names must join the botocore/data allowlist
                 # pruned in the Dockerfile, or the image fails at runtime.
                 self._exit_stack.enter_async_context(
-                    AWS_SESSION.create_client(  # type: ignore[call-overload]
+                    AWS_SESSION.create_client(
                         service.split(".", 1)[0],
                         region_name=region,
                         config=services_configs.get(service, CONFIG),
@@ -393,6 +394,7 @@ class AWSConnectionManager:
                     f"{type(cleanup_error).__name__}: {cleanup_error}"
                 )
             _CLIENTS.clear()
+            _close_bidi_clients()
             raise
         else:
             return self
@@ -412,10 +414,34 @@ class AWSConnectionManager:
         """
         await self._exit_stack.__aexit__(exc_type, exc_val, exc_tb)
         _CLIENTS.clear()
+        _close_bidi_clients()
 
 
-#: ClientError codes indicating a region-level issue worth failing over.
-_FAILOVER_ERROR_CODES: Final[frozenset[str]] = frozenset(
+def _close_bidi_clients() -> None:
+    """Drop the bidirectional clients built from this pool, if any were.
+
+    Looked up in the loaded modules rather than imported: ``stdapi.aws_bidi``
+    imports this one, and a teardown has nothing to drop when the pool was never
+    built.
+    """
+    if (bidi := modules.get("stdapi.aws_bidi")) is not None:
+        bidi.close_bidi_clients()
+
+
+def pooled_clients(service: str) -> dict[RegionName, Any]:
+    """Return every pooled client of *service*, keyed by region.
+
+    Args:
+        service: AWS service name (client pool key).
+
+    Returns:
+        The service's clients, empty when the pool holds none.
+    """
+    return _CLIENTS.get(service, {})
+
+
+#: AWS error codes indicating a region-level issue worth failing over.
+FAILOVER_ERROR_CODES: Final[frozenset[str]] = frozenset(
     {
         "InternalFailure",
         "InternalServerError",
@@ -469,7 +495,7 @@ def is_failover_error(exception: BotoCoreError | ClientError) -> bool:
     error = exception.response.get("Error", {})
     code: str = error.get("Code", "")
     status = exception.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0)
-    if code in _FAILOVER_ERROR_CODES or status >= 500:
+    if code in FAILOVER_ERROR_CODES or status >= 500:
         return True
     # A service the region does not host answers a 4xx the next region serves:
     # Comprehend reports NotAuthorizedException outside its regions, and

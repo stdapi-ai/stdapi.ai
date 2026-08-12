@@ -281,10 +281,12 @@ class _Settings(BaseSettings):
         default=5,
         gt=0,
         description=(
-            "Timeout in seconds for establishing a connection to an AWS service endpoint. "
+            "Timeout in seconds for establishing a connection to an AWS service endpoint, "
+            "and for a real-time audio session to become ready in one region (connection, "
+            "initial handshake and the first response). "
             "Keeping this value short allows fast failover to another region when a connection "
             "cannot be established. Increase it only if you experience spurious connection timeouts "
-            "on high-latency networks. "
+            "on high-latency networks, or real-time audio requests failing shortly after they start. "
             "Default: 5."
         ),
     )

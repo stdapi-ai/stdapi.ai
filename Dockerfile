@@ -62,7 +62,8 @@ COPY stdapi /opt/app/stdapi
 
 # Single source of truth for the services the server constructs clients for:
 # botocore/data is pruned to this list and the smoke test below instantiates
-# every entry to catch a miss.
+# every entry to catch a miss.  The bidirectional stream clients need no entry:
+# they are not botocore clients and carry their own generated service models.
 ENV BOTOCORE_SERVICES="bedrock bedrock-agent bedrock-agent-runtime bedrock-runtime comprehend meteringmarketplace polly pricing s3 secretsmanager ssm sso sso-oidc sts transcribe translate"
 
 # Optimize Python code
@@ -89,7 +90,10 @@ RUN find botocore/data -mindepth 1 -maxdepth 1 -type d \
     find /opt/app/stdapi -type f -exec chmod 644 {} + && \
     find /opt/app/stdapi -type d -exec chmod 755 {} +
 
-RUN AWS_DEFAULT_REGION=eu-west-3 python -c "import stdapi.main" && \
+# stdapi.aws_bidi is named on its own so the native HTTP/2 library behind the
+# bidirectional stream clients is proven loadable here, wherever the server
+# happens to import it from.
+RUN AWS_DEFAULT_REGION=eu-west-3 python -c "import stdapi.main, stdapi.aws_bidi" && \
     python -c "from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware" && \
     python -c "import os; from botocore.session import Session; s = Session(); [s.create_client(n, region_name='us-east-1', aws_access_key_id='x', aws_secret_access_key='x') for n in os.environ['BOTOCORE_SERVICES'].split()]"
 

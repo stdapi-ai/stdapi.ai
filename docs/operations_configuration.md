@@ -153,7 +153,7 @@ This section provides a quick reference of all available configuration options. 
 |---------------------------------------------------------|---------|-------------------------------------------------------------------------------------------------------------|
 | [`AWS_ADAPTIVE_RETRY`](#aws-adaptive-retry)             | `false` | Enable adaptive retry mode that throttles back under congestion rather than using fixed exponential backoff |
 | [`AWS_MAX_POOL_CONNECTIONS`](#aws-max-pool-connections) | `50`    | Maximum concurrent HTTP connections per AWS service client                                                  |
-| [`AWS_CONNECT_TIMEOUT`](#aws-connect-timeout)           | `5`     | Timeout in seconds for establishing a connection to an AWS service endpoint                                 |
+| [`AWS_CONNECT_TIMEOUT`](#aws-connect-timeout)           | `5`     | Timeout in seconds for establishing a connection to an AWS service endpoint, and for a real-time audio session to become ready in a region |
 
 ### :material-database: AWS Storage { #summary-aws-storage }
 
@@ -424,7 +424,7 @@ export AWS_MAX_POOL_CONNECTIONS=100
 :   `5`
 
 :octicons-workflow-24: **Behavior**
-:   Limits how long the client waits when opening a new connection. A short value allows fast failover to another region when an endpoint is unreachable. Increase it only if you see spurious connection timeouts on high-latency networks.
+:   Limits how long the client waits when opening a new connection. It also bounds, per candidate region, the time a real-time audio session (generative-voice speech, speech-to-speech) may take to become ready: connection, initial handshake and the first response together. A short value allows fast failover to another region when an endpoint is unreachable. Increase it only if you see spurious connection timeouts on high-latency networks, or real-time audio requests failing with a `503` a few seconds after they start.
 
 ```bash
 # Default: 5 seconds

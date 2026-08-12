@@ -43,6 +43,7 @@ from stdapi.aws_bedrock import (
     set_performance_configuration,
 )
 from stdapi.aws_bedrock_mantle import set_mantle_project
+from stdapi.aws_bidi import initialize_bidi_clients
 from stdapi.cleanup import CLEANUPS, run_cleanups_detached, run_scheduled_cleanups
 from stdapi.config import SETTINGS
 from stdapi.exceptions import ServerError
@@ -154,6 +155,9 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 ),
             )
         ):
+            # Bidirectional stream clients are not botocore clients, but they
+            # target the endpoints the pool above just resolved.
+            initialize_bidi_clients()
             span_context = otel_manager.start_span(
                 "Application start", attributes={"server.id": server.SERVER_NAME}
             )

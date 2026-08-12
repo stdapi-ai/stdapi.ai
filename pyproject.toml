@@ -8,6 +8,10 @@ dependencies = [
     "fastapi",
     "aiobotocore>=3",
     "botocore>=1.43.30",
+    # Bidirectional (HTTP/2 request event stream) operations: botocore implements
+    # response event streams only. Pinned: pre-1.0, and they move together.
+    "aws-sdk-bedrock-runtime>=0.8,<0.9",
+    "aws-sdk-polly>=0.8,<0.9",
     "pydantic>=2",
     "pydantic-settings>=2",
     "sse-starlette",
@@ -163,6 +167,12 @@ strict_equality = true
 warn_redundant_casts = true
 warn_return_any = true
 warn_unused_ignores = true
+
+# The generated bidirectional AWS clients ship no py.typed marker; everything
+# they are built on (smithy_*, awscrt) is typed.
+[[tool.mypy.overrides]]
+module = ["aws_sdk_polly.*", "aws_sdk_bedrock_runtime.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
