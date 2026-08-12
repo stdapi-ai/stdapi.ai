@@ -2,6 +2,7 @@
 
 Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html
      stdapi/responses_store.py
+     stdapi/aws_bedrock_sessions.py
 """
 
 from asyncio import Event, wait_for
@@ -534,7 +535,7 @@ class TestStoredResponseSessions:
         backtracks off a continuation byte so no chunk splits a code point:
         concatenating the stored chunks reproduces the serialized document.
 
-        Ref: stdapi/responses_store.py:_iter_utf8_chunks
+        Ref: stdapi/aws_bedrock_sessions.py:_iter_utf8_chunks
         """
         monkeypatch.setattr(responses_store, "_CHUNK_SIZE", 10)
         document = {
@@ -564,7 +565,7 @@ class TestStoredResponseSessions:
         never a trailing empty one, since an empty text content block would be
         written as a useless invocation step.
 
-        Ref: stdapi/responses_store.py:_iter_utf8_chunks
+        Ref: stdapi/aws_bedrock_sessions.py:_iter_utf8_chunks
         """
         text = "x"
         document: dict[str, Any] = {
@@ -597,7 +598,7 @@ class TestStoredResponseSessions:
         pages, so a reader that stopped at the first page or kept the returned
         order would rebuild a corrupt document.
 
-        Ref: stdapi/responses_store.py:_load_invocation_document
+        Ref: stdapi/aws_bedrock_sessions.py:load_invocation_document
         """
         monkeypatch.setattr(responses_store, "_CHUNK_SIZE", 10)
         document = {
@@ -631,7 +632,7 @@ class TestStoredResponseSessions:
     ) -> None:
         """A session deleted mid-read surfaces as a 404, not a raw ClientError.
 
-        Ref: stdapi/responses_store.py:_stored_document_or_none
+        Ref: stdapi/aws_bedrock_sessions.py:load_latest_document
         """
         document = {"response": {"id": "resp-sess-1", "object": "response"}}
         await responses_store.save_stored_response("resp-sess-1", document)
@@ -665,7 +666,7 @@ class TestStoredResponseSessions:
         identifier validation; such an ID can never name a stored object, so
         it is reported as not found rather than as an upstream error.
 
-        Ref: stdapi/responses_store.py:_stored_document_or_none
+        Ref: stdapi/aws_bedrock_sessions.py:load_latest_document
         """
 
         async def _invalid(**_params: Any) -> dict[str, Any]:  # noqa: ANN401
@@ -682,7 +683,7 @@ class TestStoredResponseSessions:
     ) -> None:
         """An existing session holding no invocation surfaces as a 404.
 
-        Ref: stdapi/responses_store.py:_stored_document_or_none
+        Ref: stdapi/aws_bedrock_sessions.py:load_latest_document
         """
 
         async def _no_invocations(**_params: object) -> dict[str, Any]:
@@ -779,7 +780,7 @@ class TestStoredResponseSessions:
         The tag lookup tolerates it (as it does a missing session), the end
         call defers it, and ``delete_session``'s own rejection maps to 404.
 
-        Ref: stdapi/responses_store.py:_not_found_as_404
+        Ref: stdapi/aws_bedrock_sessions.py:not_found_as_404
         """
 
         async def _invalid(**_params: Any) -> dict[str, Any]:  # noqa: ANN401
@@ -853,7 +854,7 @@ class TestStoredResponseSessions:
         Each save appends a new invocation rather than overwriting, so the
         newest one is the visible document.
 
-        Ref: stdapi/responses_store.py:_stored_document_or_none
+        Ref: stdapi/aws_bedrock_sessions.py:load_latest_document
         """
         documents = {
             "inv-old": {"response": {"id": "stale", "object": "response"}},
@@ -876,7 +877,7 @@ class TestStoredResponseSessions:
         Page order is not assumed to be creation order, so every page is
         collected before the latest invocation is chosen.
 
-        Ref: stdapi/responses_store.py:_stored_document_or_none
+        Ref: stdapi/aws_bedrock_sessions.py:load_latest_document
         """
         documents = {
             "inv-old": {"response": {"id": "stale", "object": "response"}},
@@ -899,7 +900,7 @@ class TestStoredResponseSessions:
         An update interrupted between CreateInvocation and its first
         PutInvocationStep must not hide the previously stored document.
 
-        Ref: stdapi/responses_store.py:_load_invocation_document
+        Ref: stdapi/aws_bedrock_sessions.py:load_invocation_document
         """
         documents = {"inv-old": {"response": {"id": "stale", "object": "response"}}}
 
@@ -921,7 +922,7 @@ class TestStoredResponseSessions:
         A read racing a partially written invocation reassembles invalid JSON;
         that invocation is skipped instead of failing the whole read.
 
-        Ref: stdapi/responses_store.py:_load_invocation_document
+        Ref: stdapi/aws_bedrock_sessions.py:load_invocation_document
         """
         documents = {"inv-old": {"response": {"id": "stale", "object": "response"}}}
 

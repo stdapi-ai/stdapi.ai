@@ -10,13 +10,11 @@ continue a stored object without shared server state.
 The stored object ID is its API ID (``resp-<session ID>`` or
 ``chatcmpl-<session ID>``); the object kind is recorded as a session tag so
 listings can tell chat completions and responses apart. Sessions live in
-the primary Bedrock region.
+the primary Bedrock region. The session wire calls themselves live in
+``stdapi.aws_bedrock_sessions``.
 """
 
-from asyncio import Semaphore, gather
-from contextlib import contextmanager, suppress
-from datetime import UTC, datetime, timedelta
-from operator import itemgetter
+from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Literal, Never
 
 from botocore.exceptions import (
@@ -25,25 +23,29 @@ from botocore.exceptions import (
     EndpointConnectionError,
     EndpointResolutionError,
 )
-from pydantic_core import from_json, to_json
 
 from stdapi.api_errors import ApiError
 from stdapi.aws import get_client
 from stdapi.aws_bedrock import handle_bedrock_client_error
+from stdapi.aws_bedrock_sessions import (
+    end_and_delete_session,
+    is_unknown_identifier,
+    load_latest_document,
+    not_found_as_404,
+    put_document,
+    scan_sessions_by_tag,
+)
 from stdapi.config import SETTINGS
 from stdapi.monitoring import build_metadata, log_error_details
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Mapping
+    from collections.abc import Mapping
+    from datetime import datetime
 
     from types_aiobotocore_bedrock_agent_runtime.client import (
         AgentsforBedrockRuntimeClient,
     )
-    from types_aiobotocore_bedrock_agent_runtime.type_defs import (
-        InvocationStepSummaryTypeDef,
-        InvocationSummaryTypeDef,
-        SessionSummaryTypeDef,
-    )
+    from types_aiobotocore_bedrock_agent_runtime.type_defs import SessionSummaryTypeDef
 
 #: Regex pattern that a valid stored response ID must match.
 RESPONSE_ID_PATTERN: str = r"^resp-[A-Za-z0-9-]+$"
@@ -52,10 +54,10 @@ RESPONSE_ID_PATTERN: str = r"^resp-[A-Za-z0-9-]+$"
 COMPLETION_ID_PATTERN: str = r"^chatcmpl-[A-Za-z0-9-]+$"
 
 #: Kind of object persisted in a session, recorded as a session tag.
-type StoredObjectKind = Literal["chat_completion", "response"]
+type StoredObjectKind = Literal["chat_completion", "response", "conversation"]
 
 #: Session tag key holding the stored object kind.
-_KIND_TAG: str = "stdapi-ai.stored-object"
+KIND_TAG: str = "stdapi-ai.stored-object"
 
 #: Maximum UTF-8 bytes per invocation step text block (stays under the payload quota).
 _CHUNK_SIZE: int = 200_000
@@ -71,19 +73,6 @@ _TAG_FETCH_CONCURRENCY: int = 16
 
 #: Maximum concurrent invocation-step puts when persisting a chunked document.
 _STEP_PUT_CONCURRENCY: int = 8
-
-#: AWS error code surfaced as a stored-object 404.
-_NOT_FOUND_CODE: str = "ResourceNotFoundException"
-
-#: AWS error codes meaning the identifier cannot name a stored object.
-_IDENTIFIER_ERROR_CODES: frozenset[str] = frozenset(
-    {_NOT_FOUND_CODE, "ValidationException"}
-)
-
-#: EndSession error codes meaning the session need not or cannot be ended (no-op).
-_END_TOLERATED_CODES: frozenset[str] = frozenset(
-    {"ConflictException", "ValidationException"}
-)
 
 #: Cache of session ID to stored-object kind, avoiding repeated tag fetches.
 _KIND_CACHE: dict[str, str] = {}
@@ -168,25 +157,6 @@ def _kind_mismatches(document: Mapping[str, Any], kind: StoredObjectKind) -> boo
     return _document_kind(document) != kind
 
 
-@contextmanager
-def _not_found_as_404(response_id: str) -> Generator[None]:
-    """Map an identifier-lookup error to the stored-object 404 error.
-
-    Args:
-        response_id: Stored object ID reported in the 404 message.
-
-    Raises:
-        ApiError: 404 when the backing Bedrock session does not exist or the
-            identifier cannot name one (e.g. it fails AWS's ID validation).
-    """
-    try:
-        yield
-    except ClientError as exc:
-        if exc.response["Error"]["Code"] in _IDENTIFIER_ERROR_CODES:
-            _not_found(response_id)
-        raise
-
-
 async def create_stored_response_session(kind: StoredObjectKind) -> str:
     """Create the AWS Bedrock session backing a stored object.
 
@@ -199,7 +169,7 @@ async def create_stored_response_session(kind: StoredObjectKind) -> str:
     """
     client = _client()
     key = SETTINGS.aws_bedrock_session_encryption_key_arn
-    tags = build_metadata(apn=True) | {_KIND_TAG: kind}
+    tags = build_metadata(apn=True) | {KIND_TAG: kind}
     with handle_bedrock_client_error():
         response = await client.create_session(
             tags=tags,
@@ -265,7 +235,7 @@ async def _cached_kind_tag(
     if session_id in _KIND_CACHE:
         return _KIND_CACHE[session_id] or None
     tags = await client.list_tags_for_resource(resourceArn=session_arn)
-    session_kind = tags.get("tags", {}).get(_KIND_TAG)
+    session_kind = tags.get("tags", {}).get(KIND_TAG)
     if len(_KIND_CACHE) > _KIND_CACHE_LIMIT:
         _KIND_CACHE.clear()
     _KIND_CACHE[session_id] = session_kind or _UNTAGGED
@@ -292,7 +262,7 @@ async def _session_kind_tag_or_none(
             session = await client.get_session(sessionIdentifier=session_id)
             return await _cached_kind_tag(client, session_id, session["sessionArn"])
         except ClientError as exc:
-            if exc.response["Error"]["Code"] in _IDENTIFIER_ERROR_CODES:
+            if is_unknown_identifier(exc):
                 return None
             raise
 
@@ -310,68 +280,29 @@ async def list_stored_sessions(kind: StoredObjectKind) -> list[tuple[str, dateti
         Unordered ``(session ID, creation time)`` pairs.
     """
     client = _client()
-    semaphore = Semaphore(_TAG_FETCH_CONCURRENCY)
 
     async def _kind_tag(summary: SessionSummaryTypeDef) -> str | None:
-        """Return the session's cached (or fetched) kind tag value, bounding concurrency."""
-        async with semaphore:
-            return await _cached_kind_tag(
-                client, summary["sessionId"], summary["sessionArn"]
-            )
+        """Return the session's cached (or freshly fetched) kind tag value."""
+        return await _cached_kind_tag(
+            client, summary["sessionId"], summary["sessionArn"]
+        )
 
-    sessions: list[tuple[str, datetime]] = []
-    scanned = 0
-    token: str | None = None
     with handle_bedrock_client_error():
-        while scanned < _LIST_SCAN_LIMIT:
-            page = await client.list_sessions(
-                maxResults=min(_LIST_PAGE_SIZE, _LIST_SCAN_LIMIT - scanned),
-                **({"nextToken": token} if token else {}),
-            )
-            summaries = page.get("sessionSummaries", [])
-            scanned += len(summaries)
-            kinds = await gather(*map(_kind_tag, summaries))
-            sessions.extend(
-                (summary["sessionId"], summary["createdAt"])
-                for summary, session_kind in zip(summaries, kinds, strict=True)
-                if session_kind == kind
-            )
-            token = page.get("nextToken")
-            if not token:
-                break
-    return sessions
-
-
-def _iter_utf8_chunks(data: bytes, limit: int) -> Generator[str]:
-    """Split *data* into UTF-8-decodable chunks of at most *limit* bytes.
-
-    Each boundary backtracks off a UTF-8 continuation byte (at most 3 bytes)
-    so a chunk never splits a multibyte code point.
-
-    Args:
-        data: UTF-8 encoded bytes to split.
-        limit: Maximum bytes per chunk.
-
-    Yields:
-        Each chunk, decoded back to text.
-    """
-    offset = 0
-    length = len(data)
-    while offset < length:
-        end = min(offset + limit, length)
-        while end > offset and end < length and data[end] & 0xC0 == 0x80:
-            end -= 1
-        yield data[offset:end].decode()
-        offset = end
+        return await scan_sessions_by_tag(
+            client,
+            kind,
+            _kind_tag,
+            page_size=_LIST_PAGE_SIZE,
+            scan_limit=_LIST_SCAN_LIMIT,
+            concurrency=_TAG_FETCH_CONCURRENCY,
+        )
 
 
 async def save_stored_response(response_id: str, document: Mapping[str, Any]) -> None:
     """Write the stored response document into its session.
 
     Each call appends a new invocation; reads use the latest one, so saving
-    again replaces the visible document (e.g. on a metadata update). Chunks
-    are written concurrently (bounded by ``_STEP_PUT_CONCURRENCY``); each
-    step carries a sequential timestamp so reads can reorder the chunks.
+    again replaces the visible document (e.g. on a metadata update).
 
     Args:
         response_id: Stored response ID (its session must already exist).
@@ -381,135 +312,14 @@ async def save_stored_response(response_id: str, document: Mapping[str, Any]) ->
         ApiError: Via ``handle_bedrock_client_error``, when the underlying
             Bedrock call fails with a recognised error code.
     """
-    client = _client()
-    session_id = _session_id(response_id)
-    data = to_json(document)
-    start = datetime.now(tz=UTC)
-    semaphore = Semaphore(_STEP_PUT_CONCURRENCY)
-
-    async def _put_step(index: int, chunk: str, invocation_id: str) -> None:
-        """Put one chunk step under the write concurrency bound."""
-        async with semaphore:
-            await client.put_invocation_step(
-                sessionIdentifier=session_id,
-                invocationIdentifier=invocation_id,
-                invocationStepTime=start + timedelta(seconds=index),
-                payload={"contentBlocks": [{"text": chunk}]},
-            )
-
     with handle_bedrock_client_error():
-        invocation_id = (await client.create_invocation(sessionIdentifier=session_id))[
-            "invocationId"
-        ]
-        await gather(
-            *(
-                _put_step(index, chunk, invocation_id)
-                for index, chunk in enumerate(_iter_utf8_chunks(data, _CHUNK_SIZE))
-            )
+        await put_document(
+            _client(),
+            _session_id(response_id),
+            document,
+            chunk_size=_CHUNK_SIZE,
+            concurrency=_STEP_PUT_CONCURRENCY,
         )
-
-
-async def _load_invocation_document(
-    client: AgentsforBedrockRuntimeClient, session_id: str, invocation_id: str
-) -> dict[str, Any] | None:
-    """Fetch and parse the document stored in one invocation.
-
-    Args:
-        client: bedrock-agent-runtime client.
-        session_id: Backing session ID.
-        invocation_id: Invocation to read.
-
-    Returns:
-        The parsed document, or None when the invocation has no steps or its
-        payload does not parse as a JSON object (an interrupted or truncated
-        write, or a foreign session storing something else entirely).
-    """
-    steps: list[InvocationStepSummaryTypeDef] = []
-    token: str | None = None
-    while True:
-        steps_page = await client.list_invocation_steps(
-            sessionIdentifier=session_id,
-            invocationIdentifier=invocation_id,
-            **({"nextToken": token} if token else {}),  # type: ignore[arg-type]
-        )
-        steps.extend(steps_page.get("invocationStepSummaries", []))
-        token = steps_page.get("nextToken")
-        if not token:
-            break
-    if not steps:
-        return None
-    steps.sort(key=lambda step: step["invocationStepTime"])
-    details = await gather(
-        *(
-            client.get_invocation_step(
-                sessionIdentifier=session_id,
-                invocationIdentifier=invocation_id,
-                invocationStepId=step["invocationStepId"],
-            )
-            for step in steps
-        )
-    )
-    parts = [
-        block["text"]
-        for detail in details
-        for block in detail["invocationStep"]["payload"]["contentBlocks"]
-        if "text" in block
-    ]
-    if not parts:
-        return None
-    try:
-        document = from_json("".join(parts))
-    except ValueError:
-        return None
-    return document if isinstance(document, dict) else None
-
-
-async def _stored_document_or_none(response_id: str) -> dict[str, Any] | None:
-    """Read the newest parseable document stored for *response_id*, if any.
-
-    Invocations are tried newest first, and the first one with a fully
-    written, parseable document is returned. This tolerates an update
-    interrupted between creating the latest invocation and writing its
-    steps, or a truncated read racing a concurrent write, by falling back
-    to the last-good invocation.
-
-    Args:
-        response_id: Stored response ID.
-
-    Returns:
-        The persisted document, or None if the backing session does not
-        exist, holds no parseable document, or the identifier cannot name a
-        session (e.g. it fails AWS's ID validation).
-    """
-    client = _client()
-    session_id = _session_id(response_id)
-    summaries: list[InvocationSummaryTypeDef] = []
-    with handle_bedrock_client_error():
-        try:
-            token: str | None = None
-            while True:
-                page = await client.list_invocations(
-                    sessionIdentifier=session_id,
-                    **({"nextToken": token} if token else {}),  # type: ignore[arg-type]
-                )
-                summaries.extend(page.get("invocationSummaries", []))
-                token = page.get("nextToken")
-                if not token:
-                    break
-            if not summaries:
-                return None
-            for summary in sorted(summaries, key=itemgetter("createdAt"), reverse=True):
-                document = await _load_invocation_document(
-                    client, session_id, summary["invocationId"]
-                )
-                if document is not None:
-                    return document
-        except ClientError as exc:
-            if exc.response["Error"]["Code"] in _IDENTIFIER_ERROR_CODES:
-                return None
-            raise
-        else:
-            return None
 
 
 async def load_stored_response(
@@ -529,7 +339,8 @@ async def load_stored_response(
             is malformed, none of its invocations hold a parseable document,
             or the document does not declare the expected kind.
     """
-    document = await _stored_document_or_none(response_id)
+    with handle_bedrock_client_error():
+        document = await load_latest_document(_client(), _session_id(response_id))
     if document is None or _kind_mismatches(document, kind):
         _not_found(response_id)
     return document
@@ -556,15 +367,8 @@ async def delete_stored_response(response_id: str, kind: StoredObjectKind) -> No
     if session_kind is not None and session_kind != kind:
         _not_found(response_id)
     session_id = _session_id(response_id)
-    with _not_found_as_404(response_id):
-        try:
-            # Sessions must be ended before deletion; tolerate already-ended
-            # (state errors defer to the delete call, which surfaces real issues).
-            await client.end_session(sessionIdentifier=session_id)
-        except ClientError as exc:
-            if exc.response["Error"]["Code"] not in _END_TOLERATED_CODES:
-                raise
-        await client.delete_session(sessionIdentifier=session_id)
+    with not_found_as_404(lambda: _not_found(response_id)):
+        await end_and_delete_session(client, session_id)
     _KIND_CACHE.pop(session_id, None)
 
 
