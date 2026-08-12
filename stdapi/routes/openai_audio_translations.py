@@ -121,7 +121,9 @@ async def create_translation(
         Form(
             description=(
                 "The transcription model to use.\n"
-                "`amazon.transcribe` or a speech-to-text model (e.g. Mistral Voxtral)."
+                "`amazon.transcribe`, `amazon.nova-2-sonic-v1:0` (lowest cost, `json`/`text` "
+                "output only, no timestamps, 10 minutes of audio maximum), or another "
+                "speech-to-text model (e.g. Mistral Voxtral)."
             )
         ),
     ] = AWS_TRANSCRIBE_MODEL_ID,
@@ -136,7 +138,14 @@ async def create_translation(
         ),
     ] = None,
     response_format: Annotated[
-        TranslateAudioResponseFormat, Form(description="Transcript output format.")
+        TranslateAudioResponseFormat,
+        Form(
+            description=(
+                "Transcript output format.\n"
+                "`srt`, `vtt` and `verbose_json` need a model that produces "
+                "timestamps, such as `amazon.transcribe`."
+            )
+        ),
     ] = "json",
     temperature: Annotated[
         float | None,
@@ -157,11 +166,12 @@ async def create_translation(
     Args:
         http_request: FastAPI request object used to detect content-type.
         file: The audio file to translate (multipart only).
-        model: The transcription model to use: ``amazon.transcribe`` or a
-            speech-to-text model (e.g. Mistral Voxtral).
+        model: The transcription model to use: ``amazon.transcribe``,
+            ``amazon.nova-2-sonic-v1:0``, or another speech-to-text model
+            (e.g. Mistral Voxtral).
         prompt: Optional style guidance for the model. Supported by
             speech-to-text models such as Mistral Voxtral; rejected by ``amazon.transcribe``.
-        response_format: Output format: `json`, `text`, `srt`, `verbose_json`, or `vtt`.
+        response_format: Output format: `json`, `text`, `srt`, `verbose_json`, or `vtt`. The timestamped formats need a model that produces timestamps.
         temperature: Sampling temperature. Supported by speech-to-text models
             such as Mistral Voxtral; rejected by ``amazon.transcribe``.
 

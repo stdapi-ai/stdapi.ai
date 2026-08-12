@@ -108,9 +108,21 @@ Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable 
     - **File size limit**: ~2MB maximum input file size
     - **Audio channels**: Mono channel audio only (single channel)
 
+### ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Nova Sonic
+
+| Model                     | Supported Languages          | Notes                                       |
+|---------------------------|------------------------------|---------------------------------------------|
+| amazon.nova-2-sonic-v1:0  | Multilingual (auto-detected) | Low-cost real-time speech recognition       |
+
+Name this model to transcribe through Amazon Nova Sonic instead of Amazon Transcribe. It is the cheapest transcription option (about $0.006 per minute of audio at current Amazon Bedrock rates) and returns punctuated text in the language that was spoken. Transcription is model selection, never automatic: requests that do not name this model are unaffected.
+
+!!! warning "What this model does not provide"
+    - **Response formats**: `json` and `text` only. `srt`, `vtt`, `verbose_json` and `diarized_json` are rejected, as is `timestamp_granularities` — this model returns no timestamps and does not report which language it detected. Use `amazon.transcribe` for subtitles, timestamps, speaker diarization or detected-language reporting.
+    - **Audio length**: up to 10 minutes per request. Longer recordings are rejected; use `amazon.transcribe`, which has no such limit.
+
 ### Other Amazon Bedrock Models
 
-Any Amazon Bedrock model that accepts the `SPEECH` input modality through the Converse API can transcribe out of the box: the gateway sends the audio together with a transcription prompt and returns the model's text output. Models whose speech input is only served by a bidirectional streaming API (e.g. `amazon.nova-2-sonic`) are not available on this route.
+Any Amazon Bedrock model that accepts the `SPEECH` input modality through the Converse API can transcribe out of the box: the gateway sends the audio together with a transcription prompt and returns the model's text output.
 
 !!! tip "Audio Input Formats on Bedrock Models"
     Uploads in the formats the Bedrock Converse audio block accepts — `aac`, `flac`, `m4a`, `mka`, `mkv`, `mp3`, `mp4`, `mpeg`, `mpga`, `ogg`, `opus`, `pcm`, `wav`, `webm`, and `x-aac` — are sent through as-is. Any other audio or video upload is automatically converted to FLAC before transcription (requires FFmpeg on the server), including the audio track of a video container. An upload that is neither audio nor video is rejected with the list of accepted formats; an audio or video file whose track cannot be decoded is rejected as carrying no decodable audio.

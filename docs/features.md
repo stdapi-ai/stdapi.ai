@@ -92,8 +92,8 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 | `/v1/images/variations`                        | Image variations                                                        | Amazon Bedrock Image Models                  |
 | [`/v1/videos`](api_openai_videos.md)           | Asynchronous text/image-to-video generation                             | Amazon Bedrock Video Models                  |
 | `/v1/audio/speech`                             | Text-to-speech with SSML support                                        | Amazon Polly                              |
-| `/v1/audio/transcriptions`                     | Speech-to-text with speaker diarization                                 | Amazon Transcribe                         |
-| `/v1/audio/translations`                       | Speech-to-English translation                                           | Amazon Transcribe + Amazon Translate      |
+| `/v1/audio/transcriptions`                     | Speech-to-text with speaker diarization                                 | Amazon Transcribe, Amazon Nova Sonic      |
+| `/v1/audio/translations`                       | Speech-to-English translation                                           | Amazon Transcribe + Amazon Translate, Amazon Nova Sonic |
 | `/v1/models`                                   | Model discovery & listing                                               | Amazon Bedrock                               |
 | `/v1/files`                                    | File upload, listing, metadata, download, deletion                      | Amazon S3                                 |
 | `/v1/uploads`                                  | Multipart upload sessions for large files                               | Amazon S3                                 |
@@ -256,6 +256,13 @@ Access every model available on Amazon Bedrock through a single, consistent API 
 
 **Speech Translation** — Transcribe audio and translate to English in a single request
 
+**Speech-to-Text (Amazon Nova Sonic)** — an alternative backend on both audio routes, selected by naming `amazon.nova-2-sonic-v1:0`:
+
+- The lowest transcription cost available here, about $0.006 per minute of audio at current Amazon Bedrock rates
+- Punctuated transcripts in the language that was spoken, with automatic language detection
+- Translation to English produced by the model itself, in one request
+- `json` and `text` output only, up to 10 minutes of audio per request — no timestamps, subtitles or diarization, and no detected-language reporting
+
 ### :material-file-document: Documents & Files
 
 - PDF input with optional citation support (precise source references in responses)
@@ -370,6 +377,7 @@ Enabled by default; regions, routing preferences, the per-request Mantle routing
 |-----------------------|---------------------------------------------------------------------|
 | **Amazon Polly**      | 60+ voices, 30+ languages, SSML, multiple engines and audio formats |
 | **Amazon Transcribe** | 100+ languages, speaker diarization, timestamps, SRT/VTT subtitles  |
+| **Amazon Nova Sonic** | Low-cost multilingual transcription and speech-to-English translation |
 | **Amazon Translate**  | Language translation for audio translation workflows                |
 | **Amazon Comprehend** | Automatic language detection for intelligent voice routing          |
 

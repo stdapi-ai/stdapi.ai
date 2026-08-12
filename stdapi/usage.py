@@ -119,6 +119,9 @@ class UsageRecord:
     output_images_by_spec: dict[str, int] = field(default_factory=dict)
     # By resolution spec bucket ("hd"); falls back to flat per-second.
     output_seconds_by_spec: dict[str, int] = field(default_factory=dict)
+    # By token modality spec bucket ("speech"): AWS charges each modality differently.
+    input_tokens_by_spec: dict[str, int] = field(default_factory=dict)
+    output_tokens_by_spec: dict[str, int] = field(default_factory=dict)
     # Input-media breakdowns by spec bucket ("document", "audio", "video", ...).
     input_images_by_spec: dict[str, int] = field(default_factory=dict)
     input_seconds_by_spec: dict[str, int] = field(default_factory=dict)
@@ -151,6 +154,8 @@ class UsageLogEntry(TypedDict, total=False):
     output_images_by_spec: dict[str, int]
     output_seconds: int
     output_seconds_by_spec: dict[str, int]
+    input_tokens_by_spec: dict[str, int]
+    output_tokens_by_spec: dict[str, int]
     input_images: int
     input_images_by_spec: dict[str, int]
     input_seconds: int
@@ -251,6 +256,8 @@ def _record_usage(
     output_seconds_by_spec: Mapping[str, int] | None = None,
     input_images_by_spec: Mapping[str, int] | None = None,
     input_seconds_by_spec: Mapping[str, int] | None = None,
+    input_tokens_by_spec: Mapping[str, int] | None = None,
+    output_tokens_by_spec: Mapping[str, int] | None = None,
 ) -> None:
     """Record real AWS-billed usage for ``service``/``model``/``tier``.
 
@@ -278,6 +285,10 @@ def _record_usage(
             resolution spec bucket.
         input_images_by_spec: Input image counts broken down by spec bucket.
         input_seconds_by_spec: Input media seconds broken down by spec bucket.
+        input_tokens_by_spec: Input token counts broken down by modality spec
+            bucket ("speech"), for models pricing modalities apart.
+        output_tokens_by_spec: Output token counts broken down by modality spec
+            bucket.
     """
     if (records := USAGE.get(None)) is None:
         return
@@ -290,6 +301,8 @@ def _record_usage(
             output_seconds_by_spec,
             input_images_by_spec,
             input_seconds_by_spec,
+            input_tokens_by_spec,
+            output_tokens_by_spec,
         )
     )
     if (
@@ -323,6 +336,8 @@ def _record_usage(
         record.output_seconds_by_spec,
         record.input_images_by_spec,
         record.input_seconds_by_spec,
+        record.input_tokens_by_spec,
+        record.output_tokens_by_spec,
     )
     for target, breakdown in zip(
         record_breakdowns, spec_breakdowns_to_add, strict=True
@@ -458,6 +473,8 @@ def _dimension_price_buckets(
         Dimension.OUTPUT_SECONDS: record.output_seconds_by_spec,
         Dimension.INPUT_IMAGES: record.input_images_by_spec,
         Dimension.INPUT_SECONDS: record.input_seconds_by_spec,
+        Dimension.INPUT_TOKENS: record.input_tokens_by_spec,
+        Dimension.OUTPUT_TOKENS: record.output_tokens_by_spec,
     }.get(dimension)
     if spec_breakdown:
         buckets = [(qty, "", spec) for spec, qty in spec_breakdown.items()]
@@ -763,6 +780,8 @@ def record_bedrock_usage(
     input_seconds: int | None = None,
     media_spec: str = "",
     cache_write_tokens_by_ttl: Mapping[CacheTtlBucket, int] | None = None,
+    input_tokens_by_spec: Mapping[str, int] | None = None,
+    output_tokens_by_spec: Mapping[str, int] | None = None,
 ) -> None:
     """Record AWS Bedrock usage.
 
@@ -793,6 +812,10 @@ def record_bedrock_usage(
         media_spec: Spec bucket for input media ("document", "audio",
             "video", ...) -- one media item per call, so a single value.
         cache_write_tokens_by_ttl: Token counts grouped by cache TTL.
+        input_tokens_by_spec: Input token counts grouped by modality spec
+            ("speech"), for models whose speech and text tokens are priced
+            apart. The remainder of ``input_tokens`` prices at the plain rate.
+        output_tokens_by_spec: Output token counts grouped by modality spec.
     """
     state = get_model_state(model)
     image_spec = IMAGE_SPEC.get("") if output_images else ""
@@ -838,6 +861,8 @@ def record_bedrock_usage(
         input_seconds_by_spec={media_spec: input_seconds}
         if media_spec and input_seconds
         else None,
+        input_tokens_by_spec=input_tokens_by_spec,
+        output_tokens_by_spec=output_tokens_by_spec,
     )
 
 
@@ -918,6 +943,18 @@ def _base_log_entry(record: UsageRecord) -> UsageLogEntry:
     return entry
 
 
+#: Per-record breakdown fields, whose log key is the attribute name.
+_BREAKDOWN_FIELDS: Final[tuple[str, ...]] = (
+    "cache_write_tokens_by_ttl",
+    "output_images_by_spec",
+    "output_seconds_by_spec",
+    "input_images_by_spec",
+    "input_seconds_by_spec",
+    "input_tokens_by_spec",
+    "output_tokens_by_spec",
+)
+
+
 def usage_log_entries() -> list[UsageLogEntry]:
     """Return the recorded usage as log entries, omitting zero/empty fields."""
     entries: list[UsageLogEntry] = []
@@ -929,16 +966,9 @@ def usage_log_entries() -> list[UsageLogEntry]:
                 entry[info.log_key] = value  # type: ignore[literal-required]
         if record.total_tokens > 0:
             entry["total_tokens"] = record.total_tokens
-        if record.cache_write_tokens_by_ttl:
-            entry["cache_write_tokens_by_ttl"] = dict(record.cache_write_tokens_by_ttl)
-        if record.output_images_by_spec:
-            entry["output_images_by_spec"] = dict(record.output_images_by_spec)
-        if record.output_seconds_by_spec:
-            entry["output_seconds_by_spec"] = dict(record.output_seconds_by_spec)
-        if record.input_images_by_spec:
-            entry["input_images_by_spec"] = dict(record.input_images_by_spec)
-        if record.input_seconds_by_spec:
-            entry["input_seconds_by_spec"] = dict(record.input_seconds_by_spec)
+        for name in _BREAKDOWN_FIELDS:
+            if breakdown := getattr(record, name):
+                entry[name] = dict(breakdown)  # type: ignore[literal-required]
         entries.append(entry)
     return entries
 

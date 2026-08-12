@@ -74,6 +74,23 @@ class TestFfmpegArguments:
         args = _ffmpeg_args("pcm", "pcm", 16000, 1, 24000)
         assert args.index("pipe:0") < len(args) - 1 - args[::-1].index("-ar")
 
+    def test_output_downmix_is_requested_after_the_input(self) -> None:
+        """``output_channels`` adds an ``-ac`` on the output side.
+
+        Backends that only accept mono need the downmix applied to the output;
+        an ``-ac`` before the input declares the *source* layout instead, which
+        silently misreads a stereo upload.
+        """
+        args = _ffmpeg_args("pcm", None, None, None, 16000, 1)
+        downmix = len(args) - 1 - args[::-1].index("-ac")
+        assert args.index("pipe:0") < downmix
+        assert args[downmix + 1] == "1"
+
+    def test_output_channels_are_left_alone_by_default(self) -> None:
+        """Without ``output_channels`` no channel option reaches the output side."""
+        args = _ffmpeg_args("pcm", None, None, None, 16000)
+        assert "-ac" not in args
+
 
 class TestStderrIsDrained:
     """ffmpeg's stderr is consumed so its pipe buffer cannot fill.

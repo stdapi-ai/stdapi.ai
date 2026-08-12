@@ -216,7 +216,9 @@ async def create_transcription(
         Form(
             description=(
                 "The transcription model to use.\n"
-                "`amazon.transcribe` or a speech-to-text model (e.g. Mistral Voxtral)."
+                "`amazon.transcribe`, `amazon.nova-2-sonic-v1:0` (lowest cost, `json`/`text` "
+                "output only, no timestamps, 10 minutes of audio maximum), or another "
+                "speech-to-text model (e.g. Mistral Voxtral)."
             )
         ),
     ] = AWS_TRANSCRIBE_MODEL_ID,
@@ -272,7 +274,14 @@ async def create_transcription(
         ),
     ] = "auto",
     response_format: Annotated[
-        AudioResponseFormat, Form(description="Transcript output format.")
+        AudioResponseFormat,
+        Form(
+            description=(
+                "Transcript output format.\n"
+                "`srt`, `vtt`, `verbose_json` and `diarized_json` need a model that "
+                "produces timestamps, such as `amazon.transcribe`."
+            )
+        ),
     ] = "json",
     timestamp_granularities: Annotated[
         list[str] | None,
@@ -350,8 +359,9 @@ async def create_transcription(
     Args:
         http_request: FastAPI request object used to detect content-type.
         file: The audio file to transcribe (multipart only).
-        model: The transcription model to use: ``amazon.transcribe`` or a
-            speech-to-text model (e.g. Mistral Voxtral).
+        model: The transcription model to use: ``amazon.transcribe``,
+            ``amazon.nova-2-sonic-v1:0``, or another speech-to-text model
+            (e.g. Mistral Voxtral).
         language: The language of the input audio (ISO-639-1 code, e.g. `en`). Improves accuracy and latency when provided.
         languages: Expected input languages when the audio may contain more than one language. Cannot be combined with `language`.
         keywords: Literal terms that may appear in the audio. Supported by Bedrock
@@ -360,7 +370,7 @@ async def create_transcription(
         prompt: Optional style guidance for the model. Supported by Bedrock
             models (e.g. Mistral Voxtral); rejected by ``amazon.transcribe``.
         chunking_strategy: Controls how the audio is cut into chunks. `auto` only is supported on this implementation.
-        response_format: Output format: `json`, `text`, `srt`, `verbose_json`, `vtt`, or `diarized_json`.
+        response_format: Output format: `json`, `text`, `srt`, `verbose_json`, `vtt`, or `diarized_json`. The timestamped formats need a model that produces timestamps.
         timestamp_granularities: For `verbose_json` only; `word` and/or `segment`. A bare form value may also carry a comma-separated list.
         include: Additional information to include in the transcription response. `logprobs` only works with response_format set to `json`.
         temperature: Sampling temperature. Supported by Bedrock models

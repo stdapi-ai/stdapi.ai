@@ -32,7 +32,7 @@ pytestmark = pytest.mark.local
 #: A synthetic Converse-capable SPEECH-input model with no dedicated audio module.
 _MODEL_ID = "synthetic.speech-to-text-v1:0"
 
-#: The speech model without Converse support (bidirectional streaming API only).
+#: A speech model Converse cannot serve; it is served by its own class instead.
 _NOVA_SONIC_ID = "amazon.nova-2-sonic-v1:0"
 
 #: Chunks the abort test's encode may yield before the test fails on its own.
@@ -198,48 +198,40 @@ class TestGenericDefaultResolution:
         assert "/v1/audio/translations" in routes
 
 
-class TestNovaSonicExcluded:
-    """nova-2-sonic has SPEECH input but no Converse API: never advertised or routed.
+class TestNonConverseSpeechModels:
+    """The Converse default refuses speech models Converse cannot serve.
+
+    Those models reach the API through their own class instead (see
+    ``tests/test_models_nova_sonic.py``); this default is what protects any that
+    have none from a Converse call that is doomed before it is sent.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/models-features.html
          stdapi/models/audio/_default.py:AudioModel._validate_converse_supported
     """
 
-    def test_nova_sonic_is_not_advertised_for_transcription(self) -> None:
-        """Capability computation skips the STT default for non-Converse speech models.
-
-        Ref: stdapi/models/__init__.py:_compute_model_capabilities
-        """
-        routes, _tools = _compute_model_capabilities(
-            _NOVA_SONIC_ID, _model_details(_NOVA_SONIC_ID, ["SPEECH", "TEXT"], ["TEXT"])
-        )
-
-        assert "/v1/audio/transcriptions" not in routes
-        assert "/v1/audio/translations" not in routes
-
-    async def test_nova_sonic_stt_is_rejected(self) -> None:
+    async def test_stt_is_rejected(self) -> None:
         """``stt()`` raises a clear error instead of sending a doomed Converse call."""
         with pytest.raises(ApiError, match="not supported"):
-            await get_audio_model(_NOVA_SONIC_ID).stt(
+            await AudioModel(_NOVA_SONIC_ID).stt(
                 _FakeAudioContent(),  # type: ignore[arg-type]
                 "json",
                 logprobs=False,
             )
 
-    async def test_nova_sonic_stt_stream_is_rejected(self) -> None:
+    async def test_stt_stream_is_rejected(self) -> None:
         """``stt_stream()`` raises the same clear error."""
         with pytest.raises(ApiError, match="not supported"):
-            async for _ in get_audio_model(_NOVA_SONIC_ID).stt_stream(
+            async for _ in AudioModel(_NOVA_SONIC_ID).stt_stream(
                 _FakeAudioContent(),  # type: ignore[arg-type]
                 "text",
                 logprobs=False,
             ):
                 pass
 
-    async def test_nova_sonic_stt_translate_is_rejected(self) -> None:
+    async def test_stt_translate_is_rejected(self) -> None:
         """``stt_translate()`` raises the same clear error."""
         with pytest.raises(ApiError, match="not supported"):
-            await get_audio_model(_NOVA_SONIC_ID).stt_translate(
+            await AudioModel(_NOVA_SONIC_ID).stt_translate(
                 _FakeAudioContent(),  # type: ignore[arg-type]
                 "json",
                 None,

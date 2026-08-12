@@ -269,7 +269,10 @@ _MODELS: dict[str, ModelDetails] = {}
 MANTLE_SERVICE = "AWS Bedrock Mantle"
 
 #: SPEECH-input model ID prefixes without Bedrock Converse support (bidirectional streaming only).
-NON_CONVERSE_SPEECH_MODEL_PREFIXES: tuple[str, ...] = ("amazon.nova-2-sonic",)
+NON_CONVERSE_SPEECH_MODEL_PREFIXES: tuple[str, ...] = (
+    "amazon.nova-2-sonic",
+    "amazon.nova-sonic",
+)
 
 #: Every Mantle-discovered model, including ones served by bedrock-runtime.
 MANTLE_MODELS: dict[str, ModelDetails] = {}

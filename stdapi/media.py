@@ -107,6 +107,7 @@ def _ffmpeg_args(
     sample_rate: int | None,
     channels: int | None,
     output_sample_rate: int | None,
+    output_channels: int | None = None,
 ) -> list[str]:
     """Build the ffmpeg command line for one encode.
 
@@ -116,6 +117,7 @@ def _ffmpeg_args(
         sample_rate: Input sample rate in Hz.
         channels: Input channel count.
         output_sample_rate: Rate to resample the output to, if any.
+        output_channels: Channel count to mix the output down to, if any.
 
     Returns:
         The full argument vector, reading stdin and writing stdout.
@@ -149,6 +151,9 @@ def _ffmpeg_args(
     if output_sample_rate:
         # -ar: resample the output to a specific sample rate in Hz
         args.extend(("-ar", str(output_sample_rate)))
+    if output_channels:
+        # -ac after the input: mix the output down to this channel count
+        args.extend(("-ac", str(output_channels)))
     args.extend(
         (
             "-f",  # Output format
@@ -166,6 +171,7 @@ async def encode_audio_stream(
     sample_rate: int | None = None,
     channels: int | None = None,
     output_sample_rate: int | None = None,
+    output_channels: int | None = None,
 ) -> AsyncGenerator[bytes]:
     """Encode audio stream using ffmpeg with highest quality settings.
 
@@ -184,6 +190,8 @@ async def encode_audio_stream(
             Optional for encoded formats.
         output_sample_rate: Resample the output to this rate in Hz.
             Optional; leaves the source rate untouched when not set.
+        output_channels: Mix the output down to this channel count (1=mono).
+            Optional; leaves the source layout untouched when not set.
 
     Yields:
         Encoded audio bytes in the specified output format.
@@ -193,7 +201,12 @@ async def encode_audio_stream(
         ApiError: If ffmpeg is not installed on the server.
     """
     ffmpeg_args = _ffmpeg_args(
-        output_format, input_format, sample_rate, channels, output_sample_rate
+        output_format,
+        input_format,
+        sample_rate,
+        channels,
+        output_sample_rate,
+        output_channels,
     )
 
     try:

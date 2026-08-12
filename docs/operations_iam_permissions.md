@@ -37,6 +37,7 @@ These permissions are mandatory for stdapi.ai to discover and invoke Amazon Bedr
         "bedrock:GetAsyncInvoke",
         "bedrock:InvokeGuardrailChecks",
         "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithBidirectionalStream",
         "bedrock:InvokeModelWithResponseStream",
         "bedrock:InvokeTool",
         "bedrock:Rerank"
@@ -725,6 +726,7 @@ Required if you configure API authentication. See the [Authentication](operation
             "bedrock:GetAsyncInvoke",
             "bedrock:InvokeGuardrailChecks",
             "bedrock:InvokeModel",
+            "bedrock:InvokeModelWithBidirectionalStream",
             "bedrock:InvokeModelWithResponseStream",
             "bedrock:InvokeTool",
             "bedrock:Rerank"
@@ -790,6 +792,7 @@ Required if you configure API authentication. See the [Authentication](operation
             "bedrock:GetAsyncInvoke",
             "bedrock:InvokeGuardrailChecks",
             "bedrock:InvokeModel",
+            "bedrock:InvokeModelWithBidirectionalStream",
             "bedrock:InvokeModelWithResponseStream",
             "bedrock:InvokeTool",
             "bedrock:Rerank"
@@ -889,7 +892,7 @@ Required if you configure API authentication. See the [Authentication](operation
 
 | Feature                                         | Required Permissions                                                                                                                                       | Configuration                                                                |
 |-------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
-| **Bedrock Models (Invoke)**                     | `bedrock:CountTokens`<br>`bedrock:InvokeGuardrailChecks`<br>`bedrock:InvokeModel`<br>`bedrock:InvokeModelWithResponseStream`<br>`bedrock:InvokeTool`<br>`bedrock:Rerank`<br>`bedrock:GetAsyncInvoke` and `bedrock:TagResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) for async-invoke models (video, TwelveLabs Marengo embeddings) | Always required                                                              |
+| **Bedrock Models (Invoke)**                     | `bedrock:CountTokens`<br>`bedrock:InvokeGuardrailChecks`<br>`bedrock:InvokeModel`<br>`bedrock:InvokeModelWithBidirectionalStream`<br>`bedrock:InvokeModelWithResponseStream`<br>`bedrock:InvokeTool`<br>`bedrock:Rerank`<br>`bedrock:GetAsyncInvoke` and `bedrock:TagResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) for async-invoke models (video, TwelveLabs Marengo embeddings) | Always required                                                              |
 | **Bedrock Models (Discovery)**                  | `bedrock:ListFoundationModels`<br>`bedrock:GetFoundationModelAvailability`<br>`bedrock:ListProvisionedModelThroughputs`<br>`bedrock:ListInferenceProfiles` | Always required                                                              |
 | **Bedrock Marketplace Auto-Subscribe**          | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions`                                                                                         | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default)                      |
 | **AWS Marketplace Metering**                    | `aws-marketplace:RegisterUsage`                                                                                                                             | AWS Marketplace image only (always active); not required for the community image |
