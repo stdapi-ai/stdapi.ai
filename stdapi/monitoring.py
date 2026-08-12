@@ -126,6 +126,11 @@ class EventLog(TypedDict):
     request_user_id: NotRequired[str]  # User ID passed from request
     request_org_id: NotRequired[str]  # Org ID passed from request
 
+    # Role session name the AWS usage of this request was billed under, when
+    # per-end-user cost attribution is enabled; the same name AWS reports in
+    # the Cost and Usage Report's caller identity column.
+    aws_role_session_name: NotRequired[str]
+
     # Edge correlation headers from the incoming request, when present
     amzn_trace_id: NotRequired[str]  # X-Amzn-Trace-Id (ALB / X-Ray)
     apigw_request_id: NotRequired[str]  # x-amz-apigw-id (API Gateway)

@@ -500,6 +500,7 @@ _LIVE_FIXTURES = frozenset(
     {
         "anthropic_client",
         "aws_session_info",
+        "bedrock_user_role_arn",
         "cohere_client",
         "live_guardrail",
         "openai_client",
@@ -1277,6 +1278,27 @@ async def aws_region(aws_session_info: tuple[str, str]) -> str:
 async def aws_account_id(aws_session_info: tuple[str, str]) -> str:
     """The AWS account ID the test session's credentials belong to."""
     return aws_session_info[1]
+
+
+@pytest.fixture(scope="session")
+def bedrock_user_role_arn() -> str:
+    """ARN of the role end user sessions are opened on, or skip.
+
+    The role is an IAM resource of the account under test, created outside this
+    repository, and named by ``TEST_BEDROCK_USER_ROLE_ARN`` in ``tests/.env``;
+    a checkout without one skips rather than fails, since no test can create
+    the trust policy the feature needs.
+
+    Returns:
+        The role ARN per-end-user cost attribution assumes.
+    """
+    arn = getenv("TEST_BEDROCK_USER_ROLE_ARN", "")
+    if not arn:
+        pytest.skip(
+            "Per-end-user cost attribution needs a role to assume "
+            "(tests/.env sets no TEST_BEDROCK_USER_ROLE_ARN)"
+        )
+    return arn
 
 
 # ---------------------------------------------------------------------------

@@ -243,6 +243,7 @@ Cost tracking prices **each request** as it happens. AWS-side attribution answer
 | **Service / gateway**   | [IAM principal attribution](https://docs.aws.amazon.com/bedrock/latest/userguide/cost-mgmt-iam-principal-tracking.html) — AWS captures the caller identity | Cost Explorer, CUR 2.0               | Automatic; tag the execution role for finer breakdowns            |
 | **Application / workload** | [Bedrock Project/Workspace](operations_configuration.md#bedrock-mantle-project) (Bedrock Mantle models)                                            | Cost Explorer, CUR 2.0               | Set `AWS_BEDROCK_MANTLE_PROJECT`                                  |
 | **End user**            | `stdapi-ai.user_id` request metadata and job tags                                                                                                     | stdapi.ai logs, Bedrock invocation logs | Clients send `safety_identifier` — `user` is a deprecated alias — (OpenAI) or `metadata.user_id` (Anthropic) |
+| **End user, on the AWS bill** | [Per-user role sessions](#per-user-attribution) — each user's model calls run under a session of their own                                       | Cost Explorer, CUR 2.0               | Set `AWS_BEDROCK_USER_ROLE_ARN` to a role you create                |
 | **Team / tenant**       | Request metadata attached by the [model alias](operations_configuration.md#model-aliases-configuration) the client names                               | Bedrock model invocation logs only   | Give each team its own alias with a `metadata` entry, then [enable and deliver model invocation logging](https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html) |
 
 !!! warning "Alias metadata is not a cost allocation tag"
@@ -252,14 +253,54 @@ Cost tracking prices **each request** as it happens. AWS-side attribution answer
 
 Amazon Bedrock records the IAM identity behind every `bedrock-runtime` inference call and forwards it to Cost Explorer and CUR 2.0. Nothing to configure in stdapi.ai, and no change to client requests.
 
-stdapi.ai calls AWS with a **single execution role** — the ECS task role — so all Bedrock spend is attributed to that one identity, the standard LLM-gateway pattern AWS documents. To break that total down, tag the execution role (for example `team` or `cost-center`), then activate those keys in the AWS Billing console under **Cost allocation tags**, filtering by type **IAM principal**.
+By default stdapi.ai calls AWS with a **single execution role** — the ECS task role — so all Bedrock spend is attributed to that one identity, the standard LLM-gateway pattern AWS documents. To break that total down, tag the execution role (for example `team` or `cost-center`), then activate those keys in the AWS Billing console under **Cost allocation tags**, filtering by type **IAM principal**. To split it per end user instead, see [Per-User Attribution](#per-user-attribution) below.
 
 !!! note "Attribution grain"
-    IAM principal attribution aggregates per usage type per day — it never yields a per-request cost. Use the [request logs](#cost-tracking-real-time-aws-pricing) for that. It also covers `bedrock-runtime` only: Bedrock Mantle requests are attributed with Projects instead.
+    IAM principal attribution aggregates per usage type per day — it never yields a per-request cost. Use the [request logs](#cost-tracking-real-time-aws-pricing) for that.
 
 ### Per-User Attribution
 
-Because every call shares the gateway's execution role, AWS itself cannot split Cost Explorer costs per end user. stdapi.ai attributes users at the request level instead: the client-supplied identifier is recorded as `stdapi-ai.user_id` in the request log — alongside that request's computed cost — and forwarded to Bedrock as request metadata, so per-user spend is aggregated from the logs rather than from the AWS bill.
+Every end user is attributed at the request level out of the box: the client-supplied identifier is recorded as `stdapi-ai.user_id` in the request log — alongside that request's computed cost — and forwarded to Bedrock as request metadata, so per-user spend can be aggregated from the logs.
+
+To split the **AWS bill itself** per end user, give each one an identity of their own. Set `AWS_BEDROCK_USER_ROLE_ARN` to a role you create, and stdapi.ai opens a short-lived session of that role per end user and runs their model calls under it. AWS then reports each user separately in Cost Explorer and CUR 2.0, from the invoice rather than from the logs.
+
+=== ":material-cog: Configure"
+
+    | Setting | Purpose |
+    |:--------|:--------|
+    | [`AWS_BEDROCK_USER_ROLE_ARN`](operations_configuration.md#aws-bedrock-user-role-arn) | The role each end user's calls run under. Enables the feature. |
+    | [`AWS_BEDROCK_USER_ROLE_TAG_KEY`](operations_configuration.md#aws-bedrock-user-role-tag-key) | Session tag key carrying the user identity (`user` by default). |
+    | [`AWS_BEDROCK_USER_ROLE_SESSION_DURATION`](operations_configuration.md#aws-bedrock-user-role-session-duration) | Session lifetime, 900–3600 seconds. Sessions are cached and reused. |
+    | [`AWS_BEDROCK_USER_ROLE_REQUIRE_IDENTITY`](operations_configuration.md#aws-bedrock-user-role-require-identity) | Reject requests that identify no end user, instead of billing them to the gateway. |
+
+    The role and the two IAM policies it needs are in [IAM Permissions](operations_iam_permissions.md#per-user-cost-attribution).
+
+=== ":material-account-check: Identify the user"
+
+    The identity is taken, in order:
+
+    1. the **authenticated caller**, when [Amazon Cognito authentication](operations_authentication_security.md) is enabled — the identity the gateway itself verified;
+    2. the identifier the request declares: `safety_identifier` (or the deprecated `user`) on the OpenAI-compatible APIs, `metadata.user_id` on the Anthropic Messages API.
+
+    A request carrying neither runs under the gateway's own identity, unless `AWS_BEDROCK_USER_ROLE_REQUIRE_IDENTITY` is enabled, in which case it is rejected with a `400`. That rejection covers the requests that would run under the end user role, and only those — the services listed in the coverage warning below stay on the gateway's identity either way, with the one exception noted there. Some APIs — audio transcription among them — have no end user field, so there the identity can only come from an authenticated caller.
+
+    !!! danger "A declared identifier is chosen by the caller"
+        The identity is verified only when it comes from an authenticated caller. With an API key, or with no authentication, any client can send any other user's `safety_identifier`, and the resulting session — its name, its tag, its line in the bill — is that other user's. This is cost metadata, not an authorization boundary: see [Restricting a role per end user](operations_iam_permissions.md#per-user-cost-attribution) before writing an IAM policy on the session tag.
+
+=== ":material-magnify: Read the bill"
+
+    Each user appears as a distinct caller identity in [CUR 2.0](https://docs.aws.amazon.com/cur/latest/userguide/what-is-cur.html)'s `line_item_iam_principal` column, which holds the full ARN — `arn:aws:sts::<account-id>:assumed-role/<role>/<session>`. Two operator steps in the AWS console:
+
+    - In **Data Exports**, enable *Include caller identity (IAM principal) allocation data* under **Additional export content** — on a new CUR 2.0 standard data export, or on an existing one through **Edit** ([editing export details](https://docs.aws.amazon.com/cur/latest/userguide/dataexports-edit-export-details.html): the report name and Billing view are fixed, the export content is not).
+    - To group by user in Cost Explorer, activate the session tag key under **Billing → Cost allocation tags**, filtering by type **IAM principal**; it is then offered under **Group by → Tag** as `iamPrincipal/<key>`. The key appears there only after that identity has made at least one call, and AWS takes up to 24 hours to list it plus up to 24 hours to activate it.
+
+    The request log's `aws_role_session_name` field records the session each request was billed under, which is what correlates a log line with a CUR row.
+
+!!! warning "What is covered, and what is not"
+    Per-user sessions apply to **model invocations**, and to the guardrail applied during them. Everything else the gateway calls on your behalf — standalone guardrail evaluations, reranking, video generation jobs and their output files, speech, transcription and translation — stays on the gateway's own identity. The one exception is a real-time speech-to-speech session, which is refused rather than billed to the gateway once [`AWS_BEDROCK_USER_ROLE_REQUIRE_IDENTITY`](operations_configuration.md#aws-bedrock-user-role-require-identity) is enabled. Bedrock Mantle requests are attributed with [Projects](operations_configuration.md#bedrock-mantle-project) instead.
+
+!!! note "Cardinality"
+    AWS multiplies CUR rows by the number of calling identities, and aggregates them per usage type per day. A deployment with a very large or unbounded user population gets a proportionally larger export, and still no per-request cost — the [request logs](#cost-tracking-real-time-aws-pricing) remain the per-request source.
 
 ---
 

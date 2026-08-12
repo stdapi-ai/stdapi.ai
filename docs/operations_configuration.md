@@ -224,6 +224,10 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_BEDROCK_GUARDRAIL_TRACE`](#aws-bedrock-guardrail-trace)                                     | None    | Guardrails trace level: `disabled`, `enabled`, or `enabled_full`                                    |
 | [`AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE`](#aws-bedrock-allow-guardrail-override)                   | `false` | Allow users to override global guardrail configuration via request headers (security: default off)  |
 | [`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`](#aws-bedrock-session-encryption-key-arn)               | None    | KMS key ARN encrypting Amazon Bedrock session storage (Responses API `store=true`)                     |
+| [`AWS_BEDROCK_USER_ROLE_ARN`](#aws-bedrock-user-role-arn)                                         | None    | Run each end user's model calls under a role session of their own, so AWS reports their spend separately |
+| [`AWS_BEDROCK_USER_ROLE_SESSION_DURATION`](#aws-bedrock-user-role-session-duration)               | `3600`  | Lifetime in seconds of a per-end-user role session (900–3600)                                       |
+| [`AWS_BEDROCK_USER_ROLE_TAG_KEY`](#aws-bedrock-user-role-tag-key)                                 | `user`  | Session tag key carrying the end user identity, for cost allocation and access policies             |
+| [`AWS_BEDROCK_USER_ROLE_REQUIRE_IDENTITY`](#aws-bedrock-user-role-require-identity)               | `false` | Reject a model request that identifies no end user instead of billing it to the server              |
 
 ### :material-lock: Authentication { #summary-authentication }
 
@@ -3610,6 +3614,87 @@ export AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN=arn:aws:kms:us-east-1:123456789012
 
 !!! info "Orphaned Session Cleanup"
     A session is created independently of the generation it will hold — before it for the Responses API, concurrently with it for Chat Completions — so a crash before the generation is written leaves an empty, orphaned session. Bedrock sessions have no TTL and persist until deleted, so periodically clean up stale sessions (`aws bedrock-agent-runtime list-sessions` plus `delete-session`, or an operator-managed lifecycle policy).
+
+#### `AWS_BEDROCK_USER_ROLE_ARN` { #aws-bedrock-user-role-arn }
+
+:octicons-package-24: **Purpose**
+:   Run each end user's model calls under an AWS IAM role session of their own, so AWS reports Amazon Bedrock model usage [per end user](operations_cost_management.md#per-user-attribution) in Cost Explorer and in the Cost and Usage Report
+
+:octicons-database-24: **Type**
+:   String — an IAM role ARN
+
+:octicons-gear-24: **Default**
+:   None — every request runs under the server's own identity, and AWS reports all model usage under it
+
+:octicons-workflow-24: **Behavior**
+:   The server opens one short-lived session of this role per end user, caches it, and signs that user's model invocations with it. The identity is the authenticated caller when [authentication](operations_authentication_security.md) is enabled, otherwise the identifier the request declares (`safety_identifier` or `user` on the OpenAI-compatible APIs, `metadata.user_id` on the Anthropic Messages API). Only model invocations are covered — guardrail evaluations, video generation, speech, transcription and translation keep the server's identity. A session that cannot be opened fails the request rather than falling back to the server's identity.
+
+:octicons-check-circle-24: **Validation**
+:   Checked at startup: must be an IAM role ARN (`arn:<partition>:iam::<account-id>:role/<name>`). The server also tries to assume it at startup and reports a warning — not a failure — when it cannot.
+
+```bash
+export AWS_BEDROCK_USER_ROLE_ARN=arn:aws:iam::123456789012:role/stdapi-ai-end-user
+```
+
+!!! warning "The role and two IAM policies come first"
+    The role's trust policy must allow this server's own role to call both `sts:AssumeRole` **and** `sts:TagSession` on it, and the server's role needs the same two actions on this role ARN. See [IAM Permissions](operations_iam_permissions.md#per-user-cost-attribution) for copyable policies, including the model ARNs a cross-region inference profile requires.
+
+#### `AWS_BEDROCK_USER_ROLE_SESSION_DURATION` { #aws-bedrock-user-role-session-duration }
+
+:octicons-package-24: **Purpose**
+:   Lifetime of a per-end-user role session, in seconds
+
+:octicons-database-24: **Type**
+:   Integer — 900 to 3600
+
+:octicons-gear-24: **Default**
+:   `3600`
+
+:octicons-workflow-24: **Behavior**
+:   Sessions are cached per end user and reopened shortly before they expire, so a longer lifetime means fewer AWS STS calls. The upper bound is imposed by AWS: the server itself runs under an assumed role, and a role session obtained from another role session cannot last longer than one hour, whatever the role's maximum session duration.
+
+```bash
+export AWS_BEDROCK_USER_ROLE_SESSION_DURATION=1800
+```
+
+#### `AWS_BEDROCK_USER_ROLE_TAG_KEY` { #aws-bedrock-user-role-tag-key }
+
+:octicons-package-24: **Purpose**
+:   Session tag key carrying the end user identity on each per-end-user role session
+
+:octicons-database-24: **Type**
+:   String, or null to send no session tag
+
+:octicons-gear-24: **Default**
+:   `user`
+
+:octicons-workflow-24: **Behavior**
+:   Activate this key as a cost allocation tag — in the AWS Billing console, under **Cost allocation tags** filtered by type **IAM principal** — to group Bedrock costs by end user in Cost Explorer. The same tag is testable in IAM policies as `aws:PrincipalTag/<key>`, so the role can be restricted per user. With no tag, end users are still distinguished by their role session name in the Cost and Usage Report.
+
+:octicons-check-circle-24: **Validation**
+:   Checked at startup: 1 to 128 characters over letters, digits, spaces and `_ . : / = + - @`; keys beginning with `aws:` are reserved by AWS and rejected.
+
+```bash
+export AWS_BEDROCK_USER_ROLE_TAG_KEY=end-user
+```
+
+#### `AWS_BEDROCK_USER_ROLE_REQUIRE_IDENTITY` { #aws-bedrock-user-role-require-identity }
+
+:octicons-package-24: **Purpose**
+:   Reject a model request that identifies no end user, instead of running it under the server's own identity
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false` — such requests run under the server's identity, and their usage is reported under it
+
+:octicons-workflow-24: **Behavior**
+:   Enable it so that no model usage escapes per-user attribution: a request carrying neither an authenticated caller nor an end user identifier is answered `400`. Clients that never send one stop working, so enable it only once every client identifies its user — and note that some APIs, audio transcription among them, have no end user field at all, so on those it takes an authenticated caller. A real-time speech-to-speech session keeps for its whole life the identity it opened with, so while this is enabled it is refused rather than attributed to the server. Requires [`AWS_BEDROCK_USER_ROLE_ARN`](#aws-bedrock-user-role-arn).
+
+```bash
+export AWS_BEDROCK_USER_ROLE_REQUIRE_IDENTITY=true
+```
 
 ---
 

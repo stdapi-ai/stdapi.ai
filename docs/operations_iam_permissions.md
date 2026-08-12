@@ -548,6 +548,102 @@ Required for [`COST_TRACKING`](operations_configuration.md#cost-tracking) (disab
 
 ---
 
+## :material-account-cash: Per-User Cost Attribution (Optional) { #per-user-cost-attribution }
+
+**Environment Variables**: [`AWS_BEDROCK_USER_ROLE_ARN`](operations_configuration.md#aws-bedrock-user-role-arn)
+
+Required to run each end user's model calls under a role session of their own, so AWS reports [their spend separately](operations_cost_management.md#per-user-attribution). Three policies are involved: the server's own role must be allowed to open the sessions, the end user role must trust it to do so, and the end user role must be allowed to invoke models.
+
+**1. On the server's role** — allow it to open sessions of the end user role, and of that role only:
+
+??? example "Server Role IAM Policy Statement"
+    ```json
+    {
+      "Sid": "EndUserRoleSessions",
+      "Effect": "Allow",
+      "Action": [
+        "sts:AssumeRole",
+        "sts:TagSession"
+      ],
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/stdapi-ai-end-user"
+    }
+    ```
+
+**2. Trust policy of the end user role** — allow the server's role, and nothing else, to assume it *and* to tag the session. `sts:TagSession` is a separate action: without it, every session that carries the end user tag is denied.
+
+??? example "End User Role Trust Policy"
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Principal": {
+            "AWS": "arn:aws:iam::ACCOUNT_ID:role/stdapi-ai-task-role"
+          },
+          "Action": [
+            "sts:AssumeRole",
+            "sts:TagSession"
+          ]
+        }
+      ]
+    }
+    ```
+
+**3. Permission policy of the end user role** — everything AWS authorizes against the caller of a model invocation: the invocation actions on the models the deployment serves, and the guardrail the invocation carries:
+
+??? example "End User Role IAM Policy Statements"
+    ```json
+    {
+      "Sid": "EndUserModelInvoke",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:*:ACCOUNT_ID:inference-profile/*",
+        "arn:aws:bedrock:*:ACCOUNT_ID:application-inference-profile/*",
+        "arn:aws:bedrock:*:ACCOUNT_ID:default-prompt-router/*",
+        "arn:aws:bedrock:*::foundation-model/*"
+      ]
+    },
+    {
+      "Sid": "EndUserApplyGuardrail",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:ApplyGuardrail"
+      ],
+      "Resource": "arn:aws:bedrock:*:ACCOUNT_ID:guardrail/*"
+    }
+    ```
+
+Replace `ACCOUNT_ID` with your AWS account ID, and `stdapi-ai-task-role` with the role the server runs as.
+
+!!! warning "An inference profile needs the foundation models behind it"
+    A cross-region inference profile routes to a foundation model in each of its Regions, and AWS authorizes **both** the profile ARN and every foundation model ARN it reaches. A policy naming only `inference-profile/...` fails with an access-denied error naming `foundation-model/...` in a Region you never configured. Keep `arn:aws:bedrock:*::foundation-model/...` alongside the profile, or the call is denied.
+
+!!! warning "A configured guardrail is authorized against the end user"
+    A guardrail applied **during** an invocation — [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](operations_configuration.md#aws-bedrock-guardrail-identifier), a model alias carrying one, or a request-level `moderation` parameter — is evaluated as part of that invocation, so AWS requires `bedrock:ApplyGuardrail` from the identity making the call. Without the `EndUserApplyGuardrail` statement, every model request fails with an access-denied error as soon as per-user attribution is enabled. See [Set up permissions to use Amazon Bedrock Guardrails](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-permissions.html). Narrow the resource to your guardrail ARN if you prefer.
+
+!!! note "Name every model ARN form the deployment allows"
+    The `Resource` list must cover every ARN a request can resolve to. Add `arn:aws:bedrock:*:ACCOUNT_ID:prompt/*` when [`AWS_BEDROCK_ALLOW_PROMPT_ARN`](operations_configuration.md#bedrock-allow-prompt-arn) is enabled, and keep the application inference profile and prompt router entries above whenever [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](operations_configuration.md#bedrock-allow-application-profile-arn), [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](operations_configuration.md#bedrock-allow-prompt-router-arn) or [`AWS_BEDROCK_MODEL_ARN_MAPPING`](operations_configuration.md#bedrock-model-arn-mapping) can put one in front of a model. An ARN form the end user role does not name is denied under it while it still works on the server's role.
+
+    Add the [Web Search](#web-search-iam) actions to this role as well if you serve `web_search` requests: AWS evaluates them when the model actually runs a search, which happens inside the invocation the end user signed. A denied search does not fail the request, it degrades the answer.
+
+!!! danger "A session tag is an access boundary only when the identity is verified"
+    The end user identity is taken from the authenticated caller only under [Amazon Cognito authentication](operations_authentication_security.md). With an API key, or with no authentication, it is whatever the client declared in the request body (`safety_identifier`, `user`, `metadata.user_id`) — so any caller holding the key can send another user's identifier and obtain that user's session tag.
+
+    Write policies conditioned on `aws:PrincipalTag/<key>` only when [`AUTHENTICATION_MODE`](operations_configuration.md#authentication-mode) is `cognito`, which is the configuration where every request carries an identity the gateway verified. Anywhere else, treat the tag as cost metadata, never as an authorization input.
+
+!!! tip "Restricting a role per end user"
+    Where the identity is verified, the session tag makes it testable in a policy: compare it to something on the resource side, so each session reaches only its own data — `"StringEquals": {"aws:ResourceTag/user": "${aws:PrincipalTag/user}"}`, an `s3:prefix` condition, or a `Resource` ARN embedding `${aws:PrincipalTag/user}`. A condition comparing the tag to itself always matches and restricts nothing. A `Deny` on any tag value the deployment does not expect is the other half of the same pattern. Set [`AWS_BEDROCK_USER_ROLE_TAG_KEY`](operations_configuration.md#aws-bedrock-user-role-tag-key) to the key the policy tests.
+
+!!! note "Scope"
+    Only Bedrock model invocations run under the end user role, together with the guardrail applied during them. Standalone guardrail evaluations (the [Moderations API](api_openai_moderations.md)), reranking, video generation and its output files, speech, transcription and translation keep the server's own role, so the end user role needs none of their permissions — and the server's role still needs all of them.
+
+---
+
 ## :material-key: API Key Authentication (Optional)
 
 Required if you configure API authentication. See the [Authentication](operations_configuration.md#authentication) configuration section.
@@ -810,6 +906,7 @@ Required if you configure API authentication. See the [Authentication](operation
 | **Comprehend Moderations**                      | `comprehend:DetectToxicContent`                                                                                                                            | Moderations API without a configured guardrail                              |
 | **Translation**                                 | `translate:TranslateText`                                                                                                                                  | `AWS_TRANSLATE_REGION`                                                       |
 | **Cost Tracking**                               | `pricing:GetProducts`                                                                                                                                      | `COST_TRACKING=true` (opt-in; `false` by default)                            |
+| **Per-User Cost Attribution**                   | `sts:AssumeRole` and `sts:TagSession` on the end user role, matched by that role's trust policy; on the end user role itself, `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream` on every model ARN form the deployment allows, plus `bedrock:ApplyGuardrail` when a guardrail is configured (see [Per-User Cost Attribution](#per-user-cost-attribution)) | `AWS_BEDROCK_USER_ROLE_ARN`                                                  |
 | **SSM Parameter Store**                         | `ssm:GetParameter`<br>`kms:Decrypt` (if encrypted)                                                                                                         | `API_KEY_SSM_PARAMETER`                                                      |
 | **Secrets Manager**                             | `secretsmanager:GetSecretValue`                                                                                                                            | `API_KEY_SECRETSMANAGER_SECRET`                                              |
 

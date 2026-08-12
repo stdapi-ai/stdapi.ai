@@ -87,6 +87,14 @@ _ISSUER_URL_PATTERN = re.compile(
 #: OAuth 2.0 scope token format: printable ASCII without space, quote or backslash (RFC 6749).
 _OAUTH_SCOPE_PATTERN = re.compile(r"^[\x21\x23-\x5B\x5D-\x7E]+$")
 
+#: IAM role ARN format, any AWS partition, with an optional path before the role name.
+_IAM_ROLE_ARN_PATTERN = re.compile(
+    r"^arn:aws(?:-[a-z]+)*:iam::[0-9]{12}:role(?:/[\w+=,.@-]+)*/[\w+=,.@-]+$"
+)
+
+#: Session tag key charset accepted by AWS STS AssumeRole (1-128 characters).
+_SESSION_TAG_KEY_PATTERN = re.compile(r"^[\w.:/=+\-@ ]{1,128}$")
+
 #: Built-in set of ``anthropic_beta`` flags known to be supported by AWS Bedrock.
 _ANTHROPIC_BETA_BEDROCK_FLAGS: frozenset[str] = frozenset(
     {
@@ -537,6 +545,74 @@ class _Settings(BaseSettings):
             "disabled and a default project is configured, request headers are ignored. "
             "When no default project is configured, request headers are always honored "
             "regardless of this setting. Defaults to False."
+        ),
+    )
+
+    aws_bedrock_user_role_arn: str | None = Field(
+        default=None,
+        description=(
+            "ARN of an AWS IAM role the server assumes, once per end user, to run "
+            "that user's model invocations under an identity of their own. AWS then "
+            "reports Amazon Bedrock model usage per end user in AWS Cost Explorer and "
+            "in the Cost and Usage Report, instead of reporting it all under the "
+            "server's own identity.\n\n"
+            "The role must grant the Amazon Bedrock model invocation actions, and its "
+            "trust policy must allow the server's own role to call both "
+            "'sts:AssumeRole' and 'sts:TagSession' on it. The server's role needs the "
+            "same two actions on this role ARN.\n\n"
+            "Example: 'arn:aws:iam::123456789012:role/stdapi-ai-end-user'\n\n"
+            "Only model invocations are covered. When unset (default), every request "
+            "runs under the server's own identity and usage is reported under it."
+        ),
+    )
+
+    aws_bedrock_user_role_session_duration: int = Field(
+        default=3600,
+        ge=900,
+        le=3600,
+        description=(
+            "Lifetime in seconds of the per-end-user role session obtained with "
+            "aws_bedrock_user_role_arn. Sessions are cached and reused until they "
+            "approach expiry, so a longer lifetime means fewer AWS STS calls.\n\n"
+            "Accepted range: 900 to 3600 seconds. The 3600-second ceiling is imposed "
+            "by AWS: the server itself runs under an assumed role, and a role session "
+            "obtained from another role session cannot last longer than one hour.\n\n"
+            "Example: 3600\n\n"
+            "Defaults to 3600."
+        ),
+    )
+
+    aws_bedrock_user_role_tag_key: str | None = Field(
+        default="user",
+        description=(
+            "Session tag key carrying the end user identity on the role sessions "
+            "obtained with aws_bedrock_user_role_arn. Activate it as a cost "
+            "allocation tag, under the 'IAM principal' type, to group Amazon Bedrock "
+            "costs by end user in AWS Cost Explorer, and to write access policies "
+            "conditioned on 'aws:PrincipalTag/<key>'.\n\n"
+            "Keys beginning with 'aws:' are reserved by AWS and rejected.\n\n"
+            "Example: 'user'\n\n"
+            "Set to null to send no session tag: end users are then still "
+            "distinguished by the role session name. Defaults to 'user'."
+        ),
+    )
+
+    aws_bedrock_user_role_require_identity: bool = Field(
+        default=False,
+        description=(
+            "Reject a model invocation that identifies no end user, instead of "
+            "running it under the server's own identity, when "
+            "aws_bedrock_user_role_arn is configured.\n\n"
+            "Enable it so that no model usage can escape per-user attribution. "
+            "Requests must then carry an authenticated caller, or name the end user "
+            "with 'safety_identifier' or 'user' on the OpenAI-compatible APIs, or "
+            "with 'metadata.user_id' on the Anthropic Messages API. APIs that have "
+            "no such field, such as audio transcription, then require an "
+            "authenticated caller.\n\n"
+            "A real-time speech-to-speech session is refused outright while this is "
+            "enabled: it keeps for its whole life the identity it opened with, so it "
+            "can only ever be attributed to the server.\n\n"
+            "Defaults to False, which attributes such requests to the server itself."
         ),
     )
 
@@ -1978,6 +2054,62 @@ class _Settings(BaseSettings):
             raise ValueError(msg)
         return value
 
+    @field_validator("aws_bedrock_user_role_arn")
+    @classmethod
+    def _validate_user_role_arn(cls, value: str | None) -> str | None:
+        """Validate the per-end-user role ARN against the STS AssumeRole format.
+
+        A malformed ARN would otherwise only surface once the first model
+        invocation fails to obtain the end user's credentials.
+
+        Args:
+            value: IAM role ARN, or None to keep the server's own identity.
+
+        Returns:
+            The validated ARN.
+
+        Raises:
+            ValueError: If the value is set and is not an IAM role ARN.
+        """
+        if value is not None and not _IAM_ROLE_ARN_PATTERN.fullmatch(value):
+            msg = (
+                f'Invalid aws_bedrock_user_role_arn "{value}": must be an IAM role '
+                'ARN "arn:<partition>:iam::<account-id>:role/<name>".'
+            )
+            raise ValueError(msg)
+        return value
+
+    @field_validator("aws_bedrock_user_role_tag_key")
+    @classmethod
+    def _validate_user_role_tag_key(cls, value: str | None) -> str | None:
+        """Validate the end user session tag key against the STS AssumeRole charset.
+
+        Args:
+            value: Session tag key, or None to send no session tag.
+
+        Returns:
+            The validated key.
+
+        Raises:
+            ValueError: If the key is empty, too long, uses characters AWS STS
+                rejects, or starts with the reserved "aws:" prefix.
+        """
+        if value is None:
+            return value
+        if not _SESSION_TAG_KEY_PATTERN.fullmatch(value):
+            msg = (
+                f'Invalid aws_bedrock_user_role_tag_key "{value}": must be 1 to 128 '
+                "characters, letters, digits, spaces or _ . : / = + - @"
+            )
+            raise ValueError(msg)
+        if value.lower().startswith("aws:"):
+            msg = (
+                f'Invalid aws_bedrock_user_role_tag_key "{value}": keys beginning '
+                'with "aws:" are reserved by AWS.'
+            )
+            raise ValueError(msg)
+        return value
+
     @field_validator("aws_bedrock_mantle_endpoint_url")
     @classmethod
     def _validate_mantle_endpoint_url(cls, value: str | None) -> str | None:
@@ -2282,6 +2414,17 @@ class _Settings(BaseSettings):
             raise ValueError(msg)
         if not self.aws_bedrock_mantle_regions:
             self.aws_bedrock_mantle_regions = self.aws_bedrock_regions
+
+        if (
+            self.aws_bedrock_user_role_require_identity
+            and not self.aws_bedrock_user_role_arn
+        ):
+            msg = (
+                "aws_bedrock_user_role_require_identity requires "
+                "aws_bedrock_user_role_arn: without a per-end-user role, rejecting "
+                "requests that identify no end user would attribute nothing."
+            )
+            raise ValueError(msg)
 
         if not self.aws_transcribe_s3_bucket:
             self.aws_transcribe_s3_bucket = self.aws_s3_bucket

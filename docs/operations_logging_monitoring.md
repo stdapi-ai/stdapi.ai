@@ -120,6 +120,7 @@ Each event shares core fields and may add type‑specific ones.
 |                                `voice_id` | request                             | TTS voice (if applicable)                                                                   |
 |                           `model_regions` | request                             | AWS region(s) that handled the request; may contain multiple values when failover occurred  |
 |       `request_user_id`, `request_org_id` | request                             | Propagated identifiers (if applicable)                                                      |
+|                  `aws_role_session_name` | request                             | Session the request's model usage was billed under, with [per-user cost attribution](operations_cost_management.md#per-user-attribution) enabled; the same value AWS reports as the caller identity |
 |                          `request_params` | request                             | Sanitized request payload (if `LOG_REQUEST_PARAMS=true`)                                    |
 |                        `request_response` | request                             | Sanitized response payload (if `LOG_REQUEST_PARAMS=true`)                                   |
 | `amzn_trace_id`, `apigw_request_id`, `cloudfront_request_id` | request          | Edge correlation IDs copied from the `X-Amzn-Trace-Id`, `x-amz-apigw-id` and `X-Amz-Cf-Id` request headers (when present) |

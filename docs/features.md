@@ -556,6 +556,17 @@ export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
 !!! note "Opt-in, and an estimate — not a bill"
     Cost tracking is disabled by default (it needs the `pricing:GetProducts` IAM permission); enable it with `COST_TRACKING=true`. Costs are a best-effort approximation for visibility and alerting, not a substitute for your AWS invoice — see [Cost Tracking](operations_cost_management.md#cost-tracking-real-time-aws-pricing) for accuracy details and known limitations.
 
+### Per-User Cost Attribution
+
+- **Each end user on the AWS bill** — Model calls optionally run under a short-lived role session opened for the user behind the request, so AWS reports their spend separately in Cost Explorer and CUR 2.0 — from the invoice, not from an estimate
+- **The identity the gateway verified** — The authenticated caller when authentication is enabled, otherwise the identifier the request declares (`safety_identifier`/`user`, or `metadata.user_id` on the Anthropic Messages API)
+- **A cost allocation dimension, and an access boundary** — The identity travels as a session tag, groupable in Cost Explorer and testable in IAM policies as `aws:PrincipalTag`
+- **Sessions cached and reused** — One session per user, refreshed before it expires, bounded in number; a burst of first requests opens a single session
+- **Fail-closed** — A session that cannot be opened fails the request instead of quietly billing the gateway, and requests identifying no user can be rejected outright
+
+!!! note "Off by default, and it needs a role"
+    Enable it with `AWS_BEDROCK_USER_ROLE_ARN`, pointing at a role you create — see [Per-User Attribution](operations_cost_management.md#per-user-attribution). It covers model invocations; the rest of the gateway's AWS usage stays on its own identity.
+
 ### Developer Tools
 
 - **Swagger UI** at `/docs` — test endpoints directly in your browser

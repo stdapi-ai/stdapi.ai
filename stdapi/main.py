@@ -35,6 +35,7 @@ from stdapi.aws import (
     initialize_aws_account_info,
     raise_first_exception,
     service_regions,
+    verify_user_role_access,
 )
 from stdapi.aws_bedrock import (
     AWS_ERROR_MAP,
@@ -181,6 +182,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                             initialize_polly_models(start_event),
                             initialize_transcribe_models(),
                             initialize_moderation_models(),
+                            verify_user_role_access(start_event),
                             register(start_event),
                             return_exceptions=True,
                         )

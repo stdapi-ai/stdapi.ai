@@ -1,14 +1,17 @@
 """AWS client management and connection pooling."""
 
+import re
 from asyncio import gather, sleep
 from contextlib import AsyncExitStack, suppress
 from datetime import datetime
+from hashlib import blake2b
 from json import dumps as _std_dumps
 from logging import getLogger
 from os import environ
 from typing import TYPE_CHECKING, Any, Final, NotRequired, Self, TypedDict
 
 from aiobotocore.config import AioConfig
+from aiobotocore.credentials import AioDeferredRefreshableCredentials
 from aiohttp import ClientError as HttpClientError
 from aiohttp import ClientSession, ClientTimeout
 from botocore import serialize as botocore_serialize
@@ -17,6 +20,7 @@ from botocore.utils import parse_timestamp
 from pydantic_core import to_json
 
 from stdapi import server
+from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock_mantle import mantle_http_session
 from stdapi.config import AWS_REGION, AWS_SESSION, SETTINGS
 
@@ -26,6 +30,8 @@ if TYPE_CHECKING:
 
     from botocore.model import OperationModel
     from types_aiobotocore_bedrock.literals import RegionName
+
+    from stdapi.monitoring import EventLog
 
     class AwsEnvironment(TypedDict):
         """AWS environment."""
@@ -50,6 +56,9 @@ _ECS_METADATA_TIMEOUT: Final = 10
 
 #: Connection timeout of a single ECS container metadata request, in seconds
 _ECS_METADATA_CONNECT_TIMEOUT: Final = 5
+
+#: Region of the pooled AWS STS client opening the end user role sessions
+_STS_REGION: RegionName = AWS_REGION  # type: ignore[assignment]
 
 #: Region-rotated Bedrock services that get single-attempt ".no-retry" client pools
 _NO_RETRY_SERVICES: Final = ("bedrock-runtime", "bedrock-agent-runtime")
@@ -298,7 +307,14 @@ class AWSConnectionManager:
                 *{
                     (service, region or SETTINGS.aws_bedrock_regions[0])
                     for service, region in self._client_specs
-                }
+                },
+                # Only warmed when end user cost attribution is enabled: its
+                # sole consumer is the per-end-user role session.
+                *(
+                    (("sts", _STS_REGION),)
+                    if SETTINGS.aws_bedrock_user_role_arn
+                    else ()
+                ),
             ]
 
             # Region-rotated services also get a single-attempt ".no-retry" pool
@@ -557,6 +573,355 @@ def get_client(service: str, region_name: RegionName | None = None) -> Any:  # n
         if len(clients) == 1:
             return next(iter(clients.values()))
         raise
+
+
+#: Bedrock runtime operations run under the end user's own role session.
+USER_ROLE_OPERATIONS: Final[frozenset[str]] = frozenset(
+    {"Converse", "ConverseStream", "InvokeModel", "InvokeModelWithResponseStream"}
+)
+
+#: Characters AWS STS rejects in a RoleSessionName (ASCII word characters, + = , . @ -).
+_SESSION_NAME_INVALID_RE = re.compile(r"[^\w+=,.@-]", re.ASCII)
+
+#: Characters AWS STS rejects in a session tag value (letters, digits, space, _ . : / = + - @).
+_TAG_VALUE_INVALID_RE = re.compile(r"[^\w .:/=+\-@]")
+
+#: Bytes of end user identifier digest appended to a session name and tag value.
+_IDENTITY_DIGEST_SIZE: Final = 6
+
+#: RoleSessionName length AWS STS accepts, minus the digest suffix and its separator.
+_SESSION_NAME_PREFIX_MAX: Final = 64 - _IDENTITY_DIGEST_SIZE * 2 - 1
+
+#: Session tag value length AWS STS accepts, minus the digest suffix and its separator.
+_TAG_VALUE_PREFIX_MAX: Final = 256 - _IDENTITY_DIGEST_SIZE * 2 - 1
+
+#: Role sessions kept per process, keyed by role session name (bounded LRU).
+_USER_ROLE_CACHE: dict[str, _UserRoleCredentials] = {}
+
+#: Maximum end users whose role session is cached; the least recently used is dropped.
+_USER_ROLE_CACHE_MAX: int = 4096
+
+#: Fraction of a role session's lifetime left when it is refreshed in the background.
+_ADVISORY_REFRESH_RATIO: Final = 0.2
+
+#: Fraction of a role session's lifetime left when a refresh becomes blocking.
+_MANDATORY_REFRESH_RATIO: Final = 0.1
+
+#: Attempts allowed to open the startup role session, whose trust policy may still propagate
+_USER_ROLE_CHECK_ATTEMPTS: Final = 3
+
+#: Delay between two startup role session attempts, in seconds
+_USER_ROLE_CHECK_RETRY_DELAY: Final = 5.0
+
+#: End user identifier of the startup check, which never invokes a model
+_USER_ROLE_CHECK_IDENTITY: Final = "stdapi-ai-startup-check"
+
+#: Client-facing message of a role session that could not be opened
+_USER_ROLE_FAILURE_MESSAGE: Final = (
+    "The request could not be processed for the end user it identifies. "
+    "Retry the request; if the failure continues, contact the service operator."
+)
+
+#: Bidirectional service whose streams are model invocations, billed as such.
+_BIDI_MODEL_SERVICE: Final = "bedrock-runtime"
+
+#: Client-facing message of a real-time session no end user can be attributed with
+_IDENTITY_UNATTRIBUTABLE_MESSAGE: Final = (
+    "This service requires each request to identify the end user it is made for, "
+    "which a real-time session cannot do. Use a non-realtime endpoint instead."
+)
+
+#: Client-facing message of a request that identifies no end user where one is required
+_IDENTITY_REQUIRED_MESSAGE: Final = (
+    "This service requires each request to identify the end user it is made for. "
+    "Set 'safety_identifier' (or 'user') on the OpenAI-compatible APIs, or "
+    "'metadata.user_id' on the Anthropic Messages API."
+)
+
+
+def user_role_session_identity(identity: str) -> tuple[str, str]:
+    """Map an end user identifier to a role session name and session tag value.
+
+    AWS STS accepts a narrower character set in a session name than in a tag
+    value, and dropping the rejected characters alone would map two end users
+    onto one session -- a mis-attribution in the Cost and Usage Report, and an
+    authorization defect wherever a policy tests ``aws:PrincipalTag``. A digest
+    of the identifier is therefore appended to both forms, which keeps them
+    distinct, stable across servers, and readable for identifiers AWS accepts.
+
+    Args:
+        identity: End user identifier, of any length and character set.
+
+    Returns:
+        The RoleSessionName and the session tag value, both non-empty and
+        within the limits AWS STS enforces.
+    """
+    digest = blake2b(identity.encode(), digest_size=_IDENTITY_DIGEST_SIZE).hexdigest()
+    name = _SESSION_NAME_INVALID_RE.sub("-", identity)[:_SESSION_NAME_PREFIX_MAX].strip(
+        "-"
+    )
+    value = _TAG_VALUE_INVALID_RE.sub("-", identity)[:_TAG_VALUE_PREFIX_MAX].strip(" -")
+    return f"{name}-{digest}" if name else digest, (
+        f"{value}-{digest}" if value else digest
+    )
+
+
+class _UserRoleCredentials(AioDeferredRefreshableCredentials):
+    """An end user's role session, reopened before it expires.
+
+    botocore reopens a session a fixed 15 minutes before it expires, which at
+    the shortest session AWS STS grants means reopening one on every request.
+    The windows here scale with the configured session lifetime instead.
+
+    Attributes:
+        session_name: RoleSessionName of the session, as AWS reports it.
+    """
+
+    def __init__(self, session_name: str, tag_value: str | None, duration: int) -> None:
+        """Prepare an end user's role session, opened on first use.
+
+        Args:
+            session_name: RoleSessionName identifying the end user.
+            tag_value: Session tag value identifying the end user, if tagged.
+            duration: Session lifetime in seconds.
+        """
+        super().__init__(
+            lambda: _assume_user_role(session_name, tag_value), "stdapi-user-role"
+        )
+        self.session_name = session_name
+        self._advisory_refresh_timeout = int(duration * _ADVISORY_REFRESH_RATIO)
+        self._mandatory_refresh_timeout = int(duration * _MANDATORY_REFRESH_RATIO)
+
+
+async def _assume_user_role(session_name: str, tag_value: str | None) -> dict[str, Any]:
+    """Open a role session for one end user.
+
+    Args:
+        session_name: RoleSessionName identifying the end user.
+        tag_value: Session tag value identifying the end user, if tagged.
+
+    Returns:
+        The session credentials, in the form botocore refreshes from.
+    """
+    params: dict[str, Any] = {
+        "RoleArn": SETTINGS.aws_bedrock_user_role_arn,
+        "RoleSessionName": session_name,
+        "DurationSeconds": SETTINGS.aws_bedrock_user_role_session_duration,
+    }
+    if tag_value is not None:
+        params["Tags"] = [
+            {"Key": SETTINGS.aws_bedrock_user_role_tag_key, "Value": tag_value}
+        ]
+    sts = get_client("sts", _STS_REGION)
+    credentials = (await sts.assume_role(**params))["Credentials"]
+    return {
+        "access_key": credentials["AccessKeyId"],
+        "secret_key": credentials["SecretAccessKey"],
+        "token": credentials["SessionToken"],
+        "expiry_time": credentials["Expiration"].isoformat(),
+    }
+
+
+async def user_role_credentials(identity: str) -> _UserRoleCredentials:
+    """Return the credentials attributing AWS usage to *identity*.
+
+    Sessions are cached per end user and reopened only as they approach expiry:
+    AWS STS enforces an account-wide request quota, and AWS documents caching
+    as a requirement of this design. A burst of first requests for one end user
+    opens a single session.
+
+    The cache is keyed by the session name rather than by the identifier it
+    came from: an end user identifier is client-chosen and unbounded, so
+    keeping one would bound the number of entries without bounding their size.
+
+    Args:
+        identity: End user identifier the usage is attributed to.
+
+    Returns:
+        The end user's role session credentials.
+
+    Raises:
+        ApiError: The session could not be opened, chained to nothing. The AWS
+            failure reaches the request log and stops there: forwarded, its
+            codes would be answered as the caller's own credentials being
+            invalid, and the Bedrock region router -- which reads the cause of
+            an ``ApiError`` -- would read a throttled AWS STS as a failed
+            Region and re-attempt the request in every other one.
+    """
+    session_name, tag_value = user_role_session_identity(identity)
+    credentials = _USER_ROLE_CACHE.pop(session_name, None)
+    if credentials is None:
+        if len(_USER_ROLE_CACHE) >= _USER_ROLE_CACHE_MAX:
+            del _USER_ROLE_CACHE[next(iter(_USER_ROLE_CACHE))]
+        credentials = _UserRoleCredentials(
+            session_name,
+            tag_value if SETTINGS.aws_bedrock_user_role_tag_key else None,
+            SETTINGS.aws_bedrock_user_role_session_duration,
+        )
+    # Re-inserted last, so the least recently used end user is the one dropped.
+    _USER_ROLE_CACHE[session_name] = credentials
+    try:
+        await credentials.get_frozen_credentials()
+    except (BotoCoreError, ClientError, RuntimeError) as exception:
+        # Dropped so the next request retries with a session of its own.
+        _USER_ROLE_CACHE.pop(session_name, None)
+        from stdapi.monitoring import REQUEST_LOG, log_error_details  # noqa: PLC0415
+
+        if REQUEST_LOG.get(None) is not None:
+            log_error_details(
+                f"Opening the end user role session failed "
+                f"({type(exception).__name__}: {exception})",
+                level="error",
+            )
+        raise ApiError(_USER_ROLE_FAILURE_MESSAGE, status=503) from None
+    return credentials
+
+
+def clear_user_role_cache() -> None:
+    """Drop every cached end user role session."""
+    _USER_ROLE_CACHE.clear()
+
+
+async def request_user_role_credentials() -> _UserRoleCredentials | None:
+    """Return the credentials the current request's model invocations run under.
+
+    Returns:
+        The end user's role session credentials, or None to keep the server's
+        own identity -- when the feature is disabled, when the call is the
+        server's own rather than a client request, or when the request
+        identifies no end user and none is required.
+
+    Raises:
+        ApiError: The request identifies no end user where the configuration
+            requires one, or the end user's session could not be opened.
+    """
+    if SETTINGS.aws_bedrock_user_role_arn is None:
+        return None
+    # Imported here: stdapi.monitoring transitively imports this module.
+    from stdapi.monitoring import REQUEST_LOG, resolve_request_identity  # noqa: PLC0415
+
+    try:
+        identity = resolve_request_identity()
+    except LookupError:
+        # Outside any request: the server's own call, attributed to itself.
+        return None
+    if not identity:
+        if SETTINGS.aws_bedrock_user_role_require_identity:
+            raise ApiError(_IDENTITY_REQUIRED_MESSAGE, status=400)
+        return None
+    credentials = await user_role_credentials(identity)
+    REQUEST_LOG.get()["aws_role_session_name"] = credentials.session_name
+    return credentials
+
+
+def verify_bidi_user_role_policy(service: str) -> None:
+    """Refuse a real-time model session no end user role can be attributed with.
+
+    A bidirectional stream is signed as it opens, from the server's own
+    credentials, and keeps that identity for its whole life: unlike a request,
+    it has no point where the end user's session can be substituted. A
+    deployment that requires every model invocation to name its end user is
+    therefore served by refusing the session rather than by reporting its usage
+    under the server. Streams of every other service are unaffected: they are
+    not model invocations.
+
+    Args:
+        service: AWS service name of the stream about to open.
+
+    Raises:
+        ApiError: The deployment requires an end user identity that a real-time
+            model session cannot carry.
+    """
+    if (
+        service == _BIDI_MODEL_SERVICE
+        and SETTINGS.aws_bedrock_user_role_arn is not None
+        and SETTINGS.aws_bedrock_user_role_require_identity
+    ):
+        raise ApiError(_IDENTITY_UNATTRIBUTABLE_MESSAGE, status=400)
+
+
+async def _set_request_credentials(context: dict[str, Any]) -> None:
+    """Sign the request being built as the end user, if it has one.
+
+    Args:
+        context: The request context botocore signs from.
+    """
+    if (credentials := await request_user_role_credentials()) is not None:
+        context.setdefault("signing", {})["request_credentials"] = credentials
+
+
+def _sign_as_user(
+    model: OperationModel, context: dict[str, Any], **_kwargs: object
+) -> Awaitable[None] | None:
+    """Attribute a Bedrock model invocation to its end user (``before-parameter-build``).
+
+    Registered once for the Bedrock runtime, so every other AWS service keeps
+    the server's own identity by construction. Returns the coroutine doing the
+    work instead of being one, so a deployment without the feature pays only
+    this comparison.
+
+    Args:
+        model: Operation model of the call.
+        context: Request context, which botocore later signs from.
+        **_kwargs: Unused botocore event arguments.
+
+    Returns:
+        The awaitable resolving the end user's credentials, or None to sign
+        with the server's own.
+    """
+    if (
+        SETTINGS.aws_bedrock_user_role_arn is None
+        or model.name not in USER_ROLE_OPERATIONS
+    ):
+        return None
+    return _set_request_credentials(context)
+
+
+# Registered on the shared session, so every Bedrock runtime client created
+# from it -- including the ".no-retry" pool -- signs invocations the same way.
+AWS_SESSION.register(
+    "before-parameter-build.bedrock-runtime",
+    _sign_as_user,
+    unique_id="stdapi-user-role",
+)
+
+
+async def verify_user_role_access(start_event: EventLog) -> None:
+    """Open a role session at startup, so a broken configuration surfaces there.
+
+    A role created moments earlier stays unassumable for a few seconds, so the
+    check is retried before it is believed. It is reported and not fatal: a
+    server refusing to start would turn a slow IAM propagation into an outage,
+    while every request that needs the session still fails closed on its own.
+
+    Args:
+        start_event: Startup log event a failure is reported on.
+    """
+    if SETTINGS.aws_bedrock_user_role_arn is None:
+        return
+    from stdapi.monitoring import add_server_warning  # noqa: PLC0415
+
+    session_name, tag_value = user_role_session_identity(_USER_ROLE_CHECK_IDENTITY)
+    failure: Exception | None = None
+    for attempt in range(_USER_ROLE_CHECK_ATTEMPTS):
+        if attempt:
+            await sleep(_USER_ROLE_CHECK_RETRY_DELAY)
+        try:
+            await _assume_user_role(
+                session_name,
+                tag_value if SETTINGS.aws_bedrock_user_role_tag_key else None,
+            )
+        except (BotoCoreError, ClientError) as exception:
+            failure = exception
+        else:
+            return
+    add_server_warning(
+        start_event,
+        "Per-end-user cost attribution is configured but its role could not be "
+        f"assumed ({type(failure).__name__}: {failure}): requests will fail until "
+        "the role's trust policy allows this server to call sts:AssumeRole and "
+        "sts:TagSession on it",
+    )
 
 
 async def _set_account_id_from_sts() -> None:
