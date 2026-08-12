@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, Never, get_args
 
 from fastapi import APIRouter, Depends, Path, Query
 from pydantic import TypeAdapter, ValidationError
+from sse_starlette import ServerSentEvent
 
 from stdapi.api_errors import ApiError
 from stdapi.api_providers.openai import TAG_OPENAI
@@ -32,6 +33,12 @@ from stdapi.aws_bedrock_mantle import (
 )
 from stdapi.cleanup import schedule_cleanup
 from stdapi.config import SETTINGS
+from stdapi.conversations import (
+    append_items,
+    load_items,
+    stored_item,
+    validate_conversation_id,
+)
 from stdapi.models import resolve_bedrock_prompt, validate_model
 from stdapi.models.capabilities import Capability, register_route_capability
 from stdapi.models.chat import get_chat_model, serves_via_mantle
@@ -62,6 +69,8 @@ from stdapi.types.openai_responses import (
     CompactedResponse,
     CompactionUserMessage,
     CompactParams,
+    Conversation,
+    ConversationParam,
     EasyInputMessage,
     InputTokenCountParams,
     InputTokenCountResponse,
@@ -79,11 +88,17 @@ from stdapi.types.openai_responses import (
     ResponseOutputText,
     ResponsePrompt,
     ResponseUsage,
+    conversation_id_of,
 )
-from stdapi.utils import hide_security_details, validation_error_handler
+from stdapi.utils import (
+    hide_security_details,
+    to_json_str,
+    try_parse_json,
+    validation_error_handler,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import AsyncGenerator, AsyncIterable, Sequence
 
     from sse_starlette import EventSourceResponse
     from types_aiobotocore_bedrock.literals import RegionName
@@ -294,6 +309,250 @@ async def _merge_previous_response(
     return request.model_copy(
         update={"input": [*history, *new_input], "previous_response_id": None}
     )
+
+
+#: Stream events whose response snapshot is the turn appended to a conversation.
+_TERMINAL_STREAM_EVENTS: frozenset[str] = frozenset(
+    {"response.completed", "response.incomplete"}
+)
+
+#: Response statuses whose turn is not appended to the request's conversation.
+_NOT_APPENDED_STATUSES: frozenset[str] = frozenset(
+    {"failed", "cancelled", "queued", "in_progress"}
+)
+
+
+def _resolve_conversation(conversation: ConversationParam) -> str | None:
+    """Validate the ``conversation`` parameter and return the ID it names.
+
+    Args:
+        conversation: The request's ``conversation`` value, in either form.
+
+    Returns:
+        The conversation ID, or None when the parameter was not set.
+
+    Raises:
+        ApiError: 400 when the ID is malformed, 404 when it cannot name a
+            conversation on this server.
+    """
+    conversation_id = conversation_id_of(conversation)
+    if conversation_id is not None:
+        validate_conversation_id(conversation_id, "conversation")
+    return conversation_id
+
+
+async def _with_conversation_prefix[
+    RequestT: (ResponseCreateParams, InputTokenCountParams)
+](request: RequestT, conversation_id: str) -> RequestT:
+    """Prepend a conversation's items to a request's input.
+
+    Args:
+        request: The incoming request.
+        conversation_id: Conversation whose items form the input prefix.
+
+    Returns:
+        The request, rebuilt with the conversation's items ahead of its input
+        and without the ``conversation`` parameter the backend never sees.
+
+    Raises:
+        ApiError: 404 when the conversation does not exist.
+    """
+    history: list[ResponseInputItem]
+    new_input: list[ResponseInputItem]
+    with validation_error_handler():
+        history = _INPUT_HISTORY_ADAPTER.validate_python(
+            await load_items(conversation_id)
+        )
+    if isinstance(request.input, str):
+        new_input = [EasyInputMessage(role="user", content=request.input)]
+    else:
+        new_input = list(request.input or ())
+    return request.model_copy(
+        update={"input": [*history, *new_input], "conversation": None}
+    )
+
+
+def _turn_input_items(request: ResponseCreateParams) -> list[dict[str, Any]]:
+    """Build the conversation items for a request's own input.
+
+    Args:
+        request: The incoming request, before the conversation prefix is applied.
+
+    Returns:
+        The items to append, each carrying its minted conversation item ID.
+    """
+    payload = request.model_dump(
+        mode="json", by_alias=True, include={"input"}, exclude_none=True
+    ).get("input", [])
+    if isinstance(payload, str):
+        payload = [{"role": "user", "content": payload}]
+    return [stored_item(entry) for entry in payload]
+
+
+async def _append_turn(
+    conversation_id: str, input_items: list[dict[str, Any]], output: Sequence[Any]
+) -> None:
+    """Append a completed turn's input and output items to its conversation.
+
+    Args:
+        conversation_id: Conversation the turn belongs to.
+        input_items: The request's own input, already prepared for storage.
+        output: The response's output items, as JSON objects.
+
+    Raises:
+        ApiError: 404 when the conversation was deleted meanwhile.
+    """
+    items = [
+        *input_items,
+        *(stored_item(entry) for entry in output if isinstance(entry, dict)),
+    ]
+    if items:
+        await append_items(conversation_id, items)
+
+
+async def _append_streamed_turn(
+    events: AsyncIterable[Any], conversation_id: str, input_items: list[dict[str, Any]]
+) -> AsyncGenerator[Any]:
+    """Append a streamed turn to its conversation once the stream has ended.
+
+    The terminal event carries the response snapshot the turn is built from,
+    and is re-emitted with the conversation the response belongs to.
+
+    Args:
+        events: The response's own stream events.
+        conversation_id: Conversation the turn belongs to.
+        input_items: The request's own input, already prepared for storage.
+
+    Yields:
+        The stream events, with the terminal one echoing the conversation.
+    """
+    output: list[Any] = []
+    terminal = False
+    async for event in events:
+        if (
+            isinstance(event, ServerSentEvent)
+            and event.event in _TERMINAL_STREAM_EVENTS
+            and isinstance(event.data, str)
+        ):
+            payload = try_parse_json(event.data)
+            if isinstance(payload, dict) and isinstance(
+                snapshot := payload.get("response"), dict
+            ):
+                snapshot["conversation"] = {"id": conversation_id}
+                items = snapshot.get("output")
+                output = items if isinstance(items, list) else []
+                terminal = True
+                event = ServerSentEvent(to_json_str(payload), event=event.event)
+        yield event
+    if not terminal:
+        return
+    try:
+        await _append_turn(conversation_id, input_items, output)
+    except Exception:  # noqa: BLE001 - the stream is sent; the turn cannot fail it
+        log_error_details(
+            f"Appending the response to conversation '{conversation_id}' failed.",
+            level="error",
+        )
+
+
+def _streamed_result(
+    result: EventSourceResponse,
+    appended_to: str | None,
+    turn_items: list[dict[str, Any]],
+) -> EventSourceResponse:
+    """Wrap a streamed response so its turn reaches its conversation.
+
+    Args:
+        result: The streaming response.
+        appended_to: Conversation the turn is appended to, if any.
+        turn_items: The request's input as conversation items.
+
+    Returns:
+        The streaming response, unchanged when no conversation is involved.
+    """
+    if appended_to:
+        result.body_iterator = _append_streamed_turn(
+            result.body_iterator, appended_to, turn_items
+        )
+    return result
+
+
+def _echo_chaining(
+    result: Response, previous_response_id: str | None, conversation_id: str | None
+) -> None:
+    """Echo the request's conversation-chaining parameters on the response.
+
+    Args:
+        result: The response to complete.
+        previous_response_id: The request's ``previous_response_id``, if any.
+        conversation_id: The request's conversation ID, if any.
+    """
+    if previous_response_id:
+        result.previous_response_id = previous_response_id
+    if conversation_id is not None:
+        result.conversation = Conversation(id=conversation_id)
+
+
+async def _apply_conversation(
+    request: ResponseCreateParams,
+) -> tuple[ResponseCreateParams, str | None, list[dict[str, Any]]]:
+    """Resolve the request's ``conversation`` into an input prefix and a turn.
+
+    ``store=false`` still resolves the conversation as the input prefix; it
+    only opts the turn out of being appended to it.
+
+    Args:
+        request: The incoming request.
+
+    Returns:
+        Tuple of (request rebuilt with the conversation's items ahead of its
+        own input, the conversation ID, the request's input as conversation
+        items to append after generation).
+
+    Raises:
+        ApiError: 400 when the conversation ID is malformed, 404 when the
+            conversation does not exist.
+    """
+    conversation_id = _resolve_conversation(request.conversation)
+    if conversation_id is None:
+        return request, None, []
+    turn_items = _turn_input_items(request) if request.store is not False else []
+    return (
+        await _with_conversation_prefix(request, conversation_id),
+        conversation_id,
+        turn_items,
+    )
+
+
+async def _save_response(
+    response_id: str, request: ResponseCreateParams, result: Response
+) -> None:
+    """Persist a stored response, discarding its storage when the write fails.
+
+    Args:
+        response_id: Stored response identifier.
+        request: The request that produced the response.
+        result: The response to persist.
+
+    Raises:
+        BaseException: Whatever the write raised, after cleanup is scheduled.
+    """
+    try:
+        await save_stored_response(
+            response_id,
+            {
+                # Absent for a `prompt` request: Bedrock renders the input.
+                "input": request.model_dump(
+                    mode="json", by_alias=True, include={"input"}, exclude_none=True
+                ).get("input", []),
+                "response": result.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                ),
+            },
+        )
+    except BaseException:
+        schedule_cleanup(discard_stored_response_session(response_id, "response"))
+        raise
 
 
 def _malformed_stored_document(response_id: str, detail: str) -> Never:
@@ -583,6 +842,8 @@ async def create_response(
     previous_response_id = request.previous_response_id
     native_supported = chat_model.native_store_supported()
     request = await _apply_previous_response(request, native_supported=native_supported)
+    request, conversation_id, turn_items = await _apply_conversation(request)
+    appended_to = conversation_id if request.store is not False else None
     if native_supported:
         # Mantle native storage handles store/previous_response_id upstream.
         store = False
@@ -616,31 +877,19 @@ async def create_response(
         if store:
             schedule_cleanup(discard_stored_response_session(response_id, "response"))
         raise
-    if isinstance(result, Response):
-        if previous_response_id:
-            result.previous_response_id = previous_response_id
-        if store:
-            try:
-                await save_stored_response(
-                    response_id,
-                    {
-                        # Absent for a `prompt` request: Bedrock renders the input.
-                        "input": request.model_dump(
-                            mode="json",
-                            by_alias=True,
-                            include={"input"},
-                            exclude_none=True,
-                        ).get("input", []),
-                        "response": result.model_dump(
-                            mode="json", by_alias=True, exclude_none=True
-                        ),
-                    },
-                )
-            except BaseException:
-                schedule_cleanup(
-                    discard_stored_response_session(response_id, "response")
-                )
-                raise
+    if not isinstance(result, Response):
+        return _streamed_result(result, appended_to, turn_items)
+    _echo_chaining(result, previous_response_id, conversation_id)
+    if store:
+        await _save_response(response_id, request, result)
+    if appended_to and result.status not in _NOT_APPENDED_STATUSES:
+        await _append_turn(
+            appended_to,
+            turn_items,
+            result.model_dump(
+                mode="json", by_alias=True, include={"output"}, exclude_none=True
+            ).get("output", []),
+        )
     return result
 
 
@@ -701,6 +950,8 @@ async def count_input_tokens(
     if serves_via_mantle(model_id):
         msg = "Token counting is not supported for this model on this endpoint."
         raise ApiError(msg, status=400)
+    if conversation_id := _resolve_conversation(request.conversation):
+        request = await _with_conversation_prefix(request, conversation_id)
     return log_response_params(
         InputTokenCountResponse(
             input_tokens=await count_input_tokens_via_bedrock(

@@ -4097,6 +4097,44 @@ class ConversationObject(BaseModelRequest):
 ConversationParam = str | ConversationObject | None
 
 
+def conversation_id_of(conversation: ConversationParam) -> str | None:
+    """Return the conversation ID a ``conversation`` parameter names.
+
+    Args:
+        conversation: The request's ``conversation`` value, in either form.
+
+    Returns:
+        The conversation ID, or None when the parameter was not set.
+    """
+    return (
+        conversation.id
+        if isinstance(conversation, ConversationObject)
+        else conversation
+    )
+
+
+def reject_conversation_with_previous_response(
+    conversation: ConversationParam, previous_response_id: str | None
+) -> None:
+    """Reject a request that chains on a response and a conversation at once.
+
+    Args:
+        conversation: The request's ``conversation`` value.
+        previous_response_id: The request's ``previous_response_id`` value.
+
+    Raises:
+        ApiError: 400 when both are set.
+    """
+    if conversation is None or previous_response_id is None:
+        return
+    error = ApiError(
+        "Mutually exclusive parameters: provide only one of "
+        "'previous_response_id' or 'conversation'."
+    )
+    error.code = "mutually_exclusive_parameters"
+    raise error
+
+
 # Ref: openai.types.responses.response_create_params.PromptCacheOptions
 class PromptCacheOptions(BaseModelRequest):
     """Explicit prompt-caching configuration for a request."""
@@ -4139,7 +4177,10 @@ class ResponseCreateParams(BaseModelRequest):
     )
     conversation: ConversationParam = Field(
         default=None,
-        description="The conversation that this response belongs to. Cannot be used with `previous_response_id`.\nUNSUPPORTED on this implementation.",
+        description="The conversation this response belongs to: its items are "
+        "prepended to the input, and the request's input and the response's "
+        "output items are appended to it unless `store` is false. Cannot be "
+        "used with `previous_response_id`.",
     )
     include: list[ResponseIncludable] | None = Field(
         default=None,
@@ -4249,7 +4290,6 @@ class ResponseCreateParams(BaseModelRequest):
         {
             # Ignored silently: "background", "safety_identifier", "stream_options"
             "context_management",
-            "conversation",
             "max_tool_calls",
             "truncation",
         }
@@ -4270,6 +4310,18 @@ class ResponseCreateParams(BaseModelRequest):
             "top_p",
         }
     )
+
+    @model_validator(mode="after")
+    def _mutually_exclusive(self) -> Self:
+        """Validate that the two conversation-chaining parameters are not combined.
+
+        Raises:
+            ApiError: If both ``conversation`` and ``previous_response_id`` are set.
+        """
+        reject_conversation_with_previous_response(
+            self.conversation, self.previous_response_id
+        )
+        return self
 
     @model_validator(mode="after")
     def _unsupported(self) -> Self:
@@ -4342,7 +4394,8 @@ class InputTokenCountParams(BaseModelRequest):
     )
     conversation: ConversationParam = Field(
         default=None,
-        description="Conversation ID.\nUNSUPPORTED on this implementation.",
+        description="The conversation whose items are counted ahead of `input`. "
+        "Cannot be used with `previous_response_id`.",
     )
     personality: str | None = Field(
         default=None,
@@ -4352,8 +4405,20 @@ class InputTokenCountParams(BaseModelRequest):
 
     # Extra validations
     _UNSUPPORTED: ClassVar[frozenset[str]] = frozenset(
-        {"text", "truncation", "previous_response_id", "conversation"}
+        {"text", "truncation", "previous_response_id"}
     )
+
+    @model_validator(mode="after")
+    def _mutually_exclusive(self) -> Self:
+        """Validate that the two conversation-chaining parameters are not combined.
+
+        Raises:
+            ApiError: If both ``conversation`` and ``previous_response_id`` are set.
+        """
+        reject_conversation_with_previous_response(
+            self.conversation, self.previous_response_id
+        )
+        return self
 
     @model_validator(mode="after")
     def _unsupported(self) -> Self:

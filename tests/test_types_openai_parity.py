@@ -76,21 +76,33 @@ class TestInputTokenCountParity:
     def test_unsupported_parameter_still_rejected(self) -> None:
         """Parameters that would change the count remain rejected.
 
-        ``conversation`` is one of ``InputTokenCountParams._UNSUPPORTED``; it is
-        surfaced as a 400 ``unsupported_parameter`` naming the offending field
-        rather than being silently ignored like ``personality``.
+        ``previous_response_id`` is one of
+        ``InputTokenCountParams._UNSUPPORTED``; it is surfaced as a 400
+        ``unsupported_parameter`` naming the offending field rather than being
+        silently ignored like ``personality``.
 
         Ref: https://developers.openai.com/api/docs/guides/error-codes
              stdapi/api_errors.py:UnsupportedParameterError
         """
-        with pytest.raises(UnsupportedParameterError, match="conversation") as excinfo:
-            InputTokenCountParams(model="m", input="x", conversation="conv_1")
+        with pytest.raises(
+            UnsupportedParameterError, match="previous_response_id"
+        ) as excinfo:
+            InputTokenCountParams(model="m", input="x", previous_response_id="resp_1")
 
         error = excinfo.value
         assert error.status == 400
         assert error.code == "unsupported_parameter"
-        assert error.param == "conversation"
+        assert error.param == "previous_response_id"
         assert "not supported" in str(error)
+
+    def test_conversation_is_accepted(self) -> None:
+        """A conversation reference is counted, matching the upstream API.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens
+             stdapi/routes/openai_responses.py:count_input_tokens
+        """
+        params = InputTokenCountParams(model="m", input="x", conversation="conv_1")
+        assert params.conversation == "conv_1"
 
     def test_reasoning_effort_still_accepted(self) -> None:
         """reasoning.effort remains accepted."""

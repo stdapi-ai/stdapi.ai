@@ -1766,7 +1766,6 @@ class TestUnsupportedFeatures:
         [
             ("truncation", "auto"),
             ("context_management", [{"type": "compaction"}]),
-            ("conversation", "conv_1"),
             ("max_tool_calls", 3),
         ],
     )

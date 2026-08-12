@@ -51,6 +51,10 @@ stdapi.ai provides multiple resources for exploring and testing the API—choose
 |                   | `GET/DELETE /v1/responses/{id}`   | Retrieve or delete stored responses                                         | [Responses →](api_openai_responses.md)                 |
 |                   | `POST /v1/responses/{id}/cancel`  | Cancel a background response                                                 | [Responses →](api_openai_responses.md)                 |
 |                   | `GET /v1/responses/{id}/input_items` | List the input items of a stored response                                | [Responses →](api_openai_responses.md)                 |
+| **💬 Conversations** | `POST /v1/conversations`       | Create a conversation holding multi-turn state                              | [Conversations →](api_openai_conversations.md)         |
+|                   | `GET/POST/DELETE /v1/conversations/{id}` | Retrieve, update the metadata of, or delete a conversation        | [Conversations →](api_openai_conversations.md)         |
+|                   | `GET/POST /v1/conversations/{id}/items` | List or add conversation items                                     | [Conversations →](api_openai_conversations.md)         |
+|                   | `GET/DELETE /v1/conversations/{id}/items/{item_id}` | Retrieve or delete one conversation item               | [Conversations →](api_openai_conversations.md)         |
 | **🎨 Images**     | `POST /v1/images/generations`     | Text-to-image generation                                                    | [Generations →](api_openai_images_generations.md)      |
 |                   | `POST /v1/images/edits`           | Image editing and transformations                                           | [Edits →](api_openai_images_edits.md)                  |
 |                   | `POST /v1/images/variations`      | Generate image variations                                                   | [Variations →](api_openai_images_variations.md)        |
@@ -117,6 +121,14 @@ When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, s
 | `openai_response_delete`         | `DELETE /v1/responses/{response_id}`        |
 | `openai_response_cancel`         | `POST /v1/responses/{response_id}/cancel`   |
 | `openai_response_input_items`    | `GET /v1/responses/{response_id}/input_items` |
+| `openai_conversation`            | `POST /v1/conversations`                    |
+| `openai_conversation_get`        | `GET /v1/conversations/{conversation_id}`   |
+| `openai_conversation_update`     | `POST /v1/conversations/{conversation_id}`  |
+| `openai_conversation_delete`     | `DELETE /v1/conversations/{conversation_id}` |
+| `openai_conversation_items`      | `POST /v1/conversations/{conversation_id}/items` |
+| `openai_conversation_items_list` | `GET /v1/conversations/{conversation_id}/items` |
+| `openai_conversation_item_get`   | `GET /v1/conversations/{conversation_id}/items/{item_id}` |
+| `openai_conversation_item_delete` | `DELETE /v1/conversations/{conversation_id}/items/{item_id}` |
 | `openai_image_generation`        | `POST /v1/images/generations`               |
 | `openai_image_edit`              | `POST /v1/images/edits`                     |
 | `openai_image_variation`         | `POST /v1/images/variations`                |

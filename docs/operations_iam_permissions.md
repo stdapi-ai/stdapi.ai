@@ -179,7 +179,7 @@ Required if you configure Bedrock Guardrails for content filtering, use the `mod
 
 **Environment Variables**: none (enabled by the `store=true` request parameter; see [Bedrock Session Storage](operations_configuration.md#bedrock-session-storage-optional) configuration)
 
-Required only if clients use `store=true` on the [Responses](api_openai_responses.md#stored-responses) or [Chat Completions](api_openai_chat_completions.md#stored-chat-completions) APIs, which persist generations in Amazon Bedrock sessions.
+Required if clients use `store=true` on the [Responses](api_openai_responses.md#stored-responses) or [Chat Completions](api_openai_chat_completions.md#stored-chat-completions) APIs, or the [Conversations](api_openai_conversations.md) API, all of which persist state in Amazon Bedrock sessions.
 
 ??? example "Bedrock Session Storage IAM Policy Statement"
     ```json
@@ -189,6 +189,7 @@ Required only if clients use `store=true` on the [Responses](api_openai_response
       "Action": [
         "bedrock:CreateSession",
         "bedrock:GetSession",
+        "bedrock:UpdateSession",
         "bedrock:CreateInvocation",
         "bedrock:PutInvocationStep",
         "bedrock:ListInvocations",
@@ -209,7 +210,7 @@ Required only if clients use `store=true` on the [Responses](api_openai_response
     }
     ```
 
-    `bedrock:ListSessions` serves the stored chat completions listing endpoint (`GET /v1/chat/completions`); the account-level `ListSessions` action does not support resource scoping. `bedrock:GetSession` is used on deletion and `bedrock:ListTagsForResource` on both deletion and listing, to check that a stored object belongs to the API it is requested from.
+    `bedrock:ListSessions` serves the stored chat completions listing endpoint (`GET /v1/chat/completions`); the account-level `ListSessions` action does not support resource scoping. `bedrock:GetSession` is used on deletion and `bedrock:ListTagsForResource` on both deletion and listing, to check that a stored object belongs to the API it is requested from. `bedrock:UpdateSession` serves the conversation metadata update (`POST /v1/conversations/{conversation_id}`) only.
 
     Add `kms:Decrypt` and `kms:GenerateDataKey` on the key when [`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`](operations_configuration.md#aws-bedrock-session-encryption-key-arn) is configured.
 
