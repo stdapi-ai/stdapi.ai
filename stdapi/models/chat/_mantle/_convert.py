@@ -3477,7 +3477,16 @@ async def text_completion_as_chat_payload(
         "model": model_id,
         "messages": [{"role": "user", "content": prompt}],
     }
-    for name in ("max_tokens", "temperature", "top_p", "n", "stop", "stream", "user"):
+    for name in (
+        "max_tokens",
+        "temperature",
+        "top_p",
+        "n",
+        "stop",
+        "stream",
+        "user",
+        "service_tier",
+    ):
         if (value := getattr(request, name)) is not None:
             payload[name] = value
     return payload

@@ -1,7 +1,7 @@
 ---
 title: Troubleshooting - Common stdapi.ai deployment issues
 description: Fixes for the most common errors encountered when deploying and running stdapi.ai - Terraform failures, 400/401/403/404/429/503 responses, Bedrock throttling, IAM permission errors, S3 bucket errors, VPC connectivity, and more.
-keywords: stdapi.ai troubleshooting, AWS Bedrock errors, Terraform apply failed, 503 ECS service, 401 API key, 403 permission IAM, AccessDeniedException, 404 model not found, ThrottlingException Bedrock, S3 bucket region, ElastiCache capacity, VPC endpoint timeout, podman SELinux, ECONNREFUSED IPv6 service discovery, drop_params ValidationException, ECS task unhealthy restart loop, container healthCheck command
+keywords: stdapi.ai troubleshooting, AWS Bedrock errors, Terraform apply failed, 503 ECS service, 401 API key, 403 permission IAM, AccessDeniedException, 404 model not found, ThrottlingException Bedrock, S3 bucket region, ElastiCache capacity, VPC endpoint timeout, podman SELinux, ECONNREFUSED IPv6 service discovery, drop_params ValidationException, ECS task unhealthy restart loop, container healthCheck command, text to speech input too long, speech input limited to 3000 characters, service_tier ignored, guardrail ignored, model parameters ignored, model alias configuration, MODEL_ALIASES validation error, extra inputs are not permitted alias
 ---
 
 # :material-wrench: Troubleshooting
@@ -159,6 +159,29 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     - The known LiteLLM control parameters are stripped by a built-in denylist, so this only appears for a name it does not yet cover. The rejected field is in the Bedrock message detail, correlated via `x-request-id` in the server logs.
     - Add that name to [`EXTRA_MODEL_PARAMS_DENYLIST`](operations_configuration.md#extra-model-params-denylist) — it is merged with the built-in list, and every other extra parameter keeps being forwarded.
     - If no client needs the passthrough, [`EXTRA_MODEL_PARAMS_DROP_ALL`](operations_configuration.md#extra-model-params-drop-all) disables it outright. Per-model defaults set through [`DEFAULT_MODEL_PARAMS`](operations_configuration.md#default-model-params) are unaffected — only request-supplied extras are dropped.
+
+??? failure "A request's `service_tier`, guardrail or model parameters are ignored"
+    Some configuration reaches the model that the client did not send, or the value the client sent is not the one applied. Two layers of server-side configuration sit behind every request, and both are deliberate.
+
+    - The model name may be an alias carrying its own configuration — check the entry in [`MODEL_ALIASES`](operations_configuration.md#model-aliases-configuration) for that name. Requests naming it get its service tier, guardrail, metadata and model parameters; requests naming the target model directly do not.
+    - The reverse also happens: alias and server-wide configuration apply to models served through Amazon Bedrock's Converse and InvokeModel operations. A model served through Amazon Bedrock Mantle applies the request's own values only, so a configured service tier, metadata or model parameters are ignored there by design — see [the scope note](operations_configuration.md#model-aliases-configuration).
+    - A request value is discarded on purpose when its override setting is disabled: [`AWS_BEDROCK_ALLOW_SERVICE_TIER_OVERRIDE`](operations_configuration.md#aws-bedrock-allow-service-tier-override) for the tier, [`AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE`](operations_configuration.md#aws-bedrock-allow-guardrail-override) for the guardrail headers.
+    - Otherwise the value comes from the server-wide setting for that field — [`DEFAULT_MODEL_SERVICE_TIERS`](operations_configuration.md#default-model-service-tiers), [`DEFAULT_MODEL_PARAMS`](operations_configuration.md#default-model-params) or [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](operations_configuration.md#aws-bedrock-guardrail-identifier). The order is always the request, then the alias, then the setting.
+
+??? failure "Startup fails with a validation error naming a model alias"
+    An alias in [`MODEL_ALIASES`](operations_configuration.md#model-aliases-configuration) maps to an object that is not a valid alias configuration, so the server refuses to start rather than ignore it.
+
+    - `Extra inputs are not permitted` names a field that does not exist — check its spelling against the [alias fields](operations_configuration.md#model-aliases-configuration).
+    - `Field required` on `model` means the object gives configuration but no target model.
+    - A guardrail needs both `guardrail_id` and `guardrail_version`.
+    - An alias that only maps a name to a model stays a plain string: `{"my-model": "amazon.nova-lite-v1:0"}`.
+
+??? failure "`400 Bad Request` — text-to-speech rejects a long `input`"
+    The message states the length the server accepts (`'input' is limited to 3,000 characters…`). Beyond that length, Amazon Polly synthesizes the audio into an S3 bucket co-located with the region serving the request, and none is configured there.
+
+    - Set [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) for the first region of `AWS_BEDROCK_REGIONS`, and an [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets) entry for every other region that may serve speech — the server log names the one that was missing.
+    - Grant the task role `polly:StartSpeechSynthesisTask`, `polly:GetSpeechSynthesisTask`, and S3 read/write/delete on those buckets — see [IAM Permissions](operations_iam_permissions.md#text-to-speech-optional).
+    - Up to 3,000 characters (6,000 including SSML markup) never needs a bucket; the limits and the expected latency are in [Long Input](api_openai_audio_speech.md#long-input).
 
 ??? failure "S3 error on image generation or audio transcription"
     The S3 bucket is missing, unreachable, or in the wrong region.

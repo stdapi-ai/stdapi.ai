@@ -8,11 +8,19 @@ from itertools import batched
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from botocore.exceptions import ClientError
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    ValidationError,
+)
 
 from stdapi.api_errors import ApiError
 from stdapi.aws import get_client
-from stdapi.config import SETTINGS
+from stdapi.config import SETTINGS, ModelAliasConfig
+from stdapi.exceptions import ServerError
 from stdapi.types import JsonMapping
 from stdapi.usage import record_guardrail_policy_usage
 from stdapi.utils import validation_error_handler
@@ -147,6 +155,11 @@ _GUARDRAIL_STREAM_PROCESSING_MODE_HEADER = (
 #: Valid values for the guardrail stream-processing-mode header/field.
 _GUARDRAIL_STREAM_PROCESSING_MODE_VALUES: frozenset[str] = frozenset(("sync", "async"))
 
+#: Whether the request itself selected the guardrail held by GUARDRAIL_CONFIG_VAR.
+GUARDRAIL_REQUEST_OVERRIDE_VAR: ContextVar[bool] = ContextVar(
+    "guardrail_request_override"
+)
+
 #: Performance configuration for the request
 PERFORMANCE_CONFIG_VAR: ContextVar[
     tuple[PerformanceConfigLatencyType | None, ServiceTierTypeType | None]
@@ -265,6 +278,159 @@ class _DefaultModelParameters(BaseModel):
     )
 
 
+@dataclass(frozen=True, slots=True)
+class AliasOverlay:
+    """Configuration a model alias applies to the requests naming it.
+
+    Every field is resolved once, when the alias table is built, so serving a
+    request costs a lookup instead of a merge.
+
+    Attributes:
+        service_tier: Service tier the alias selects, if any.
+        guardrail: Guardrail configuration the alias applies, if any.
+        metadata: Request metadata the alias attaches, if any.
+        model_params: The target model's default parameters, overridden by the
+            alias' own; ``None`` when the alias sets none.
+        inference_defaults: ``model_params`` validated as inference defaults.
+    """
+
+    service_tier: ServiceTierTypeType | None = None
+    guardrail: GuardrailStreamConfigurationTypeDef | None = None
+    metadata: Mapping[str, str] | None = None
+    model_params: JsonMapping | None = None
+    inference_defaults: _DefaultModelParameters | None = None
+
+
+#: Configuration of the model alias the current request named, if any.
+MODEL_ALIAS_OVERLAY_VAR: ContextVar[AliasOverlay | None] = ContextVar(
+    "model_alias_overlay", default=None
+)
+
+#: Whether the request's alias overlay has already been resolved.
+MODEL_ALIAS_OVERLAY_RESOLVED_VAR: ContextVar[bool] = ContextVar(
+    "model_alias_overlay_resolved", default=False
+)
+
+
+def build_alias_overlay(alias: str, config: ModelAliasConfig) -> AliasOverlay:
+    """Resolve a configured model alias into its ready-to-apply overlay.
+
+    The alias' parameters are validated here rather than in the settings model:
+    the inference-parameter schema lives with the request builder, which reads
+    the settings and so cannot be read by them. Startup still fails, naming the
+    alias, instead of every request naming it.
+
+    Args:
+        alias: Name the configuration is attached to, used in the error.
+        config: Alias configuration, as validated from ``model_aliases``.
+
+    Returns:
+        The overlay applied to every request naming that alias.
+
+    Raises:
+        ServerError: When the alias' extra parameters are not valid model parameters.
+    """
+    guardrail: GuardrailStreamConfigurationTypeDef | None = None
+    if config.guardrail_identifier and config.guardrail_version:
+        guardrail = {
+            "guardrailIdentifier": config.guardrail_identifier,
+            "guardrailVersion": config.guardrail_version,
+        }
+        if config.guardrail_trace:
+            guardrail["trace"] = config.guardrail_trace
+    model_params: JsonMapping | None = None
+    inference_defaults: _DefaultModelParameters | None = None
+    if config.extra_params:
+        model_params = (
+            SETTINGS.default_model_params.get(config.model, {}) | config.extra_params
+        )
+        try:
+            inference_defaults = _DefaultModelParameters(**model_params)  # type: ignore[arg-type]
+        except ValidationError as error:
+            msg = f"Invalid 'extra_params' on the model alias '{alias}': {error}"
+            raise ServerError(msg) from error
+    return AliasOverlay(
+        service_tier=config.service_tier,
+        guardrail=guardrail,
+        metadata=config.metadata,
+        model_params=model_params,
+        inference_defaults=inference_defaults,
+    )
+
+
+def apply_alias_overlay(overlay: AliasOverlay | None) -> None:
+    """Apply the overlay of the model alias the request named, if any.
+
+    The alias sits between the request and the server-wide configuration, so
+    its guardrail replaces the configured one unless the request selected a
+    guardrail of its own and was allowed to.
+
+    Only the model the request itself named installs an overlay: a secondary
+    resolution within the same request (a prompt template's model, a built-in
+    tool's model) must neither clear it nor replace it with its own.
+
+    Args:
+        overlay: Overlay of the named alias, or ``None`` when the request named
+            a model directly.
+    """
+    if MODEL_ALIAS_OVERLAY_RESOLVED_VAR.get():
+        return
+    MODEL_ALIAS_OVERLAY_RESOLVED_VAR.set(True)
+    MODEL_ALIAS_OVERLAY_VAR.set(overlay)
+    if (
+        overlay is not None
+        and overlay.guardrail is not None
+        and not GUARDRAIL_REQUEST_OVERRIDE_VAR.get(False)
+    ):
+        GUARDRAIL_CONFIG_VAR.set(overlay.guardrail)
+
+
+def resolve_service_tier(
+    model_id: str, requested: ServiceTierTypeType | None
+) -> ServiceTierTypeType | None:
+    """Resolve the service tier to serve a request with.
+
+    Applies the request value, then the named alias', then
+    ``default_model_service_tiers``. A request cannot displace a configured
+    tier while ``aws_bedrock_allow_service_tier_override`` is disabled.
+
+    Args:
+        model_id: Bedrock model identifier serving the request.
+        requested: Tier the request selected, by parameter or header.
+
+    Returns:
+        The tier to send to Bedrock, or ``None`` to let it apply its own default.
+    """
+    overlay = MODEL_ALIAS_OVERLAY_VAR.get()
+    configured = (
+        overlay.service_tier if overlay is not None else None
+    ) or SETTINGS.default_model_service_tiers.get(model_id)
+    if requested and (
+        SETTINGS.aws_bedrock_allow_service_tier_override or not configured
+    ):
+        return requested
+    return configured
+
+
+def alias_request_metadata(
+    existing: Mapping[str, str] | None,
+) -> Mapping[str, str] | None:
+    """Merge the named alias' metadata under the request's own.
+
+    Args:
+        existing: Metadata carried by the request, if any.
+
+    Returns:
+        The metadata to attach to the model call.
+    """
+    overlay = MODEL_ALIAS_OVERLAY_VAR.get()
+    if overlay is None or overlay.metadata is None:
+        return existing
+    if not existing:
+        return overlay.metadata
+    return {**overlay.metadata, **existing}
+
+
 def set_guardrail_configuration(headers: Headers) -> None:
     """Set the guardrail context var for the current request.
 
@@ -272,11 +438,18 @@ def set_guardrail_configuration(headers: Headers) -> None:
     Request-level headers (``X-Amzn-Bedrock-GuardrailIdentifier``,
     ``X-Amzn-Bedrock-GuardrailVersion``, ``X-Amzn-Bedrock-Trace``,
     ``X-Amzn-Bedrock-GuardrailStreamProcessingMode``) are accepted when
-    ``aws_bedrock_allow_guardrail_override`` is enabled.
+    ``aws_bedrock_allow_guardrail_override`` is enabled, and are recorded as
+    such so a model alias does not override them.
+
+    Also arms the model-alias overlay for the request, since resolving one
+    rewrites the guardrail this sets.
 
     Args:
         headers: Incoming request headers.
     """
+    GUARDRAIL_REQUEST_OVERRIDE_VAR.set(False)
+    MODEL_ALIAS_OVERLAY_RESOLVED_VAR.set(False)
+    MODEL_ALIAS_OVERLAY_VAR.set(None)
     if (
         SETTINGS.aws_bedrock_allow_guardrail_override
         and _GUARDRAIL_IDENTIFIER_HEADER in headers
@@ -299,6 +472,7 @@ def set_guardrail_configuration(headers: Headers) -> None:
         )
         if stream_processing_mode in _GUARDRAIL_STREAM_PROCESSING_MODE_VALUES:
             config["streamProcessingMode"] = stream_processing_mode
+        GUARDRAIL_REQUEST_OVERRIDE_VAR.set(True)
     elif (
         SETTINGS.aws_bedrock_guardrail_identifier
         and SETTINGS.aws_bedrock_guardrail_version
@@ -689,10 +863,12 @@ _DEFAULT_MODEL_PARAMETERS_CACHE: dict[
 def _get_default_model_parameters(model_id: str) -> _DefaultModelParameters:
     """Return the validated default parameters for *model_id*, cached by settings identity.
 
-    Settings are immutable after startup, so the entry is reused while
-    ``SETTINGS.default_model_params[model_id]`` is the same object; replacing
-    that mapping (e.g. in a test) invalidates it. A model with no configured
-    defaults is keyed by ``None``, which compares identical across calls.
+    A model alias carrying parameters of its own supplies them already merged
+    and validated. Otherwise, settings are immutable after startup, so the
+    entry is reused while ``SETTINGS.default_model_params[model_id]`` is the
+    same object; replacing that mapping (e.g. in a test) invalidates it. A
+    model with no configured defaults is keyed by ``None``, which compares
+    identical across calls.
 
     Args:
         model_id: Bedrock model identifier; used to look up
@@ -704,6 +880,9 @@ def _get_default_model_parameters(model_id: str) -> _DefaultModelParameters:
     Raises:
         ApiError: When the configured defaults for *model_id* fail validation.
     """
+    overlay = MODEL_ALIAS_OVERLAY_VAR.get()
+    if overlay is not None and overlay.inference_defaults is not None:
+        return overlay.inference_defaults
     raw = SETTINGS.default_model_params.get(model_id)
     cached = _DEFAULT_MODEL_PARAMETERS_CACHE.get(model_id)
     if cached is not None and cached[0] is raw:
@@ -800,6 +979,9 @@ def get_extra_model_parameters(
 ) -> JsonMapping:
     """Return merged model parameters: defaults from settings overridden by request extras.
 
+    A model alias carrying parameters of its own supplies the defaults instead,
+    already merged over the target model's.
+
     Args:
         model_id: Bedrock model identifier; used to look up ``SETTINGS.default_model_params``.
         request: Request object whose ``model_extra`` dict takes precedence over defaults,
@@ -808,10 +990,13 @@ def get_extra_model_parameters(
     Returns:
         Merged parameter dict.
     """
-    return {
-        **SETTINGS.default_model_params.get(model_id, {}),
-        **filter_extra_model_parameters(request.model_extra),
-    }
+    overlay = MODEL_ALIAS_OVERLAY_VAR.get()
+    defaults = (
+        overlay.model_params
+        if overlay is not None and overlay.model_params is not None
+        else SETTINGS.default_model_params.get(model_id, {})
+    )
+    return {**defaults, **filter_extra_model_parameters(request.model_extra)}
 
 
 @contextmanager

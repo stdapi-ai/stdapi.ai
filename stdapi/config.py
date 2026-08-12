@@ -17,10 +17,15 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 from aiobotocore.session import get_session
 from aiohttp import ClientTimeout
 from pydantic import (
+    AliasChoices,
     AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Discriminator,
     Field,
     JsonValue,
     SecretStr,
+    Tag,
     ValidationError,
     ValidationInfo,
     field_validator,
@@ -82,6 +87,126 @@ _ANTHROPIC_BETA_BEDROCK_FLAGS: frozenset[str] = frozenset(
         "tool-examples-2025-10-29",
     }
 )
+
+#: Guardrail trace levels accepted wherever a guardrail is configured.
+GuardrailTrace = Literal["disabled", "enabled", "enabled_full"]
+
+
+class ModelAliasConfig(BaseModel):
+    """A model alias that carries configuration alongside its target model.
+
+    Every field except ``model`` is optional and overrides the equivalent
+    general configuration for requests naming the alias, while a value sent
+    with the request still wins unless its override gate is closed.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    model: str = Field(
+        description=(
+            "Model ID or ARN this alias resolves to, as it would be written "
+            "in the plain string form of the alias."
+        )
+    )
+    service_tier: ServiceTierTypeType | None = Field(
+        default=None,
+        description=(
+            "Service tier applied to requests naming this alias, overriding "
+            "default_model_service_tiers for them. A request may still select "
+            "another tier unless aws_bedrock_allow_service_tier_override is "
+            "disabled.\n\n"
+            "Like default_model_service_tiers, applies to models served by the "
+            "Bedrock Converse and InvokeModel APIs; a Mantle-served model runs "
+            "on the tier its own request names.\n\n"
+            "Example: 'flex'"
+        ),
+    )
+    guardrail_identifier: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("guardrail_identifier", "guardrail_id"),
+        description=(
+            "ID of the Amazon Bedrock Guardrail applied to requests naming "
+            "this alias, overriding aws_bedrock_guardrail_identifier for them. "
+            "Requires guardrail_version. May also be written 'guardrail_id'.\n\n"
+            "Example: 'abcd1234efgh'"
+        ),
+    )
+    guardrail_version: str | None = Field(
+        default=None,
+        description=(
+            "Version of the Amazon Bedrock Guardrail applied to requests "
+            "naming this alias. Requires guardrail_identifier.\n\n"
+            "Example: 'DRAFT'"
+        ),
+    )
+    guardrail_trace: GuardrailTrace | None = Field(
+        default=None,
+        description=(
+            "Whether the guardrail trace is enabled for requests naming this "
+            "alias. Requires guardrail_identifier."
+        ),
+    )
+    metadata: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "Key-value metadata attached to requests naming this alias, for "
+            "audit reporting: it reaches Amazon Bedrock model invocation logs "
+            "only, never Cost Explorer or CUR 2.0. A key also sent with the "
+            "request wins.\n\n"
+            'Example: {"team": "research"}'
+        ),
+    )
+    extra_params: dict[str, JsonValue] | None = Field(
+        default=None,
+        description=(
+            "Model parameters applied to requests naming this alias, in the "
+            "same format as default_model_params, whose entry for the target "
+            "model they override. A parameter sent with the request wins.\n\n"
+            'Example: {"temperature": 0.2}'
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _validate(self) -> Self:
+        """Reject a guardrail that could never be applied.
+
+        Returns:
+            Self, once the guardrail fields agree.
+
+        Raises:
+            ValueError: When the guardrail configuration is incomplete.
+        """
+        if bool(self.guardrail_identifier) != bool(self.guardrail_version):
+            msg = (
+                "Both guardrail_identifier (guardrail_id) and guardrail_version "
+                "are required to apply an Amazon Bedrock Guardrail from a model alias."
+            )
+            raise ValueError(msg)
+        if self.guardrail_trace and not self.guardrail_identifier:
+            msg = "guardrail_trace requires guardrail_identifier (guardrail_id)."
+            raise ValueError(msg)
+        return self
+
+
+def _model_alias_kind(value: object) -> str:
+    """Select the alias form a configured value uses.
+
+    Args:
+        value: Raw or already-validated ``MODEL_ALIASES`` entry.
+
+    Returns:
+        ``"configuration"`` for the object form, ``"model"`` for the plain
+        target model ID, so an invalid object reports its own error instead of
+        one error per union member.
+    """
+    return "configuration" if isinstance(value, dict | ModelAliasConfig) else "model"
+
+
+#: A ``MODEL_ALIASES`` entry: a target model ID, or that model plus its configuration.
+type ModelAliasTarget = Annotated[
+    Annotated[str, Tag("model")] | Annotated[ModelAliasConfig, Tag("configuration")],
+    Discriminator(_model_alias_kind),
+]
 
 
 class _Settings(BaseSettings):
@@ -559,9 +684,7 @@ class _Settings(BaseSettings):
         ),
     )
 
-    aws_bedrock_guardrail_trace: (
-        Literal["disabled", "enabled", "enabled_full"] | None
-    ) = Field(
+    aws_bedrock_guardrail_trace: GuardrailTrace | None = Field(
         default=None,
         description=(
             "Configure Amazon Bedrock Guardrails to include safeguards in model input and responses. "
@@ -580,6 +703,20 @@ class _Settings(BaseSettings):
             "When disabled and a global guardrail is configured, request headers are ignored for security. "
             "Note: If no global guardrail is configured, request headers are always allowed regardless of this setting. "
             "Defaults to False for security to prevent users from bypassing configured safety controls."
+        ),
+    )
+
+    aws_bedrock_allow_service_tier_override: bool = Field(
+        default=True,
+        description=(
+            "Allow users to select the service tier at request level, through the "
+            "'service_tier' request parameter or the X-Amzn-Bedrock-Service-Tier header. "
+            "When disabled, a request cannot change the tier configured for the model "
+            "by default_model_service_tiers or by the model alias it names, which keeps "
+            "the cost profile of a shared deployment under the administrator's control. "
+            "A model with no configured tier still honors the request in either case. "
+            "Applies to models served by the Bedrock Converse and InvokeModel APIs. "
+            "Defaults to True, matching the behavior of previous versions."
         ),
     )
 
@@ -1220,16 +1357,30 @@ class _Settings(BaseSettings):
         ),
     )
 
-    model_aliases: dict[str, str] = Field(
+    model_aliases: dict[str, ModelAliasTarget] = Field(
         default={},
         description=(
             "Map of model aliases to actual model IDs. "
             "Allows users to reference models using custom alias names. "
             "This is merged with default system aliases at startup. "
             "User-provided aliases take precedence over system defaults.\n\n"
+            "An alias maps either to a model ID, or to an object carrying that "
+            "model plus the configuration to apply to requests naming the "
+            "alias: 'service_tier', 'guardrail_id' with 'guardrail_version' "
+            "(and optionally 'guardrail_trace'), 'metadata' and 'extra_params'. "
+            "Those values override the equivalent server-wide configuration, "
+            "and a value sent with the request still wins unless its override "
+            "setting (aws_bedrock_allow_guardrail_override, "
+            "aws_bedrock_allow_service_tier_override) is disabled.\n\n"
             "Example: {\n"
             '  "my-tts": "amazon.polly-neural",\n'
-            '  "my-stt": "amazon.transcribe"\n'
+            '  "my-stt": "amazon.transcribe",\n'
+            '  "my-chat": {\n'
+            '    "model": "amazon.nova-lite-v1:0",\n'
+            '    "service_tier": "flex",\n'
+            '    "metadata": {"team": "research"},\n'
+            '    "extra_params": {"temperature": 0.2}\n'
+            "  }\n"
             "}"
         ),
     )
@@ -1734,14 +1885,24 @@ class _Settings(BaseSettings):
             )
             raise ValueError(msg)
 
+        # An alias-borne guardrail is operator configuration too: it must not
+        # open the request-level override gate, and must not be silently
+        # dropped by a Mantle-served deployment.
+        alias_guardrail = any(
+            isinstance(alias, ModelAliasConfig) and alias.guardrail_identifier
+            for alias in self.model_aliases.values()
+        )
         if (
             not self.aws_bedrock_guardrail_identifier
             and not self.aws_bedrock_guardrail_version
+            and not alias_guardrail
         ):
             self.aws_bedrock_allow_guardrail_override = True
 
         if self.aws_bedrock_mantle_service_header and (
-            self.aws_bedrock_guardrail_identifier or not self.aws_bedrock_mantle_enabled
+            self.aws_bedrock_guardrail_identifier
+            or alias_guardrail
+            or not self.aws_bedrock_mantle_enabled
         ):
             msg = (
                 "aws_bedrock_mantle_service_header requires aws_bedrock_mantle_enabled "

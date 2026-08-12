@@ -61,7 +61,7 @@ finally:
 faulthandler.register(signal.SIGUSR1, all_threads=True)
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator
+    from collections.abc import Callable, Generator, Iterator
     from typing import Any
 
     from pluggy import Result as _PluggyResult
@@ -494,6 +494,7 @@ _LIVE_FIXTURES = frozenset(
         "anthropic_client",
         "aws_session_info",
         "cohere_client",
+        "live_guardrail",
         "openai_client",
         "test_client",
     }
@@ -931,6 +932,64 @@ def configured_guardrail(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", "gr123")
     monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_version", "1")
+
+
+@pytest.fixture(scope="session")
+def live_guardrail(use_official_api: bool) -> Iterator[str]:
+    """Create one temporary guardrail for the whole session.
+
+    Blocks the word ``BLOCKWORDXYZ`` and every content filter category, so a
+    test can trip it deterministically. On the official API no guardrail
+    exists; tests use the OpenAI moderation model instead. The server (local or
+    --server-url) must allow guardrail overrides, which is automatic when no
+    global guardrail is configured. Yields the guardrail ARN so the server
+    resolves the guardrail's region.
+
+    Creating one is slow and billable, hence the session scope: pin every
+    consumer to the ``moderations_guardrail`` xdist group so a single worker
+    creates it.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-content-filters.html
+         stdapi/aws_bedrock.py:guardrail_region
+    """
+    if use_official_api:
+        yield ""
+        return
+    import time  # noqa: PLC0415
+    from uuid import uuid4  # noqa: PLC0415
+
+    import boto3  # type: ignore[import-untyped]  # noqa: PLC0415
+
+    from stdapi.config import SETTINGS  # noqa: PLC0415
+
+    region = SETTINGS.aws_bedrock_regions[0]
+    bedrock = boto3.client("bedrock", region_name=region)
+    created = bedrock.create_guardrail(
+        name=f"stdapi-tests-moderations-{uuid4().hex[:8]}",
+        blockedInputMessaging="Blocked by test guardrail.",
+        blockedOutputsMessaging="Blocked by test guardrail.",
+        wordPolicyConfig={"wordsConfig": [{"text": "BLOCKWORDXYZ"}]},
+        contentPolicyConfig={
+            "filtersConfig": [
+                {"type": name, "inputStrength": "HIGH", "outputStrength": "HIGH"}
+                for name in ("HATE", "INSULTS", "SEXUAL", "VIOLENCE", "MISCONDUCT")
+            ]
+        },
+    )
+    guardrail_id = created["guardrailId"]
+    try:
+        for _ in range(30):
+            status = bedrock.get_guardrail(guardrailIdentifier=guardrail_id)["status"]
+            if status == "READY":
+                break
+            time.sleep(1)
+        else:
+            pytest.fail("Test guardrail never reached READY status.")
+        yield created["guardrailArn"]
+    finally:
+        # A guardrail is a billable account resource: delete it on every path,
+        # including a polling error or an interrupted session.
+        bedrock.delete_guardrail(guardrailIdentifier=guardrail_id)
 
 
 @pytest.fixture(scope="session")

@@ -9,7 +9,6 @@ Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
 from asyncio import Event, wait_for
 from base64 import b64encode
 from typing import TYPE_CHECKING, Any
-from uuid import uuid4
 
 import pytest
 from botocore.exceptions import ClientError
@@ -34,8 +33,6 @@ from stdapi.types.openai_moderations import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from openai import OpenAI
 
 #: Minimal 1x1 PNG image bytes.
@@ -2447,55 +2444,6 @@ class TestGuardrailChecksModerationsRoute:
         assert response.status_code == 200, response.text
         assert len(throttled.requests) == 1
         assert len(healthy.requests) == 1
-
-
-@pytest.fixture(scope="module")
-def live_guardrail(use_official_api: bool) -> Iterator[str]:
-    """Create a temporary guardrail, passed as the explicit moderation model.
-
-    On the official API no guardrail exists; tests use the OpenAI moderation
-    model instead. The server (local or --server-url) must allow guardrail
-    overrides, which is automatic when no global guardrail is configured.
-    Yields the guardrail ARN so the server resolves the guardrail's region.
-
-    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-content-filters.html
-         stdapi/aws_bedrock.py:guardrail_region
-    """
-    if use_official_api:
-        yield ""
-        return
-    import time  # noqa: PLC0415
-
-    import boto3  # type: ignore[import-untyped]  # noqa: PLC0415
-
-    region = SETTINGS.aws_bedrock_regions[0]
-    bedrock = boto3.client("bedrock", region_name=region)
-    created = bedrock.create_guardrail(
-        name=f"stdapi-tests-moderations-{uuid4().hex[:8]}",
-        blockedInputMessaging="Blocked by test guardrail.",
-        blockedOutputsMessaging="Blocked by test guardrail.",
-        wordPolicyConfig={"wordsConfig": [{"text": "BLOCKWORDXYZ"}]},
-        contentPolicyConfig={
-            "filtersConfig": [
-                {"type": name, "inputStrength": "HIGH", "outputStrength": "HIGH"}
-                for name in ("HATE", "INSULTS", "SEXUAL", "VIOLENCE", "MISCONDUCT")
-            ]
-        },
-    )
-    guardrail_id = created["guardrailId"]
-    try:
-        for _ in range(30):
-            status = bedrock.get_guardrail(guardrailIdentifier=guardrail_id)["status"]
-            if status == "READY":
-                break
-            time.sleep(1)
-        else:
-            pytest.fail("Test guardrail never reached READY status.")
-        yield created["guardrailArn"]
-    finally:
-        # A guardrail is a billable account resource: delete it on every path,
-        # including a polling error or an interrupted session.
-        bedrock.delete_guardrail(guardrailIdentifier=guardrail_id)
 
 
 @pytest.mark.slow

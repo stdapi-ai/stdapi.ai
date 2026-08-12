@@ -78,11 +78,16 @@ def map_service_tier(
 ) -> tuple[ServiceTierTypeType | None, ServiceTiers | None]:
     """Map OpenAI service tier to Bedrock service tier.
 
+    Only the request's own value is translated here: the alias and
+    server-configured tiers resolve where the Bedrock request is built
+    (:func:`stdapi.aws_bedrock.resolve_service_tier`), alongside the tier
+    header, and the response echoes the requested value.
+
     Args:
         value: OpenAI service tier.
 
     Returns:
-        Bedrock service tier, Effective OpenAI service tier.
+        Bedrock service tier, Echoed OpenAI service tier.
     """
     if value is None:
         return None, None

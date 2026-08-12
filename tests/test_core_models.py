@@ -24,9 +24,15 @@ from pydantic import SecretStr
 from starlette.testclient import TestClient
 
 from stdapi import auth, pricing
-from stdapi.config import SETTINGS
+from stdapi.aws_bedrock import build_alias_overlay
+from stdapi.config import SETTINGS, ModelAliasConfig
 from stdapi.main import app
-from stdapi.models import MANTLE_SERVICE, MODEL_ALIASES, ModelDetails
+from stdapi.models import (
+    MANTLE_SERVICE,
+    MODEL_ALIAS_OVERLAYS,
+    MODEL_ALIASES,
+    ModelDetails,
+)
 from stdapi.pricing import Dimension, Price, PriceKey, Service
 from stdapi.routes import core_models
 from tests._helpers import make_model_details
@@ -1060,6 +1066,39 @@ class TestModelPricingEndpoint:
         (card,) = response.json()
         assert card["id"] == "priced-alias"
         assert len(card["prices"]) == 3
+
+    def test_alias_card_uses_the_tier_the_alias_configures(
+        self,
+        client: TestClient,
+        priced_catalog: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A card requested by alias prices the tier that alias applies.
+
+        An alias carrying a service tier is what those requests are billed at,
+        so quoting the model's own default tier would understate the price of
+        exactly the name the client sends.
+
+        Ref: https://stdapi.ai/operations_configuration/#model-aliases-configuration
+             stdapi/routes/core_models.py:_pricing_defaults
+        """
+        monkeypatch.setitem(MODEL_ALIASES, "priced-alias", "amazon.pricedmodel-v1:0")
+        monkeypatch.setitem(
+            MODEL_ALIAS_OVERLAYS,
+            "priced-alias",
+            build_alias_overlay(
+                "priced-alias",
+                ModelAliasConfig(model="amazon.pricedmodel-v1:0", service_tier="flex"),
+            ),
+        )
+        response = client.get(
+            "/model_pricing", params={"model": "priced-alias"}, headers=priced_catalog
+        )
+        assert response.status_code == 200
+        (card,) = response.json()
+        assert card["default_tier"] == "flex"
+        rows_by_dimension = {row["dimension"]: row for row in card["prices"]}
+        assert rows_by_dimension["input_tokens"]["tier"] == "flex"
 
     def test_alias_card_reports_the_aliased_models_service(
         self,

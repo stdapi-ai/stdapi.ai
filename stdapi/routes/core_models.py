@@ -10,6 +10,7 @@ from stdapi.auth import authenticate
 from stdapi.config import SETTINGS
 from stdapi.models import (
     MANTLE_SERVICE,
+    MODEL_ALIAS_OVERLAYS,
     ModelDetails,
     get_all_models_details,
     get_all_models_details_and_modalities,
@@ -348,23 +349,27 @@ def _validated_dimensions(dimension: set[str] | None) -> set[Dimension] | None:
 
 
 def _pricing_defaults(
-    model_id: str, details: ModelDetails | None
+    model_id: str, details: ModelDetails | None, alias_tier: str | None = None
 ) -> tuple[str, list[str]]:
     """Return the (tier, routings) this server applies to a model by default.
 
     Args:
         model_id: The canonical model ID (aliases already resolved).
         details: The model's registry entry, when known.
+        alias_tier: Service tier configured on the alias that was asked about,
+            which takes precedence over the model's own default.
 
     Returns:
-        Tuple of (service tier, serving profiles): the tier from
+        Tuple of (service tier, serving profiles): the tier from the alias or
         ``default_model_service_tiers`` (``standard`` when unset) and the
         distinct serving profiles across the configured Bedrock regions —
         ``["global"]``, or per region the geography prefix of the model's
         inference profile or the region itself, restricted to the model's
         regions when known.
     """
-    configured_tier = SETTINGS.default_model_service_tiers.get(model_id, "default")
+    configured_tier = alias_tier or SETTINGS.default_model_service_tiers.get(
+        model_id, "default"
+    )
     tier = "standard" if configured_tier == "default" else configured_tier
     profiles = (details.inference_profiles if details else None) or {}
     if any(profile.startswith("global.") for profile in profiles.values()):
@@ -590,7 +595,12 @@ async def model_pricing(
     for model_id in dict.fromkeys(model) if model else sorted(all_models):
         resolved_model_id = resolve_model_alias(model_id)
         details = all_models.get(resolved_model_id)
-        default_tier, default_routings = _pricing_defaults(resolved_model_id, details)
+        alias_overlay = MODEL_ALIAS_OVERLAYS.get(model_id)
+        default_tier, default_routings = _pricing_defaults(
+            resolved_model_id,
+            details,
+            alias_overlay.service_tier if alias_overlay is not None else None,
+        )
         preferred_service = (
             Service.BEDROCK_MANTLE
             if details is not None and details.service == MANTLE_SERVICE

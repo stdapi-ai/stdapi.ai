@@ -30,10 +30,15 @@ from stdapi.aws_bedrock import (
     GUARDRAIL_CONFIG_VAR,
     GUARDRAIL_TRACE_VAR,
     PERFORMANCE_CONFIG_VAR,
+    AliasOverlay,
     BedrockPrompt,
+    alias_request_metadata,
+    apply_alias_overlay,
     bedrock_client,
+    build_alias_overlay,
     check_stream_event,
     handle_bedrock_client_error,
+    resolve_service_tier,
     usage_from_amazon_bedrock_invocation_metrics,
     validate_bedrock_region,
 )
@@ -44,7 +49,8 @@ from stdapi.aws_s3 import (
     require_s3_bucket_for_region,
     track_temporary_s3_objects,
 )
-from stdapi.config import SETTINGS
+from stdapi.config import SETTINGS, ModelAliasConfig
+from stdapi.exceptions import ServerError
 from stdapi.input_file import get_s3_input_regions, resolve_all_bedrock_content_blocks
 from stdapi.models.capabilities import ROUTE_CAPABILITIES, Capability
 from stdapi.models.deprecation import DEPRECATED_MODELS
@@ -339,6 +345,9 @@ _PROMPTS: dict[str, tuple[str, AwareDatetime]] = {}
 
 #: Model aliases (populated on import, merged with user settings at startup)
 MODEL_ALIASES: dict[str, str] = {}
+
+#: Configuration carried by the aliases that declare any, keyed by alias name
+MODEL_ALIAS_OVERLAYS: dict[str, AliasOverlay] = {}
 
 #: Registered model classes for all model families
 _GLOBAL_MODEL_REGISTRY: set[type[ModelBase[Any, Any]]] = set()
@@ -933,15 +942,16 @@ class ModelBase[RequestT, ResponseT]:
                 latency=latency,
                 prefer_regional=_request_uses_system_tool(request),
             )
-        request["requestMetadata"] = build_metadata(request.get("requestMetadata"))
+        request["requestMetadata"] = build_metadata(
+            alias_request_metadata(request.get("requestMetadata"))
+        )
 
         if latency:
             request["performanceConfig"] = {"latency": latency}
 
-        if service_tier := (
-            request.get("serviceTier", {}).get("type")
-            or perf_service_tier
-            or SETTINGS.default_model_service_tiers.get(self._model_id)
+        if service_tier := resolve_service_tier(
+            self._model_id,
+            request.get("serviceTier", {}).get("type") or perf_service_tier,
         ):
             request["serviceTier"] = {"type": service_tier}
             get_model_state(self._model_id).service_tier = service_tier
@@ -1955,6 +1965,7 @@ async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool
                 failed_regions, unavailable_models
             )
 
+            mantle_guardrail_aliases = _mantle_guardrail_aliases(all_models)
             mantle_guardrail_models = (
                 sum(1 for m in all_models.values() if m.service == MANTLE_SERVICE)
                 if SETTINGS.aws_bedrock_guardrail_identifier
@@ -1999,6 +2010,9 @@ async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool
             invalid_arn_mappings = {}
             unmatched_restrict_keys = set()
             mantle_guardrail_models = 0
+            mantle_guardrail_aliases = []
+    if mantle_guardrail_aliases:
+        _reject_mantle_guardrail_aliases(mantle_guardrail_aliases, start_event)
     _warn_bedrock_refresh_issues(
         start_event,
         failed_regions,
@@ -2036,6 +2050,60 @@ async def _trigger_price_catalog_refresh(
                     f"Price-catalog refresh for new models failed: {exc}",
                     level="warning",
                 )
+
+
+def _mantle_guardrail_aliases(all_models: dict[str, ModelDetails]) -> list[str]:
+    """Return the guardrail-bearing aliases whose target model cannot apply it.
+
+    Amazon Bedrock Guardrails are a bedrock-runtime feature, so a Mantle-served
+    model silently ignores one. Unlike the server-wide guardrail, an alias names
+    exactly one model, so the mismatch is decidable.
+
+    Args:
+        all_models: All available models keyed by model ID.
+
+    Returns:
+        Names of the offending aliases, sorted.
+    """
+    return sorted(
+        alias
+        for alias, target in SETTINGS.model_aliases.items()
+        if isinstance(target, ModelAliasConfig)
+        and target.guardrail_identifier
+        and (model := all_models.get(target.model)) is not None
+        and model.service == MANTLE_SERVICE
+    )
+
+
+def _reject_mantle_guardrail_aliases(
+    aliases: list[str], start_event: EventLog | None
+) -> None:
+    """Fail startup when an alias guardrail targets a model that cannot apply it.
+
+    Serving unfiltered content while the operator believes a guardrail applies
+    is not an acceptable default, so this is fatal at startup. A later refresh
+    that turns a model Mantle-served only warns: the deployment is already
+    running, and stopping it would be a worse outcome than reporting it.
+
+    Args:
+        aliases: Offending alias names.
+        start_event: Startup event log, or ``None`` on a lazy refresh.
+
+    Raises:
+        ServerError: At startup, naming the offending aliases.
+    """
+    detail = (
+        f"Amazon Bedrock Guardrails configured by the model aliases "
+        f"{', '.join(aliases)} cannot apply to their target model, which is "
+        "served by Bedrock Mantle. Point the alias at another model, or, if "
+        "the model is also available on the classic endpoint, remove it from "
+        "AWS_BEDROCK_MANTLE_PREFERRED_MODELS."
+    )
+    if start_event is None:
+        if REQUEST_LOG.get(None) is not None:
+            log_error_details(detail, level="warning")
+        return
+    raise ServerError(detail)
 
 
 def _warn_bedrock_refresh_issues(
@@ -2189,15 +2257,24 @@ def _order_ids_mantle_first(all_models: dict[str, ModelDetails]) -> list[str]:
 def _populate_model_aliases(all_models: dict[str, ModelDetails]) -> None:
     """Rebuild ``MODEL_ALIASES`` from all registered model classes and user settings.
 
-    Also sets ``ModelDetails.aliases`` for each model that has aliases.
+    An operator alias carrying configuration contributes its target model to
+    ``MODEL_ALIASES``, like the plain form, and its resolved configuration to
+    ``MODEL_ALIAS_OVERLAYS``. Also sets ``ModelDetails.aliases`` for each model
+    that has aliases.
 
     Args:
         all_models: All available models keyed by model ID.
     """
     MODEL_ALIASES.clear()
+    MODEL_ALIAS_OVERLAYS.clear()
     for cls in _GLOBAL_MODEL_REGISTRY:
         MODEL_ALIASES.update(cls.get_aliases(all_models))
-    MODEL_ALIASES.update(SETTINGS.model_aliases)
+    for alias, target in SETTINGS.model_aliases.items():
+        if isinstance(target, str):
+            MODEL_ALIASES[alias] = target
+        else:
+            MODEL_ALIASES[alias] = target.model
+            MODEL_ALIAS_OVERLAYS[alias] = build_alias_overlay(alias, target)
 
     aliases_by_model: dict[str, set[str]] = {}
     for alias, model_id in MODEL_ALIASES.items():
@@ -2751,7 +2828,9 @@ async def _build_invoke_kwargs(
         "body": body if isinstance(body, bytes) else to_json(body),
         # InvokeModel carries the metadata as a JSON string header, unlike
         # Converse which takes a map.
-        "requestMetadata": to_json(build_metadata()).decode(),
+        "requestMetadata": to_json(
+            build_metadata(alias_request_metadata(None))
+        ).decode(),
     }
 
     if guardrail is not None:
@@ -2762,10 +2841,8 @@ async def _build_invoke_kwargs(
 
     if latency:
         kwargs["performanceConfigLatency"] = latency
-    if service_tier := (
-        service_tier
-        or perf_service_tier
-        or SETTINGS.default_model_service_tiers.get(model_id)
+    if service_tier := resolve_service_tier(
+        model_id, service_tier or perf_service_tier
     ):
         get_model_state(model_id).service_tier = kwargs["serviceTier"] = service_tier
     return kwargs
@@ -2965,7 +3042,8 @@ async def validate_model(
     """Validate *model_id* and return its ``ModelDetails``.
 
     Resolves aliases and ARNs, refreshes the cache on a miss, checks modality support,
-    and records the model ID in the request log.
+    and records the model ID in the request log. An alias carrying configuration
+    applies it to the rest of the request.
 
     If the model is not found and is listed in :data:`~stdapi.models.deprecation.DEPRECATED_MODELS`,
     and :attr:`~stdapi.config.Settings.aws_bedrock_deprecated_model_fallback` is enabled,
@@ -2985,6 +3063,8 @@ async def validate_model(
         UnsupportedModelError: If the model is not found.
         ApiError: If the model does not support the requested modality.
     """
+    if MODEL_ALIAS_OVERLAYS:
+        apply_alias_overlay(MODEL_ALIAS_OVERLAYS.get(model_id))
     model_id = resolve_model_alias(model_id)
     original_id = model_id
     models = _MODELS if bedrock_only else _ALL_MODELS

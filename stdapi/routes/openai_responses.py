@@ -570,12 +570,14 @@ async def create_response(
     """
     log_request_params(request, user_id=request.safety_identifier or request.user)
     store = bool(request.store)
-    apply_request_moderation(request.moderation)
     model_id = (
         await validate_model(
             request.model, input_modality="TEXT", output_modality="TEXT"
         )
     ).id
+    # After the model: an alias may carry the guardrail this request is checked
+    # against, and 'moderation' reports on the guardrail that ends up applying.
+    apply_request_moderation(request.moderation)
     chat_model = get_chat_model(model_id)
     await _apply_prompt_template(request.prompt, chat_model, model_id)
     previous_response_id = request.previous_response_id

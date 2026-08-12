@@ -208,12 +208,13 @@ async def create_chat_completion(
             level="warning",
         )
         store = False
-    apply_request_moderation(request.moderation)
     model_id = (
         await validate_model(
             request.model, input_modality="TEXT", output_modality="TEXT"
         )
     ).id
+    # After the model: an alias may carry the guardrail 'moderation' reports on.
+    apply_request_moderation(request.moderation)
     placeholder_id = f"chatcmpl-{REQUEST_ID.get()}"
     created = int(REQUEST_TIME.get().timestamp())
     generation = get_chat_model(model_id).create_completion(

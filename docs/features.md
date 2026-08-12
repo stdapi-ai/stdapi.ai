@@ -194,6 +194,7 @@ Access every model available on Amazon Bedrock through a single, consistent API 
 
 - **Automatic model discovery** — Scans configured regions at startup; no manual model list to maintain
 - **Model aliases** — Map custom names to Bedrock model IDs; Claude and OpenAI names resolve automatically
+- **Configured aliases** — An alias can also carry a [service tier, a guardrail, metadata and model parameters](operations_configuration.md#model-aliases-configuration), so one model is published under several names with different policies
 - **Deprecated model failover** — Requests to retired models transparently redirect to their replacements
 - **Legacy model filtering** — Optionally hide deprecated models from the models list
 

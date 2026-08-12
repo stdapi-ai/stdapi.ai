@@ -177,6 +177,10 @@ When only one currency is involved, the entry's `cost`/`currency` reports that c
 
 AWS prices some models differently per serving profile: the cross-region "global" routing profile is *lower* than the plain/regional rate for some marketplace-listed models (confirmed live: Claude Sonnet 4.5 input tokens at $3.30/M regional vs $3.00/M global), while latency-optimized serving (requested via the `X-Amzn-Bedrock-PerformanceConfig-Latency: optimized` header) is *higher*. stdapi.ai tracks the profile that served each request (`"routing": "global"` or `"latency"`) and prices it at the matching rate, falling back to the regional rate when AWS publishes no distinct one.
 
+### Service Tiers as a Cost Lever
+
+AWS prices each [service tier](operations_configuration.md#default-model-service-tiers-section) differently: `flex` trades latency for a lower rate, `priority` does the opposite. Two ways to apply one without changing client code: `DEFAULT_MODEL_SERVICE_TIERS` pins a tier per model, and a [model alias](operations_configuration.md#model-aliases-configuration) pins one per alias — publishing, say, a `flex` name for batch workloads and a `priority` name for interactive ones over the same model. Set [`AWS_BEDROCK_ALLOW_SERVICE_TIER_OVERRIDE`](operations_configuration.md#aws-bedrock-allow-service-tier-override) to `false` to stop clients selecting another tier, and the cost profile you configured holds. Both settings and the override gate cover models served through the Bedrock Converse and InvokeModel APIs; a Bedrock Mantle-served model runs on the tier its own request names.
+
 ### Long-Context Pricing
 
 Some 1M-context-capable models (currently Claude Sonnet 4, via the `context-1m` `anthropic-beta` flag) are billed by AWS at a higher rate — roughly double for input-side tokens — when a call's prompt (input + cache read/write tokens) exceeds 200K tokens. stdapi.ai detects this per model call and prices the whole call at the published long-context rate, reporting it with `"context": "long"` in the usage entry. When AWS publishes no long-context rate for a model, the standard rate is used as the best available estimate.
@@ -237,6 +241,10 @@ Cost tracking prices **each request** as it happens. AWS-side attribution answer
 | **Service / gateway**   | [IAM principal attribution](https://docs.aws.amazon.com/bedrock/latest/userguide/cost-mgmt-iam-principal-tracking.html) — AWS captures the caller identity | Cost Explorer, CUR 2.0               | Automatic; tag the execution role for finer breakdowns            |
 | **Application / workload** | [Bedrock Project/Workspace](operations_configuration.md#bedrock-mantle-project) (Bedrock Mantle models)                                            | Cost Explorer, CUR 2.0               | Set `AWS_BEDROCK_MANTLE_PROJECT`                                  |
 | **End user**            | `stdapi-ai.user_id` request metadata and job tags                                                                                                     | stdapi.ai logs, Bedrock invocation logs | Clients send `safety_identifier` — `user` is a deprecated alias — (OpenAI) or `metadata.user_id` (Anthropic) |
+| **Team / tenant**       | Request metadata attached by the [model alias](operations_configuration.md#model-aliases-configuration) the client names                               | Bedrock model invocation logs only   | Give each team its own alias with a `metadata` entry, then [enable and deliver model invocation logging](https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html) |
+
+!!! warning "Alias metadata is not a cost allocation tag"
+    A model alias' `metadata` travels as Amazon Bedrock **request metadata**: it appears in [model invocation logs](https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html), which you enable and deliver to S3 or CloudWatch Logs yourself, and which it can be filtered on. It never appears in the stdapi.ai request logs, in Cost Explorer or in CUR 2.0 — splitting the bill by team still needs one of the mechanisms above.
 
 ### IAM Principal Attribution
 

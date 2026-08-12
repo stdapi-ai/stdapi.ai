@@ -299,13 +299,14 @@ Configure **one** source. If several are set, precedence is `API_KEY` → SSM Pa
 | [`TIMEZONE`](#timezone)                                             | `UTC`                   | IANA timezone identifier for request timestamps                                            |
 | [`STRICT_INPUT_VALIDATION`](#strict-input-validation)               | `false`                 | Reject API requests with unknown/extra fields                                              |
 | [`CHAT_COMPLETIONS_REASONING_FIELD`](#chat-completions-reasoning-field) | `reasoning_content` | Field carrying reasoning text on `/v1/chat/completions`: `reasoning_content`, `reasoning`, or `none` |
-| [`MODEL_ALIASES`](#model-aliases)                                   | `{}`                    | JSON object mapping custom model name aliases to Bedrock model IDs                         |
+| [`MODEL_ALIASES`](#model-aliases)                                   | `{}`                    | JSON object mapping custom model name aliases to Bedrock model IDs, optionally with per-alias configuration |
 | [`DEFAULT_TTS_MODEL`](#default-tts-model)                           | `amazon.polly-standard` | Default TTS model: `amazon.polly-standard`, `-neural`, `-long-form`, or `-generative`      |
 | [`DEFAULT_TTS_LANGUAGE`](#default-tts-language)                     | None                    | Default language for TTS (e.g., `en-US`); when set, skips Amazon Comprehend auto-detection    |
 | [`TOKENS_ESTIMATION`](#tokens-estimation)                           | `false`                 | Deprecated and ignored (token estimation removed)                                          |
 | [`TOKENS_ESTIMATION_DEFAULT_ENCODING`](#tokens-encoding)            | `None`                  | Deprecated and ignored (token estimation removed)                                          |
 | [`DEFAULT_MODEL_PARAMS`](#default-model-params)                     | `{}`                    | JSON object with per-model default inference parameters (temperature, max_tokens, etc.)    |
 | [`DEFAULT_MODEL_SERVICE_TIERS`](#default-model-service-tiers)       | `{}`                    | JSON object with per-model default service tiers (default, flex, priority, reserved)        |
+| [`AWS_BEDROCK_ALLOW_SERVICE_TIER_OVERRIDE`](#aws-bedrock-allow-service-tier-override) | `true` | Allow users to select the service tier per request, overriding the configured one (cost control) |
 | [`MODEL_CACHE_SECONDS`](#model-cache-seconds)                       | `900`                   | Model list cache lifetime in seconds before lazy refresh (default: 15 minutes)             |
 | [`AI_RESPONSE_TIMEOUT`](#ai-response-timeout)                       | `600`                   | Maximum seconds without data from a model before the request times out (default: 10 min)   |
 | [`DROP_UNSUPPORTED_SYSTEM_PROMPT`](#drop-unsupported-system-prompt) | `true`                  | Drop system prompts for unsupported models; when `false`, return error instead             |
@@ -3306,11 +3307,14 @@ export AWS_BEDROCK_GUARDRAIL_TRACE=enabled
 :   When set to `false` (default) and a global guardrail is configured, only the global configuration is enforced, preventing users from bypassing or modifying safety controls. Set to `true` if you need to allow per-request guardrail customization to override the global configuration.
 
 :octicons-info-24: **Auto-Enable Behavior**
-:   If no global guardrail configuration is set (both `AWS_BEDROCK_GUARDRAIL_IDENTIFIER` and `AWS_BEDROCK_GUARDRAIL_VERSION` are unset), this setting is automatically set to `true` at startup, allowing per-request guardrails when no global policy is enforced.
+:   If no guardrail is configured at all — both `AWS_BEDROCK_GUARDRAIL_IDENTIFIER` and `AWS_BEDROCK_GUARDRAIL_VERSION` unset, and no [model alias](#model-aliases-configuration) carrying one — this setting is automatically set to `true` at startup, allowing per-request guardrails when no policy is enforced.
 
 ```bash
 export AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE=true
 ```
+
+!!! tip "Per-Alias Guardrails"
+    A [model alias](#model-aliases-configuration) can carry its own guardrail, applied to the requests naming it and overriding the global one. That is how a single deployment publishes the same model under a strictly guarded name and an unguarded one.
 
 !!! example "Complete Guardrail Configuration"
     ```bash
@@ -3421,6 +3425,11 @@ Configure service tier and performance settings per request using HTTP headers. 
 |--------------------------------------------|------------------------|-------------------------------|
 | `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `priority`, `default`, `flex` |
 | `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`       |
+
+!!! warning "The tier header is subject to the override gate"
+    When [`AWS_BEDROCK_ALLOW_SERVICE_TIER_OVERRIDE`](#aws-bedrock-allow-service-tier-override) is `false`, `X-Amzn-Bedrock-Service-Tier` — like the `service_tier` request parameter — is ignored for any model that has a tier configured, by `DEFAULT_MODEL_SERVICE_TIERS` or by the [alias](#model-aliases-configuration) the request names. A model with no configured tier honors the header in either case. The response's `service_tier` field keeps echoing the request's own value; [usage and cost reporting](operations_cost_management.md) record the tier that actually served the call.
+
+    Configured tiers, the header and this gate all apply to models served through the Bedrock Converse and InvokeModel APIs. On a [Bedrock Mantle](#summary-bedrock-mantle)-served model, the request's own `service_tier` parameter is what applies — the header is not read, no configured tier is added, and the response reports the tier that model returns.
 
 ```bash title="Example: Chat Completions with Priority Tier and Optimized Latency"
 curl -X POST https://api.example.com/v1/chat/completions \
@@ -3772,7 +3781,7 @@ Configure default service tiers applied automatically to specific Bedrock models
     - `amazon.nova-premier-v1:0` (legacy) supports: `default`, `flex`, `priority`, `reserved`
 
 !!! info "Tier Precedence"
-    Explicit request parameters always take precedence over configured defaults.
+    Explicit request parameters take precedence over the tier configured for the model, unless [`AWS_BEDROCK_ALLOW_SERVICE_TIER_OVERRIDE`](#aws-bedrock-allow-service-tier-override) is disabled.
 
 #### `DEFAULT_MODEL_SERVICE_TIERS` { #default-model-service-tiers }
 
@@ -3793,6 +3802,24 @@ Configure default service tiers applied automatically to specific Bedrock models
 | `flex`     | Cost-optimized flexible compute                   |
 | `priority` | Lower-latency priority compute                    |
 | `reserved` | Dedicated reserved capacity (requires AWS contract) |
+
+#### `AWS_BEDROCK_ALLOW_SERVICE_TIER_OVERRIDE` { #aws-bedrock-allow-service-tier-override }
+
+:octicons-package-24: **Purpose**
+:   Control whether clients can select the service tier at request level
+
+:octicons-gear-24: **Default**
+:   `true` (clients may select a tier)
+
+:octicons-cash-24: **Cost Consideration**
+:   Service tiers are billed at different rates. Set to `false` on a shared deployment to pin every model to the tier you configured, so a client cannot move its traffic to a more expensive tier. A model with no configured tier still honors the request in either case.
+
+:octicons-alert-24: **Scope**
+:   Applies to models served through the Bedrock Converse and InvokeModel APIs. A [Bedrock Mantle](#summary-bedrock-mantle)-served model carries no configured tier, so its requests always run on the tier they name.
+
+```bash
+export AWS_BEDROCK_ALLOW_SERVICE_TIER_OVERRIDE=false
+```
 
 ### Configuration Examples { #service-tier-examples }
 
@@ -3815,10 +3842,17 @@ export DEFAULT_MODEL_SERVICE_TIERS='{
 
 ### Service Tier Merging
 
+For models served through the Bedrock Converse and InvokeModel APIs:
+
 1. :material-numeric-1-circle: **Explicit request parameter** takes highest priority
 2. :material-numeric-2-circle: **HTTP header** (`X-Amzn-Bedrock-Service-Tier`, see [Per-Request Service Tier Configuration](#service-tier-per-request)) overrides defaults
-3. :material-numeric-3-circle: **Default from** `DEFAULT_MODEL_SERVICE_TIERS` applies if no explicit value
-4. :material-numeric-4-circle: **No service tier** passed to Bedrock if unset
+3. :material-numeric-3-circle: **Tier configured on the requested alias** (see [Model Aliases](#model-aliases-section)) applies if the request sets none
+4. :material-numeric-4-circle: **Default from** `DEFAULT_MODEL_SERVICE_TIERS` applies if neither does
+5. :material-numeric-5-circle: **No service tier** passed to Bedrock if unset
+
+Steps 1 and 2 are skipped when [`AWS_BEDROCK_ALLOW_SERVICE_TIER_OVERRIDE`](#aws-bedrock-allow-service-tier-override) is `false` and a tier is configured.
+
+On a [Bedrock Mantle](#summary-bedrock-mantle)-served model, only step 1 applies: the request's own `service_tier` is forwarded as sent, and neither the header, nor an alias' tier, nor `DEFAULT_MODEL_SERVICE_TIERS` takes part.
 
 ---
 
@@ -3848,13 +3882,58 @@ Configure custom aliases to map user-friendly model names to actual model IDs. T
 :   Map alias names to actual model IDs or ARNs
 
 :octicons-code-24: **Format**
-:   JSON object with alias names as keys and model IDs or ARNs as values
+:   JSON object with alias names as keys, and as values either a model ID or ARN, or an object carrying that model plus the configuration to apply to it
 
 :octicons-gear-24: **Default**
 :   `{}` (empty, uses built-in defaults only)
 
 !!! tip "Advanced Routing with ARNs"
     Model aliases can also reference ARNs for Application Inference Profiles or Prompt Routers, enabling advanced routing strategies through friendly alias names. See [Using Inference Profile and Prompt Router ARNs](#using-inference-profile-and-prompt-router-arns) for more details.
+
+### Aliases That Carry Configuration { #model-aliases-configuration }
+
+An alias may map to an object instead of a model name. Every request naming that alias then gets the configuration attached to it, so one deployment can publish the same model under several names with different tiers, safeguards or defaults.
+
+Every field below is designed around an **Amazon Bedrock** model call. An alias pointing at a model served by another AWS service — Amazon Polly, Amazon Transcribe, Amazon Comprehend — still resolves the name, and two fields keep working there: `extra_params` applies wherever the route accepts model parameters, and `guardrail_id` is enforced on the routes that check content through [Amazon Bedrock Guardrails](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html) (speech input, transcripts) — a billed guardrail evaluation. `service_tier` and `metadata` configure the Bedrock call itself and are ignored on those services.
+
+| Field                | Purpose                                                                                       |
+|----------------------|-----------------------------------------------------------------------------------------------|
+| `model`              | **Required.** Model ID or ARN the alias resolves to                                            |
+| `service_tier`       | Service tier for requests naming the alias, on a model served through the Bedrock Converse or InvokeModel APIs — see [Default Model Service Tiers](#default-model-service-tiers-section) |
+| `guardrail_id`       | ID of an [Amazon Bedrock Guardrail](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html) to apply, requires `guardrail_version` |
+| `guardrail_version`  | Version of that guardrail                                                                      |
+| `guardrail_trace`    | Guardrail trace level: `disabled`, `enabled` or `enabled_full`                                 |
+| `metadata`           | Key-value metadata attached to the model call, for audit reporting — it reaches [Amazon Bedrock model invocation logs](https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html), which you enable and deliver yourself, and nothing else: it is not a cost allocation tag, see [AWS Cost Attribution](operations_cost_management.md#aws-cost-attribution) |
+| `extra_params`       | Model parameters, in the format of [`DEFAULT_MODEL_PARAMS`](#default-model-params)             |
+
+```bash
+export MODEL_ALIASES='{
+  "support-assistant": {
+    "model": "amazon.nova-lite-v1:0",
+    "service_tier": "flex",
+    "guardrail_id": "abc123def456",
+    "guardrail_version": "1",
+    "metadata": {"team": "support"},
+    "extra_params": {"temperature": 0.2}
+  }
+}'
+```
+
+!!! info "Precedence"
+    Each field resolves in one order: **the request**, then **the alias**, then the **server-wide setting** for that field. A field the alias leaves unset falls through to the server-wide value, and a client that sends nothing gets the alias' configuration.
+
+    The two settings that decide whether a request may override an administrator's value apply to the alias layer as well:
+
+    - [`AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE`](#aws-bedrock-allow-guardrail-override) — when `false`, the alias' guardrail holds and request headers cannot replace it
+    - [`AWS_BEDROCK_ALLOW_SERVICE_TIER_OVERRIDE`](#aws-bedrock-allow-service-tier-override) — when `false`, the alias' service tier holds and the request cannot select another
+
+!!! warning "Startup Validation"
+    An alias object is validated when the server starts: an unknown field, a missing `model`, a guardrail ID without its version, or an out-of-range `extra_params` value stops startup with an error naming the alias. A typo never becomes a silently ignored setting.
+
+    An alias whose `guardrail_id` targets a model served through [Bedrock Mantle](#summary-bedrock-mantle) also stops startup: Amazon Bedrock Guardrails do not apply to those models, and serving them unfiltered while a guardrail is configured would be a silent gap. Point the alias at another model, or — when the model is also available on the classic endpoint — remove it from [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](#bedrock-mantle-preferred-models) so it is served where guardrails apply.
+
+!!! note "Scope on Bedrock Mantle models"
+    On a [Bedrock Mantle](#summary-bedrock-mantle)-served model, `guardrail_id` is rejected at startup as above, and `service_tier`, `metadata` and `extra_params` — like the server-wide [`DEFAULT_MODEL_SERVICE_TIERS`](#default-model-service-tiers) and [`DEFAULT_MODEL_PARAMS`](#default-model-params) — do not apply. Such a request runs on the tier it names itself, and on that model's default tier when it names none.
 
 ### Configuration Examples { #model-aliases-examples }
 
