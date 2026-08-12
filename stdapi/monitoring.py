@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict, get_args
 
 from botocore.exceptions import ClientError, HTTPClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
-from fastapi import Request  # noqa: TC002
 from pydantic import AwareDatetime, BaseModel, JsonValue
 from sse_starlette import ServerSentEvent
+from starlette.requests import HTTPConnection  # noqa: TC002
 
 from stdapi import server
 from stdapi.api_errors import ApiError
@@ -181,7 +181,7 @@ REQUEST_TIME: ContextVar[AwareDatetime] = ContextVar("request_time")
 REQUEST_LOG: ContextVar[EventLog] = ContextVar("request_log")
 
 #: HTTP request object
-REQUEST: ContextVar[Request] = ContextVar("request")
+REQUEST: ContextVar[HTTPConnection] = ContextVar("request")
 
 #: Per-request accumulator of downstream AWS API call correlation entries
 _AWS_API_CALLS: ContextVar[list[AwsApiCallLog]] = ContextVar("aws_api_calls")
@@ -297,6 +297,38 @@ def _finalize_usage_safely(log: EventLog) -> None:
         _add_warnings(log, ["\n".join(format_exception(exc))], level="error")
 
 
+def flush_usage_log_event(elapsed_ms: int) -> None:
+    """Write and drain everything recorded so far, mid-request.
+
+    A long-lived session bills continuously, and its request log entry is only
+    written once it ends: a connection dropped before that would take the whole
+    bill with it. Flushing writes a ``request_stream`` entry for what has
+    accumulated and empties the accumulator, so nothing is billed twice and at
+    most the current turn is ever at risk. No-op outside a request scope.
+
+    Args:
+        elapsed_ms: Milliseconds the session has been running.
+    """
+    if (parent := REQUEST_LOG.get(None)) is None:
+        return
+    log = EventLog(
+        type="request_stream",
+        level="info",
+        date=SETTINGS.now(),
+        server_id=server.SERVER_NAME,
+        server_version=SERVER_FULL_VERSION,
+        id=parent.get("id", ""),
+        execution_time_ms=elapsed_ms,
+    )
+    if model_id := parent.get("model_id"):
+        log["model_id"] = model_id
+    _finalize_usage_safely(log)
+    if "usage" not in log:
+        return
+    _attach_aws_api_calls(log)
+    write_log_event(log)
+
+
 def record_aws_api_call(
     service: str, operation: str, request_id: str, error_code: str | None = None
 ) -> None:
@@ -359,7 +391,7 @@ def write_log_event(log: EventLog) -> None:
 
 def _reset_request_context(
     request_id_token: Token[str],
-    request_token: Token[Request],
+    request_token: Token[HTTPConnection],
     operation_token: Token[str],
     request_log_token: Token[EventLog],
     request_time_token: Token[AwareDatetime],
@@ -392,7 +424,7 @@ def _reset_request_context(
     IMAGE_SPEC.set("")
 
 
-def _edge_header_value(request: Request, header: str) -> str:
+def _edge_header_value(request: HTTPConnection, header: str) -> str:
     """Return a sanitized edge correlation header value.
 
     The value is client-supplied input: non-printable-ASCII characters are
@@ -413,7 +445,7 @@ def _edge_header_value(request: Request, header: str) -> str:
 
 
 def _record_edge_headers(
-    log: EventLog, request: Request, span_context: Span | None
+    log: EventLog, request: HTTPConnection, span_context: Span | None
 ) -> None:
     """Record edge correlation headers from *request*, when present.
 
@@ -437,7 +469,7 @@ def _record_edge_headers(
 
 
 @contextmanager
-def log_request_event(request: Request) -> Generator[EventLog]:
+def log_request_event(request: HTTPConnection) -> Generator[EventLog]:
     """Log a request event with OpenTelemetry tracing.
 
     Reuses the parent request ID for internal MCP → API calls (identified by
@@ -458,6 +490,9 @@ def log_request_event(request: Request) -> Generator[EventLog]:
         )
         else webuuid()
     )
+    # A WebSocket scope carries no method; its handshake is the GET the client
+    # sent, which is also what an access log upstream of the upgrade records.
+    method = request.scope.get("method", "GET")
     request_id_token = REQUEST_ID.set(request_id)
     request_time_token = REQUEST_TIME.set(request_time := SETTINGS.now())
     request_log_token = REQUEST_LOG.set(
@@ -468,7 +503,7 @@ def log_request_event(request: Request) -> Generator[EventLog]:
             server_id=server.SERVER_NAME,
             server_version=SERVER_FULL_VERSION,
             id=request_id,
-            method=request.method,  # type: ignore[typeddict-item]
+            method=method,
             path=request.url.path,
         )
     )
@@ -479,9 +514,9 @@ def log_request_event(request: Request) -> Generator[EventLog]:
     request_token = REQUEST.set(request)
     span_context = (
         otel_manager.start_span(
-            f"{request.method} {request.url.path}",
+            f"{method} {request.url.path}",
             attributes={
-                "http.method": request.method,
+                "http.method": method,
                 "http.url": str(request.url),
                 "http.scheme": request.url.scheme,
                 "http.host": request.url.hostname or "localhost",

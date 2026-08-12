@@ -1068,6 +1068,34 @@ class _Settings(BaseSettings):
         default="/cohere", description="Cohere API compatible routes prefix"
     )
 
+    realtime_client_secret_key: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Secret the ephemeral client secrets of the Realtime API are signed "
+            "with. Any value works as long as every instance of the deployment "
+            "shares it: a secret minted by one instance is verified by whichever "
+            "one the client's WebSocket reaches. Defaults to a value derived from "
+            "the configured API key, and to a per-process random value when no "
+            "API key is configured, in which case ephemeral client secrets stop "
+            "working across more than one instance."
+        ),
+    )
+
+    realtime_allow_session_override: bool = Field(
+        default=True,
+        description=(
+            "Allow a client connecting with an ephemeral client secret of the "
+            "Realtime API to override the session configuration that secret "
+            "carries. When disabled, the model, the instructions and the output "
+            "token cap minted into the secret are final: a 'model' query "
+            "parameter naming another model is refused, and a session.update "
+            "changing one of them answers an error. Defaults to True, which is "
+            "the upstream behavior; disable it in a multi-tenant deployment "
+            "where the secret is the only thing constraining an untrusted "
+            "client."
+        ),
+    )
+
     api_key: SecretStr | None = Field(
         default=None,
         description=(

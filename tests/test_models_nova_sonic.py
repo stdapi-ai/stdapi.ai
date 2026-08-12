@@ -741,7 +741,7 @@ class TestSessionBounds:
         Ref: stdapi/models/audio/amazon_nova_sonic.py:_send_audio
         """
         stream = FakeDuplexStream()
-        session: BidiSession[Any, Any] = BidiSession(stream, _REGION)  # type: ignore[arg-type]
+        session: BidiSession[Any, Any] = BidiSession(stream, _REGION, "bedrock-runtime")  # type: ignore[arg-type]
         names = sonic._SessionNames()  # noqa: SLF001
         pcm = bytes(sonic.FRAME_BYTES * 3)
 
@@ -810,8 +810,7 @@ class TestUsageAccounting:
     ) -> None:
         """Speech tokens land under the speech spec, text tokens under the default one."""
         events = _transcript_events("hello")
-        # Metering runs throughout, so the last frame before the model's turn
-        # carries the session's totals; the earlier one must not be summed in.
+        # The last frame carries the session totals; the earlier must not be summed.
         events.insert(0, _usage_event(10, 20, 0, 0))
         events.insert(-1, _usage_event(100, 200, 3, 7))
         streams.script(FakeDuplexStream(events=events))

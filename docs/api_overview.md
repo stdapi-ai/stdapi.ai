@@ -63,6 +63,8 @@ stdapi.ai provides multiple resources for exploring and testing the API—choose
 | **🔊 Audio**      | `POST /v1/audio/speech`           | Text-to-speech synthesis                                                    | [Text to Speech →](api_openai_audio_speech.md)         |
 |                   | `POST /v1/audio/transcriptions`   | Speech-to-text transcription                                                | [Transcriptions →](api_openai_audio_transcriptions.md) |
 |                   | `POST /v1/audio/translations`     | Speech-to-English translation                                               | [Translations →](api_openai_audio_translations.md)     |
+| **🎙️ Realtime**   | `POST /v1/realtime/client_secrets` | Mint a short-lived client secret carrying a session configuration          | [Realtime →](api_openai_realtime.md)                   |
+|                   | `WS /v1/realtime`                 | Live, bidirectional speech-to-speech session                                | [Realtime →](api_openai_realtime.md)                   |
 | **🧠 Embeddings** | `POST /v1/embeddings`             | Vector embeddings for semantic search                                       | [Embeddings →](api_openai_embeddings.md)               |
 | **🛡️ Moderations** | `POST /v1/moderations`           | Content safety classification via Bedrock Guardrails or Amazon Comprehend   | [Moderations →](api_openai_moderations.md)             |
 | **📋 Models**     | `GET /v1/models`                  | List available models                                                       | [Models →](api_openai_models.md)                       |
@@ -148,6 +150,7 @@ When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, s
 | `openai_audio_speech`            | `POST /v1/audio/speech`                     |
 | `openai_audio_transcription`     | `POST /v1/audio/transcriptions`             |
 | `openai_audio_translation`       | `POST /v1/audio/translations`               |
+| `openai_realtime_client_secret`  | `POST /v1/realtime/client_secrets`          |
 | `openai_embedding`               | `POST /v1/embeddings`                       |
 | `openai_moderation`              | `POST /v1/moderations`                      |
 | `openai_model_list`              | `GET /v1/models`                            |

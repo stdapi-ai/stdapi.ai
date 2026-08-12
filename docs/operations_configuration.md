@@ -348,6 +348,8 @@ Publishing where tokens come from lets an AI agent authenticate itself — see [
 | [`EXTRA_MODEL_PARAMS_DENYLIST`](#extra-model-params-denylist)       | None                    | Additional "extra model parameters" names to strip, beyond the built-in LiteLLM control-parameter denylist |
 | [`EXTRA_MODEL_PARAMS_DROP_ALL`](#extra-model-params-drop-all)       | `false`                 | Disable the "extra model parameters" passthrough entirely                                  |
 | [`IMAGE_GENERATION_MODEL`](#image-generation-model)                 | None                    | Default Bedrock image model ID used when the `image_generation` Responses API tool is invoked |
+| [`REALTIME_CLIENT_SECRET_KEY`](#realtime-client-secret-key)         | None                    | Secret the Realtime API's ephemeral client secrets are signed with; derived from the API key when unset |
+| [`REALTIME_ALLOW_SESSION_OVERRIDE`](#realtime-allow-session-override) | `true`                 | Allow a client holding an ephemeral client secret to override the session configuration it carries |
 
 ### :material-file-document: API Documentation { #summary-api-documentation }
 
@@ -3579,7 +3581,7 @@ Amazon Bedrock Guardrails add content filtering and safety controls to model inp
 
 ### Route Coverage
 
-The configured guardrail applies to every route. Chat routes use the native Bedrock integration; routes whose AWS backend has no guardrail mechanism enforce it through the [ApplyGuardrail API](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html): client-supplied text is checked as `INPUT` before the backend call and generated text as `OUTPUT` after it.
+The configured guardrail applies to every route. Chat routes use the native Bedrock integration; routes whose AWS backend has no guardrail mechanism enforce it through the [ApplyGuardrail API](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html): client-supplied text is checked as `INPUT` before the backend call and generated text as `OUTPUT` after it. On the Realtime API, where content streams both ways for as long as the session is open, the check runs per turn and an intervention ends the session — see [Guardrail coverage](api_openai_realtime.md#guardrail-coverage) for what that does and does not catch.
 
 | Routes                                                     | Mechanism                            | Checked content                                        |
 |------------------------------------------------------------|--------------------------------------|--------------------------------------------------------|
@@ -3592,6 +3594,7 @@ The configured guardrail applies to every route. Chat routes use the native Bedr
 | Audio Speech                                               | :material-shield-check: ApplyGuardrail | `INPUT` — text to synthesize                          |
 | Audio Transcriptions (including streaming)                 | :material-shield-check: ApplyGuardrail | `OUTPUT` — transcript                                 |
 | Audio Translations                                         | :material-shield-check: ApplyGuardrail | `OUTPUT` — translated text                            |
+| [Realtime](api_openai_realtime.md#guardrail-coverage)      | :material-shield-check: ApplyGuardrail | `INPUT` — each written item before it reaches the model, and each transcribed caller turn; `OUTPUT` — each completed answer |
 
 !!! warning "Cost Tracking"
     AWS bills the guardrail on **every** route it applies to, but only the ApplyGuardrail-enforced ones report the units consumed. The mechanism a route uses therefore decides whether its guardrail cost is visible.
@@ -4006,6 +4009,53 @@ export DEFAULT_TTS_LANGUAGE=fr-FR
 
 !!! note "Interaction with Voice Selection"
     This setting only affects automatic language detection when using OpenAI voice names (like `alloy`, `echo`, `nova`). If you specify a Polly voice ID directly (like `Joanna`, `Matthew`), language detection is already skipped.
+
+---
+
+## :material-headset: Realtime API
+
+#### `REALTIME_CLIENT_SECRET_KEY` { #realtime-client-secret-key }
+
+:octicons-package-24: **Purpose**
+:   Secret the [Realtime API](api_openai_realtime.md#ephemeral-client-secrets)'s ephemeral client secrets (`POST /v1/realtime/client_secrets`) are signed with
+
+:octicons-database-24: **Type**
+:   String (any value)
+
+:octicons-gear-24: **Default**
+:   None — a signing key is derived from the configured API key instead
+
+:octicons-workflow-24: **Behavior**
+:   Ephemeral client secrets are stateless: nothing is stored server-side, so any instance behind a load balancer verifies a secret minted by any other, as long as they all sign with the same key. By default that key is derived from the deployment's own API key, which is already shared across every instance — so this setting has nothing to add on a deployment that already configures one.
+
+    Set it explicitly on a deployment that runs with **no API key configured at all**: without either one, each instance falls back to a random key generated **per process**, and a client secret minted by one instance then fails to verify on any other — the symptom is an ephemeral secret rejected intermittently on a multi-instance deployment. Any value works, as long as every instance shares it.
+
+```bash
+export REALTIME_CLIENT_SECRET_KEY=a-value-shared-by-every-instance
+```
+
+!!! warning "Changing it invalidates outstanding secrets"
+    A secret minted with one key does not verify against another. Rotating this setting (or the API key it would otherwise derive from) invalidates every client secret minted before the change — they simply stop working once their bearer tries to open a session, the same as if they had expired.
+
+#### `REALTIME_ALLOW_SESSION_OVERRIDE` { #realtime-allow-session-override }
+
+:octicons-package-24: **Purpose**
+:   Whether a client connecting with an [ephemeral client secret](api_openai_realtime.md#ephemeral-client-secrets) may override the session configuration that secret carries
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `true` — the upstream behavior: the carried configuration is a default the client may change
+
+:octicons-workflow-24: **Behavior**
+:   A minted secret carries a session configuration, and by default a client opening a session with it may name another model on the `?model=` query string and replace any of that configuration with its own `session.update` — exactly as it can against the upstream API.
+
+    Set to `false` on a multi-tenant deployment, where the secret is the only thing constraining an untrusted browser or mobile client. The `model`, the `instructions` and `max_output_tokens` the secret was minted with are then final: connecting with a `?model=` naming a different model is refused before the session opens, and a `session.update` changing any of the three answers an `error` event. Everything else — voice, audio formats, turn detection, transcription — stays under the client's control.
+
+```bash
+export REALTIME_ALLOW_SESSION_OVERRIDE=false
+```
 
 ---
 

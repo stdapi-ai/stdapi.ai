@@ -70,6 +70,7 @@ from stdapi.pricing import (
     start_price_catalog,
     stop_price_catalog,
 )
+from stdapi.realtime import close_realtime_sessions, open_realtime_sessions
 from stdapi.region_routing import measure_region_latencies, quota_retry_after
 from stdapi.routes import discover_routers
 from stdapi.routes.core_root import WWW_AUTHENTICATE_CHALLENGE
@@ -221,7 +222,14 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                     )
                 start_event["server_start_time_ms"] = (time_ns() - start) // 1000000
                 write_log_event(start_event)
-                yield
+                open_realtime_sessions()
+                try:
+                    yield
+                finally:
+                    # A termination signal kills an open WebSocket in
+                    # milliseconds with no close frame, and the server offers no
+                    # graceful drain of its own.
+                    close_realtime_sessions()
             finally:
                 await stop_price_catalog()
     except (BotoCoreError, ClientError, ServerError) as exception:

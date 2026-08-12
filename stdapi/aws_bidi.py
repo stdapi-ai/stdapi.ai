@@ -27,7 +27,7 @@ from smithy_core.serializers import SerializeableShape
 from smithy_http.aio.crt import AWSCRTHTTPClient
 
 from stdapi import server
-from stdapi.api_errors import ApiError
+from stdapi.api_errors import ApiError, FeatureUnavailableError
 from stdapi.aws import (
     FAILOVER_ERROR_CODES,
     pooled_clients,
@@ -85,6 +85,18 @@ _ERROR_MESSAGES: Final[dict[int, str]] = {
 
 #: Message for any server-side or transport failure of a stream.
 _SERVER_ERROR_MESSAGE: Final = "The request could not be completed. Retry the request."
+
+#: Statuses meaning the gateway's own credential, not the caller's, was refused.
+_DENIED_STATUSES: Final = frozenset({401, 403})
+
+#: Feature name and stream permission per service, for a refused credential.
+_BIDI_UNAVAILABLE: Final[dict[str, tuple[str, str]]] = {
+    "bedrock-runtime": (
+        "Live conversation",
+        "bedrock:InvokeModelWithBidirectionalStream",
+    ),
+    "polly": ("Streaming speech synthesis", "polly:StartSpeechSynthesisStream"),
+}
 
 
 class _BidiTransport(AWSCRTHTTPClient):
@@ -147,8 +159,7 @@ class _CredentialsResolver:
         if (credentials := self._credentials) is None:
             credentials = self._credentials = await AWS_SESSION.get_credentials()
             if credentials is None:
-                # The client-facing 401 is identical to the one a wrong API key
-                # gets, so the log is where the two become distinguishable.
+                # The 401 matches a wrong API key; only the log tells the two apart.
                 log_error_details(
                     "No AWS credentials could be resolved for the stream clients",
                     status=401,
@@ -254,8 +265,7 @@ def _create_client(service: str, region: RegionName, pooled: Any) -> Any:  # noq
     config = config_class(
         region=region,
         aws_credentials_identity_resolver=_CREDENTIALS_RESOLVER,
-        # The SDK's own resolver hardcodes the "amazonaws.com" DNS suffix, which
-        # does not exist in the sovereign and China partitions.
+        # The SDK resolver hardcodes "amazonaws.com", absent in other partitions.
         endpoint_uri=pooled.meta.endpoint_url,
         transport=_TRANSPORT,
         user_agent_extra=server.USER_AGENT,
@@ -285,16 +295,14 @@ def _stream_error_status(exception: BaseException) -> int:
         return mapped[0]
     if (modeled := _STREAM_ERROR_STATUS.get(name)) is not None:
         return modeled
-    # The SDK marks its transport timeouts as the caller's fault, which they
-    # are not: they are transient, and another region may still answer.
+    # The SDK blames the caller for its transport timeouts; they are transient.
     if getattr(exception, "is_timeout_error", False):
         return 503
-    # An unmodelled failure is a transport failure; a modeled one states whose
-    # fault it is.
+    # An unmodelled failure is a transport one; a modeled one names the fault.
     return 400 if getattr(exception, "fault", None) == "client" else 503
 
 
-def _stream_api_error(exception: BaseException) -> ApiError:
+def _stream_api_error(exception: BaseException, service: str) -> ApiError:
     """Translate a stream failure into the error a client receives.
 
     No SDK message is ever forwarded: they embed AWS request IDs and internal
@@ -302,6 +310,7 @@ def _stream_api_error(exception: BaseException) -> ApiError:
 
     Args:
         exception: The failure raised by the SDK.
+        service: AWS service the stream was opened on.
 
     Returns:
         The equivalent API error.
@@ -309,8 +318,16 @@ def _stream_api_error(exception: BaseException) -> ApiError:
     if isinstance(exception, ApiError):
         return exception
     status = _stream_error_status(exception)
-    # The message withheld from the client stays in the request log, which is
-    # the only place a rejected stream remains diagnosable.
+    if status in _DENIED_STATUSES and (denied := _BIDI_UNAVAILABLE.get(service)):
+        # The caller was authenticated before this refusal: it is the deployment's.
+        feature, permission = denied
+        return FeatureUnavailableError(
+            feature,
+            f"AWS refused the {service} bidirectional stream "
+            f"({type(exception).__name__}: {exception}); the server role needs "
+            f"{permission}.",
+        )
+    # Withheld from the client, so the request log is the only diagnosis left.
     log_error_details(
         f"Bidirectional stream error ({type(exception).__name__}): {exception}",
         status=status,
@@ -328,8 +345,7 @@ def _is_stream_failover_error(exception: BaseException) -> bool:
         True for throttling, availability and transport failures, False for a
         caller error, which would be refused identically everywhere.
     """
-    # The shared codes name failures whose own status says nothing regional,
-    # such as a per-region job quota reported as a caller error.
+    # These codes are regional even where their status is not, e.g. a job quota.
     if type(exception).__name__ in FAILOVER_ERROR_CODES:
         return True
     status = _stream_error_status(exception)
@@ -343,19 +359,21 @@ class BidiSession[IE: SerializeableShape, OE: DeserializeableShape]:
     has resolved -- the single point at which the stream is known to be alive.
     """
 
-    __slots__ = ("_stream", "region")
+    __slots__ = ("_service", "_stream", "region")
 
     def __init__(
-        self, stream: DuplexEventStream[IE, OE, Any], region: RegionName
+        self, stream: DuplexEventStream[IE, OE, Any], region: RegionName, service: str
     ) -> None:
         """Wrap an opened SDK stream.
 
         Args:
             stream: The SDK's duplex event stream.
             region: Region serving it.
+            service: AWS service the stream was opened on.
         """
         self._stream = stream
         self.region = region
+        self._service = service
 
     async def await_open(self) -> None:
         """Wait for the service to answer, which is what proves the stream is alive.
@@ -379,7 +397,7 @@ class BidiSession[IE: SerializeableShape, OE: DeserializeableShape]:
         try:
             await self._stream.input_stream.send(event)
         except Exception as exception:
-            raise _stream_api_error(exception) from exception
+            raise _stream_api_error(exception, self._service) from exception
 
     async def close_input(self) -> None:
         """End the input half, leaving the output half streaming.
@@ -395,7 +413,7 @@ class BidiSession[IE: SerializeableShape, OE: DeserializeableShape]:
             async with async_timeout(_CLOSE_TIMEOUT):
                 await self._stream.input_stream.close()
         except Exception as exception:
-            raise _stream_api_error(exception) from exception
+            raise _stream_api_error(exception, self._service) from exception
 
     async def __aiter__(self) -> AsyncIterator[OE]:
         """Yield the service's events until the stream ends.
@@ -417,7 +435,7 @@ class BidiSession[IE: SerializeableShape, OE: DeserializeableShape]:
         except CancelledError:
             raise
         except Exception as exception:
-            raise _stream_api_error(exception) from exception
+            raise _stream_api_error(exception, self._service) from exception
 
     async def aclose(self) -> None:
         """Close both halves of the stream, bounded, ignoring their own errors.
@@ -522,14 +540,14 @@ async def _open_with_failover[IE: SerializeableShape, OE: DeserializeableShape](
             )
         except Exception as exception:
             if not _is_stream_failover_error(exception):
-                raise _stream_api_error(exception) from exception
+                raise _stream_api_error(exception, service) from exception
             _log_region_failover(service, region, exception)
     try:
         return await _open_session(
             service, last_region, open_stream, prime, open_timeout
         )
     except Exception as exception:
-        raise _stream_api_error(exception) from exception
+        raise _stream_api_error(exception, service) from exception
 
 
 async def _open_session[IE: SerializeableShape, OE: DeserializeableShape](
@@ -557,13 +575,12 @@ async def _open_session[IE: SerializeableShape, OE: DeserializeableShape](
     """
     session: BidiSession[IE, OE] | None = None
     try:
-        # Inside the guarded block: a region with no client is one more reason
-        # to try the next one, not a crash on the request path.
+        # Guarded: a region with no client is a reason to try the next, not a crash.
         client = get_bidi_client(service, region)
         async with async_timeout(
             SETTINGS.aws_connect_timeout if open_timeout is None else open_timeout
         ):
-            session = BidiSession(await open_stream(client, region), region)
+            session = BidiSession(await open_stream(client, region), region, service)
             if prime is not None:
                 await prime(session)
             await session.await_open()
@@ -586,8 +603,7 @@ async def _close_session(session: BidiSession[Any, Any]) -> None:
     task = create_task(session.aclose())
     _CLOSE_TASKS.add(task)
     task.add_done_callback(_CLOSE_TASKS.discard)
-    # Suppressing the cancellation only drops this second delivery of it: the one
-    # that triggered the cleanup keeps propagating.
+    # Only this second delivery is dropped; the one that triggered it propagates.
     with suppress(CancelledError):
         await shield(task)
 

@@ -81,7 +81,11 @@ class TestCountTokensCapabilityGating:
 
     def test_converse_model_advertises_input_tokens_tool(self) -> None:
         """A Converse-served TEXT model lists the input-tokens tool and route."""
-        with patch.object(models, "_find_model_class", return_value=ConverseChatModel):
+        with patch.object(
+            models,
+            "_model_capability_flags",
+            return_value=ConverseChatModel.get_supported_operations(),
+        ):
             routes, tools = _compute_model_capabilities(
                 "test.model-v1:0", _text_model("AWS Bedrock Runtime")
             )
@@ -94,7 +98,11 @@ class TestCountTokensCapabilityGating:
         Only the ``COUNT_TOKENS``-gated entry is dropped: the ungated Responses
         route on the same modalities stays advertised.
         """
-        with patch.object(models, "_find_model_class", return_value=MantleChatModel):
+        with patch.object(
+            models,
+            "_model_capability_flags",
+            return_value=MantleChatModel.get_supported_operations(),
+        ):
             routes, tools = _compute_model_capabilities(
                 "test.model-v1:0", _text_model(MANTLE_SERVICE)
             )

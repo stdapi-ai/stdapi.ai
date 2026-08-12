@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from aws_sdk_bedrock_runtime.models import (
+    AccessDeniedException,
     ModelErrorException,
     ModelNotReadyException,
     ModelStreamErrorException,
@@ -127,8 +128,7 @@ class FakeEventPublisher:
             return
         if self._close_hangs:
             await self.release_close.wait()
-        # The real close writes a signed empty frame and awaits it, so it is a
-        # suspension point: a cleanup path that is cancelled here closes nothing.
+        # The real close awaits a signed empty frame, so it is a suspension point.
         await sleep(0)
         self._is_closed = True
         self.closed += 1
@@ -781,8 +781,7 @@ class TestErrorTranslation:
             (SmithyError("AWS_IO_DNS_INVALID_NAME: Host name was invalid"), 503),
             (OSError("Failed to read from stream."), 503),
             (TimeoutError(), 503),
-            # Neither table names these three: the fault decides, except for a
-            # transport timeout, which the SDK also calls the caller's fault.
+            # Named by neither table: the fault decides, except a transport timeout.
             (InvalidSsmlException(message="Invalid SSML request"), 400),
             (CallError("The service failed", fault="server"), 503),
             (ClientTimeoutError("The request timed out"), 503),
@@ -795,7 +794,7 @@ class TestErrorTranslation:
         ``fault="client"``, so the fault fallback alone would tell the caller its
         parameters are wrong about a connection that simply stopped answering.
         """
-        assert stdapi.aws_bidi._stream_api_error(error).status == status  # noqa: SLF001
+        assert stdapi.aws_bidi._stream_api_error(error, "polly").status == status  # noqa: SLF001
 
     def test_an_already_translated_error_is_kept(self) -> None:
         """An error the gateway itself raised keeps its status and message.
@@ -805,7 +804,7 @@ class TestErrorTranslation:
         """
         error = ApiError("The requested voice is unknown.", status=404)
 
-        assert stdapi.aws_bidi._stream_api_error(error) is error  # noqa: SLF001
+        assert stdapi.aws_bidi._stream_api_error(error, "polly") is error  # noqa: SLF001
 
     def test_the_backend_message_is_kept_in_the_request_log(
         self, request_log: dict[str, Any]
@@ -816,13 +815,44 @@ class TestErrorTranslation:
         """
         error = ValidationException(message="RequestId=fa0d12c4 : Invalid Engine")
 
-        api_error = stdapi.aws_bidi._stream_api_error(error)  # noqa: SLF001
+        api_error = stdapi.aws_bidi._stream_api_error(error, "polly")  # noqa: SLF001
 
         assert "RequestId=fa0d12c4" not in str(api_error)
         assert any(
             "RequestId=fa0d12c4" in str(detail)
             for detail in request_log["error_detail"]
         )
+
+    @pytest.mark.parametrize(
+        ("service", "permission"),
+        [
+            ("bedrock-runtime", "bedrock:InvokeModelWithBidirectionalStream"),
+            ("polly", "polly:StartSpeechSynthesisStream"),
+        ],
+    )
+    def test_a_denied_stream_is_the_deployment_not_the_caller(
+        self, request_log: dict[str, Any], service: str, permission: str
+    ) -> None:
+        """A refused credential answers 503, and names the permission in the log.
+
+        The caller's own credential was verified before the stream was opened,
+        so blaming them for a missing IAM permission sends them to fix something
+        they do not own -- and tells them which backend is behind the route.
+
+        Ref: stdapi/aws_bidi.py:_stream_api_error
+             stdapi/api_errors.py:FeatureUnavailableError
+        """
+        error = AccessDeniedException(message="User is not authorized to perform")
+
+        api_error = stdapi.aws_bidi._stream_api_error(error, service)  # noqa: SLF001
+
+        assert api_error.status == 503
+        assert api_error.code == "feature_unavailable"
+        assert "not available on the current server" in str(api_error)
+        assert "contact the administrator" in str(api_error)
+        assert permission not in str(api_error)
+        assert any(permission in str(detail) for detail in request_log["error_detail"])
+        assert request_log["level"] == "warning"
 
     @pytest.mark.parametrize(
         "error",
@@ -838,7 +868,7 @@ class TestErrorTranslation:
     )
     def test_no_backend_text_reaches_the_client(self, error: Exception) -> None:
         """No request ID, transport error name, or exception class name is forwarded."""
-        message = str(stdapi.aws_bidi._stream_api_error(error))  # noqa: SLF001
+        message = str(stdapi.aws_bidi._stream_api_error(error, "polly"))  # noqa: SLF001
 
         for leaked in (
             "RequestId",
@@ -1316,6 +1346,7 @@ class TestSessionLifecycle:
         session: BidiSession[Any, Any] = BidiSession(
             FakeDuplexStream(never_answers=True),  # type: ignore[arg-type]
             "us-east-1",
+            "polly",
         )
 
         with pytest.raises(ServerError):
@@ -1482,7 +1513,7 @@ class TestBoundedClose:
         connection it was closing.
         """
         stream = FakeDuplexStream(close_hangs=True)
-        session: BidiSession[Any, Any] = BidiSession(stream, "us-east-1")  # type: ignore[arg-type]
+        session: BidiSession[Any, Any] = BidiSession(stream, "us-east-1", "polly")  # type: ignore[arg-type]
 
         closing = create_task(stdapi.aws_bidi._close_session(session))  # noqa: SLF001
         await sleep(0)

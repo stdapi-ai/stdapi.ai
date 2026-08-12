@@ -33,6 +33,7 @@ from stdapi.models import (
     MODEL_ALIASES,
     ModelDetails,
 )
+from stdapi.models.capabilities import ROUTE_CAPABILITIES
 from stdapi.pricing import Dimension, Price, PriceKey, Service
 from stdapi.routes import core_models
 from tests._helpers import make_model_details
@@ -1649,16 +1650,19 @@ class TestModelDiscoveryHints:
         """Each hinted value is an operation ID the catalogue can filter on.
 
         ``route`` accepts a path or the MCP tool name, which is the operation
-        ID; a renamed route would leave the hint pointing at nothing.
+        ID; a renamed route would leave the hint pointing at nothing. The
+        capability registry is checked alongside the OpenAPI operations because
+        a WebSocket route has no OpenAPI operation at all, yet is exactly what
+        ``search_models`` filters on for it.
         """
         spec = app.openapi()
-        exposed = {
+        filterable = {
             operation["operationId"]
             for operation in self._operations(spec)
             if "operationId" in operation
-        }
+        } | set(ROUTE_CAPABILITIES)
 
         unknown = sorted(
-            value for _name, value in self._hints(spec) if value not in exposed
+            value for _name, value in self._hints(spec) if value not in filterable
         )
         assert not unknown, f"hints name routes the server does not expose: {unknown}"

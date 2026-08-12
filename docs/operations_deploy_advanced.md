@@ -479,6 +479,50 @@ For development, side projects, and non-critical workloads.
 
 ---
 
+## :material-web-sync: WebSocket-Capable Deployment (Realtime API)
+
+The [Realtime API](api_openai_realtime.md) holds a session open on a single WebSocket for up to 8 minutes. That changes what a normal HTTP-shaped deployment needs to get right — the points below are what the standard setup above does not already cover.
+
+### The load balancer must allow the upgrade end to end
+
+An Application Load Balancer forwards a WebSocket upgrade (`Connection: Upgrade`, `Upgrade: websocket`) to its target by default — nothing extra to enable there. Anything placed **in front of** the ALB (a CDN, a reverse proxy, an API Gateway) must pass those headers through unmodified, or the upgrade never reaches the gateway and every connection attempt fails before a single event is exchanged.
+
+### The idle timeout bounds a session
+
+The ALB's idle timeout closes a connection with no traffic for that long — and a Realtime session, once opened, can sit with no traffic between spoken turns. Keep `alb_idle_timeout` **at or above** the Realtime session limit (8 minutes / 480 seconds); the Terraform module's default of 3600 seconds already clears it. Lowering it below the session limit — or fronting the deployment with your own load balancer or reverse proxy at a shorter idle timeout — cuts sessions off mid-conversation with no `error` event, indistinguishable from a network failure. See [ALB Resilience](operations_resilience.md#alb-resilience) for the same setting's effect on ordinary streaming responses.
+
+### Autoscale on CPU or memory, not request count
+
+`ALBRequestCountPerTarget` counts a WebSocket connection as **one request for its entire duration** — an hour of active voice traffic on a handful of long-lived connections looks identical, to that metric, to an idle target. A fleet serving real Realtime traffic can read as underloaded and scale in while it is actually busy. Scale ECS on CPU or memory utilization instead wherever the service handles Realtime sessions; those track the work a session actually does.
+
+### A deploy truncates open sessions
+
+Replacing a task — a new deployment, a scale-in, a Spot interruption — ends whatever Realtime sessions that task is holding: there is no live handoff to another task. Two settings decide how abrupt that is:
+
+- **Deregistration delay** on the target group gives a task being drained time to finish in-flight work before it is sent a `SIGTERM`; a value shorter than a typical session length simply means sessions running past it are cut regardless.
+- **Stop timeout** on the ECS task caps how long the container gets to exit gracefully after `SIGTERM` before ECS sends `SIGKILL`.
+
+Neither setting makes a session survive its task's replacement — the gateway holds session state in the process, not externally — so a deploy during active Realtime traffic will end some conversations. Schedule deploys for low-usage windows where that matters, and have clients reconnect on an unexpected close the same way they already do for the [8-minute session limit](api_openai_realtime.md#session-lifecycle-and-limits).
+
+### AWS WAF's `NoUserAgent_HEADER` rule reads like an auth failure
+
+The AWS-managed Common Rule Set (bundled by `alb_waf_enabled = true`) includes `NoUserAgent_HEADER`, which blocks any request with no `User-Agent` header. A raw WebSocket client — a bespoke SIP/telephony bridge, a minimal test script — that sends no `User-Agent` is blocked by the WAF with a `403` **before the request reaches the gateway at all**. Because the gateway itself also answers a rejected credential with `403`, the two are easy to conflate; check the WAF sampled requests (or disable `NoUserAgent_HEADER` for the Realtime path) before assuming the credential is wrong. Every mainstream WebSocket client library sets a `User-Agent` by default, so this only surfaces with a hand-rolled one.
+
+### WebRTC and SIP need their own ingress
+
+The Realtime API serves [one transport, the WebSocket](api_openai_realtime.md#transports) — an ordinary HTTPS connection, carried by the same listener as every other route. WebRTC and SIP are not: each negotiates a separate UDP media path, and an Application Load Balancer's listeners accept [only HTTP and HTTPS](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-listeners.html). No amount of configuration makes the module's ALB carry RTP or SIP, and that costs this deployment nothing, because nothing it serves needs UDP.
+
+**Put the media terminator beside the gateway, not behind its load balancer.** A voice-agent framework such as LiveKit Agents or Pipecat, or a telephony bridge, faces the caller on its own address and reaches the gateway over the ordinary HTTPS ingress — so the gateway's networking, WAF and autoscaling stay exactly as documented above. Run the terminator in the same VPC, behind an internal load balancer, and that leg stays on the private path; the [WebSocket points above](#the-idle-timeout-bounds-a-session) then apply to the terminator as a client, not to the caller.
+
+**If you publish a media terminator of your own**, it needs an ingress the module does not build, and two AWS services are the usual answers:
+
+- A [Network Load Balancer with a `UDP` or `TCP_UDP` listener](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/load-balancer-listeners.html), or a task or instance with a public address and the media port range opened in its security group. Both **carry packets only** — neither decrypts DTLS, decodes RTP or performs ICE, so the media stack remains the terminator's own work. Note that a UDP target group is health-checked over [TCP or HTTP](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html), so a broken media path can pass its probe.
+- [Amazon Chime SDK Voice Connector](https://docs.aws.amazon.com/chime-sdk/latest/ag/voice-connectors.html) for a phone leg. It terminates SIP trunking as a managed service, which is worth more here than on the WebRTC leg: the caller is a telephone, so there is no client-side API compatibility to preserve.
+
+The detail that catches deployments out is **ICE addressing**: behind a load balancer the terminator's task sees only its private VPC address, and nothing tells it the address:port a client actually reached it on, so the candidate it advertises must be configured out of band. A public-addressed task is the cleanest shape for that and the least stable, since the address is reassigned every time the task is replaced.
+
+---
+
 ## :material-hand-pointing-right: Manual ECS Deployment
 
 Deploy the stdapi.ai container image directly to AWS ECS without Terraform.

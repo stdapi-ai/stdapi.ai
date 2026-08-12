@@ -21,6 +21,7 @@ class Capability(IntFlag):
     RERANK = auto()
     VIDEO_GENERATION = auto()
     COUNT_TOKENS = auto()
+    REALTIME = auto()
 
 
 @dataclass(frozen=True, slots=True)

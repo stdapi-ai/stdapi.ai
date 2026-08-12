@@ -37,7 +37,7 @@ from aiobotocore.session import get_session
 from anthropic import Anthropic, AnthropicBedrock
 from anthropic import APIStatusError as AnthropicAPIStatusError
 from dotenv import load_dotenv
-from openai import APIStatusError, OpenAI
+from openai import APIStatusError, AsyncOpenAI, OpenAI
 from PIL import Image as PILImage
 from pybase64 import b64encode
 
@@ -352,6 +352,7 @@ MODEL_MAPPINGS = {
         "image_generation_stream": "stability.stable-image-core-v1:1",
         # Luma is the only non-legacy video model (Nova Reel is LEGACY on AWS).
         "video_generation": "luma.ray-v2:0",
+        "realtime": "amazon.nova-2-sonic-v1:0",
     },
     "openai": {
         "transcription": "whisper-1",
@@ -378,6 +379,7 @@ MODEL_MAPPINGS = {
         "image_generation_hd": "gpt-image-1",
         "image_generation_stream": "gpt-image-1",
         "video_generation": "sora-2",  # Cheapest video model
+        "realtime": "gpt-realtime-mini",  # Cheapest realtime model
     },
 }
 
@@ -496,6 +498,10 @@ _OPT_IN_MARKERS = ("expensive", "agentic", "slow", "video", "container")
 _GATEWAY_SKIP_REASON = "Exercises a gateway-only capability (official API selected)"
 #: Message every route of an optional API answers when the operator left it unconfigured.
 _FEATURE_DISABLED = "not available on the current server"
+#: Seconds the loopback server backing the WebSocket lane gets to bind and boot.
+_LIVE_SERVER_BOOT_TIMEOUT = 120.0
+#: Seconds that server gets to stop before the session moves on without it.
+_LIVE_SERVER_STOP_TIMEOUT = 30.0
 #: Extra attempts a ``retry`` test gets when it names no count of its own.
 _DEFAULT_RERUNS = 2
 #: Seconds between two attempts, long enough for a written cache entry to be visible.
@@ -504,10 +510,12 @@ _DEFAULT_RERUN_DELAY = 3.0
 _LIVE_FIXTURES = frozenset(
     {
         "anthropic_client",
+        "async_openai_client",
         "aws_session_info",
         "bedrock_user_role_arn",
         "cohere_client",
         "live_guardrail",
+        "live_server",
         "openai_client",
         "test_client",
     }
@@ -841,6 +849,12 @@ def video_generation_model(models: dict[str, str]) -> str:
 
 
 @pytest.fixture(scope="session")
+def realtime_model(models: dict[str, str]) -> str:
+    """Cheapest speech-to-speech model served over the Realtime WebSocket."""
+    return models["realtime"]
+
+
+@pytest.fixture(scope="session")
 def api_key() -> str:
     """API key shared by the test server and every local client."""
     return _TEST_API_KEY
@@ -1044,6 +1058,103 @@ def openai_client(
     return OpenAI(
         base_url=f"{server_url}/v1", max_retries=0, organization=_OPENAI_ORGANIZATION
     )
+
+
+@pytest.fixture(scope="session")
+def live_server(use_official_api: bool, server_url: str | None) -> Iterator[str | None]:
+    """Base URL of a target reachable over a real socket, or None for the vendor.
+
+    A WebSocket route cannot be exercised through ``TestClient`` as an SDK
+    transport: the official client dials the URL itself, with its own WebSocket
+    stack. The in-process lane therefore serves the same ASGI app from a real
+    uvicorn on a loopback port, which also runs the app lifespan exactly once.
+
+    Yields:
+        The HTTP base URL to dial, or None when the vendor's own endpoint is the
+        target.
+    """
+    if use_official_api:
+        yield None
+        return
+    if server_url:
+        yield server_url
+        return
+
+    import socket  # noqa: PLC0415
+    import threading  # noqa: PLC0415
+    import time  # noqa: PLC0415
+
+    import uvicorn  # noqa: PLC0415
+
+    from stdapi.main import app  # noqa: PLC0415
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    port = int(listener.getsockname()[1])
+    server = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
+    thread = threading.Thread(
+        target=server.run, kwargs={"sockets": [listener]}, daemon=True
+    )
+    thread.start()
+    try:
+        deadline = time.monotonic() + _LIVE_SERVER_BOOT_TIMEOUT
+        while not server.started:
+            if time.monotonic() > deadline or not thread.is_alive():
+                pytest.fail("the in-process WebSocket server did not start")
+            time.sleep(0.05)
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        server.should_exit = True
+        thread.join(timeout=_LIVE_SERVER_STOP_TIMEOUT)
+
+
+@pytest.fixture(scope="session")
+def async_openai_client(live_server: str | None, api_key: str) -> AsyncOpenAI:
+    """Async OpenAI SDK client bound to a socket-reachable target.
+
+    The WebSocket routes need this rather than ``openai_client``, whose in-process
+    transport cannot upgrade a connection.
+    """
+    if live_server is None:
+        return AsyncOpenAI(max_retries=5)
+    return AsyncOpenAI(
+        base_url=f"{live_server}/v1",
+        api_key=api_key,
+        max_retries=0,
+        organization=_OPENAI_ORGANIZATION,
+    )
+
+
+@pytest.fixture(scope="session")
+def sample_audio_pcm24(sample_audio_file: bytes) -> bytes:
+    """The spoken WAV sample as 24 kHz mono 16-bit PCM, the Realtime input format."""
+    import shutil  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+
+    ffmpeg = shutil.which("ffmpeg")
+    assert ffmpeg, "ffmpeg is required to condition the Realtime audio sample"
+    converted = subprocess.run(  # noqa: S603
+        [
+            ffmpeg,
+            "-v",
+            "quiet",
+            "-i",
+            "pipe:0",
+            "-f",
+            "s16le",
+            "-ac",
+            "1",
+            "-ar",
+            "24000",
+            "pipe:1",
+        ],
+        input=sample_audio_file,
+        capture_output=True,
+        check=False,
+    )
+    assert converted.returncode == 0, converted.stderr.decode(errors="replace")
+    assert converted.stdout, "ffmpeg produced no PCM for the speech sample"
+    return converted.stdout
 
 
 def _skip_when_feature_disabled(

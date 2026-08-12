@@ -363,6 +363,9 @@ MODEL_ALIAS_OVERLAYS: dict[str, AliasOverlay] = {}
 #: Registered model classes for all model families
 _GLOBAL_MODEL_REGISTRY: set[type[ModelBase[Any, Any]]] = set()
 
+#: Modality base class each registered model class was loaded for
+_MODEL_CLASS_FAMILY: dict[type[ModelBase[Any, Any]], type[ModelBase[Any, Any]]] = {}
+
 #: Fallback model class per package (populated by load_model_plugins)
 _DEFAULT: dict[str, type[ModelBase[Any, Any]]] = {}
 
@@ -1349,6 +1352,47 @@ def _find_model_class(
     return best
 
 
+def _model_capability_flags(model_id: str, *, mantle: bool) -> Capability:
+    """Union the capabilities of every family serving *model_id*.
+
+    One model can be registered in more than one modality package -- a live
+    speech model is also an audio one -- and each package answers for its own
+    routes, so the most specific class of each family is what decides. Taking
+    only the single most specific class overall would hide every route the
+    other families serve.
+
+    Args:
+        model_id: Bedrock model identifier to look up.
+        mantle: When True, only consider Mantle model classes; when False,
+            only classic Converse model classes.
+
+    Returns:
+        The capability flags of the model, across every family.
+    """
+    best: dict[type[ModelBase[Any, Any]], tuple[int, Capability]] = {}
+    for cls in _GLOBAL_MODEL_REGISTRY:
+        if cls.IS_MANTLE is not mantle:
+            continue
+        matcher = getattr(cls, "MATCHER", "")
+        if isinstance(matcher, Pattern):
+            # A pattern ranks below every string prefix, as it does everywhere
+            # else a model class is resolved.
+            score = 0 if matcher.match(model_id) else -1
+        elif matcher and model_id.startswith(matcher):
+            score = len(matcher)
+        else:
+            score = -1
+        if score < 0:
+            continue
+        family = _MODEL_CLASS_FAMILY.get(cls, cls)
+        if score > best.get(family, (-1, Capability(0)))[0]:
+            best[family] = (score, cls.get_supported_operations())
+    flags = Capability(0)
+    for _score, capabilities in best.values():
+        flags |= capabilities
+    return flags
+
+
 def _advertised_output_modalities(
     model_id: str, output_modalities: list[str]
 ) -> list[str]:
@@ -1385,11 +1429,8 @@ def _compute_model_capabilities(
     Returns:
         Tuple of (sorted list of route paths, sorted list of operation_ids / MCP tool names).
     """
-    model_class = _find_model_class(model_id, mantle=model.service == MANTLE_SERVICE)
-    capability_flags = (
-        model_class.get_supported_operations()
-        if model_class is not None
-        else Capability(0)
+    capability_flags = _model_capability_flags(
+        model_id, mantle=model.service == MANTLE_SERVICE
     )
     # SPEECH-input Converse models transcribe through the generic Converse STT
     # default even without a dedicated audio model class.
@@ -2423,6 +2464,7 @@ def load_model_plugins[ModelT: ModelBase[Any, Any]](
 
         registry.append((matcher, cls))
         _GLOBAL_MODEL_REGISTRY.add(cls)
+        _MODEL_CLASS_FAMILY[cls] = class_type
 
     registry.sort(
         key=lambda item: (

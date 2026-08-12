@@ -24,15 +24,20 @@ _authorization_bearer = HTTPBearer(auto_error=False)
 _x_api_key = APIKeyHeader(name="x-api-key", auto_error=False)
 
 
+#: Personalisation separating the key-derivation seed from the stored hash.
+_DERIVATION_PERSON = b"stdapi-drv"
+
+
 class AuthenticationHandler:
     """Handles API key authentication with secure hashing for API endpoints."""
 
-    __slots__ = ("_api_key_hash", "_api_key_salt")
+    __slots__ = ("_api_key_hash", "_api_key_salt", "_derivation_seed")
 
     def __init__(self) -> None:
         """Initialize authentication handler with no cached API key hash."""
         self._api_key_hash: SecretBytes | None = None
         self._api_key_salt: SecretBytes | None = None
+        self._derivation_seed: SecretBytes | None = None
 
     def _hash_api_key(self, api_key: SecretStr) -> None:
         """Hash the API key with a random salt using BLAKE2.
@@ -47,6 +52,30 @@ class AuthenticationHandler:
                 salt=self._api_key_salt.get_secret_value(),
             ).digest()
         )
+        # Unsalted on purpose: a key derived from the salted hash would differ
+        # on every instance, and a token one instance signs has to verify on
+        # every other one behind the same load balancer.
+        self._derivation_seed = SecretBytes(
+            blake2b(
+                api_key.get_secret_value().encode("utf-8"), person=_DERIVATION_PERSON
+            ).digest()
+        )
+
+    def derived_key(self, person: bytes, size: int) -> bytes | None:
+        """Derive a key of this deployment's own from the configured API key.
+
+        Args:
+            person: Personalisation separating this key from any other derived one.
+            size: Length of the derived key, in bytes.
+
+        Returns:
+            The derived key, or None when no API key is configured.
+        """
+        if (seed := self._derivation_seed) is None:
+            return None
+        return blake2b(
+            seed.get_secret_value(), digest_size=size, person=person
+        ).digest()
 
     async def initialize(self) -> bool:
         """Initialize authentication by retrieving and securely hashing the API key.
@@ -267,6 +296,18 @@ async def authenticate(
     if credentials is not None:
         credential = credential or credentials.credentials
         credentials.credentials = ""
+    await verify_credential(credential)
+
+
+async def verify_credential(credential: str | None) -> None:
+    """Verify one already-extracted credential, whatever carried it.
+
+    Args:
+        credential: The credential the caller presented, if any.
+
+    Raises:
+        ApiError: 401 if authentication is required but missing/invalid.
+    """
     if _cognito_authenticator.enabled:
         # A signed token carries three segments; an API key shaped like one
         # merely fails verification and falls back to the comparison below.
@@ -285,3 +326,36 @@ async def authenticate(
             msg = "Unauthorized"
             raise ApiError(msg, status=401)
     _auth_handler.verify_credentials(SecretStr(credential) if credential else None)
+
+
+async def verify_websocket_credentials(credential: str | None) -> None:
+    """Verify the credential a WebSocket client presented.
+
+    The HTTP dependency cannot serve this: FastAPI's security schemes are
+    annotated ``request: Request`` and the solver fills the *websocket*
+    parameter on a WebSocket scope instead, so the scheme is called with no
+    argument at all and the handshake fails as a ``TypeError``.
+
+    Args:
+        credential: The credential read off the connection, if any.
+
+    Raises:
+        ApiError: 401 if authentication is required but missing/invalid.
+    """
+    # Set on every connection, for the same reason the HTTP path sets it: a
+    # session must never inherit a principal it did not itself authenticate.
+    PRINCIPAL.set(None)
+    await verify_credential(credential)
+
+
+def realtime_signing_key(person: bytes, size: int) -> bytes | None:
+    """Return a key derived from this deployment's own API key.
+
+    Args:
+        person: Personalisation separating this key from any other derived one.
+        size: Length of the derived key, in bytes.
+
+    Returns:
+        The derived key, or None when no API key is configured.
+    """
+    return _auth_handler.derived_key(person, size)

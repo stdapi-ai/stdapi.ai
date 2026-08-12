@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from fastapi import Request
     from fastapi.responses import Response
     from pydantic import JsonValue
+    from starlette.requests import HTTPConnection
 
     from stdapi.monitoring import EventLog
     from stdapi.types import JsonMapping
@@ -32,7 +33,7 @@ SET_LOG_FIELDS_BY_TAG: dict[str, Callable[[Request, EventLog], None]] = {}
 
 @overload
 def _lookup_by_route_tag(
-    request: Request,
+    request: HTTPConnection,
     mapping: dict[
         str, Callable[[int, str, str | None, str | None], tuple[JsonMapping, int]]
     ],
@@ -42,11 +43,13 @@ def _lookup_by_route_tag(
 
 @overload
 def _lookup_by_route_tag(
-    request: Request, mapping: dict[str, str], default: str
+    request: HTTPConnection, mapping: dict[str, str], default: str
 ) -> str: ...
 
 
-def _lookup_by_route_tag[T](request: Request, mapping: dict[str, T], default: T) -> T:
+def _lookup_by_route_tag[T](
+    request: HTTPConnection, mapping: dict[str, T], default: T
+) -> T:
     """Generic lookup function for route tag-based dispatch.
 
     Args:
@@ -85,7 +88,7 @@ def _default_formatter(
 
 
 def format_http_error(
-    request: Request,
+    request: HTTPConnection,
     status: int,
     message: str,
     param: str | None = None,

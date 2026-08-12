@@ -70,6 +70,7 @@ nav:
             - Audio Speech: api_openai_audio_speech.md
             - Audio Transcriptions: api_openai_audio_transcriptions.md
             - Audio Translations: api_openai_audio_translations.md
+            - Realtime: api_openai_realtime.md
             - Embeddings: api_openai_embeddings.md
             - Moderations: api_openai_moderations.md
             - Models: api_openai_models.md

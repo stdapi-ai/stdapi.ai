@@ -131,4 +131,4 @@ ENV GRANIAN_HOST="0.0.0.0" \
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=30s \
     CMD ["python3", "-S", "-m", "stdapi.healthcheck"]
 
-CMD ["python3", "-m", "granian", "stdapi.main:app", "--interface", "asgi", "--no-ws", "--loop", "uvloop"]
+CMD ["python3", "-m", "granian", "stdapi.main:app", "--interface", "asgi", "--loop", "uvloop"]

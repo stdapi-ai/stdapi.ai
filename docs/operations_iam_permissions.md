@@ -68,6 +68,9 @@ These permissions are mandatory for stdapi.ai to discover and invoke Amazon Bedr
 !!! note "Asynchronous Invocations"
     `bedrock:GetAsyncInvoke` and `bedrock:TagResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) serve Bedrock asynchronous invocations, used by video generation models and asynchronous embedding models such as TwelveLabs Marengo (`twelvelabs.marengo-embed-*`). They can be dropped if your deployment uses none of these models. `bedrock:ListAsyncInvokes` and `bedrock:ListTagsForResource` are **not** part of this core set — they are only needed for video job listing (see [Video Generation](#video-generation-optional)).
 
+!!! note "Bidirectional Streaming"
+    `bedrock:InvokeModelWithBidirectionalStream` serves any model invoked over a persistent, two-way connection: live audio transcription with Amazon Nova Sonic (see [Speech-to-Text](#speech-to-text-optional)) and the [Realtime API](api_openai_realtime.md) (`POST /v1/realtime/client_secrets`, `WS /v1/realtime`) alike. No route-specific action exists for either — it is already part of the core Bedrock policy above.
+
 ---
 
 ## :material-storefront: Bedrock Marketplace Auto-Subscribe (Optional) { #bedrock-marketplace-auto-subscribe-iam }
@@ -1024,6 +1027,7 @@ Required if you configure API authentication. See the [Authentication](operation
 | Feature                                         | Required Permissions                                                                                                                                       | Configuration                                                                |
 |-------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
 | **Bedrock Models (Invoke)**                     | `bedrock:CountTokens`<br>`bedrock:InvokeGuardrailChecks`<br>`bedrock:InvokeModel`<br>`bedrock:InvokeModelWithBidirectionalStream`<br>`bedrock:InvokeModelWithResponseStream`<br>`bedrock:InvokeTool`<br>`bedrock:Rerank`<br>`bedrock:GetAsyncInvoke` and `bedrock:TagResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) for async-invoke models (video, TwelveLabs Marengo embeddings) | Always required                                                              |
+| **Realtime API**                                | `bedrock:InvokeModelWithBidirectionalStream` (already part of the core Bedrock policy above); no additional action | `POST /v1/realtime/client_secrets`, `WS /v1/realtime`                        |
 | **Bedrock Models (Discovery)**                  | `bedrock:ListFoundationModels`<br>`bedrock:GetFoundationModelAvailability`<br>`bedrock:ListProvisionedModelThroughputs`<br>`bedrock:ListInferenceProfiles` | Always required                                                              |
 | **Bedrock Marketplace Auto-Subscribe**          | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions`                                                                                         | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default)                      |
 | **AWS Marketplace Metering**                    | `aws-marketplace:RegisterUsage`                                                                                                                             | AWS Marketplace image only (always active); not required for the community image |

@@ -95,6 +95,8 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 | `/v1/audio/speech`                             | Text-to-speech with SSML support                                        | Amazon Polly                              |
 | `/v1/audio/transcriptions`                     | Speech-to-text with speaker diarization                                 | Amazon Transcribe, Amazon Nova Sonic      |
 | `/v1/audio/translations`                       | Speech-to-English translation                                           | Amazon Transcribe + Amazon Translate, Amazon Nova Sonic |
+| [`/v1/realtime`](api_openai_realtime.md)       | Live, bidirectional speech-to-speech over WebSocket                     | Amazon Bedrock                               |
+| `/v1/realtime/client_secrets`                  | Mint a short-lived, browser-safe client secret for a realtime session   | Amazon Bedrock                               |
 | `/v1/models`                                   | Model discovery & listing                                               | Amazon Bedrock                               |
 | `/v1/files`                                    | File upload, listing, metadata, download, deletion                      | Amazon S3                                 |
 | `/v1/uploads`                                  | Multipart upload sessions for large files                               | Amazon S3                                 |
@@ -266,6 +268,14 @@ Access every model available on Amazon Bedrock through a single, consistent API 
 - Punctuated transcripts in the language that was spoken, with automatic language detection
 - Translation to English produced by the model itself, in one request
 - `json` and `text` output only, up to 10 minutes of audio per request — no timestamps, subtitles or diarization, and no detected-language reporting
+
+**Live Speech-to-Speech ([Realtime API](api_openai_realtime.md)):**
+
+- Bidirectional audio over a single WebSocket, OpenAI Realtime API compatible — `session.update`, `input_audio_buffer.append`/`commit`, `response.create` and their server-side events
+- Ephemeral, browser-safe client secrets — signed and stateless, so any instance behind a load balancer verifies one minted by any other
+- 24 kHz PCM by default, or G.711 (`audio/pcmu`, `audio/pcma`) at 8 kHz for telephony interoperability
+- Server-side voice activity detection by default, or manual turn control
+- WebSocket is the only transport served — upstream's `POST /v1/realtime/calls` (WebRTC, SIP) is not available. Browsers connect to the same WebSocket with an ephemeral secret; for WebRTC or telephony, LiveKit Agents and Pipecat terminate the media themselves and reach this API on a base-URL change — see [Transports](api_openai_realtime.md#transports)
 
 ### :material-file-document: Documents & Files
 
@@ -717,7 +727,7 @@ Competitor capabilities were verified against official sources on 5 August 2026.
 | **OpenAI STT (transcription)**              | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **OpenAI Files & Uploads API**              | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **Server-side stored conversations**        | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^17] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> |
-| **OpenAI Realtime API**                     | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
+| **OpenAI Realtime API**                     | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **Cohere Rerank API**                       | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **Cohere Embed API**                        | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **Own AI &amp; media APIs as MCP tools**    | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^20] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |

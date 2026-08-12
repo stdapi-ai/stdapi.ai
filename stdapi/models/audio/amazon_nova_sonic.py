@@ -145,8 +145,7 @@ class AudioModel(AudioModelBase[Any, Any]):
 
     __slots__ = ()
 
-    # A string, not a pattern: the catalog ranks every pattern below every string
-    # prefix, so a pattern here would lose this model's routes to the chat family.
+    # A string, not a pattern: a pattern would lose these routes to the chat family.
     MATCHER = "amazon.nova-2-sonic"
 
     SUPPORTED_RESPONSES_FORMATS = frozenset({"json", "text"})
@@ -202,12 +201,7 @@ class AudioModel(AudioModelBase[Any, Any]):
         text = await apply_guardrail_to_text(" ".join(transcript.user), source="OUTPUT")
         if response_format == "text":
             return Response(content=text, media_type="text/plain; charset=utf-8")
-        return Transcription(
-            text=text,
-            # This model reports no log probabilities.
-            logprobs=None,
-            usage=transcript.usage_tokens(),
-        )
+        return Transcription(text=text, logprobs=None, usage=transcript.usage_tokens())
 
     async def stt_stream(
         self,
@@ -255,8 +249,7 @@ class AudioModel(AudioModelBase[Any, Any]):
             )
         ) as utterances:
             async for utterance in utterances:
-                # The separator travels with the delta, so concatenating the
-                # deltas rebuilds exactly the non-streamed transcript.
+                # The separator travels with the delta, so deltas concatenate exactly.
                 delta = utterance if not parts else f" {utterance}"
                 parts.append(delta)
                 yield TranscriptionTextDeltaEvent(
@@ -476,8 +469,7 @@ class AudioModel(AudioModelBase[Any, Any]):
         try:
             deadline = get_running_loop().time() + _SESSION_TIMEOUT
             async with async_timeout_at(deadline) as limit:
-                # Bounds the first event too: a session given audio it cannot
-                # read never answers at all.
+                # Bounds the first event too: a session may never answer at all.
                 _extend(limit, deadline)
                 async for event in session:
                     _extend(limit, deadline)
@@ -528,8 +520,7 @@ class AudioModel(AudioModelBase[Any, Any]):
                 async for chunk in encoded:
                     buffer.extend(chunk)
                     if len(buffer) > _MAX_AUDIO_BYTES:
-                        # Closing the stream kills ffmpeg: a long recording
-                        # would otherwise be decoded in full before being refused.
+                        # Closing kills ffmpeg before it decodes the whole recording.
                         break
         except ApiError as exception:
             if exception.status != _ENCODE_FAILURE_STATUS:
@@ -609,8 +600,7 @@ def _priming(
                 "promptStart": {
                     "promptName": names.prompt,
                     "textOutputConfiguration": {"mediaType": "text/plain"},
-                    # Not optional in practice: without it the session stays
-                    # silent, even though nothing here reads the audio back.
+                    # Not optional: without it the session stays silent.
                     "audioOutputConfiguration": {
                         "mediaType": "audio/lpcm",
                         "sampleRateHertz": 24000,
@@ -811,8 +801,7 @@ class _EventReader:
         match name:
             case "contentStart":
                 self._note_block(body)
-                # The model's own turn starts only once it has heard everything,
-                # and stopping here is what keeps it from generating speech.
+                # Stopping at the model's own turn is what keeps it from speaking.
                 return None, not self._translate and body.get("role") == "ASSISTANT"
             case "textOutput":
                 return self._read_text(body), False
@@ -860,8 +849,7 @@ class _EventReader:
         if (
             self._translate
             and role == "ASSISTANT"
-            # A FINAL block restates speech the preview already carried; keeping
-            # both duplicates the whole reply.
+            # A FINAL block restates the preview; keeping both duplicates the reply.
             and self._stages.get(content_id) != _FINAL_STAGE
         ):
             self._transcript.assistant.append(text)
