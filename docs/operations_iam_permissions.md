@@ -342,27 +342,51 @@ Video generation itself runs on the core Bedrock asynchronous invocation permiss
 
 ---
 
-## :material-account-voice: Text-to-Speech (Optional)
+## :material-account-voice: Text-to-Speech (Optional) { #text-to-speech-optional }
 
-**Environment Variables**: [`AWS_POLLY_REGION`](operations_configuration.md#aws-polly-region), [`DEFAULT_TTS_MODEL`](operations_configuration.md#default-tts-model), [`DEFAULT_TTS_LANGUAGE`](operations_configuration.md#default-tts-language)
+**Environment Variables**: [`AWS_POLLY_REGION`](operations_configuration.md#aws-polly-region), [`DEFAULT_TTS_MODEL`](operations_configuration.md#default-tts-model), [`DEFAULT_TTS_LANGUAGE`](operations_configuration.md#default-tts-language), [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket), [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets)
 
 Required for generating speech from text using Amazon Polly. See the [Audio and Text-to-Speech](operations_configuration.md#audio-and-text-to-speech) configuration section.
 
 !!! tip "Optimize Performance"
     Set [`DEFAULT_TTS_LANGUAGE`](operations_configuration.md#default-tts-language) to skip language detection and avoid Amazon Comprehend API calls, improving response times and reducing costs.
 
-??? example "Polly Text-to-Speech IAM Policy Statement"
+??? example "Polly Text-to-Speech IAM Policy Statements"
     ```json
     {
       "Sid": "PollyTextToSpeech",
       "Effect": "Allow",
       "Action": [
         "polly:SynthesizeSpeech",
-        "polly:DescribeVoices"
+        "polly:DescribeVoices",
+        "polly:StartSpeechSynthesisTask",
+        "polly:GetSpeechSynthesisTask"
       ],
       "Resource": "*"
+    },
+    {
+      "Sid": "PollyS3Storage",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::AWS_S3_BUCKET_VALUE/*"
     }
     ```
+
+    !!! info "Only for Long Input"
+        The two task actions and the S3 statement serve [input above 3,000 characters](api_openai_audio_speech.md#long-input), which Amazon Polly synthesizes into a bucket co-located with the serving region.
+
+        Replace `AWS_S3_BUCKET_VALUE` with the value of your [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) environment variable, and repeat the statement for each [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets) bucket serving a Polly region. Amazon Polly writes the audio object with the identity that started the synthesis, which is why `s3:PutObject` belongs to this policy; the audio is then read back and deleted once the response has been sent.
+
+    !!! warning "Granting the permissions is not what enables long input"
+        The 3,000-character limit is decided by the configuration, not by this policy: text-to-speech stays capped at 3,000 characters per request — and requests above it are rejected with that limit — as long as no bucket is configured for the Polly regions ([`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket), [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets)).
+
+        With a bucket configured but these actions missing, long requests are accepted and then fail on a permission error instead. Grant the whole set, or leave the bucket unconfigured.
+
+    **If your S3 buckets use KMS encryption**, also add the KMS permissions for each bucket's key, with that region's `kms:ViaService` value.
 
 ---
 
@@ -754,7 +778,7 @@ Required if you configure API authentication. See the [Authentication](operation
 | **File Storage**                                | `s3:PutObject`<br>`s3:PutObjectTagging`<br>`s3:GetObject`<br>`s3:DeleteObject`<br>`s3:AbortMultipartUpload`<br>`s3:ListMultipartUploadParts`<br>`s3:ListBucket`<br>`s3:ListBucketMultipartUploads`<br>on every bucket, including each `AWS_S3_REGIONAL_BUCKETS` entry | `AWS_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`                                 |
 | **Video Generation**                            | Core Bedrock invoke permissions (incl. `bedrock:GetAsyncInvoke`, `bedrock:TagResource`)<br>`bedrock:ListAsyncInvokes` and `bedrock:ListTagsForResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) for job listing<br>File Storage S3 permissions on each regional bucket | `AWS_S3_REGIONAL_BUCKETS`                                                    |
 | **KMS Encrypted S3 Buckets**                    | `kms:Decrypt`<br>`kms:GenerateDataKey`<br>with `kms:ViaService` condition                                                                                  | If S3 buckets use KMS encryption                                             |
-| **Text-to-Speech**                              | `polly:SynthesizeSpeech`<br>`polly:DescribeVoices`                                                                                                         | `AWS_POLLY_REGION`                                                           |
+| **Text-to-Speech**                              | `polly:SynthesizeSpeech`<br>`polly:DescribeVoices`<br>`polly:StartSpeechSynthesisTask`, `polly:GetSpeechSynthesisTask` and S3 `PutObject`/`GetObject`/`DeleteObject` on each bucket serving a Polly region, for input above 3,000 characters | `AWS_POLLY_REGION`<br>`AWS_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`           |
 | **Speech-to-Text**                              | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`transcribe:TagResource` (on `arn:aws:transcribe:*:*:transcription-job/*`)<br>File Storage S3 permissions on every bucket serving a candidate region | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS` |
 | **Language Detection**                          | `comprehend:DetectDominantLanguage`                                                                                                                        | `AWS_COMPREHEND_REGION`                                                      |
 | **Comprehend Moderations**                      | `comprehend:DetectToxicContent`                                                                                                                            | Moderations API without a configured guardrail                              |

@@ -116,6 +116,10 @@ async def _speech_audio_sse(
         "Amazon Polly `SpeechMarkTypes` returns timing marks as an "
         "`application/x-json-stream` JSON lines stream, which ignores "
         "`response_format` and does not support `stream_format=sse`.\n\n"
+        "Amazon Polly models accept up to 100,000 characters of `input` "
+        "(200,000 including SSML markup). Beyond 3,000 characters the audio "
+        "takes proportionally longer to return, and a server that is not "
+        "configured for it rejects the request with the length it accepts.\n\n"
         "**Find compatible models:** Call `search_models` with `route=openai_audio_speech` "
         "to discover model IDs that support text-to-speech."
     ),

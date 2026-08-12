@@ -1,13 +1,20 @@
 """Amazon Polly TTS model implementation."""
 
-from asyncio import gather
+from asyncio import gather, sleep
 from contextlib import contextmanager
+from re import compile as re_compile
+from time import monotonic
 from typing import TYPE_CHECKING
 
 from botocore.exceptions import BotoCoreError, ClientError, ParamValidationError
 
 from stdapi.api_errors import ApiError, UnsupportedModelError
 from stdapi.aws import call_with_region_failover, get_client, service_regions
+from stdapi.aws_s3 import (
+    get_s3_bucket_for_region,
+    s3_key_from_uri,
+    track_temporary_s3_objects,
+)
 from stdapi.config import SETTINGS
 from stdapi.media import encode_audio_stream, stream_body
 from stdapi.models import (
@@ -29,7 +36,7 @@ from stdapi.usage import record_comprehend_usage, record_polly_usage
 from stdapi.utils import format_language_code, validation_error_handler
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Generator
+    from collections.abc import AsyncGenerator, Awaitable, Generator
 
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_comprehend.client import ComprehendClient
@@ -47,10 +54,13 @@ if TYPE_CHECKING:
     )
     from types_aiobotocore_polly.type_defs import (
         DescribeVoicesInputTypeDef,
+        StartSpeechSynthesisTaskInputTypeDef,
+        SynthesisTaskTypeDef,
         SynthesizeSpeechInputTypeDef,
         SynthesizeSpeechOutputTypeDef,
         VoiceTypeDef,
     )
+    from types_aiobotocore_s3.client import S3Client
 
     from stdapi.types.openai_audio import AudioFileFormat
 
@@ -89,6 +99,40 @@ _CLIENT_VALIDATION_ERRORS = {
     "LanguageNotSupportedException",
     "EngineNotSupportedException",
 }
+
+#: Polly errors reporting that the audio cannot be stored where it was requested
+_STORAGE_ERRORS = frozenset({"InvalidS3BucketException", "InvalidS3KeyException"})
+
+#: Billed characters (SSML markup excluded) a single synthesis call accepts
+_MAX_BILLED_CHARACTERS = 3000
+
+#: Total characters (SSML markup included) a single synthesis call accepts
+_MAX_CHARACTERS = 6000
+
+#: Billed characters (SSML markup excluded) a synthesis job accepts
+_JOB_MAX_BILLED_CHARACTERS = 100_000
+
+#: Total characters (SSML markup included) a synthesis job accepts
+_JOB_MAX_CHARACTERS = 200_000
+
+#: SSML markup, which Polly excludes from its billed character count
+_SSML_TAG = re_compile(r"<[^>]*>")
+
+#: Key prefix of the audio objects a synthesis job writes
+_JOB_KEY_PREFIX = f"{SETTINGS.aws_s3_tmp_prefix}speech"
+
+#: Initial synthesis job status poll interval, in seconds
+_POLL_INTERVAL_INITIAL = 0.5
+
+#: Maximum synthesis job status poll interval after exponential backoff, in seconds
+_POLL_INTERVAL_MAX = 5.0
+
+#: Answer to a long input this server cannot synthesize
+_LONG_INPUT_UNAVAILABLE = (
+    f"'input' is limited to {_MAX_BILLED_CHARACTERS:,} characters "
+    f"({_MAX_CHARACTERS:,} including SSML markup) on this server. Split the text "
+    "into shorter requests, or contact the administrator to enable longer inputs."
+)
 
 #: Supported Polly models
 _SUPPORTED_SPEECH_MODELS: set[str] = {
@@ -401,6 +445,251 @@ def _handle_polly_error(
         raise ApiError(msg) from error
 
 
+def _requires_synthesis_job(
+    text: str, text_type: TextTypeType, *, job_available: bool
+) -> bool:
+    """Return whether the text is longer than a single synthesis call accepts.
+
+    Polly limits a single call to 3,000 billed characters and 6,000 in total,
+    counting SSML markup towards the second only, so the decision is made on
+    the final text and both limits are checked.
+
+    Args:
+        text: Text as it is sent for synthesis.
+        text_type: Whether that text is plain text or an SSML document.
+        job_available: Whether a region able to serve the request can also
+            store a job's audio.
+
+    Returns:
+        True when the text has to be synthesized as a job.
+
+    Raises:
+        ApiError: The text is longer than this server synthesizes: longer than
+            a job accepts, or longer than a single call accepts when no job can
+            run, so the rejection always names the limit actually enforced.
+    """
+    # Counted by subtracting the markup, which never copies the document itself.
+    billed = (
+        len(text) - sum(map(len, _SSML_TAG.findall(text)))
+        if text_type == "ssml"
+        else len(text)
+    )
+    if billed <= _MAX_BILLED_CHARACTERS and len(text) <= _MAX_CHARACTERS:
+        return False
+    if not job_available:
+        log_error_details(
+            "No S3 bucket configured (aws_s3_bucket, aws_s3_regional_buckets) for "
+            f"the speech synthesis regions: inputs over {_MAX_BILLED_CHARACTERS} "
+            "characters are rejected"
+        )
+        raise ApiError(_LONG_INPUT_UNAVAILABLE)
+    if billed > _JOB_MAX_BILLED_CHARACTERS or len(text) > _JOB_MAX_CHARACTERS:
+        msg = (
+            f"'input' is limited to {_JOB_MAX_BILLED_CHARACTERS:,} characters "
+            f"({_JOB_MAX_CHARACTERS:,} including SSML markup)."
+        )
+        raise ApiError(msg)
+    return True
+
+
+def _synthesis_job_candidates(
+    engine: EngineType, voice_id: str
+) -> list[tuple[RegionName, str]]:
+    """Return the candidate (region, S3 bucket) pairs for a synthesis job.
+
+    A job writes its audio to a bucket in its own region, so a region without
+    one cannot serve it.
+
+    Args:
+        engine: Polly engine.
+        voice_id: Selected voice ID.
+
+    Returns:
+        (region, bucket) pairs in priority order; empty when no region able to
+        synthesize the voice has a bucket.
+    """
+    return [
+        (region, bucket)
+        for region in _engine_voice_regions(engine, voice_id)
+        if (bucket := get_s3_bucket_for_region(region))
+    ]
+
+
+async def _start_synthesis_job(
+    request: SynthesizeSpeechInputTypeDef, candidates: list[tuple[RegionName, str]]
+) -> tuple[SynthesisTaskTypeDef, RegionName, str]:
+    """Start a synthesis job, failing over across the candidate regions.
+
+    No failed-region cleanup: a start that errors returns no job identifier,
+    and Polly offers no way to stop a job that may have been created anyway.
+
+    Args:
+        request: Synthesis request, as built for a single call.
+        candidates: (region, bucket) pairs in priority order (at least one).
+
+    Returns:
+        The started job, and the region and bucket that accepted it: the
+        status polling and the download both belong there.
+
+    Raises:
+        BotoCoreError: When every candidate region fails (last error).
+        ClientError: Same as above.
+    """
+    buckets = dict(candidates)
+
+    async def _start(polly: PollyClient, region: RegionName) -> SynthesisTaskTypeDef:
+        """Start the job writing to one region's co-located bucket."""
+        params: StartSpeechSynthesisTaskInputTypeDef = {
+            **request,
+            "OutputS3BucketName": buckets[region],
+            "OutputS3KeyPrefix": _JOB_KEY_PREFIX,
+        }
+        return (await polly.start_speech_synthesis_task(**params))["SynthesisTask"]
+
+    job, region = await call_with_region_failover(
+        "polly", [region for region, _ in candidates], _start
+    )
+    return job, region, buckets[region]
+
+
+async def _wait_for_synthesis_job(region: RegionName, job_id: str) -> None:
+    """Poll a synthesis job in its own region until its audio is available.
+
+    Args:
+        region: Region that accepted the job.
+        job_id: Synthesis job identifier.
+
+    Raises:
+        ApiError: The job failed, or is still running after
+            ``ai_response_timeout`` seconds.
+    """
+    polly: PollyClient = get_client("polly", region)
+    deadline = monotonic() + SETTINGS.ai_response_timeout
+    interval = _POLL_INTERVAL_INITIAL
+    while True:
+        job = (await polly.get_speech_synthesis_task(TaskId=job_id))["SynthesisTask"]
+        status = job["TaskStatus"]
+        if status == "completed":
+            return
+        if status == "failed":
+            # The reason names the backend and its storage, and stays in the log.
+            log_error_details(job.get("TaskStatusReason", status), status=503)
+            msg = "The speech could not be synthesized. Retry the request."
+            raise ApiError(msg, status=503)
+        if monotonic() >= deadline:
+            log_error_details(
+                f"Speech synthesis still '{status}' after "
+                f"{SETTINGS.ai_response_timeout}s (ai_response_timeout)",
+                status=503,
+            )
+            msg = "The speech synthesis timed out. Retry with a shorter 'input'."
+            raise ApiError(msg, status=503)
+        await sleep(interval)
+        interval = min(interval * 2, _POLL_INTERVAL_MAX)
+
+
+async def _synthesis_job_audio(
+    region: RegionName, bucket: str, key: str
+) -> AsyncGenerator[bytes]:
+    """Stream a completed job's audio from the region that served it.
+
+    Args:
+        region: Region that served the job.
+        bucket: Bucket the job wrote its audio to.
+        key: Key of the audio object.
+
+    Returns:
+        The audio stream.
+    """
+    s3: S3Client = get_client("s3", region)
+    return stream_body((await s3.get_object(Bucket=bucket, Key=key))["Body"])
+
+
+async def _synthesize_long_text(
+    request: SynthesizeSpeechInputTypeDef,
+    model_id: str,
+    engine: EngineType,
+    voice_id: str,
+    candidates: list[tuple[RegionName, str]],
+) -> tuple[AsyncGenerator[bytes], int]:
+    """Synthesize text too long for a single call, as a job.
+
+    Args:
+        request: Synthesis request, as built for a single call.
+        model_id: Model ID, for error messages.
+        engine: Polly engine.
+        voice_id: Selected voice ID.
+        candidates: (region, bucket) pairs in priority order (at least one).
+
+    Returns:
+        The audio stream, and the billed character count.
+
+    Raises:
+        ApiError: No candidate bucket accepts the audio, or the job failed or
+            timed out.
+    """
+    try:
+        with _handle_polly_error(model_id, voice_id, engine):
+            job, region, bucket = await _start_synthesis_job(request, candidates)
+    except ClientError as error:
+        if error.response["Error"]["Code"] not in _STORAGE_ERRORS:
+            raise
+        log_error_details(error.response["Error"]["Message"])
+        raise ApiError(_LONG_INPUT_UNAVAILABLE) from error
+
+    # Deleted whatever happens next: the object is known as soon as the job is
+    # accepted, so a timeout, a poll error or a client disconnect leaves nothing
+    # behind. Polly cannot be cancelled, so a delete that runs before the job
+    # writes is a no-op, and the prefix's lifecycle rule is the failsafe.
+    key = s3_key_from_uri(job["OutputUri"], bucket)
+    track_temporary_s3_objects(bucket, key)
+
+    # Billed as soon as Polly accepts the text, whatever the job then does.
+    input_tokens = record_polly_usage(
+        job.get("RequestCharacters", 0), engine, region=region
+    )
+    await _wait_for_synthesis_job(region, job["TaskId"])
+    return await _synthesis_job_audio(region, bucket, key), input_tokens
+
+
+async def _synthesize_text(
+    request: SynthesizeSpeechInputTypeDef,
+    model_id: str,
+    engine: EngineType,
+    voice_id: str,
+) -> tuple[AsyncGenerator[bytes], int]:
+    """Synthesize text in a single call, failing over across candidate regions.
+
+    Args:
+        request: Synthesis request.
+        model_id: Model ID, for error messages.
+        engine: Polly engine.
+        voice_id: Selected voice ID.
+
+    Returns:
+        The audio stream, and the billed character count.
+
+    Raises:
+        ApiError: The request is not one Polly accepts.
+    """
+
+    def _synthesize(
+        polly: PollyClient, _region: RegionName
+    ) -> Awaitable[SynthesizeSpeechOutputTypeDef]:
+        """Start the speech synthesis call on one region's client."""
+        return polly.synthesize_speech(**request)
+
+    with _handle_polly_error(model_id, voice_id, engine):
+        response, region = await call_with_region_failover(
+            "polly", _engine_voice_regions(engine, voice_id), _synthesize
+        )
+
+    input_tokens = record_polly_usage(
+        int(response["RequestCharacters"]), engine, region=region
+    )
+    return stream_body(response["AudioStream"]), input_tokens
+
+
 class AudioModel(AudioModelBase[None, None]):
     """Amazon Polly audio model implementation (TTS only)."""
 
@@ -432,6 +721,9 @@ class AudioModel(AudioModelBase[None, None]):
         extra_params: JsonMapping | None = None,
     ) -> TTSResponse:
         """Generate audio from text using AWS Polly.
+
+        Text longer than a single synthesis call accepts is synthesized as a
+        job instead, which needs an S3 bucket in the serving region.
 
         Args:
             text: Text to convert to speech.
@@ -498,22 +790,18 @@ class AudioModel(AudioModelBase[None, None]):
                     # Polly pcm caps at 16 kHz; encode from Ogg Vorbis above it.
                     output_format = request["OutputFormat"] = "ogg_vorbis"
 
-        def _synthesize(
-            polly: PollyClient, _region: RegionName
-        ) -> Awaitable[SynthesizeSpeechOutputTypeDef]:
-            """Start the speech synthesis call on one region's client."""
-            return polly.synthesize_speech(**request)
-
-        with _handle_polly_error(self.model.id, voice_id, engine):
-            response, used_region = await call_with_region_failover(
-                "polly", _engine_voice_regions(engine, voice_id), _synthesize
+        # Resolved before the length check, so an input no region can store is
+        # rejected with the length this server accepts, not with the job limit.
+        candidates = _synthesis_job_candidates(engine, voice_id)
+        if _requires_synthesis_job(text, text_type, job_available=bool(candidates)):
+            body, input_tokens = await _synthesize_long_text(
+                request, self.model.id, engine, voice_id, candidates
+            )
+        else:
+            body, input_tokens = await _synthesize_text(
+                request, self.model.id, engine, voice_id
             )
 
-        input_tokens = record_polly_usage(
-            int(response["RequestCharacters"]), engine, region=used_region
-        )
-
-        body = stream_body(response["AudioStream"])
         if encoding:
             # channels/sample_rate only apply to the raw-pcm source: _ffmpeg_args
             # ignores both when input_format is unset (encoded source, autodetected).

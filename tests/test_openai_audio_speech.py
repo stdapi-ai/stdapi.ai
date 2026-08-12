@@ -108,6 +108,40 @@ class TestAudioSpeech:
         assert response.response.headers.get("content-type") == "audio/mpeg"
         _assert_is_mp3(audio_data)
 
+    @pytest.mark.slow
+    def test_speech_above_the_synchronous_character_limit(
+        self, openai_client: OpenAI, speech_standard_model: str
+    ) -> None:
+        """A 4000-character input is still returned as one complete mp3 file.
+
+        4000 characters is under the 4096 the OpenAI API accepts, and over the
+        3000 billed characters Polly synthesizes in a single call, so the
+        gateway must serve it without the caller splitting the text.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             https://docs.aws.amazon.com/polly/latest/dg/limits.html
+             stdapi/models/audio/amazon_polly.py:AudioModel.tts
+        """
+        with (SAMPLES_DIR / "lorem_ipsum.txt").open() as file:
+            input_text = file.read(4000)  # over the single-call limit, under OpenAI's
+
+        response = openai_client.audio.speech.create(
+            model=speech_standard_model, voice="alloy", input=input_text
+        )
+        truncated = openai_client.audio.speech.create(
+            model=speech_standard_model, voice="alloy", input=input_text[:3000]
+        )
+
+        audio_data = response.content
+        assert isinstance(audio_data, bytes)
+        assert response.response.headers.get("content-type") == "audio/mpeg"
+        _assert_is_mp3(audio_data)
+        # Text silently cut at the single-call limit would still be valid mp3:
+        # only the same text cut at 3000 characters says how long it should be.
+        assert len(audio_data) > len(truncated.content) * 1.2, (
+            "the audio is no longer than the first 3000 characters spoken"
+        )
+
     @pytest.mark.image
     @pytest.mark.gateway("Amazon Polly is not available on the official OpenAI API")
     @pytest.mark.retry(

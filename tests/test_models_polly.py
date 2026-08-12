@@ -11,23 +11,29 @@ from typing import TYPE_CHECKING
 
 import pytest
 from botocore.exceptions import ClientError, ParamValidationError
+from httpx import ASGITransport, AsyncClient
 
 import stdapi.aws
+import stdapi.aws_s3
 from stdapi import usage
 from stdapi.api_errors import ApiError
+from stdapi.cleanup import CLEANUPS
 from stdapi.config import SETTINGS
 from stdapi.models import EXTRA_MODELS
 from stdapi.models.audio import amazon_polly, get_audio_model
 from stdapi.models.audio.amazon_polly import (
     _engine_voice_regions,
     _PollyExtraParams,
+    _requires_synthesis_job,
     _select_voice,
     initialize_polly_models,
 )
 from stdapi.monitoring import REQUEST_LOG, EventLog
+from tests._helpers import make_client_error, make_model_details
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Generator, Mapping
+    from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapping
+    from typing import Any
 
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_polly.literals import EngineType, VoiceIdType
@@ -1029,3 +1035,523 @@ class TestSynthesizeSpeechTextType:
         (request,) = client.requests
         assert request["TextType"] == "ssml"
         assert request["Text"] == '<speak><prosody rate="150%">Hello</prosody></speak>'
+
+
+class TestLongInputSelection:
+    """_requires_synthesis_job: which inputs the synchronous call cannot serve.
+
+    Both limits are real and independent: 3,000 billed characters and 6,000
+    total, SSML tags counting only towards the second. A selector keyed on
+    ``len(input)`` alone would push a tag-heavy but short document through the
+    slower path, and let a 3,001-character one fail against Polly instead.
+    The job limits belong to a server able to run a job: where none can run,
+    the only limit that exists is the single call's.
+
+    Ref: https://docs.aws.amazon.com/polly/latest/dg/limits.html
+         stdapi/models/audio/amazon_polly.py:_requires_synthesis_job
+    """
+
+    def test_input_at_the_billed_limit_stays_synchronous(self) -> None:
+        """3,000 billed characters is accepted by SynthesizeSpeech itself."""
+        assert _requires_synthesis_job("a" * 3000, "text", job_available=True) is False
+
+    def test_input_above_the_billed_limit_needs_a_task(self) -> None:
+        """One character more than the billed limit is rejected by SynthesizeSpeech."""
+        assert _requires_synthesis_job("a" * 3001, "text", job_available=True) is True
+
+    def test_ssml_tags_are_not_billed_characters(self) -> None:
+        """A document billed under the limit stays synchronous despite its tags."""
+        document = f"<speak>{'<break time="1s"/>' * 100}{'a' * 2900}</speak>"
+
+        assert len(document) > 3000, "the raw document must exceed the billed limit"
+        assert _requires_synthesis_job(document, "ssml", job_available=True) is False
+
+    def test_ssml_above_the_total_limit_needs_a_task(self) -> None:
+        """Tags alone can exceed the 6,000-character total limit."""
+        document = f"<speak>hi{'<break time="1s"/>' * 340}</speak>"
+
+        assert len(document) > 6000
+        assert _requires_synthesis_job(document, "ssml", job_available=True) is True
+
+    def test_input_above_the_task_billed_limit_is_rejected(self) -> None:
+        """Beyond 100,000 billed characters, the error states the limit."""
+        with pytest.raises(ApiError) as excinfo:
+            _requires_synthesis_job("a" * 100_001, "text", job_available=True)
+
+        assert excinfo.value.status == 400
+        assert "100,000" in str(excinfo.value)
+
+    def test_ssml_above_the_task_total_limit_is_rejected(self) -> None:
+        """Beyond 200,000 total characters, the error states that limit too."""
+        document = f"<speak>hi{'<break time="1s"/>' * 11_112}</speak>"
+
+        assert len(document) > 200_000
+        with pytest.raises(ApiError) as excinfo:
+            _requires_synthesis_job(document, "ssml", job_available=True)
+
+        assert excinfo.value.status == 400
+        assert "200,000" in str(excinfo.value)
+
+    @pytest.mark.parametrize("length", [3001, 100_001], ids=["above_call", "above_job"])
+    def test_without_a_job_only_the_single_call_limit_exists(self, length: int) -> None:
+        """No job means no job limit: both bands name the 3,000-character one.
+
+        A server that cannot run a job never accepts 100,000 characters, so
+        quoting that limit would advertise a length it always rejects.
+        """
+        with pytest.raises(ApiError) as excinfo:
+            _requires_synthesis_job("a" * length, "text", job_available=False)
+
+        message = str(excinfo.value)
+        assert excinfo.value.status == 400
+        assert "3,000" in message
+        assert "100,000" not in message
+
+
+#: Task identifier the stubbed asynchronous synthesis answers with.
+_JOB_ID = "1a2b3c4d"
+
+
+class _StubSynthesisJobClient:
+    """Stub Polly and S3 client scripting one asynchronous synthesis task."""
+
+    def __init__(
+        self,
+        statuses: list[str],
+        *,
+        audio: bytes = b"long-audio",
+        reason: str = "",
+        start_error: Exception | None = None,
+    ) -> None:
+        self._statuses = statuses
+        self._audio = audio
+        self._reason = reason
+        self._start_error = start_error
+        self.output_uri = ""
+        self.requests: list[dict[str, Any]] = []
+        self.clients: list[tuple[str, str | None]] = []
+        self.polls = 0
+        self.fetched: list[tuple[str, str]] = []
+        self.deleted: list[tuple[str, str]] = []
+
+    def _task(self, status: str) -> dict[str, Any]:
+        """Build the task description Polly answers with in *status*."""
+        task: dict[str, Any] = {
+            "TaskId": _JOB_ID,
+            "TaskStatus": status,
+            "OutputUri": self.output_uri,
+            "RequestCharacters": 3001,
+        }
+        if status == "failed":
+            task["TaskStatusReason"] = self._reason
+        return task
+
+    async def start_speech_synthesis_task(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
+        """Record the request and answer with a freshly scheduled task."""
+        if self._start_error is not None:
+            raise self._start_error
+        self.requests.append(kwargs)
+        # Polly answers with the URI of the object in the job's own region.
+        region = self.clients[-1][1] if self.clients else "us-east-1"
+        self.output_uri = (
+            f"https://s3.{region}.amazonaws.com/{kwargs['OutputS3BucketName']}"
+            f"/{kwargs['OutputS3KeyPrefix']}.{_JOB_ID}.mp3"
+        )
+        return {"SynthesisTask": self._task("scheduled")}
+
+    async def get_speech_synthesis_task(self, **_kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
+        """Answer with the next scripted status, repeating the last one."""
+        self.polls += 1
+        return {
+            "SynthesisTask": self._task(
+                self._statuses[min(self.polls, len(self._statuses)) - 1]
+            )
+        }
+
+    async def get_object(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
+        """Serve the synthesized object as a readable body."""
+        self.fetched.append((kwargs["Bucket"], kwargs["Key"]))
+        return {"Body": _FakeAudioStream(self._audio)}
+
+    async def delete_object(self, **kwargs: Any) -> None:  # noqa: ANN401
+        """Record the deletion the scheduled cleanup performs."""
+        self.deleted.append((kwargs["Bucket"], kwargs["Key"]))
+
+
+@pytest.fixture
+def pending_cleanups() -> Generator[list[Awaitable[None]]]:
+    """Bind the per-request cleanup list, closing anything left unawaited."""
+    pending: list[Awaitable[None]] = []
+    token = CLEANUPS.set(pending)
+    try:
+        yield pending
+    finally:
+        CLEANUPS.reset(token)
+        for task in pending:
+            task.close()  # type: ignore[attr-defined]
+
+
+@pytest.fixture
+def fake_clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Replace the poll loop's clock with one only its own backoff advances.
+
+    Returns:
+        The backoff delays waited so far, in order.
+    """
+    delays: list[float] = []
+    now = 0.0
+
+    async def _sleep(delay: float) -> None:
+        """Record the backoff and advance the clock by it, instantly."""
+        nonlocal now
+        now += delay
+        delays.append(delay)
+
+    monkeypatch.setattr(amazon_polly, "sleep", _sleep)
+    monkeypatch.setattr(amazon_polly, "monotonic", lambda: now)
+    return delays
+
+
+@pytest.fixture
+async def stub_synthesis_job(
+    monkeypatch: pytest.MonkeyPatch, _request_context: None
+) -> Callable[[_StubSynthesisJobClient], _StubSynthesisJobClient]:
+    """Register a neural ``Joanna`` voice in both regions, one with a bucket.
+
+    Only the primary region has a bucket, so it is the only candidate unless a
+    test configures another one.
+
+    Returns:
+        Factory binding the given stub as every AWS client the asynchronous
+        path uses, and returning it for request assertions.
+    """
+    _patch_voices(
+        monkeypatch,
+        {("neural", "us-east-1"): {"Joanna"}, ("neural", "eu-west-1"): {"Joanna"}},
+    )
+    await initialize_polly_models()
+    amazon_polly._VOICES_BY_NAME_LOWER["joanna"] = "Joanna"  # noqa: SLF001
+    monkeypatch.setattr(SETTINGS, "aws_s3_bucket", "primary-bucket")
+    monkeypatch.setattr(SETTINGS, "aws_s3_regional_buckets", {})
+    monkeypatch.setattr(
+        stdapi.aws_s3, "BUCKET_TO_REGION", {"primary-bucket": "us-east-1"}
+    )
+
+    def _bind(client: _StubSynthesisJobClient) -> _StubSynthesisJobClient:
+        def _get_client(service: str, region: str | None = None) -> object:
+            """Serve the stub, recording which region's client was asked for."""
+            client.clients.append((service, region))
+            return client
+
+        for module in (amazon_polly, stdapi.aws, stdapi.aws_s3):
+            monkeypatch.setattr(module, "get_client", _get_client)
+        return client
+
+    return _bind
+
+
+@pytest.mark.usefixtures("pending_cleanups")
+class TestSynthesisJobPath:
+    """AudioModel.tts: long input is synthesized as a job and streamed back.
+
+    The audio is produced into the region's own bucket, so the whole path --
+    job, poll, download, deletion -- must stay on the region that accepted the
+    job, and the object is deleted once the request ends. A job that outlives
+    the request writes after that deletion, and is expired by the prefix's
+    lifecycle rule instead.
+
+    Ref: https://docs.aws.amazon.com/polly/latest/dg/asynchronous.html
+         stdapi/models/audio/amazon_polly.py:AudioModel.tts
+    """
+
+    async def test_long_input_is_synthesized_and_the_object_cleaned_up(
+        self,
+        stub_synthesis_job: Callable[
+            [_StubSynthesisJobClient], _StubSynthesisJobClient
+        ],
+        pending_cleanups: list[Awaitable[None]],
+        fake_clock: list[float],
+    ) -> None:
+        """The job's audio is served, billed once, and deleted after the response."""
+        client = stub_synthesis_job(
+            _StubSynthesisJobClient(["scheduled", "inProgress", "completed"])
+        )
+
+        response = await get_audio_model("amazon.polly-neural").tts(
+            text="a" * 3001, voice="Joanna", resp_format="mp3"
+        )
+        audio = b"".join([chunk async for chunk in response["audio_stream"]])
+
+        (request,) = client.requests
+        assert request["OutputS3BucketName"] == "primary-bucket"
+        assert request["Text"] == "a" * 3001
+        assert request["OutputFormat"] == "mp3"
+        assert audio == b"long-audio"
+        assert response["input_tokens"] == 3001
+        assert client.polls == 3
+        assert fake_clock == [0.5, 1.0], "the poll interval must back off"
+        (key,) = usage.USAGE.get()
+        assert key.region == "us-east-1"
+
+        # The audio lands under the prefix operators expire with a lifecycle rule.
+        object_key = f"{SETTINGS.aws_s3_tmp_prefix}speech.{_JOB_ID}.mp3"
+        assert request["OutputS3KeyPrefix"] == f"{SETTINGS.aws_s3_tmp_prefix}speech"
+        assert client.fetched == [("primary-bucket", object_key)]
+        assert client.deleted == [], "the deletion must not block the response"
+        (cleanup,) = pending_cleanups
+        await cleanup
+        assert client.deleted == [("primary-bucket", object_key)]
+
+    async def test_the_job_never_leaves_the_region_that_accepted_it(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        stub_synthesis_job: Callable[
+            [_StubSynthesisJobClient], _StubSynthesisJobClient
+        ],
+        pending_cleanups: list[Awaitable[None]],
+        fake_clock: list[float],
+    ) -> None:
+        """A job served by the second region polls, reads and deletes there.
+
+        Polly writes the audio to a bucket co-located with the job, so a
+        region without one cannot serve the request at all, and every call
+        that follows the job belongs to the region that took it.
+        """
+        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
+        monkeypatch.setattr(
+            SETTINGS, "aws_s3_regional_buckets", {"eu-west-1": "fallback-bucket"}
+        )
+        monkeypatch.setattr(
+            stdapi.aws_s3, "BUCKET_TO_REGION", {"fallback-bucket": "eu-west-1"}
+        )
+        client = stub_synthesis_job(
+            _StubSynthesisJobClient(["inProgress", "completed"])
+        )
+
+        response = await get_audio_model("amazon.polly-neural").tts(
+            text="a" * 3001, voice="Joanna", resp_format="mp3"
+        )
+        audio = b"".join([chunk async for chunk in response["audio_stream"]])
+        (cleanup,) = pending_cleanups
+        await cleanup
+
+        assert audio == b"long-audio"
+        assert fake_clock == [0.5], "the unfinished poll must have waited once"
+        (request,) = client.requests
+        assert request["OutputS3BucketName"] == "fallback-bucket"
+        assert client.clients, "the AWS clients used must have been recorded"
+        assert {region for _, region in client.clients} == {"eu-west-1"}, (
+            "job, polling, download and deletion all belong to the serving region"
+        )
+        assert {service for service, _ in client.clients} == {"polly", "s3"}
+        object_key = f"{SETTINGS.aws_s3_tmp_prefix}speech.{_JOB_ID}.mp3"
+        assert client.fetched == [("fallback-bucket", object_key)]
+        assert client.deleted == [("fallback-bucket", object_key)]
+        (key,) = usage.USAGE.get()
+        assert key.region == "eu-west-1"
+
+    async def test_polling_backs_off_up_to_its_cap_then_times_out(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        stub_synthesis_job: Callable[
+            [_StubSynthesisJobClient], _StubSynthesisJobClient
+        ],
+        pending_cleanups: list[Awaitable[None]],
+        fake_clock: list[float],
+    ) -> None:
+        """A job that never completes ends the request, leaving no object behind.
+
+        The interval doubles from 0.5s but never exceeds 5s, so a long job is
+        still noticed promptly without polling Polly hundreds of times, and
+        ``ai_response_timeout`` bounds the whole wait.
+        """
+        timeout = 10
+        monkeypatch.setattr(SETTINGS, "ai_response_timeout", timeout)
+        client = stub_synthesis_job(_StubSynthesisJobClient(["inProgress"]))
+
+        with pytest.raises(ApiError) as excinfo:
+            await get_audio_model("amazon.polly-neural").tts(
+                text="a" * 3001, voice="Joanna", resp_format="mp3"
+            )
+
+        assert excinfo.value.status == 503
+        assert fake_clock == [0.5, 1.0, 2.0, 4.0, 5.0], "5s is the interval cap"
+        assert timeout <= sum(fake_clock) < timeout + 5.0, (
+            "the request ends within one poll interval of the deadline"
+        )
+        assert client.polls == len(fake_clock) + 1
+        assert usage.USAGE.get(), "characters accepted by Polly are billed regardless"
+        assert not client.fetched, "an unfinished job has no audio to serve"
+
+        (cleanup,) = pending_cleanups
+        await cleanup
+        assert client.deleted == [
+            ("primary-bucket", f"{SETTINGS.aws_s3_tmp_prefix}speech.{_JOB_ID}.mp3")
+        ], "a timed-out job still has its audio object deleted"
+
+    async def test_a_failed_job_never_reports_its_backend_reason(
+        self,
+        stub_synthesis_job: Callable[
+            [_StubSynthesisJobClient], _StubSynthesisJobClient
+        ],
+        pending_cleanups: list[Awaitable[None]],
+    ) -> None:
+        """The failure reason stays in the log; the caller gets a clean message."""
+        client = stub_synthesis_job(
+            _StubSynthesisJobClient(
+                ["failed"], reason="Access denied writing to s3://internal-bucket"
+            )
+        )
+
+        with pytest.raises(ApiError) as excinfo:
+            await get_audio_model("amazon.polly-neural").tts(
+                text="a" * 3001, voice="Joanna", resp_format="mp3"
+            )
+
+        assert excinfo.value.status == 503
+        assert "s3" not in str(excinfo.value).lower()
+        assert "denied" not in str(excinfo.value).lower()
+        log = REQUEST_LOG.get()
+        assert any("Access denied" in str(detail) for detail in log["error_detail"]), (
+            "the failure reason must still be logged server-side"
+        )
+
+        (cleanup,) = pending_cleanups
+        await cleanup
+        assert client.deleted == [
+            ("primary-bucket", f"{SETTINGS.aws_s3_tmp_prefix}speech.{_JOB_ID}.mp3")
+        ], "a failed job may still have written a partial object"
+
+    @pytest.mark.parametrize("length", [3001, 100_001], ids=["above_call", "above_job"])
+    async def test_without_a_bucket_the_error_states_the_input_limit(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        stub_synthesis_job: Callable[
+            [_StubSynthesisJobClient], _StubSynthesisJobClient
+        ],
+        length: int,
+    ) -> None:
+        """A deployment with no bucket rejects long input, naming its length limit.
+
+        Both bands answer the same: the 100,000-character job limit is only
+        reachable where a job can run, so an input beyond it must not be
+        rejected with a length this deployment would never accept either.
+        """
+        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
+        client = stub_synthesis_job(_StubSynthesisJobClient(["completed"]))
+
+        with pytest.raises(ApiError) as excinfo:
+            await get_audio_model("amazon.polly-neural").tts(
+                text="a" * length, voice="Joanna", resp_format="mp3"
+            )
+
+        message = str(excinfo.value)
+        assert excinfo.value.status == 400
+        assert "3,000" in message, "the caller must be told the length it may send"
+        assert "100,000" not in message, "the job limit is not this server's limit"
+        assert "aws_s3_bucket" not in message
+        assert "s3" not in message.lower()
+        assert not client.requests, "Polly must not be asked to do the impossible"
+        log = REQUEST_LOG.get()
+        assert any("aws_s3_bucket" in str(detail) for detail in log["error_detail"]), (
+            "the operator must find the setting in the log"
+        )
+
+    async def test_an_unusable_bucket_answers_like_a_missing_one(
+        self,
+        stub_synthesis_job: Callable[
+            [_StubSynthesisJobClient], _StubSynthesisJobClient
+        ],
+    ) -> None:
+        """A bucket Polly rejects is a deployment fault, not a 502 to retry."""
+        stub_synthesis_job(
+            _StubSynthesisJobClient(
+                ["completed"],
+                start_error=ClientError(
+                    {
+                        "Error": {
+                            "Code": "InvalidS3BucketException",
+                            "Message": "The bucket 'primary-bucket' is invalid",
+                        }
+                    },
+                    "StartSpeechSynthesisTask",
+                ),
+            )
+        )
+
+        with pytest.raises(ApiError) as excinfo:
+            await get_audio_model("amazon.polly-neural").tts(
+                text="a" * 3001, voice="Joanna", resp_format="mp3"
+            )
+
+        assert excinfo.value.status == 400
+        assert "3,000" in str(excinfo.value)
+        assert "primary-bucket" not in str(excinfo.value)
+        log = REQUEST_LOG.get()
+        assert any("primary-bucket" in str(detail) for detail in log["error_detail"]), (
+            "the rejected bucket must still be named in the log"
+        )
+
+    async def test_a_denied_start_is_not_disguised_as_a_length_limit(
+        self,
+        api_key: str,
+        monkeypatch: pytest.MonkeyPatch,
+        stub_synthesis_job: Callable[
+            [_StubSynthesisJobClient], _StubSynthesisJobClient
+        ],
+    ) -> None:
+        """A denied task start answers 403, not the input-length rejection.
+
+        Only the two storage errors mean "this deployment cannot store the
+        audio". Anything else -- a missing ``polly:StartSpeechSynthesisTask``
+        permission first of all -- reaches the caller as itself, so an operator
+        whose IAM policy is incomplete is not told to split their text.
+
+        Ref: https://docs.aws.amazon.com/polly/latest/APIReference/API_StartSpeechSynthesisTask.html
+             stdapi/models/audio/amazon_polly.py:_synthesize_long_text
+        """
+        from stdapi.main import app  # noqa: PLC0415
+        from stdapi.routes import openai_audio_speech  # noqa: PLC0415
+
+        async def _resolve(model_id: str, *_args: Any, **_kwargs: Any) -> Any:  # noqa: ANN401
+            """Resolve the model without the live Bedrock catalog."""
+            return make_model_details(model_id, output_modalities=["SPEECH"])
+
+        monkeypatch.setattr(openai_audio_speech, "validate_model", _resolve)
+        client = stub_synthesis_job(
+            _StubSynthesisJobClient(
+                ["completed"],
+                start_error=make_client_error(
+                    "AccessDeniedException",
+                    "StartSpeechSynthesisTask",
+                    message=(
+                        "User: arn:aws:sts::123456789012:assumed-role/gw is not "
+                        "authorized to perform: polly:StartSpeechSynthesisTask"
+                    ),
+                    status=403,
+                ),
+            )
+        )
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://gateway",
+            headers={"Authorization": f"Bearer {api_key}"},
+        ) as http_client:
+            response = await http_client.post(
+                "/v1/audio/speech",
+                json={
+                    "model": "amazon.polly-neural",
+                    "voice": "Joanna",
+                    "input": "a" * 3001,
+                },
+            )
+
+        assert response.status_code == 403, response.text
+        error = response.json()["error"]
+        assert error["type"] == "permission_error"
+        assert "3,000" not in error["message"], (
+            "a permission failure must not be reported as an input too long"
+        )
+        assert "polly" not in error["message"].lower()
+        assert not client.fetched, "a task that never started has no audio to serve"
