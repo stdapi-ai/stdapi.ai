@@ -18,7 +18,12 @@ from stdapi.api_errors import (
 )
 from stdapi.aws import call_with_region_failover, get_client
 from stdapi.aws_bedrock import apply_guardrail_to_text
-from stdapi.aws_s3 import copy_s3_object, get_text_from_s3, track_temporary_s3_objects
+from stdapi.aws_s3 import (
+    copy_s3_object,
+    get_text_from_s3,
+    s3_key_from_uri,
+    track_temporary_s3_objects,
+)
 from stdapi.aws_translate import translate, translate_subtitle
 from stdapi.cleanup import schedule_cleanup
 from stdapi.config import SETTINGS
@@ -611,19 +616,6 @@ def _handle_transcription_error(language: str | None) -> Generator[None]:
         raise ApiError(msg) from error
 
 
-def _s3_key_from_uri(uri: str, s3_bucket: str) -> str:
-    """Return the S3 object key from a Transcribe output URI.
-
-    Args:
-        uri: ``https://s3.<region>.amazonaws.com/<bucket>/<key>`` output URI.
-        s3_bucket: Bucket the job wrote to.
-
-    Returns:
-        The object key.
-    """
-    return uri.split(f"/{s3_bucket}/", 1)[-1]
-
-
 async def _wait_for_transcription_completion(
     transcribe: TranscribeServiceClient, job_id: str, s3_bucket: str
 ) -> tuple[str, str | None]:
@@ -667,12 +659,12 @@ async def _wait_for_transcription_completion(
     transcript = job["Transcript"]
     subtitle_uris = job.get("Subtitles", {}).get("SubtitleFileUris")
     return (
-        _s3_key_from_uri(
+        s3_key_from_uri(
             transcript.get("RedactedTranscriptFileUri")
             or transcript["TranscriptFileUri"],
             s3_bucket,
         ),
-        _s3_key_from_uri(subtitle_uris[0], s3_bucket) if subtitle_uris else None,
+        s3_key_from_uri(subtitle_uris[0], s3_bucket) if subtitle_uris else None,
     )
 
 

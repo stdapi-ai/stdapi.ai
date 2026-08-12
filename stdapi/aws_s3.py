@@ -200,6 +200,20 @@ async def put_object_and_get_url(body: bytes, content_type: str, filename: str) 
     )[0]
 
 
+def s3_key_from_uri(uri: str, s3_bucket: str) -> str:
+    """Return the S3 object key from a path-style S3 URI.
+
+    Args:
+        uri: ``https://s3.<region>.amazonaws.com/<bucket>/<key>`` URI, as returned
+            by the AWS services that write their output to a caller-owned bucket.
+        s3_bucket: Bucket the object was written to.
+
+    Returns:
+        The object key.
+    """
+    return uri.split(f"/{s3_bucket}/", 1)[-1]
+
+
 async def get_bytes_from_s3(s3_bucket: str, s3_key: str) -> bytes:
     """Retrieve raw bytes from an S3 object.
 
