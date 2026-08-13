@@ -967,9 +967,16 @@ class TestBatchResultTranslation:
         )
         assert body["object"] == "chat.completion"
         assert body["model"] == "amazon.nova-micro-v1:0"
-        assert body["choices"][0]["message"]["content"] == "hello"
-        assert body["choices"][0]["finish_reason"] == "stop"
-        assert body["usage"]["prompt_tokens"] == 5
+        choices, usage = body["choices"], body["usage"]
+        assert isinstance(choices, list)
+        assert isinstance(usage, dict)
+        choice = choices[0]
+        assert isinstance(choice, dict)
+        message = choice["message"]
+        assert isinstance(message, dict)
+        assert message["content"] == "hello"
+        assert choice["finish_reason"] == "stop"
+        assert usage["prompt_tokens"] == 5
 
     def test_backend_wording_never_reaches_the_client(self) -> None:
         """A per-request failure is reported without the backend's own wording.

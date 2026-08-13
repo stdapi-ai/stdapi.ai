@@ -970,13 +970,14 @@ class TestOpenAndFailover:
         monkeypatch.setattr(SETTINGS, "aws_bedrock_user_role_require_identity", True)
         opened: list[FakeDuplexStream] = []
 
-        async def _opener(_client: Any, _region: RegionName) -> FakeDuplexStream:  # noqa: ANN401
+        async def _open(_client: Any, _region: RegionName) -> FakeDuplexStream:  # noqa: ANN401
             stream = FakeDuplexStream(events=["audio"])
             opened.append(stream)
             return stream
 
+        opener: Any = _open
         with pytest.raises(ApiError) as raised:
-            async with open_bidi_stream("bedrock-runtime", ["us-east-1"], _opener):
+            async with open_bidi_stream("bedrock-runtime", ["us-east-1"], opener):
                 pass
 
         assert raised.value.status == 400

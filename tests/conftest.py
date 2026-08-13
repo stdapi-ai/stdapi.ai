@@ -28,7 +28,7 @@ from json import JSONDecodeError, dumps, loads
 from os import environ, getenv
 from pathlib import Path
 from secrets import token_hex
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import cohere
 import httpx
@@ -41,13 +41,9 @@ from openai import APIStatusError, AsyncOpenAI, OpenAI
 from PIL import Image as PILImage
 from pybase64 import b64encode
 
-# Starlette's TestClient subclasses whichever HTTP library it can import, and prefers
-# httpx2, which every vendor SDK below rejects as an ``http_client``. Aliasing the name
-# while starlette binds it takes starlette's httpx fallback branch; the alias is dropped
-# at once so genai-prices -- which is why httpx2 is ever installed, through the agentic
-# lane's pydantic-ai -- still gets the real one. Only the client overlay pulls httpx2 in
-# (see tests/agentic/requirements.txt), so a plain sync takes the fallback branch anyway;
-# this stays unconditional because it has to hold in the run that does have it.
+# Starlette's TestClient prefers httpx2, which every vendor SDK rejects as an
+# ``http_client``; aliasing the name while starlette binds it takes its httpx
+# fallback. Dropped at once so genai-prices still gets the real httpx2.
 assert "starlette.testclient" not in sys.modules, (
     "starlette.testclient was imported before this alias could be installed"
 )
@@ -267,8 +263,7 @@ environ.update(
         # Ensure all optional features are enabled so their tests can run.
         "aws_bedrock_allow_application_inference_profile_arn": "true",
         "aws_bedrock_allow_prompt_router_arn": "true",
-        # OAuth 2.0 discovery: publishes the protected resource metadata document
-        # and puts its location in the challenge every 401 carries.
+        # OAuth 2.0 discovery: publishes the metadata document named in every 401.
         "oauth_resource_identifier": "https://gateway.tests.stdapi.ai",
         "oauth_authorization_servers": (
             "https://cognito-idp.eu-west-3.amazonaws.com/eu-west-3_tEsTpOoL1"
@@ -513,6 +508,7 @@ _LIVE_FIXTURES = frozenset(
         "async_openai_client",
         "aws_session_info",
         "bedrock_user_role_arn",
+        "cognito_sandbox_pool",
         "cohere_client",
         "live_guardrail",
         "live_server",
@@ -860,6 +856,46 @@ def api_key() -> str:
     return _TEST_API_KEY
 
 
+class CognitoSandboxPool(NamedTuple):
+    """The real Amazon Cognito user pool the token tests obtain a token from.
+
+    ``foreign_client_id``/``foreign_client_secret`` name a second application of
+    the same pool, allowed the same scope: a token minted by it differs from an
+    accepted one only in the application it was issued to.
+    """
+
+    user_pool_id: str
+    token_url: str
+    scope: str
+    client_id: str
+    client_secret: str
+    foreign_client_id: str
+    foreign_client_secret: str
+
+
+@pytest.fixture(scope="session")
+def cognito_sandbox_pool() -> CognitoSandboxPool:
+    """Coordinates of the user pool provisioned for this checkout, or skip.
+
+    The pool is created by the ``terraform-sandbox`` stack and wired into
+    ``tests/.env``; a checkout without one skips rather than fails, since no
+    test can create a pool for itself.
+
+    Returns:
+        The pool, its token endpoint, and the two applications registered in it.
+    """
+    values = {
+        name: getenv(f"TEST_COGNITO_{name.upper()}", "")
+        for name in CognitoSandboxPool._fields
+    }
+    if missing := sorted(name for name, value in values.items() if not value):
+        pytest.skip(
+            "No Amazon Cognito user pool is configured for this checkout "
+            f"(tests/.env sets no TEST_COGNITO_{missing[0].upper()})"
+        )
+    return CognitoSandboxPool(**values)
+
+
 @pytest.fixture(scope="session")
 def test_client(
     use_official_api: bool, server_url: str | None
@@ -1020,8 +1056,7 @@ def live_guardrail(use_official_api: bool) -> Iterator[str]:
             pytest.fail("Test guardrail never reached READY status.")
         yield created["guardrailArn"]
     finally:
-        # A guardrail is a billable account resource: delete it on every path,
-        # including a polling error or an interrupted session.
+        # A guardrail is billable: delete it on every path.
         bedrock.delete_guardrail(guardrailIdentifier=guardrail_id)
 
 
@@ -1045,9 +1080,7 @@ def openai_client(
             api_key=api_key,
             max_retries=0,
             organization=_OPENAI_ORGANIZATION,
-            # Starlette type-checks its TestClient against httpx2 unconditionally;
-            # the alias at the top of this module fixes only the runtime class.
-            http_client=test_client,  # type: ignore[arg-type]
+            http_client=test_client,
         )
 
     # Official API test
@@ -1588,7 +1621,7 @@ def anthropic_client(
             base_url="http://testserver/anthropic/",
             api_key=api_key,
             max_retries=0,
-            # See the OpenAI client fixture: only the static type is still httpx2's.
+            # Starlette types TestClient against httpx2; the alias fixes runtime only.
             http_client=test_client,  # type: ignore[arg-type]
         )
     if use_official_api:
@@ -1685,7 +1718,7 @@ def _build_cohere_client[ClientT: cohere.Client](
         return client_class(
             api_key=api_key,
             base_url="http://testserver/cohere",
-            # See the OpenAI client fixture: only the static type is still httpx2's.
+            # Starlette types TestClient against httpx2; the alias fixes runtime only.
             httpx_client=test_client,  # type: ignore[arg-type]
         )
     if use_official_api:

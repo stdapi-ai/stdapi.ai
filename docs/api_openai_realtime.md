@@ -304,8 +304,7 @@ import base64
 from openai import AsyncOpenAI
 
 client = AsyncOpenAI(
-    api_key="YOUR_API_KEY",
-    base_url="https://your-deployment.example.com/v1",
+    api_key="YOUR_API_KEY", base_url="https://your-deployment.example.com/v1"
 )
 
 

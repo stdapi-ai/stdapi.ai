@@ -53,7 +53,7 @@ class _Body:
 
 def _client_error(code: str, operation: str) -> ClientError:
     """Build the ``ClientError`` botocore raises for *code*."""
-    return ClientError({"Error": {"Code": code, "Message": code}}, operation)  # type: ignore[arg-type]
+    return ClientError({"Error": {"Code": code, "Message": code}}, operation)
 
 
 #: Error codes the fakes raise, named so the raise sites stay one line.
