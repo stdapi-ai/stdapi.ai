@@ -24,7 +24,7 @@ from starlette.requests import Request as StarletteRequest
 
 from stdapi import server
 from stdapi.config import SETTINGS
-from stdapi.mcp import _make_stateless
+from stdapi.mcp import _lift_body_limit, _make_stateless
 from stdapi.monitoring import REQUEST_ID, log_error_details, log_request_event
 from stdapi.types.openai_audio import (
     AudioTranscriptionJsonBody,
@@ -576,6 +576,70 @@ def _mcp_only_app(*, stateless: bool) -> FastAPI:
     if stateless:
         _make_stateless(mcp)
     return app
+
+
+@pytest.mark.local
+class TestStreamableHttpBodyLimit:
+    """The transport must not refuse media the same tool accepts over HTTP.
+
+    The MCP SDK caps a request body at 4 MiB and answers 413 before parsing,
+    which is below what the image tools carry once base64 has inflated it. The
+    mount raises that ceiling to the API's own limit.
+
+    Ref: stdapi/mcp.py:_lift_body_limit
+         https://github.com/stdapi-ai/stdapi.ai/issues/140
+    """
+
+    @staticmethod
+    def _mounted_limit(*, lift: bool) -> int:
+        """Mount the transport, start it, and read the body limit it enforces.
+
+        Args:
+            lift: Whether to apply :func:`~stdapi.mcp._lift_body_limit`.
+
+        Returns:
+            The ceiling in bytes the transport rejects a body above.
+        """
+        from starlette.testclient import TestClient  # noqa: PLC0415
+
+        app = FastAPI()
+
+        @app.get("/echo", operation_id="echo")
+        async def echo() -> dict[str, str]:
+            """Return a fixed payload."""
+            return {"echo": "ok"}
+
+        mcp = FastApiMCP(app, name="test", description="test")
+        mcp.mount_http()
+        if lift:
+            _lift_body_limit(mcp)
+        with TestClient(app) as client:
+            client.post(
+                "/mcp",
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+                headers={"Accept": "application/json, text/event-stream"},
+            )
+            manager = mcp._http_transport._session_manager  # noqa: SLF001
+            return int(manager.asgi_app.max_body_size)
+
+    def test_the_sdk_default_is_below_what_an_image_tool_carries(self) -> None:
+        """Without the lift, the transport refuses a modest base64 image.
+
+        This is what shipped: the ceiling is low enough that an agent could not
+        edit an image it could edit through the same tool over HTTP.
+        """
+        assert self._mounted_limit(lift=False) < 8 * 1024 * 1024
+
+    def test_the_mount_raises_the_ceiling(self) -> None:
+        """The mounted transport accepts what the API itself accepts."""
+        assert self._mounted_limit(lift=True) >= 64 * 1024 * 1024
+
+    def test_a_configured_input_limit_wins(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An operator who bounds input files bounds the transport with it."""
+        monkeypatch.setattr(SETTINGS, "max_input_file_size", 5 * 1024 * 1024)
+        assert self._mounted_limit(lift=True) == 5 * 1024 * 1024
 
 
 def _tools_list(

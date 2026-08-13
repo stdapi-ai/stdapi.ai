@@ -31,6 +31,9 @@ if TYPE_CHECKING:
 #: Marker fastapi_mcp always prepends to the auto-generated response/example block.
 _RESPONSES_MARKER = "\n\n### Responses:"
 
+#: Streamable HTTP body ceiling when no input file size is configured.
+_MCP_MAX_BODY_SIZE = 64 * 1024 * 1024
+
 #: Request parameters an MCP client cannot use: streaming modes (tool results are
 #: single messages), token-level tuning, and caller-identity/routing identifiers.
 _HIDDEN_TOOL_PARAMS: frozenset[str] = frozenset(
@@ -207,6 +210,33 @@ class _McpLogHandler(Handler):
             pass
 
 
+def _lift_body_limit(mcp: FastApiMCP) -> None:
+    """Stop the MCP transport rejecting media the API itself accepts.
+
+    The MCP SDK caps a Streamable HTTP request body at 4 MiB and answers 413
+    before parsing, while the same tool called over HTTP is bounded only by
+    ``max_input_file_size`` (unlimited by default). Base64 inflates media by a
+    third, so an agent could not edit an image much over 3 MB through a tool it
+    could edit directly. The limit follows the API's own where one is set, and
+    otherwise rises to a ceiling wide enough that the transport is never the
+    binding constraint while a hostile body is still bounded.
+
+    Args:
+        mcp: The FastApiMCP instance whose HTTP transport was just mounted.
+    """
+    transport = mcp._http_transport  # noqa: SLF001
+    start = transport._ensure_session_manager_started  # noqa: SLF001
+
+    async def start_with_limit() -> None:
+        await start()
+        if (manager := transport._session_manager) is not None:  # noqa: SLF001
+            manager.asgi_app.max_body_size = (
+                SETTINGS.max_input_file_size or _MCP_MAX_BODY_SIZE
+            )
+
+    transport._ensure_session_manager_started = start_with_limit  # noqa: SLF001
+
+
 def _make_stateless(mcp: FastApiMCP) -> None:
     """Switch the mounted Streamable HTTP transport to stateless mode.
 
@@ -267,6 +297,7 @@ def mount_mcp(app: FastAPI) -> None:
 
     if SETTINGS.enable_mcp_streamable_http:
         mcp.mount_http()
+        _lift_body_limit(mcp)
         if SETTINGS.mcp_stateless_http:
             _make_stateless(mcp)
     if SETTINGS.enable_mcp_sse:
