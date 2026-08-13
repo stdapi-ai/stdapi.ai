@@ -4,7 +4,6 @@
 - twelvelabs.marengo-embed-3-0-v1:0
 """
 
-from asyncio import gather
 from math import ceil
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
@@ -270,15 +269,11 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         else:
             input_tokens = 0
             output_tokens = 0
-            for result in await gather(
-                *(
-                    self._embed(
-                        value=value,
-                        extra_params=extra_params,
-                        force_s3_data=force_s3_data,
-                    )
-                    for value in inputs
+            for result in await self._gather_bounded(
+                self._embed(
+                    value=value, extra_params=extra_params, force_s3_data=force_s3_data
                 )
+                for value in inputs
             ):
                 embeddings.extend(
                     vector["embedding"] for vector in result.response["data"]

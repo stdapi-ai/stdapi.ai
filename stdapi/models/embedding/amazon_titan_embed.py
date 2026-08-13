@@ -5,7 +5,6 @@
 - amazon.titan-embed-text-v2:0
 """
 
-from asyncio import gather
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 from stdapi.input_file import InputFile, InputFileUrl
@@ -91,7 +90,9 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         embeddings_by_type: dict[str, list[list[float | int]]] | None = (
             {} if "embeddingTypes" in request else None
         )
-        for result in await gather(*(self._invoke(request, v) for v in inputs)):
+        for result in await self._gather_bounded(
+            self._invoke(request, value) for value in inputs
+        ):
             embeddings.append(result.response["embedding"])
             input_tokens += (
                 result.response.get("inputTextTokenCount") or result.input_tokens or 0

@@ -290,16 +290,14 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         embeddings: list[list[float]] = []
         input_tokens = 0
         output_tokens = 0
-        for result in await gather(
-            *(
-                self._embed(
-                    value=value,
-                    base_params=base_params,
-                    extra_params=extra_params,
-                    force_s3_data=force_s3_data,
-                )
-                for value in inputs
+        for result in await self._gather_bounded(
+            self._embed(
+                value=value,
+                base_params=base_params,
+                extra_params=extra_params,
+                force_s3_data=force_s3_data,
             )
+            for value in inputs
         ):
             embeddings.extend(
                 item["embedding"] for item in result.response["embeddings"]

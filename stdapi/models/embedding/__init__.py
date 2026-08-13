@@ -6,6 +6,7 @@ and are auto-loaded once on import.
 """
 
 from abc import abstractmethod
+from asyncio import Semaphore, gather
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydantic import BaseModel
@@ -13,10 +14,14 @@ from pydantic import BaseModel
 from stdapi.models import ModelBase, get_model, load_model_plugins
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Iterable
     from re import Pattern
 
     from stdapi.input_file import InputFileUrl
     from stdapi.types import JsonMapping
+
+#: Concurrent invocations per request, for models that embed one input per call.
+_EMBED_CONCURRENCY = 8
 
 
 class EmbeddingImageDescription(BaseModel):
@@ -86,6 +91,33 @@ class EmbeddingModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             Embedding response.
         """
 
+    @staticmethod
+    async def _gather_bounded[T](invocations: Iterable[Awaitable[T]]) -> list[T]:
+        """Await one invocation per input under the per-request concurrency bound.
+
+        A model that embeds one input per call fans out a number of concurrent
+        invocations the caller controls: a document split into chunks yields
+        hundreds. The bound keeps such a request running at a sustainable rate
+        instead of throttling itself against the backend.
+
+        Args:
+            invocations: Awaitables to run, one per input.
+
+        Returns:
+            Their results, in the order the awaitables were given.
+        """
+        semaphore = Semaphore(_EMBED_CONCURRENCY)
+
+        async def _bounded(invocation: Awaitable[T]) -> T:
+            """Await one invocation while holding a slot of the bound.
+
+            Returns:
+                Whatever the invocation returned.
+            """
+            async with semaphore:
+                return await invocation
+
+        return await gather(*(_bounded(invocation) for invocation in invocations))
 
 _MODEL_REGISTRY: list[
     tuple[str | Pattern[str], type[EmbeddingModelBase[Any, Any]]]
