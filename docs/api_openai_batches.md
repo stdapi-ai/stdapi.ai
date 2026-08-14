@@ -121,6 +121,21 @@ Each line pairs a `custom_id` with the completion it produced:
 
 Requests that failed are collected in a separate file, named by `error_file_id`.
 
+!!! tip "Expiring the result files"
+    Result files are kept until deleted, and are billed as stored objects
+    meanwhile. Pass `output_expires_after` when creating the batch to have both
+    files expire on their own — between 1 hour and 30 days, counted from the
+    moment they are written:
+
+    ```python
+    batch = client.batches.create(
+        input_file_id=requests_file.id,
+        endpoint="/v1/chat/completions",
+        completion_window="24h",
+        output_expires_after={"anchor": "created_at", "seconds": 7 * 24 * 3600},
+    )
+    ```
+
 !!! warning "Results Are Not in Request Order"
     Output lines may come back in any order, as upstream also warns. Match a result to its request with `custom_id`, never with the line number.
 
@@ -128,7 +143,7 @@ Requests that failed are collected in a separate file, named by `error_file_id`.
 
 | Limit                          | Value                        |
 |--------------------------------|------------------------------|
-| Minimum requests per model     | 100                          |
+| Minimum requests per model     | 100 (default quota)          |
 | Maximum requests per batch     | 50,000                       |
 | Maximum input file size        | 200 MB                       |
 | `custom_id` length             | 64 characters                |
@@ -136,6 +151,9 @@ Requests that failed are collected in a separate file, named by `error_file_id`.
 | Processing window              | 24 hours from creation       |
 
 A batch below the minimum, or past any of these caps, is refused when it is created and the message names the shortfall, rather than accepted and failed later.
+
+!!! note "The 100-request minimum is a quota default"
+    100 is the default of the Amazon Bedrock quota *Minimum number of records per batch inference job*, which is set **per model** and adjustable for some of them — see [Amazon Bedrock quotas](https://docs.aws.amazon.com/general/latest/gr/bedrock.html). The check applied here is the default, whatever your account's own value is: an account that raised the quota has its smaller batches accepted here and refused on creation, and one that lowered it still cannot submit fewer than 100 requests for a model.
 
 ## Feature Compatibility
 
@@ -148,7 +166,7 @@ A batch below the minimum, or past any of these caps, is refused when it is crea
 | `endpoint`                       |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | `/v1/chat/completions` only                                                 |
 | `completion_window`              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `24h`, as upstream                                                          |
 | `metadata`                       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Up to 16 key-value pairs, returned on every read                            |
-| `output_expires_after`           | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Result files persist until deleted; use an S3 Lifecycle rule instead        |
+| `output_expires_after`           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `anchor: "created_at"` and 1 hour to 30 days, counted from the moment the result files are written; omit it to keep them until deleted |
 | **Per-request body**             |                                          |                                                                             |
 | `messages`, `max_tokens`, sampling |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Same parameters as [Chat Completions](api_openai_chat_completions.md)     |
 | `response_format` `json_object`  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Full support                                                                |

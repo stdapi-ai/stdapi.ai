@@ -4,9 +4,8 @@ from typing import TYPE_CHECKING, Literal, Self
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 
-from stdapi.config import SETTINGS
+from stdapi.aws_s3 import require_url_response_bucket
 from stdapi.input_file import FileIdInputFile, InputFileUrl
-from stdapi.monitoring import log_error_details
 from stdapi.types import (
     BaseModelRequest,
     BaseModelRequestWithExtra,
@@ -303,24 +302,22 @@ class _ImageBaseParams(BaseModelRequestWithExtra):
     @field_validator("response_format", mode="after")
     @classmethod
     def _validate_response_format(cls, value: str) -> str:
-        """Ensure S3 bucket is configured for 'url' format.
+        """Refuse ``url`` when no bucket can host the images it points at.
+
+        Refused here rather than at upload time, so a deployment that cannot
+        serve the format never bills the caller for images it has to discard.
 
         Args:
             value: The response format to validate.
 
         Returns:
             The validated response format.
+
+        Raises:
+            FeatureUnavailableError: No bucket is configured to host the images.
         """
-        if value == "url" and not SETTINGS.aws_s3_bucket:
-            log_error_details(
-                "No S3 bucket configured for presigned URLs. "
-                "AWS_S3_BUCKET environment variable is not set."
-            )
-            msg = (
-                "The url response format is not enabled on this server. "
-                "Please contact the administrator to enabled it."
-            )
-            raise ValueError(msg)
+        if value == "url":
+            require_url_response_bucket()
         return value
 
 

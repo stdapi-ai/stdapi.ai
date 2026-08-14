@@ -541,7 +541,9 @@ class TestStartVideoGeneration:
 
         monkeypatch.setattr(video, "compute_candidate_regions", _candidates)
         monkeypatch.setattr(video, "resolve_routed_model_id", _resolve)
-        monkeypatch.setattr(video, "require_s3_bucket_for_region", lambda _r: "bucket")
+        monkeypatch.setattr(
+            video, "require_s3_bucket_for_region", lambda _r, **_kwargs: "bucket"
+        )
         monkeypatch.setattr(video, "get_client", lambda _service, _region: client)
 
     async def test_start_records_usage_and_targets_regional_bucket(

@@ -20,6 +20,7 @@ from stdapi.batches import (
     cancel_batch,
     create_batch,
     delete_batch,
+    finish_listed,
     get_batch,
     iter_anthropic_results,
     list_batches,
@@ -234,7 +235,10 @@ async def list_all(
         before=before_id[9:] if before_id else None,
         limit=limit,
     )
-    batches = [_to_message_batch(http_request, state) for state in states]
+    batches = [
+        _to_message_batch(http_request, state)
+        for state in await finish_listed(states, settle)
+    ]
     return log_response_params(
         MessageBatchList(
             data=batches,

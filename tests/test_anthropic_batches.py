@@ -550,6 +550,49 @@ class TestMessageBatchLifecycle:
         assert [item["id"] for item in body["data"]] == [batch_id]
         assert body["has_more"] is False
 
+    def test_listing_settles_an_ended_batch(
+        self,
+        anthropic_app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """A batch that ends is billed from the listing, as it is from a retrieval.
+
+        A client polling the listing may never retrieve a batch on its own, and
+        its usage is read from the jobs exactly once, by whichever read first
+        observes the end of the batch — so a listing that did not settle would
+        leave that batch unbilled.
+
+        Ref: https://platform.claude.com/docs/en/api/listing-message-batches
+             stdapi/batches.py:finish_listed
+        """
+        from tests.conftest import logged_usage_entries  # noqa: PLC0415
+
+        s3, bedrock = _batches.install(monkeypatch)
+        batch_id = _create(anthropic_app_client, _requests(100))["id"]
+        bedrock.finish(succeeded=100)
+        _batches.write_job_output(
+            s3,
+            bedrock,
+            [
+                {"recordId": f"req-{index}", "modelOutput": converse_output("answer")}
+                for index in range(100)
+            ],
+            {"inputTokenCount": 500, "outputTokenCount": 300},
+        )
+        capfd.readouterr()
+
+        body = anthropic_app_client.get(f"{_PATH}?limit=10").json()
+
+        assert [item["id"] for item in body["data"]] == [batch_id]
+        assert body["data"][0]["processing_status"] == "ended"
+        (entry,) = logged_usage_entries(
+            capfd.readouterr().out, service="bedrock-runtime"
+        )
+        assert entry["tier"] == "batch"
+        assert entry["input_tokens"] == 500
+        assert entry["output_tokens"] == 300
+
     def test_cursors_page_forwards_and_backwards(
         self, anthropic_app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:

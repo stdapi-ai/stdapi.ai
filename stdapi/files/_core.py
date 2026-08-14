@@ -37,11 +37,12 @@ from uuid import uuid7
 
 from botocore.exceptions import ClientError
 
-from stdapi.api_errors import ApiError
+from stdapi.api_errors import ApiError, FeatureUnavailableError
 from stdapi.api_errors import FileNotExistError as _FileNotFoundError
 from stdapi.aws import get_client
 from stdapi.aws_s3 import (
     BUCKET_TO_REGION,
+    EXPIRING_S3_TAG_SET,
     S3_TAGGING,
     multipart_copy_parts,
     put_s3_object,
@@ -49,8 +50,6 @@ from stdapi.aws_s3 import (
     track_temporary_s3_objects,
 )
 from stdapi.config import SETTINGS
-from stdapi.monitoring import log_error_details
-from stdapi.server import AWS_APN_ID
 from stdapi.types import FILE_ID_PATTERN
 from stdapi.utils import now_utc_timestamp, parse_content_disposition_filename
 
@@ -90,6 +89,9 @@ _BUCKET_CRC32: dict[int, str] = {_crc32(b.encode()): b for b in BUCKET_TO_REGION
 
 #: Compiled matcher for prefixed Files API identifiers.
 _FILE_ID_RE = re_compile(FILE_ID_PATTERN).match
+
+#: The feature name a caller reads when no bucket backs the Files API.
+_FEATURE: str = "The Files API"
 
 
 @dataclass(slots=True)
@@ -137,19 +139,13 @@ def _require_bucket() -> str:
     """Return the configured S3 bucket.
 
     Raises:
-        ApiError: ``aws_s3_bucket`` not configured (503).
+        FeatureUnavailableError: ``aws_s3_bucket`` not configured (503).
     """
     if bucket := SETTINGS.aws_s3_bucket:
         return bucket
-    log_error_details(
-        "S3 bucket not configured (aws_s3_bucket): the Files API is disabled.",
-        level="warning",
+    raise FeatureUnavailableError(
+        _FEATURE, "S3 bucket not configured (aws_s3_bucket): the Files API is disabled."
     )
-    msg = (
-        "The Files API is not available on the current server. "
-        "Please contact the administrator to enable it."
-    )
-    raise ApiError(msg, status=503)
 
 
 def file_id_s3_key(payload: str) -> str:
@@ -369,9 +365,9 @@ async def upload_file(
     """Stream *file* to S3 and return its metadata record.
 
     Metadata is encoded in native S3 object attributes — no database needed.
-    When *expires_after* is set, an S3 object tag ``expires=true`` is added
-    for Lifecycle rule cleanup; code-level expiry is enforced by both
-    :func:`get_file` and :func:`list_files`.
+    When *expires_after* is set, the object is tagged with
+    :data:`EXPIRING_S3_TAG_KEY` for Lifecycle rule cleanup; code-level expiry
+    is enforced by both :func:`get_file` and :func:`list_files`.
 
     Args:
         file: Input file with content and optional filename / content type.
@@ -385,7 +381,11 @@ async def upload_file(
     Raises:
         ApiError: ``aws_s3_bucket`` not configured (503) or invalid filename.
     """
-    bucket = require_s3_bucket_for_region(region) if region else _require_bucket()
+    bucket = (
+        require_s3_bucket_for_region(region, feature=_FEATURE)
+        if region
+        else _require_bucket()
+    )
     payload = encode_id_payload(bucket)
     s3_key = file_id_s3_key(payload)
     expires_at = (
@@ -424,14 +424,7 @@ async def upload_file(
         head = await s3.head_object(Bucket=bucket, Key=s3_key)
     if expires_at is not None:
         await s3.put_object_tagging(
-            Bucket=bucket,
-            Key=s3_key,
-            Tagging={
-                "TagSet": [
-                    {"Key": "stdapi-ai.expires", "Value": "true"},
-                    {"Key": "aws-apn-id", "Value": AWS_APN_ID},
-                ]
-            },
+            Bucket=bucket, Key=s3_key, Tagging={"TagSet": EXPIRING_S3_TAG_SET}
         )
     return _record_from_head(payload, head)
 
@@ -444,6 +437,7 @@ async def put_file_content(
     filename: str,
     purpose: str,
     content_type: str = "application/jsonl",
+    expires_after: int | None = None,
 ) -> None:
     """Store *data* as the Files API object named by *payload*.
 
@@ -458,14 +452,23 @@ async def put_file_content(
         filename: Filename reported by the Files API.
         purpose: OpenAI purpose string stored with the object.
         content_type: MIME type of the content.
+        expires_after: Seconds the content stays readable, counted from now.
+            ``None`` keeps it until it is deleted.
     """
+    expires_at = (
+        now_utc_timestamp() + expires_after if expires_after is not None else None
+    )
     await put_s3_object(
         data,
         content_type,
         bucket=bucket,
         key=file_id_s3_key(payload),
         content_disposition=f'attachment; filename="{_validate_filename(filename)}"',
-        metadata={"expires-at": "", "purpose": purpose},
+        metadata={
+            "expires-at": str(expires_at) if expires_at is not None else "",
+            "purpose": purpose,
+        },
+        expiring=expires_at is not None,
     )
 
 

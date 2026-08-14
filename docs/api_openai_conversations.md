@@ -153,7 +153,7 @@ if a conversation stops accepting items earlier than expected.
 Conversations are stored in Amazon Bedrock session storage in your own account.
 The gateway's IAM role needs the
 [Bedrock Session Storage permissions](operations_iam_permissions.md#bedrock-session-storage-optional);
-without them, conversation requests fail with `403`. Set
+without them, conversation requests fail with `503`. Set
 [`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`](operations_configuration.md#aws-bedrock-session-encryption-key-arn)
 to encrypt conversation content with your own AWS KMS key.
 

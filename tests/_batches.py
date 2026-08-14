@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from botocore.exceptions import ClientError
 
-from stdapi import batches
+from stdapi import aws_s3, batches
 from stdapi.models.chat._default import ChatModel
 
 if TYPE_CHECKING:
@@ -51,9 +51,9 @@ class _Body:
         yield self._data[middle:]
 
 
-def _client_error(code: str, operation: str) -> ClientError:
+def _client_error(code: str, operation: str, message: str | None = None) -> ClientError:
     """Build the ``ClientError`` botocore raises for *code*."""
-    return ClientError({"Error": {"Code": code, "Message": code}}, operation)
+    return ClientError({"Error": {"Code": code, "Message": message or code}}, operation)
 
 
 #: Error codes the fakes raise, named so the raise sites stay one line.
@@ -68,6 +68,7 @@ class FakeS3:
 
     def __init__(self) -> None:
         self.objects: dict[tuple[str, str], bytes] = {}
+        self.options: dict[tuple[str, str], dict[str, Any]] = {}
 
     async def put_object(
         self,
@@ -78,10 +79,11 @@ class FakeS3:
         IfNoneMatch: str | None = None,  # noqa: N803
         **_kwargs: Any,  # noqa: ANN401
     ) -> dict[str, Any]:
-        """Store an object, honouring the create-only precondition."""
+        """Store an object and its write options, honouring the create-only precondition."""
         if IfNoneMatch == "*" and (Bucket, Key) in self.objects:
             raise _client_error(_PRECONDITION, "PutObject")
         self.objects[Bucket, Key] = Body
+        self.options[Bucket, Key] = _kwargs
         return {}
 
     async def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803
@@ -145,13 +147,24 @@ class FakeBedrock:
         self.created: list[dict[str, Any]] = []
         self.stopped: list[str] = []
         self.reject_models: set[str] = set()
+        self.reject_message: str | None = None
         self.stop_error: str | None = None
 
     async def create_model_invocation_job(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
-        """Register a job and return its ARN."""
+        """Register a job and return its ARN.
+
+        A refused model is refused the way the backend refuses one: a flat
+        validation failure whose message names the model it is about, unless
+        ``reject_message`` sets another validation failure to answer with.
+        """
         self.created.append(kwargs)
         if kwargs["modelId"] in self.reject_models:
-            raise _client_error(_VALIDATION, "CreateModelInvocationJob")
+            raise _client_error(
+                _VALIDATION,
+                "CreateModelInvocationJob",
+                self.reject_message
+                or f"Model {kwargs['modelId']} is not supported for batch inference.",
+            )
         job_id = f"job{len(self.jobs)}"
         arn = f"arn:aws:bedrock:{REGION}:123456789012:model-invocation-job/{job_id}"
         self.jobs[arn] = {
@@ -322,7 +335,9 @@ def install(
     monkeypatch.setattr(SETTINGS, "aws_bedrock_batch_role_arn", ROLE_ARN)
     monkeypatch.setattr(batches, "BUCKET_TO_REGION", {BUCKET: REGION})
     monkeypatch.setattr(batches, "resolve_file_bucket", lambda _payload: BUCKET)
-    monkeypatch.setattr(batches, "require_s3_bucket_for_region", lambda _region: BUCKET)
+    monkeypatch.setattr(
+        batches, "require_s3_bucket_for_region", lambda _region, **_kwargs: BUCKET
+    )
     monkeypatch.setattr(
         batches,
         "get_client",
@@ -334,26 +349,13 @@ def install(
             model_id, output_modalities=(models or {}).get(model_id, ["TEXT"])
         )
 
-    async def _put_s3_object(
-        data: bytes, _content_type: str | None = None, **kwargs: str
-    ) -> None:
-        await s3.put_object(Bucket=kwargs["bucket"], Key=kwargs["key"], Body=data)
-
-    async def _put_file_content(
-        payload: str, bucket: str, data: bytes | AsyncIterator[bytes], **_kwargs: object
-    ) -> None:
-        body = data if isinstance(data, bytes) else b"".join([c async for c in data])
-        await s3.put_object(
-            Bucket=bucket, Key=f"{SETTINGS.aws_s3_files_prefix}{payload}", Body=body
-        )
-
     monkeypatch.setattr(batches, "validate_model", _validate_model)
     monkeypatch.setattr(
         batches, "get_chat_model", TranslatingChatModel if translate else StubChatModel
     )
     monkeypatch.setattr(batches, "serves_via_mantle", lambda _model_id: False)
-    monkeypatch.setattr(batches, "put_s3_object", _put_s3_object)
-    monkeypatch.setattr(batches, "put_file_content", _put_file_content)
+    # The real uploader writes to the double, so its captured options are real.
+    monkeypatch.setattr(aws_s3, "get_client", lambda _service, _region=None: s3)
     return s3, bedrock
 
 
@@ -511,7 +513,17 @@ def read_result_file(s3: FakeS3, file_id: str) -> list[dict[str, Any]]:
     """Return the decoded lines of the stored Files API object named by *file_id*."""
     from pydantic_core import from_json  # noqa: PLC0415
 
+    body = s3.objects[BUCKET, _file_key(file_id)]
+    return [from_json(line) for line in body.splitlines()]
+
+
+def result_file_options(s3: FakeS3, file_id: str) -> dict[str, Any]:
+    """Return the S3 write options of the stored Files API object named by *file_id*."""
+    return s3.options[BUCKET, _file_key(file_id)]
+
+
+def _file_key(file_id: str) -> str:
+    """Return the S3 key holding the Files API object named by *file_id*."""
     from stdapi.config import SETTINGS  # noqa: PLC0415
 
-    body = s3.objects[BUCKET, f"{SETTINGS.aws_s3_files_prefix}{file_id[5:]}"]
-    return [from_json(line) for line in body.splitlines()]
+    return f"{SETTINGS.aws_s3_files_prefix}{file_id[5:]}"

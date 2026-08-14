@@ -23,7 +23,11 @@ from typing import TYPE_CHECKING, Any, Literal
 from botocore.exceptions import ClientError
 from pydantic_core import from_json
 
-from stdapi.api_errors import ApiError
+from stdapi.api_errors import (
+    ApiError,
+    FeatureUnavailableError,
+    feature_unavailable_guard,
+)
 from stdapi.aws import get_client
 from stdapi.aws_s3 import BUCKET_TO_REGION, put_s3_object, require_s3_bucket_for_region
 from stdapi.cleanup import schedule_cleanup
@@ -64,7 +68,24 @@ if TYPE_CHECKING:
 #: Which API a batch was created through; its results speak that API's dialect.
 BatchSurface = Literal["openai", "anthropic"]
 
-#: Minimum number of requests a single model must carry, imposed by the backend.
+#: The feature name a caller reads when the deployment cannot run a batch.
+_FEATURE: str = "The Batch API"
+
+#: Permissions a denied job submission names to the operator.
+_CREATE_JOB_PERMISSIONS: str = (
+    "bedrock:CreateModelInvocationJob, or iam:PassRole on the batch service "
+    "role set in 'aws_bedrock_batch_role_arn' with the condition "
+    "iam:PassedToService=bedrock.amazonaws.com"
+)
+
+#: What the operator reads when a job submission is refused as invalid.
+_REFUSED_JOB_DETAIL: str = (
+    "Batch inference job refused: {message}. Check the account's batch quotas "
+    "for this model, the model's own batch availability, and the batch service "
+    "role set in 'aws_bedrock_batch_role_arn'."
+)
+
+#: Default minimum requests one model must carry, set by an adjustable backend quota.
 MIN_REQUESTS_PER_MODEL: int = 100
 
 #: Maximum number of distinct models one batch may fan out to.
@@ -120,6 +141,9 @@ _LIST_SCAN_PAGES: int = 100
 
 #: Requests translated concurrently while a batch is being prepared.
 _BUILD_CONCURRENCY: int = 32
+
+#: Batches whose outcome is stored concurrently while a listing is answered.
+_FINISH_CONCURRENCY: int = 8
 
 #: Last payload byte marking a batch's results file.
 _OUTPUT_FILE_MARKER: int = 1
@@ -211,6 +235,8 @@ class BatchRecord:
         output_file_id: Files API identifier of the results.
         error_file_id: Files API identifier of the failed requests' results.
         usage: Token counters, once the batch has ended.
+        output_expires_after: Seconds the result files stay readable once
+            written, or ``None`` to keep them until they are deleted.
     """
 
     batch_id: str
@@ -221,6 +247,7 @@ class BatchRecord:
     completion_window: str
     input_file_id: str | None = None
     metadata: dict[str, str] | None = None
+    output_expires_after: int | None = None
     jobs: list[BatchJobRef] = field(default_factory=list)
     cancel_initiated_at: int | None = None
     deleted: bool = False
@@ -335,16 +362,11 @@ def require_batches_enabled() -> tuple[str, str]:
     bucket = SETTINGS.aws_s3_bucket
     if role_arn and bucket:
         return role_arn, bucket
-    log_error_details(
+    raise FeatureUnavailableError(
+        _FEATURE,
         "Batch API disabled: 'aws_bedrock_batch_role_arn' and 'aws_s3_bucket' "
         "must both be set.",
-        level="warning",
     )
-    msg = (
-        "The Batch API is not available on the current server. "
-        "Please contact the administrator to enable it."
-    )
-    raise ApiError(msg, status=503)
 
 
 def _derive_file_payload(payload: str, bucket: str, marker: int) -> str:
@@ -711,7 +733,7 @@ async def _submit_job(
     """
     chat_model = await _resolve_model(model)
     region = await chat_model.select_region(s3_required=True)
-    bucket = require_s3_bucket_for_region(region)
+    bucket = require_s3_bucket_for_region(region, feature=_FEATURE)
     try:
         model_id = chat_model.model.get_id(region, inference_profile=True)
     except ModelRegionUnavailableError as exc:
@@ -727,31 +749,33 @@ async def _submit_job(
     await put_s3_object(body, "application/jsonl", bucket=bucket, key=input_key)
     del body
     client: BedrockClient = get_client("bedrock", region)
-    try:
-        response = await client.create_model_invocation_job(
-            jobName=_job_name(payload, index),
-            roleArn=role_arn,
-            modelId=model_id,
-            modelInvocationType="Converse",
-            inputDataConfig={
-                "s3InputDataConfig": {
-                    "s3Uri": f"s3://{bucket}/{input_key}",
-                    "s3InputFormat": "JSONL",
-                }
-            },
-            outputDataConfig={
-                "s3OutputDataConfig": {"s3Uri": f"s3://{bucket}/{prefix}out/"}
-            },
-            timeoutDurationInHours=_BATCH_WINDOW_SECONDS // 3600,
-        )
-    except ClientError as exc:
-        # The requests were written before the job could refuse them: drop them.
-        schedule_cleanup(_delete_object(bucket, input_key))
-        if exc.response["Error"]["Code"] == "ValidationException":
-            log_error_details(exc.response["Error"]["Message"], level="warning")
-            msg = f"The model `{model}` is not available for batched requests."
-            raise ApiError(msg) from exc
-        raise
+    with feature_unavailable_guard(_FEATURE, missing=_CREATE_JOB_PERMISSIONS):
+        try:
+            response = await client.create_model_invocation_job(
+                jobName=_job_name(payload, index),
+                roleArn=role_arn,
+                modelId=model_id,
+                modelInvocationType="Converse",
+                inputDataConfig={
+                    "s3InputDataConfig": {
+                        "s3Uri": f"s3://{bucket}/{input_key}",
+                        "s3InputFormat": "JSONL",
+                    }
+                },
+                outputDataConfig={
+                    "s3OutputDataConfig": {"s3Uri": f"s3://{bucket}/{prefix}out/"}
+                },
+                timeoutDurationInHours=_BATCH_WINDOW_SECONDS // 3600,
+            )
+        except ClientError as exc:
+            # The requests were written before the job could refuse them: drop them.
+            schedule_cleanup(_delete_object(bucket, input_key))
+            error = exc.response["Error"]
+            if error["Code"] == "ValidationException":
+                raise _refused_job(
+                    model, (model_id, chat_model.model.id), error["Message"]
+                ) from exc
+            raise
     job_arn = response["jobArn"]
     return BatchJobRef(
         model=model,
@@ -762,6 +786,34 @@ async def _submit_job(
         model_id=chat_model.model.id,
         requests=len(items),
         prefix=prefix,
+    )
+
+
+def _refused_job(model: str, model_ids: tuple[str, ...], message: str) -> ApiError:
+    """Return the error a submission the backend refused as invalid answers with.
+
+    The backend reports every invalid submission as one flat validation
+    failure, whatever it was about, so the only reliable sign that the *model*
+    is what it refused is the model identifier the submission carried: a
+    message naming it is about that model, and anything else — a quota, the
+    service role, the storage paths — is a deployment problem the caller can
+    neither see nor fix.
+
+    Args:
+        model: Model name as written by the client.
+        model_ids: Backend model identifiers the submission carried.
+        message: The backend's own refusal message.
+
+    Returns:
+        An unsupported-model error naming the model, or a feature this
+        deployment cannot run, with the cause left in the server log.
+    """
+    if any(model_id in message for model_id in model_ids):
+        log_error_details(message, level="warning")
+        msg = f"The model `{model}` is not available for batched requests."
+        return ApiError(msg)
+    return FeatureUnavailableError(
+        _FEATURE, _REFUSED_JOB_DETAIL.format(message=message)
     )
 
 
@@ -795,6 +847,28 @@ async def _stop_job(ref: BatchJobRef) -> None:
         log_error_details(exc.response["Error"]["Message"], level="warning")
 
 
+async def _abandon_jobs(refs: Sequence[BatchJobRef]) -> None:
+    """Stop the jobs of a batch that will never exist, and drop their data.
+
+    A job nothing points at runs for its whole window and is billed for it, so
+    one that cannot be stopped is named to the operator: it is the only trace
+    left of it.
+
+    Args:
+        refs: The jobs that were started.
+    """
+    stops = await gather(*(_stop_job(ref) for ref in refs), return_exceptions=True)
+    for ref, stop in zip(refs, stops, strict=True):
+        if isinstance(stop, BaseException):
+            log_error_details(
+                f"Batch inference job {ref.job_id} was started in {ref.region} but "
+                f"could not be stopped ({stop}), and no batch names it. Stop it "
+                "manually, or it runs and bills until its window ends.",
+                level="warning",
+            )
+    schedule_cleanup(*(_delete_job_data(ref) for ref in refs))
+
+
 async def _write_record(record: BatchRecord) -> None:
     """Store *record* as the batch's own object."""
     s3: S3Client = get_client("s3", BUCKET_TO_REGION.get(record.bucket))
@@ -814,11 +888,13 @@ async def create_batch(
     prepared: Sequence[PreparedRequest],
     input_file_id: str | None = None,
     metadata: dict[str, str] | None = None,
+    output_expires_after: int | None = None,
 ) -> BatchState:
     """Group translated requests by model, start a job per model, and store the batch.
 
-    A job that starts while a sibling fails is stopped again, so a rejected
-    batch leaves nothing running behind it.
+    A job that starts while a sibling fails is stopped again, and so is every
+    job of a batch whose record cannot be stored: nothing that could not be
+    found, cancelled or settled afterwards is left running and billing.
 
     Args:
         surface: API the batch is created through.
@@ -827,6 +903,8 @@ async def create_batch(
         prepared: The translated requests, in input order.
         input_file_id: Files API identifier of the submitted requests.
         metadata: Key-value pairs to attach to the batch.
+        output_expires_after: Seconds the result files stay readable once
+            written, or ``None`` to keep them until they are deleted.
 
     Returns:
         The created batch and the state of its jobs.
@@ -852,8 +930,7 @@ async def create_batch(
     )
     started = [item for item in results if isinstance(item, BatchJobRef)]
     if failures := [item for item in results if isinstance(item, BaseException)]:
-        await gather(*(_stop_job(ref) for ref in started), return_exceptions=True)
-        schedule_cleanup(*(_delete_job_data(ref) for ref in started))
+        await _abandon_jobs(started)
         raise failures[0]
 
     record = BatchRecord(
@@ -865,9 +942,15 @@ async def create_batch(
         completion_window=completion_window,
         input_file_id=input_file_id,
         metadata=metadata,
+        output_expires_after=output_expires_after,
         jobs=started,
     )
-    await _write_record(record)
+    try:
+        await _write_record(record)
+    except BaseException:
+        # Unstored, the batch cannot be found, cancelled or settled by anyone.
+        await _abandon_jobs(started)
+        raise
     return BatchState(
         record, [_pending_state(ref, record.created_at) for ref in started]
     )
@@ -922,6 +1005,7 @@ async def _read_record(payload: str, surface: BatchSurface) -> BatchRecord:
         completion_window=str(data["completion_window"]),
         input_file_id=data.get("input_file_id"),
         metadata=data.get("metadata"),
+        output_expires_after=data.get("output_expires_after"),
         jobs=[BatchJobRef(**job) for job in data.get("jobs", ())],
         cancel_initiated_at=data.get("cancel_initiated_at"),
         deleted=bool(data.get("deleted")),
@@ -952,10 +1036,19 @@ def _to_job_state(
         The job's live state.
     """
     total = int(response.get("totalRecordCount") or ref.requests)
+    # An unknown status is read as still running rather than as finished.
+    status = response.get("status") or "InProgress"
+    if status == "Failed" and (message := response.get("message")):
+        # The client only ever sees the failed count: the reason lands here.
+        log_error_details(
+            f"Batch inference job {ref.job_id} failed: {message}. Check the "
+            "batch service role set in 'aws_bedrock_batch_role_arn' and its "
+            "access to the batch bucket.",
+            level="warning",
+        )
     return JobState(
         ref=ref,
-        # An unknown status is read as still running rather than as finished.
-        status=response.get("status") or "InProgress",
+        status=status,
         submitted_at=int(response["submitTime"].timestamp()),
         ended_at=int(end.timestamp()) if (end := response.get("endTime")) else None,
         total=total,
@@ -1143,8 +1236,7 @@ async def list_batches(
     )
     if after:
         payloads = payloads[payloads.index(after) + 1 :] if after in payloads else []
-    # A `before` cursor asks for the page adjacent to it, not the newest one,
-    # so the newer batches are walked from the cursor outwards.
+    # A `before` cursor pages adjacent to it, so newer batches walk outwards.
     backwards = False
     if before is not None and before in payloads:
         backwards = True
@@ -1171,6 +1263,44 @@ async def list_batches(
             break
     page = states[:limit]
     return (page[::-1] if backwards else page), has_more
+
+
+async def finish_listed(
+    states: Sequence[BatchState], finish: Callable[[BatchState], Awaitable[BatchState]]
+) -> list[BatchState]:
+    """Store the outcome of every listed batch that has just ended.
+
+    A listing is the only view a client that never retrieves a batch has of
+    it, so it settles and publishes exactly as a retrieval does — otherwise
+    the batch's usage is never recorded. A batch still running, or whose
+    outcome is already stored, costs no backend call at all: *finish* returns
+    it untouched, so the work is proportional to the batches that ended since
+    the last read rather than to the size of the page.
+
+    One batch that cannot be settled is reported to the operator and listed as
+    it stands rather than failing the whole page: nothing has been claimed, so
+    the next read settles it.
+
+    Args:
+        states: The batches of the page, in listing order.
+        finish: Coroutine function storing one batch's outcome.
+
+    Returns:
+        The batches, in listing order.
+    """
+    finished: list[BatchState] = []
+    for start in range(0, len(states), _FINISH_CONCURRENCY):
+        wave = states[start : start + _FINISH_CONCURRENCY]
+        results = await gather(*map(finish, wave), return_exceptions=True)
+        for state, result in zip(wave, results, strict=True):
+            if isinstance(result, BaseException):
+                log_error_details(
+                    f"Batch {state.record.batch_id} could not be settled while "
+                    f"listing: {result}.",
+                    level="warning",
+                )
+            finished.append(state if isinstance(result, BaseException) else result)
+    return finished
 
 
 async def _read_manifest(ref: BatchJobRef) -> JsonMapping:
@@ -1221,8 +1351,7 @@ async def _claim_billing(record: BatchRecord) -> bool:
     except ClientError as exc:
         if exc.response["Error"]["Code"] in _ALREADY_CLAIMED_ERRORS:
             return False
-        # Losing the claim for any other reason would lose the usage entry
-        # altogether, which is worse than recording it twice.
+        # Recording usage twice beats losing the entry to a lost claim.
         log_error_details(exc.response["Error"]["Message"], level="warning")
     return True
 
@@ -1499,7 +1628,9 @@ async def materialize_openai_results(state: BatchState) -> BatchState:
     """Write a finished batch's results to the Files API and name them on the batch.
 
     Writing the same batch's results twice writes the same objects, so a
-    second reader observing the end of the batch changes nothing.
+    second reader observing the end of the batch changes nothing.  The
+    expiration the batch was created with is applied to both files, counted
+    from the moment they are written.
 
     Args:
         state: The batch state.
@@ -1509,10 +1640,10 @@ async def materialize_openai_results(state: BatchState) -> BatchState:
     """
     record = state.record
     if not state.ended or state.failed or record.output_file_id is not None:
-        # A failed batch produced no result to publish: naming an empty
-        # results file would tell the client to download nothing.
+        # A failed batch has no results; an empty file would mislead the client.
         return state
     bucket = record.bucket
+    expires_after = record.output_expires_after
     output_payload = _derive_file_payload(record.batch_id, bucket, _OUTPUT_FILE_MARKER)
     await put_file_content(
         output_payload,
@@ -1520,6 +1651,7 @@ async def materialize_openai_results(state: BatchState) -> BatchState:
         iter_openai_results(record, errors=False),
         filename=f"batch_{record.batch_id}_output.jsonl",
         purpose="batch_output",
+        expires_after=expires_after,
     )
     record.output_file_id = f"file-{output_payload}"
     if state.errored:
@@ -1532,6 +1664,7 @@ async def materialize_openai_results(state: BatchState) -> BatchState:
             iter_openai_results(record, errors=True),
             filename=f"batch_{record.batch_id}_error.jsonl",
             purpose="batch_output",
+            expires_after=expires_after,
         )
         record.error_file_id = f"file-{error_payload}"
     await _write_record(record)
@@ -1570,8 +1703,7 @@ async def read_input_requests(file_id: str) -> list[JsonMapping]:
     lines: list[JsonMapping] = []
     async for index, line in _enumerate(_iter_jsonl(content)):
         if index >= maximum:
-            # Refused here rather than after the decode, so an oversized file
-            # cannot be materialised into memory first.
+            # Refused mid-decode, so an oversized file is never materialised in memory.
             msg = (
                 f"A batch may carry at most {maximum} requests; '{file_id}' "
                 f"carries more."
@@ -1702,6 +1834,7 @@ __all__ = [
     "cancel_batch",
     "create_batch",
     "delete_batch",
+    "finish_listed",
     "get_batch",
     "iter_anthropic_results",
     "iter_openai_results",

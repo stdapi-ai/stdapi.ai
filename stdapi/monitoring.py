@@ -15,7 +15,7 @@ from sse_starlette import ServerSentEvent
 from starlette.requests import HTTPConnection  # noqa: TC002
 
 from stdapi import server
-from stdapi.api_errors import ApiError
+from stdapi.api_errors import ApiError, denied_feature_unavailable
 from stdapi.api_providers import format_http_error
 from stdapi.aws_bedrock import AWS_ERROR_MAP
 from stdapi.config import SETTINGS, LogLevel
@@ -126,9 +126,7 @@ class EventLog(TypedDict):
     request_user_id: NotRequired[str]  # User ID passed from request
     request_org_id: NotRequired[str]  # Org ID passed from request
 
-    # Role session name the AWS usage of this request was billed under, when
-    # per-end-user cost attribution is enabled; the same name AWS reports in
-    # the Cost and Usage Report's caller identity column.
+    # Role session name the AWS usage was billed under, as the CUR reports it
     aws_role_session_name: NotRequired[str]
 
     # Edge correlation headers from the incoming request, when present
@@ -490,8 +488,7 @@ def log_request_event(request: HTTPConnection) -> Generator[EventLog]:
         )
         else webuuid()
     )
-    # A WebSocket scope carries no method; its handshake is the GET the client
-    # sent, which is also what an access log upstream of the upgrade records.
+    # A WebSocket scope carries no method; its handshake was a GET.
     method = request.scope.get("method", "GET")
     request_id_token = REQUEST_ID.set(request_id)
     request_time_token = REQUEST_TIME.set(request_time := SETTINGS.now())
@@ -722,6 +719,8 @@ def log_background_event(
         id=request_id,
         event=event,
     )
+    # Without it, the work logs into a finalized request log, or nowhere.
+    request_log_token = REQUEST_LOG.set(log)
     start = perf_counter_ns()
     try:
         with (
@@ -741,6 +740,7 @@ def log_background_event(
             USAGE.reset(usage_token)
             MODEL_STATE.reset(model_state_token)
         _attach_aws_api_calls(log)
+        REQUEST_LOG.reset(request_log_token)
         write_log_event(log)
 
 
@@ -877,6 +877,30 @@ async def log_request_stream_event[T](stream: AsyncGenerator[T]) -> AsyncGenerat
     return _rebuild_and_log_stream(await stream.__anext__(), stream)
 
 
+def _api_error_sse_event(exc: ApiError) -> ServerSentEvent:
+    """Log an API error and render it as the stream's terminal ``error`` event.
+
+    Args:
+        exc: The API error ending the stream.
+
+    Returns:
+        The provider-formatted ``error`` event to send the client.
+    """
+    log_error_details(exc.args[0], status=exc.status)
+    return ServerSentEvent(
+        data=to_json_str(
+            format_http_error(
+                REQUEST.get(),
+                exc.status,
+                hide_security_details(exc.status, exc.args[0]),
+                exc.param,
+                exc.code,
+            )[0]
+        ),
+        event="error",
+    )
+
+
 async def log_request_sse_stream_event(
     stream: AsyncGenerator[ServerSentEvent],
 ) -> AsyncGenerator[ServerSentEvent]:
@@ -902,21 +926,11 @@ async def log_request_sse_stream_event(
         # The adapter already emitted spec-compliant error events; log only.
         log_error_details(exc.args[0], status=exc.status, level=exc.level)
     except ApiError as exc:
-        status = exc.status
-        log_error_details(exc.args[0], status=status)
-        yield ServerSentEvent(
-            data=to_json_str(
-                format_http_error(
-                    REQUEST.get(),
-                    status,
-                    hide_security_details(status, exc.args[0]),
-                    exc.param,
-                    exc.code,
-                )[0]
-            ),
-            event="error",
-        )
+        yield _api_error_sse_event(exc)
     except ClientError as exc:
+        if (denied := denied_feature_unavailable(exc)) is not None:
+            yield _api_error_sse_event(denied)
+            return
         error = exc.response["Error"]
         status = AWS_ERROR_MAP.get(error["Code"], (502, "server_error"))[0]
         log_error_details(error["Message"], status=status)

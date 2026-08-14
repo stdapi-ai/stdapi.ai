@@ -19,10 +19,12 @@ Ref: https://developers.openai.com/api/docs/guides/batch.md
 """
 
 import contextlib
+from datetime import UTC, datetime
 from json import dumps
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from botocore.exceptions import ClientError
 
 from stdapi import batches
 from tests import _batches
@@ -472,6 +474,195 @@ class TestOpenAIBatchValidation:
         assert isinstance(error, dict)
         assert "not available on the current server" in error["message"]
 
+    def test_a_region_without_storage_names_the_batch_api(
+        self,
+        app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """A model whose region has no bucket refuses as the Batch API, not another one.
+
+        The same bucket resolution serves async invocation, the Files API and
+        batches; an operator reading "async invocation" in the log for a batch
+        that could not start goes looking at a feature nobody used.
+
+        Ref: stdapi/batches.py:_submit_job
+             stdapi/aws_s3.py:require_s3_bucket_for_region
+        """
+        from stdapi.aws_s3 import require_s3_bucket_for_region  # noqa: PLC0415
+        from stdapi.config import SETTINGS  # noqa: PLC0415
+
+        _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        monkeypatch.setattr(
+            batches, "require_s3_bucket_for_region", require_s3_bucket_for_region
+        )
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["eu-west-1"])
+        monkeypatch.setattr(SETTINGS, "aws_s3_regional_buckets", {})
+
+        body = _create(app_client, file_id)
+
+        assert body["http_status"] == 503
+        assert body["error"]["message"].startswith("The Batch API is not available")
+        logged = capfd.readouterr().out
+        assert "aws_s3_regional_buckets" in logged
+
+    def test_a_denied_submission_answers_like_a_disabled_deployment(
+        self,
+        app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """A missing permission is the operator's problem, not the caller's.
+
+        ``CreateModelInvocationJob`` is denied both when the role cannot start a
+        job and when it cannot pass the batch service role to Amazon Bedrock;
+        the caller reads the same message as an unconfigured deployment, while
+        the log names both permissions.
+
+        Ref: stdapi/batches.py:_submit_job
+             stdapi/api_errors.py:feature_unavailable_guard
+        """
+        _, bedrock = _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+
+        async def _denied(**_kwargs: object) -> dict[str, Any]:
+            raise ClientError(
+                {"Error": {"Code": "AccessDeniedException", "Message": "denied"}},
+                "CreateModelInvocationJob",
+            )
+
+        monkeypatch.setattr(bedrock, "create_model_invocation_job", _denied)
+        body = _create(app_client, file_id)
+
+        assert body["http_status"] == 503
+        assert "not available on the current server" in body["error"]["message"]
+        assert "PassRole" not in body["error"]["message"]
+        logged = capfd.readouterr().out
+        assert "bedrock:CreateModelInvocationJob" in logged
+        assert "iam:PassRole" in logged
+        assert "aws_bedrock_batch_role_arn" in logged
+
+    def test_a_model_the_backend_refuses_is_named_to_the_caller(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A model the backend will not batch is refused as that model's limitation.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference-supported.html
+             stdapi/batches.py:_refused_job
+        """
+        _, bedrock = _batches.install(monkeypatch)
+        bedrock.reject_models = {"amazon.nova-micro-v1:0"}
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+
+        body = _create(app_client, file_id)
+
+        assert body["http_status"] == 400
+        assert "not available for batched requests" in body["error"]["message"]
+        assert "amazon.nova-micro-v1:0" in body["error"]["message"]
+
+    def test_another_validation_failure_does_not_blame_the_model(
+        self,
+        app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """A refusal that is not about the model does not report it as one.
+
+        The backend reports a quota, a service role or an account restriction
+        as the same flat validation failure as an unbatchable model. Reading
+        "the model is not available for batched requests" for a model the
+        account simply has not used recently sends both the caller and the
+        operator looking in the wrong place, so only the message naming the
+        model keeps that answer; the rest is a deployment problem, with the
+        real cause in the server log.
+
+        Ref: stdapi/batches.py:_refused_job
+             stdapi/api_errors.py:FeatureUnavailableError
+        """
+        _, bedrock = _batches.install(monkeypatch)
+        bedrock.reject_models = {"amazon.nova-micro-v1:0"}
+        bedrock.reject_message = (
+            "This Model is marked by provider as Legacy and you have not been "
+            "actively using the model in the last 30 days."
+        )
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        capfd.readouterr()
+
+        body = _create(app_client, file_id)
+
+        assert body["http_status"] == 503
+        assert body["error"]["code"] == "feature_unavailable"
+        assert "not available for batched requests" not in body["error"]["message"]
+        assert "Legacy" not in body["error"]["message"]
+        logged = capfd.readouterr().out
+        assert "marked by provider as Legacy" in logged
+        assert "aws_bedrock_batch_role_arn" in logged
+
+    def test_a_failed_job_reports_its_reason_to_the_operator(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """The backend's failure message is logged when a job reports ``Failed``.
+
+        A batch that fails wholesale — the service role cannot read its input,
+        typically — carries the reason only in the job description, and the
+        client is told nothing but a count of failures.
+
+        Ref: stdapi/batches.py:_to_job_state
+        """
+        del monkeypatch
+        ref = batches.BatchJobRef(
+            model="stub-model",
+            region=_batches.REGION,
+            bucket=_batches.BUCKET,
+            job_arn="arn:aws:bedrock:us-east-1:123456789012:model-invocation-job/j1",
+            job_id="j1",
+            model_id="stub-model",
+            requests=100,
+            prefix="batches/1/0/",
+        )
+        response = {
+            "status": "Failed",
+            "message": "Access denied when calling s3:GetObject on the input.",
+            "submitTime": datetime(2026, 8, 12, tzinfo=UTC),
+        }
+
+        state = batches._to_job_state(ref, response)  # type: ignore[arg-type] # noqa: SLF001
+
+        assert state.status == "Failed"
+        details = " ".join(str(detail) for detail in request_log["error_detail"])
+        assert "s3:GetObject" in details
+        assert "aws_bedrock_batch_role_arn" in details
+        assert request_log["level"] == "warning"
+
+    def test_a_running_job_logs_nothing(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """A job still running writes no warning, whatever message it carries.
+
+        Ref: stdapi/batches.py:_to_job_state
+        """
+        del monkeypatch
+        ref = batches.BatchJobRef(
+            model="stub-model",
+            region=_batches.REGION,
+            bucket=_batches.BUCKET,
+            job_arn="arn:aws:bedrock:us-east-1:123456789012:model-invocation-job/j1",
+            job_id="j1",
+            model_id="stub-model",
+            requests=100,
+            prefix="batches/1/0/",
+        )
+        response = {
+            "status": "InProgress",
+            "message": "Validating input",
+            "submitTime": datetime(2026, 8, 12, tzinfo=UTC),
+        }
+
+        batches._to_job_state(ref, response)  # type: ignore[arg-type] # noqa: SLF001
+
+        assert "error_detail" not in request_log
+
 
 @pytest.mark.local
 class TestOpenAIBatchLifecycle:
@@ -612,6 +803,105 @@ class TestOpenAIBatchLifecycle:
         assert first["response"]["status_code"] == 200
         assert first["error"] is None
         assert first["response"]["body"]["choices"][0]["message"]["content"] == "answer"
+
+    def _completed_batch(
+        self,
+        app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        extra: dict[str, Any] | None = None,
+    ) -> tuple[_batches.FakeS3, dict[str, Any]]:
+        """Run a batch of 100 answers to completion and return the store and the batch."""
+        s3, bedrock = _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        response = app_client.post(
+            "/v1/batches",
+            json={
+                "input_file_id": file_id,
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+                **(extra or {}),
+            },
+        )
+        assert response.status_code == 200, response.text
+        bedrock.finish(succeeded=100)
+        _batches.write_job_output(
+            s3,
+            bedrock,
+            [
+                {"recordId": f"req-{index}", "modelOutput": converse_output("answer")}
+                for index in range(100)
+            ],
+            {"inputTokenCount": 500, "outputTokenCount": 300},
+        )
+        return s3, app_client.get(f"/v1/batches/{response.json()['id']}").json()
+
+    def test_output_expires_after_sets_the_result_file_expiry(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`output_expires_after` expires the result file instead of keeping it forever.
+
+        Result files are the batch's own output: without the policy the caller
+        asked for, they stay in storage, and are paid for, until deleted by hand.
+
+        Ref: https://developers.openai.com/api/reference/resources/batches/methods/create
+             stdapi/batches.py:materialize_openai_results
+        """
+        before = int(datetime.now(UTC).timestamp())
+        s3, body = self._completed_batch(
+            app_client,
+            monkeypatch,
+            {"output_expires_after": {"anchor": "created_at", "seconds": 3600}},
+        )
+        assert body["status"] == "completed"
+        options = _batches.result_file_options(s3, body["output_file_id"])
+        assert int(options["Metadata"]["expires-at"]) >= before + 3600
+        assert "stdapi-ai.expires=true" in options["Tagging"]
+
+    def test_result_files_are_kept_when_no_policy_is_asked_for(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The control case: an omitted policy keeps the results until deleted.
+
+        Ref: https://developers.openai.com/api/reference/resources/batches/methods/create
+             stdapi/files/_core.py:put_file_content
+        """
+        s3, body = self._completed_batch(app_client, monkeypatch)
+        options = _batches.result_file_options(s3, body["output_file_id"])
+        assert options["Metadata"]["expires-at"] == ""
+        assert "stdapi-ai.expires" not in options["Tagging"]
+
+    @pytest.mark.parametrize(
+        "policy",
+        [
+            {"anchor": "created_at", "seconds": 3599},
+            {"anchor": "created_at", "seconds": 2592001},
+            {"anchor": "completed_at", "seconds": 3600},
+        ],
+        ids=["too_short", "too_long", "unknown_anchor"],
+    )
+    def test_out_of_range_expiry_is_refused(
+        self,
+        app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        policy: dict[str, Any],
+    ) -> None:
+        """A policy upstream does not accept is refused before the batch runs.
+
+        Ref: https://developers.openai.com/api/reference/resources/batches/methods/create
+             stdapi/types/openai_batches.py:BatchOutputExpiresAfter
+        """
+        _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        response = app_client.post(
+            "/v1/batches",
+            json={
+                "input_file_id": file_id,
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+                "output_expires_after": policy,
+            },
+        )
+        assert response.status_code == 400
 
     def test_usage_is_billed_once_at_the_batch_rate(
         self,
@@ -813,16 +1103,21 @@ class TestOpenAIBatchLifecycle:
 
         A deployment whose role cannot stop jobs would otherwise answer 200,
         record the cancellation, and let the batch run for a day at full cost
-        while every poll claims it is stopping.
+        while every poll claims it is stopping. The refusal is that role's
+        missing `bedrock:StopModelInvocationJob`, so it answers as a feature
+        this deployment cannot run -- the same as a denied batch creation,
+        rather than a 403 blaming the caller's own key.
 
         Ref: stdapi/batches.py:_stop_job
+             stdapi/api_errors.py:denied_feature_unavailable
         """
         _, bedrock = _batches.install(monkeypatch)
         file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
         batch_id = _create(app_client, file_id)["id"]
         bedrock.stop_error = "AccessDeniedException"
         response = app_client.post(f"/v1/batches/{batch_id}/cancel")
-        assert response.status_code == 403
+        assert response.status_code == 503
+        assert response.json()["error"]["code"] == "feature_unavailable"
         after = app_client.get(f"/v1/batches/{batch_id}").json()
         assert after["status"] == "validating"
         assert "cancelling_at" not in after
@@ -883,6 +1178,203 @@ class TestOpenAIBatchLifecycle:
         assert body["object"] == "list"
         assert [item["id"] for item in body["data"]] == [batch_id]
         assert body["has_more"] is False
+
+    def _ended_batch(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[_batches.FakeS3, _batches.FakeBedrock, str]:
+        """Run a batch of 100 answers to its end without ever retrieving it."""
+        s3, bedrock = _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        batch_id = _create(app_client, file_id)["id"]
+        bedrock.finish(succeeded=100)
+        _batches.write_job_output(
+            s3,
+            bedrock,
+            [
+                {"recordId": f"req-{index}", "modelOutput": converse_output("answer")}
+                for index in range(100)
+            ],
+            {"inputTokenCount": 500, "outputTokenCount": 300},
+        )
+        return s3, bedrock, batch_id
+
+    def test_listing_settles_and_publishes_an_ended_batch(
+        self,
+        app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """A batch first seen in the listing is settled and published there.
+
+        A client that polls the listing never retrieves a batch on its own, so
+        a listing reporting `completed` with no `output_file_id` would leave it
+        with nowhere to read its results — and its usage unrecorded until
+        somebody happened to retrieve it, which is a batch nobody is billed for.
+
+        Ref: https://developers.openai.com/api/docs/guides/batch
+             stdapi/batches.py:finish_listed
+        """
+        from tests.conftest import logged_usage_entries  # noqa: PLC0415
+
+        s3, _, batch_id = self._ended_batch(app_client, monkeypatch)
+        capfd.readouterr()
+
+        (listed,) = app_client.get("/v1/batches?limit=10").json()["data"]
+
+        assert listed["id"] == batch_id
+        assert listed["status"] == "completed"
+        assert listed["usage"]["input_tokens"] == 500
+        assert listed["usage"]["output_tokens"] == 300
+        assert len(_batches.read_result_file(s3, listed["output_file_id"])) == 100
+        (entry,) = logged_usage_entries(
+            capfd.readouterr().out, service="bedrock-runtime"
+        )
+        assert entry["tier"] == "batch"
+        assert entry["input_tokens"] == 500
+
+    def test_listing_settles_only_what_changed(
+        self,
+        app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """A listing costs nothing for a batch that is running or already settled.
+
+        Settling is what makes a listing expensive — every job's counters, then
+        the whole results file — so a page of batches must not pay for it on
+        every poll, only for the ones that ended since the last read.
+
+        Ref: stdapi/batches.py:finish_listed
+        """
+        from tests.conftest import logged_usage_entries  # noqa: PLC0415
+
+        s3, _, _ = self._ended_batch(app_client, monkeypatch)
+        _create(app_client, _batches.install_input_file(monkeypatch, chat_lines(100)))
+        assert len(app_client.get("/v1/batches?limit=10").json()["data"]) == 2
+        capfd.readouterr()
+        read: list[str] = []
+        written: list[str] = []
+        get_object, put_object = s3.get_object, s3.put_object
+
+        async def _read(*, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803
+            read.append(Key)
+            return await get_object(Bucket=Bucket, Key=Key)
+
+        async def _write(*, Key: str, **kwargs: Any) -> dict[str, Any]:  # noqa: N803, ANN401
+            written.append(Key)
+            return await put_object(Key=Key, **kwargs)
+
+        monkeypatch.setattr(s3, "get_object", _read)
+        monkeypatch.setattr(s3, "put_object", _write)
+
+        body = app_client.get("/v1/batches?limit=10").json()
+
+        assert len(body["data"]) == 2
+        # The records themselves, and not one job counter or results file.
+        assert not [key for key in read if key.endswith(".out")]
+        assert not written
+        assert not logged_usage_entries(
+            capfd.readouterr().out, service="bedrock-runtime"
+        )
+
+    def test_a_batch_that_cannot_be_settled_still_lists(
+        self,
+        app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """One batch that cannot be settled does not take the whole page down.
+
+        Nothing is claimed by a settlement that failed, so the batch is listed
+        as it stands and the next read settles it; failing the listing instead
+        would leave the client unable to see any of its batches.
+
+        Ref: stdapi/batches.py:finish_listed
+        """
+        s3, _, batch_id = self._ended_batch(app_client, monkeypatch)
+        get_object = s3.get_object
+
+        async def _read(*, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803
+            if Key.endswith("manifest.json.out"):
+                raise ClientError(
+                    {"Error": {"Code": "InternalError", "Message": "storage failed"}},
+                    "GetObject",
+                )
+            return await get_object(Bucket=Bucket, Key=Key)
+
+        monkeypatch.setattr(s3, "get_object", _read)
+        capfd.readouterr()
+
+        response = app_client.get("/v1/batches?limit=10")
+
+        assert response.status_code == 200
+        (listed,) = response.json()["data"]
+        assert listed["id"] == batch_id
+        assert listed["status"] == "completed"
+        assert "output_file_id" not in listed
+        assert "usage" not in listed
+        assert "could not be settled" in capfd.readouterr().out
+
+    def test_a_batch_that_cannot_be_stored_stops_its_jobs(
+        self,
+        app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """A batch whose record cannot be written leaves no job running.
+
+        The record is the only thing that names the jobs: without it nothing
+        can find, cancel or settle them, and they would run for their whole
+        window and be billed with no trace an operator could act on.
+
+        Ref: stdapi/batches.py:create_batch
+        """
+        s3, bedrock = _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+
+        async def _unwritable(_record: batches.BatchRecord) -> None:
+            raise ClientError(
+                {"Error": {"Code": "InternalError", "Message": "storage failed"}},
+                "PutObject",
+            )
+
+        monkeypatch.setattr(batches, "_write_record", _unwritable)
+        capfd.readouterr()
+
+        body = _create(app_client, file_id)
+
+        assert body["http_status"] >= 500
+        assert bedrock.stopped == list(bedrock.jobs)
+        assert not [key for (_b, key) in s3.objects if key.endswith(".jsonl")]
+
+    def test_a_job_that_cannot_be_stopped_is_named_to_the_operator(
+        self,
+        app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """A job left running by a failed creation is reported, since nothing else can.
+
+        Ref: stdapi/batches.py:_abandon_jobs
+        """
+        _, bedrock = _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+
+        async def _unwritable(_record: batches.BatchRecord) -> None:
+            raise ClientError(
+                {"Error": {"Code": "InternalError", "Message": "storage failed"}},
+                "PutObject",
+            )
+
+        monkeypatch.setattr(batches, "_write_record", _unwritable)
+        bedrock.stop_error = "AccessDeniedException"
+        capfd.readouterr()
+
+        assert _create(app_client, file_id)["http_status"] >= 500
+
+        logged = capfd.readouterr().out
+        assert "could not be stopped" in logged
+        assert "bills until its window ends" in logged
 
     def test_unknown_batch_is_not_found(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch

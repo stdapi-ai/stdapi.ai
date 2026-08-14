@@ -230,8 +230,7 @@ async def create(
         for key, value in (body.metadata or {}).items()
         if isinstance(value, str)
     }
-    # Prepared before the conversation exists, so a rejected item leaves no
-    # empty conversation behind.
+    # Prepared first, so a rejected item leaves no empty conversation behind.
     items = await _new_items(body.items or (), None)
     conversation_id, created_at = await create_conversation(metadata)
     if items:

@@ -17,6 +17,7 @@ from stdapi.batches import (
     BatchState,
     cancel_batch,
     create_batch,
+    finish_listed,
     get_batch,
     list_batches,
     materialize_openai_results,
@@ -129,16 +130,16 @@ def _to_batch(state: BatchState) -> Batch:
     )
 
 
-async def _finish(state: BatchState) -> Batch:
-    """Total and publish a batch's results once it has ended, then answer it.
+async def _finish(state: BatchState) -> BatchState:
+    """Total and publish a batch's results once it has ended.
 
     Args:
         state: The batch state.
 
     Returns:
-        Serialisable ``Batch``.
+        The batch state, with its usage and its result files named.
     """
-    return _to_batch(await materialize_openai_results(await settle(state)))
+    return await materialize_openai_results(await settle(state))
 
 
 @router.post(
@@ -158,7 +159,9 @@ async def _finish(state: BatchState) -> Batch:
         "Returns the `Batch` immediately. Poll `openai_batch_get` until its "
         "`status` is `completed`, then download `output_file_id` with "
         "`openai_file_content`. Results may come back in any order — match them "
-        "to the requests by `custom_id`."
+        "to the requests by `custom_id`.\n\n"
+        "Set `output_expires_after` to have the result files deleted "
+        "automatically once they are no longer needed."
     ),
     response_description="The created batch.",
     responses={
@@ -184,8 +187,7 @@ async def create(
             batched; 503 when the Batch API is not enabled.
     """
     log_request_params(request)
-    # Checked before the input file is read: a server without batches must not
-    # spend a 200 MB parse on a request it can only answer with a 503.
+    # Before the input file is read, so a 503 costs no 200 MB parse.
     require_batches_enabled()
     lines = await read_input_requests(request.input_file_id)
     prepared = await prepare_openai_requests(lines, request.endpoint)
@@ -199,6 +201,11 @@ async def create(
                 prepared=prepared,
                 input_file_id=request.input_file_id,
                 metadata=request.metadata,
+                output_expires_after=(
+                    request.output_expires_after.seconds
+                    if request.output_expires_after
+                    else None
+                ),
             )
         )
     )
@@ -242,7 +249,7 @@ async def list_all(
     states, has_more = await list_batches(
         "openai", after=after[6:] if after else None, limit=limit
     )
-    batches = [_to_batch(state) for state in states]
+    batches = [_to_batch(state) for state in await finish_listed(states, _finish)]
     return log_response_params(
         BatchList(
             data=batches,
@@ -285,7 +292,9 @@ async def retrieve(
         ApiError: With 404 if the batch does not exist.
     """
     log_request_params({"batch_id": batch_id})
-    return log_response_params(await _finish(await get_batch(batch_id[6:], "openai")))
+    return log_response_params(
+        _to_batch(await _finish(await get_batch(batch_id[6:], "openai")))
+    )
 
 
 @router.post(

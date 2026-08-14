@@ -657,6 +657,162 @@ class TestBotocoreClientErrorEnvelope:
         assert err["code"] is None
 
 
+#: An AWS authorization message, as IAM writes it: principal, action, resource.
+_DENIAL_MESSAGE = (
+    "User: arn:aws:sts::123456789012:assumed-role/stdapi-ai/task is not "
+    "authorized to perform: bedrock:InvokeModel on resource: "
+    "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-micro-v1:0"
+)
+
+
+@pytest.mark.usefixtures("request_log")
+class TestAccessDeniedNamesWhoWasDenied:
+    """A denied AWS call answers for the identity AWS actually evaluated.
+
+    The gateway signs with its own role, so a denial is the deployment's own
+    misconfiguration and reaches the caller as a feature this server cannot
+    run -- the same answer on every route, whichever call was refused. The one
+    exception is a model invocation signed as its end user, where AWS decided
+    about *that* caller against a policy the operator wrote on purpose.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
+         stdapi/api_errors.py:denied_feature_unavailable
+         stdapi/aws.py:USER_ROLE_OPERATIONS
+    """
+
+    @pytest.mark.parametrize(
+        ("code", "operation"),
+        [
+            ("AccessDeniedException", "Converse"),
+            ("AccessDeniedException", "StopModelInvocationJob"),
+            ("AccessDenied", "GetObject"),
+        ],
+    )
+    async def test_a_denial_of_the_server_role_is_a_feature_it_cannot_run(
+        self, code: str, operation: str
+    ) -> None:
+        """Every server-role denial answers 503 ``feature_unavailable``.
+
+        A 403 ``permission_error`` reads, in every OpenAI and Anthropic SDK, as
+        the caller's own key lacking permission -- blaming them for an IAM
+        policy only the operator can fix, and differing from the 503 the guarded
+        call sites already answer with for the very same misconfiguration.
+        """
+        response = await handle_botocore_client_error(
+            _openai_request(),
+            make_client_error(code, operation, message=_DENIAL_MESSAGE, status=403),
+        )
+        err = _assert_openai_error_shape(json.loads(bytes(response.body)))
+        assert response.status_code == 503
+        assert err["code"] == "feature_unavailable"
+        assert err["message"] == (
+            "The requested feature is not available on the current server. "
+            "Please contact the administrator to enable it."
+        )
+
+    async def test_the_caller_reads_nothing_of_the_denial(self) -> None:
+        """No role, account, action or resource of AWS's message reaches the client."""
+        response = await handle_botocore_client_error(
+            _openai_request(),
+            make_client_error(
+                "AccessDeniedException", "Converse", message=_DENIAL_MESSAGE
+            ),
+        )
+        body = str(bytes(response.body))
+        for leaked in ("arn:aws", "123456789012", "bedrock:InvokeModel", "nova-micro"):
+            assert leaked not in body, leaked
+
+    async def test_the_operator_reads_the_permission_and_the_model(
+        self, request_log: dict[str, Any]
+    ) -> None:
+        """The server log names the operation, the model and what AWS refused.
+
+        A warning that does not say which permission is absent has reported
+        nothing: it is the only half of this answer an operator can act on.
+        """
+        request_log["model_id"] = "amazon.nova-micro-v1:0"
+        await handle_botocore_client_error(
+            _openai_request(),
+            make_client_error(
+                "AccessDeniedException", "Converse", message=_DENIAL_MESSAGE
+            ),
+        )
+        (detail,) = [
+            str(entry)
+            for entry in request_log["error_detail"]
+            if "Access denied" in str(entry)
+        ]
+        assert "Converse" in detail
+        assert "amazon.nova-micro-v1:0" in detail
+        assert "bedrock:InvokeModel" in detail
+
+    async def test_an_end_user_denial_stays_the_callers_own(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """An invocation signed as its end user keeps answering 403.
+
+        With per-user attribution on, AWS evaluated a policy written about that
+        end user; reporting it as a server-wide outage would hide an
+        authorization decision the deployment makes deliberately, and have every
+        SDK retry a refusal that is permanent for that caller.
+        """
+        monkeypatch.setattr(
+            SETTINGS, "aws_bedrock_user_role_arn", "arn:aws:iam::123456789012:role/eu"
+        )
+        request_log["aws_role_session_name"] = "alice-0123456789ab"
+        response = await handle_botocore_client_error(
+            _openai_request(),
+            make_client_error(
+                "AccessDeniedException", "Converse", message=_DENIAL_MESSAGE
+            ),
+        )
+        err = _assert_openai_error_shape(json.loads(bytes(response.body)))
+        assert response.status_code == 403
+        assert err["type"] == "permission_error"
+        assert err["message"] == "Forbidden"
+
+    async def test_a_server_signed_call_is_not_read_as_the_end_users(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With per-user attribution on, an unattributed call is still the server's.
+
+        Only invocations run under an end user's session; a request that names
+        none, and every non-invocation call, keeps the server's own identity, so
+        its denial stays the deployment's.
+        """
+        monkeypatch.setattr(
+            SETTINGS, "aws_bedrock_user_role_arn", "arn:aws:iam::123456789012:role/eu"
+        )
+        response = await handle_botocore_client_error(
+            _openai_request(),
+            make_client_error(
+                "AccessDeniedException", "Converse", message=_DENIAL_MESSAGE
+            ),
+        )
+        assert response.status_code == 503
+
+    async def test_a_denial_of_a_call_no_end_user_can_sign_stays_the_servers(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """A session-signed request's *other* AWS calls answer as the server's.
+
+        The end user's session covers model invocations alone, so a guardrail,
+        a batch or an S3 call refused during the same request is a missing
+        permission on the server's own role.
+        """
+        monkeypatch.setattr(
+            SETTINGS, "aws_bedrock_user_role_arn", "arn:aws:iam::123456789012:role/eu"
+        )
+        request_log["aws_role_session_name"] = "alice-0123456789ab"
+        response = await handle_botocore_client_error(
+            _openai_request(),
+            make_client_error(
+                "AccessDeniedException", "ApplyGuardrail", message=_DENIAL_MESSAGE
+            ),
+        )
+        assert response.status_code == 503
+
+
 def _tagged_request(tag: str) -> Request:
     """Build a request whose resolved route carries the given API provider tag.
 

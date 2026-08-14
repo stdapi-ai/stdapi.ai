@@ -13,6 +13,7 @@ from typing_extensions import TypedDict
 
 from stdapi.api_errors import (
     ApiError,
+    FeatureUnavailableError,
     InvalidLanguageFormatError,
     UnsupportedParameterError,
 )
@@ -83,6 +84,9 @@ AWS_TRANSCRIBE_MODEL_ID = "amazon.transcribe"
 
 #: Ordinal value of the "A" letter used as speaker label
 _A_ORDINAL_VALUE = ord("A")
+
+#: The feature name a caller reads when no region can stage a transcription job.
+_TRANSCRIPTION_FEATURE = "Transcription"
 
 
 class _TranscribeContentRedaction(BaseModelResponse):
@@ -1017,16 +1021,12 @@ class AudioModel(AudioModelBase[None, None]):
 
         candidates = transcribe_job_candidates()
         if not candidates:
-            log_error_details(
+            raise FeatureUnavailableError(
+                _TRANSCRIPTION_FEATURE,
                 "No S3 bucket configured for AWS Transcribe: set AWS_S3_BUCKET, "
                 "AWS_TRANSCRIBE_S3_BUCKET, or an AWS_S3_REGIONAL_BUCKETS entry "
-                "for a candidate region."
+                "for a candidate region.",
             )
-            msg = (
-                "This model is not available on the current server. "
-                "Please contact the administrator to enabled it."
-            )
-            raise ApiError(msg, status=404)
 
         to_cleanup: tuple[TranscribeServiceClient, str] | None = None
         request_id = REQUEST_ID.get()

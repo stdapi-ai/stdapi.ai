@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, EndpointConnectionError
 from openai import NotFoundError
 from sse_starlette import EventSourceResponse
 
@@ -359,6 +359,94 @@ class TestConversationLifecycle:
         assert app_client.get(url).status_code == 404
         assert app_client.delete(url).status_code == 404
         assert app_client.get(f"{url}/items").status_code == 404
+
+
+@pytest.mark.local
+class TestConversationsUnavailable:
+    """A deployment whose session storage is denied or absent answers one 503.
+
+    Conversations are the only API served entirely by Bedrock session storage,
+    which is optional: an account without the permissions, or a region that does
+    not offer the endpoint at all, must read as "not available here" rather than
+    as a permission error the caller could act on.
+
+    Ref: stdapi/conversations.py:_session_calls
+         stdapi/api_errors.py:feature_unavailable_guard
+    """
+
+    @pytest.mark.parametrize(
+        ("call", "permission"),
+        [
+            ("create_session", "bedrock:CreateSession"),
+            ("get_session", "bedrock:GetSession"),
+            ("update_session", "bedrock:UpdateSession"),
+        ],
+    )
+    def test_a_denied_session_call_names_its_permission(
+        self,
+        app_client: TestClient,
+        store: _FakeSessionClient,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+        call: str,
+        permission: str,
+    ) -> None:
+        """Each session call answers 503, with the permission in the server log.
+
+        ``bedrock:UpdateSession`` is the one a deployment predating conversations
+        lacks, and it serves the metadata update alone.
+
+        Ref: stdapi/conversations.py:update_conversation
+        """
+        conversation = _create(app_client, metadata={"topic": "weather"})
+
+        async def _denied(**_params: object) -> dict[str, Any]:
+            raise ClientError(
+                {"Error": {"Code": "AccessDeniedException", "Message": "denied"}}, call
+            )
+
+        monkeypatch.setattr(store, call, _denied)
+        capfd.readouterr()
+        response = (
+            app_client.post("/v1/conversations")
+            if call == "create_session"
+            else app_client.post(
+                f"/v1/conversations/{conversation['id']}",
+                json={"metadata": {"topic": "rain"}},
+            )
+        )
+
+        assert response.status_code == 503, response.text
+        error = _error(response)
+        assert "not available on the current server" in error["message"]
+        assert "bedrock" not in error["message"]
+        assert permission in capfd.readouterr().out
+
+    def test_a_region_without_the_endpoint_is_not_a_server_error(
+        self,
+        app_client: TestClient,
+        store: _FakeSessionClient,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """An unreachable session endpoint answers 503 naming the region setting.
+
+        Session storage covers fewer Regions than model inference, so a
+        deployment can sit where the endpoint does not resolve at all.
+
+        Ref: stdapi/conversations.py:_UNREACHABLE_DETAIL
+        """
+
+        async def _unreachable(**_params: object) -> dict[str, Any]:
+            raise EndpointConnectionError(endpoint_url="https://x.invalid")
+
+        monkeypatch.setattr(store, "create_session", _unreachable)
+        capfd.readouterr()
+        response = app_client.post("/v1/conversations")
+
+        assert response.status_code == 503, response.text
+        assert "not available on the current server" in _error(response)["message"]
+        assert "aws_bedrock_regions" in capfd.readouterr().out
 
 
 @pytest.mark.local
@@ -886,8 +974,7 @@ def _item_id(item: ConversationItem) -> str:
     return item.id
 
 
-#: These tests write into one account-wide conversation store, and a cursor read spans
-#: two requests; without a group ``--dist=loadgroup`` would spread them across workers.
+#: One account-wide store and cursor reads spanning requests: pin to one worker.
 @pytest.mark.xdist_group("openai_conversations")
 class TestConversationsLive:
     """The Conversations API against real storage, on whichever target is selected.
@@ -924,8 +1011,7 @@ class TestConversationsLive:
                 conversation.id
             )
 
-            # Sent whole rather than as a patch: the update merges here and the
-            # same call must leave the same metadata on a target that replaces.
+            # Sent whole: a merging and a replacing target then agree.
             updated = openai_client.conversations.update(
                 conversation.id, metadata={"topic": "storage", "stage": "live"}
             )

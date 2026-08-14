@@ -181,6 +181,9 @@ async def stream_generator(
     responses={
         200: {"description": "Images successfully generated."},
         400: {"description": "Invalid request or unsupported parameters."},
+        503: {
+            "description": "The 'url' response format is not enabled on this server."
+        },
     },
     openapi_extra={
         "requestBody": {

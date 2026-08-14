@@ -20,7 +20,7 @@ from uuid import uuid4
 
 from botocore.exceptions import ClientError
 
-from stdapi.api_errors import ApiError
+from stdapi.api_errors import ApiError, feature_unavailable_guard
 from stdapi.aws import get_client
 from stdapi.aws_bedrock import handle_bedrock_client_error
 from stdapi.aws_bedrock_sessions import (
@@ -36,6 +36,7 @@ from stdapi.responses_store import KIND_TAG
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
+    from contextlib import AbstractContextManager
 
     from types_aiobotocore_bedrock_agent_runtime.client import (
         AgentsforBedrockRuntimeClient,
@@ -99,6 +100,33 @@ _ID_MAX_LENGTH: int = 64
 
 #: Item types that reference an existing item instead of adding a new one.
 _REFERENCE_TYPE: str = "item_reference"
+
+#: The feature name a caller reads when the deployment cannot serve conversations.
+_FEATURE: str = "The Conversations API"
+
+#: What an unreachable session endpoint means, for the operator.
+_UNREACHABLE_DETAIL: str = (
+    "The Amazon Bedrock session endpoint is unreachable or timed out: session "
+    "storage is offered in fewer regions than model inference; configure a "
+    "first 'aws_bedrock_regions' entry that provides it."
+)
+
+
+def _session_calls(*actions: str) -> AbstractContextManager[None]:
+    """Answer a denied or unreachable session call as an unavailable feature.
+
+    Args:
+        *actions: The ``bedrock`` session actions the guarded calls need.
+
+    Returns:
+        The guard wrapping the calls.
+    """
+    permissions = ", ".join(f"bedrock:{action}" for action in actions)
+    return feature_unavailable_guard(
+        _FEATURE,
+        missing=f"{permissions} on 'arn:aws:bedrock:*:*:session/*'",
+        unreachable=_UNREACHABLE_DETAIL,
+    )
 
 
 def _invalid_id(value: str, param: str, expected: str) -> Never:
@@ -288,7 +316,10 @@ async def _session_metadata(
             cannot name a session, or the session holds another object kind.
     """
     session_id = _session_id(conversation_id)
-    with handle_bedrock_client_error():
+    with (
+        _session_calls("GetSession", "ListTagsForResource"),
+        handle_bedrock_client_error(),
+    ):
         try:
             session = await client.get_session(sessionIdentifier=session_id)
             tags = await client.list_tags_for_resource(
@@ -318,7 +349,10 @@ async def create_conversation(metadata: Mapping[str, str]) -> tuple[str, int]:
     """
     client = _client()
     key = SETTINGS.aws_bedrock_session_encryption_key_arn
-    with handle_bedrock_client_error():
+    with (
+        _session_calls("CreateSession", "CreateInvocation", "PutInvocationStep"),
+        handle_bedrock_client_error(),
+    ):
         session = await client.create_session(
             tags=build_metadata(apn=True) | {KIND_TAG: _KIND},
             sessionMetadata=dict(metadata),
@@ -326,14 +360,12 @@ async def create_conversation(metadata: Mapping[str, str]) -> tuple[str, int]:
         )
         conversation_id = f"conv-{session['sessionId']}"
         try:
-            # Marks the session as a conversation for the item routes, which
-            # then need no tag lookup, and makes an empty conversation readable.
+            # Marks the session as a conversation, sparing the item routes a tag lookup.
             await _put_conversation_document(
                 client, conversation_id, {_ITEMS_FIELD: []}
             )
         except BaseException:
-            # A half-created conversation is unreachable: drop its storage
-            # rather than leaving it to expire on its own.
+            # A half-created conversation is unreachable, so drop it now.
             with suppress(ClientError):
                 await end_and_delete_session(client, session["sessionId"])
             raise
@@ -382,7 +414,7 @@ async def update_conversation(
         else:
             metadata[key] = value
     if patch:
-        with handle_bedrock_client_error():
+        with _session_calls("UpdateSession"), handle_bedrock_client_error():
             await client.update_session(
                 sessionIdentifier=_session_id(conversation_id), sessionMetadata=metadata
             )
@@ -401,6 +433,7 @@ async def delete_conversation(conversation_id: str) -> None:
     client = _client()
     await _session_metadata(client, conversation_id)
     with (
+        _session_calls("EndSession", "DeleteSession"),
         handle_bedrock_client_error(),
         not_found_as_404(lambda: conversation_not_found(conversation_id)),
     ):
@@ -441,6 +474,7 @@ async def load_items(conversation_id: str) -> list[dict[str, Any]]:
         ApiError: 404 when the conversation does not exist.
     """
     with (
+        _session_calls("ListInvocations", "ListInvocationSteps", "GetInvocationStep"),
         handle_bedrock_client_error(),
         not_found_as_404(lambda: conversation_not_found(conversation_id)),
     ):
@@ -481,6 +515,7 @@ async def append_items(
         ApiError: 404 when the conversation does not exist.
     """
     with (
+        _session_calls("CreateInvocation", "PutInvocationStep"),
         handle_bedrock_client_error(),
         not_found_as_404(lambda: conversation_not_found(conversation_id)),
     ):
@@ -502,6 +537,7 @@ async def delete_item(conversation_id: str, item_id: str) -> None:
     if not any(item["id"] == item_id for item in await load_items(conversation_id)):
         item_not_found(item_id)
     with (
+        _session_calls("CreateInvocation", "PutInvocationStep"),
         handle_bedrock_client_error(),
         not_found_as_404(lambda: conversation_not_found(conversation_id)),
     ):

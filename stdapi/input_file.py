@@ -35,6 +35,7 @@ from stdapi.aws_s3 import (
     BUCKET_TO_REGION,
     UPLOAD_CHUNK_SIZE,
     S3Object,
+    caller_input_denial_guard,
     copy_s3_object,
     get_bytes_from_s3,
     put_s3_object,
@@ -478,12 +479,15 @@ class _S3Source(_FileSource):
         Raises:
             FileNotExistError: When the source resolves a Files API ID whose
                 underlying object is missing or expired.
+            InputAccessDeniedError: When the caller named an object this server
+                is not allowed to read.
             ApiError: When the S3 object cannot be found or accessed.
         """
         try:
-            head = await get_client("s3", self._region).head_object(
-                Bucket=self._bucket, Key=self._key
-            )
+            with caller_input_denial_guard(self._bucket, self._uri):
+                head = await get_client("s3", self._region).head_object(
+                    Bucket=self._bucket, Key=self._key
+                )
         except ClientError as exc:
             if self._file_id is not None and exc.response["Error"]["Code"] in (
                 "404",
@@ -509,8 +513,13 @@ class _S3Source(_FileSource):
 
         Returns:
             The complete file bytes.
+
+        Raises:
+            InputAccessDeniedError: When the caller named an object this server
+                is not allowed to read.
         """
-        return await get_bytes_from_s3(self._bucket, self._key)
+        with caller_input_denial_guard(self._bucket, self._uri):
+            return await get_bytes_from_s3(self._bucket, self._key)
 
     async def to_s3(
         self,
@@ -545,18 +554,21 @@ class _S3Source(_FileSource):
             An ``S3Object`` pointing to the S3 object.
 
         Raises:
+            InputAccessDeniedError: When the caller named a source object this
+                server is not allowed to read.
             ApiError: When the file cannot be uploaded or copied.
         """
         if self._region == region and bucket is None and key is None:
             return S3Object(bucket=self._bucket, key=self._key)
-        return await copy_s3_object(
-            self._bucket,
-            self._key,
-            dest_bucket=bucket,
-            dest_key=key,
-            dest_region=region,
-            temporary=temporary,
-        )
+        with caller_input_denial_guard(self._bucket, self._uri):
+            return await copy_s3_object(
+                self._bucket,
+                self._key,
+                dest_bucket=bucket,
+                dest_key=key,
+                dest_region=region,
+                temporary=temporary,
+            )
 
 
 class _HttpSource(_FileSource):
@@ -1484,14 +1496,11 @@ class InputFile:
                 every call sharing the block.
         """
         if not hasattr(self, "_bedrock_source"):
-            # The calls of one request (one per requested choice) share these
-            # blocks: wait for the content rather than reading or uploading the
-            # file a second time, which the consumed source cannot serve anyway.
+            # Calls of one request share these blocks; the source cannot be read twice.
             if (resolved := getattr(self, "_bedrock_resolved", None)) is not None:
                 await resolved.wait()
                 if (error := getattr(self, "_bedrock_error", None)) is not None:
-                    # The block was never filled: fail with what the call that
-                    # claimed it failed with, rather than sending an empty source.
+                    # Never filled: fail with what the claiming call failed with.
                     raise error
             return
         # Claimed before the first await, so exactly one call does the work.
@@ -1724,8 +1733,7 @@ async def plan_bedrock_media_transport(
             or when what has to be stored exceeds ``max_input_file_size`` (413).
     """
     tracked = _CURRENT_INPUT_FILES.get(())
-    # A concurrent call of the same request (one per requested choice) may have
-    # resolved the blocks already; its decision still governs the region.
+    # A concurrent call of the same request may already have decided the region.
     uploads = any(getattr(file, "_bedrock_to_s3", False) for file in tracked)
     pending = [file for file in tracked if hasattr(file, "_bedrock_source")]
     if not pending:

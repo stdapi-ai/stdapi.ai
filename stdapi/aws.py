@@ -309,8 +309,7 @@ class AWSConnectionManager:
                     (service, region or SETTINGS.aws_bedrock_regions[0])
                     for service, region in self._client_specs
                 },
-                # Only warmed when end user cost attribution is enabled: its
-                # sole consumer is the per-end-user role session.
+                # Only consumer is the per-end-user role session.
                 *(
                     (("sts", _STS_REGION),)
                     if SETTINGS.aws_bedrock_user_role_arn
@@ -605,6 +604,30 @@ def get_client(service: str, region_name: RegionName | None = None) -> Any:  # n
 USER_ROLE_OPERATIONS: Final[frozenset[str]] = frozenset(
     {"Converse", "ConverseStream", "InvokeModel", "InvokeModelWithResponseStream"}
 )
+
+
+def signed_as_end_user(operation_name: str) -> bool:
+    """Whether the current request signed *operation_name* as its own end user.
+
+    Args:
+        operation_name: AWS API operation the failing call invoked.
+
+    Returns:
+        True when the deployment attributes model invocations to end users and
+        this request opened a session for one, so the identity AWS evaluated
+        was the caller's rather than the server's.
+    """
+    if (
+        SETTINGS.aws_bedrock_user_role_arn is None
+        or operation_name not in USER_ROLE_OPERATIONS
+    ):
+        return False
+    # Imported here: stdapi.monitoring transitively imports this module.
+    from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
+
+    log = REQUEST_LOG.get(None)
+    return log is not None and bool(log.get("aws_role_session_name"))
+
 
 #: Characters AWS STS rejects in a RoleSessionName (ASCII word characters, + = , . @ -).
 _SESSION_NAME_INVALID_RE = re.compile(r"[^\w+=,.@-]", re.ASCII)
@@ -903,8 +926,7 @@ def _sign_as_user(
     return _set_request_credentials(context)
 
 
-# Registered on the shared session, so every Bedrock runtime client created
-# from it -- including the ".no-retry" pool -- signs invocations the same way.
+# On the shared session, so the ".no-retry" pool signs invocations the same way.
 AWS_SESSION.register(
     "before-parameter-build.bedrock-runtime",
     _sign_as_user,

@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from stdapi.api_errors import ApiError
+from stdapi.api_errors import ApiError, FeatureUnavailableError
 from stdapi.media import _drain, _ffmpeg_args, encode_audio_stream
 
 if TYPE_CHECKING:
@@ -200,16 +200,34 @@ class TestStalledEncodeIsBounded:
         assert "Input: finished, stdin closed" in details
         assert "ffmpeg said: oops" in details
 
-    async def test_a_missing_encoder_is_reported_as_unsupported(
+    async def test_a_missing_encoder_is_reported_as_unavailable(
         self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
     ) -> None:
-        """No ffmpeg on the server is a configuration error, not a timeout."""
+        """No ffmpeg on the server is the deployment's fault, not the caller's.
+
+        The caller reads the same 503 refusal every unavailable feature gives,
+        naming the encoding it asked for; the operator reads what is missing in
+        the request log, at ``warning`` -- the ``critical`` an unlabelled detail
+        resolves to would page for a request nobody can act on.
+
+        Ref: stdapi/api_errors.py:FeatureUnavailableError
+             stdapi/media.py:encode_audio_stream
+        """
         monkeypatch.setattr(
             "stdapi.media._ffmpeg_args", lambda *_args: ["stdapi-no-such-binary-exists"]
         )
-        with pytest.raises(ApiError, match="not supported by the server"):
+        with pytest.raises(FeatureUnavailableError) as excinfo:
             async for _chunk in encode_audio_stream(_feed(b"audio"), "mp3"):
                 pass
+        assert excinfo.value.status == 503
+        assert str(excinfo.value) == (
+            "The 'mp3' encoding is not available on the current server. "
+            "Please contact the administrator to enable it."
+        )
+        assert request_log["level"] == "warning"
+        assert "ffmpeg is not installed" in "".join(
+            map(str, request_log["error_detail"])
+        )
 
 
 class TestFailedEncodeIsReported:

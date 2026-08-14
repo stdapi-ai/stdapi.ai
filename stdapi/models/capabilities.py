@@ -34,6 +34,7 @@ class RouteCapability:
         required_input_modality: Input modality a model must support.
         required_output_modality: Output modality a model must produce.
         required_capability: Optional capability flag the model class must declare.
+        mcp_tool: Whether the route is exposed as an MCP tool.
     """
 
     operation_id: str
@@ -41,6 +42,7 @@ class RouteCapability:
     required_input_modality: str
     required_output_modality: str
     required_capability: Capability | None = None
+    mcp_tool: bool = True
 
 
 #: Live mapping of operation_id → RouteCapability, populated by route modules at import time.
@@ -56,6 +58,8 @@ def register_route_capability(
     required_input_modality: str,
     required_output_modality: str,
     required_capability: Capability | None = None,
+    *,
+    mcp_tool: bool = True,
 ) -> None:
     """Register a route's model requirements in the capability registry.
 
@@ -65,6 +69,8 @@ def register_route_capability(
         required_input_modality: Modality the model must accept as input.
         required_output_modality: Modality the model must produce as output.
         required_capability: Optional capability flag the model class must expose.
+        mcp_tool: Whether the route is exposed as an MCP tool. False for a route
+            with no OpenAPI operation, which no MCP tool is built from.
     """
     _REGISTRY[operation_id] = RouteCapability(
         operation_id=operation_id,
@@ -72,4 +78,5 @@ def register_route_capability(
         required_input_modality=required_input_modality,
         required_output_modality=required_output_modality,
         required_capability=required_capability,
+        mcp_tool=mcp_tool,
     )

@@ -316,9 +316,7 @@ async def create_vector_store(
                 batch_id="",
             )
         except ApiError:
-            # The caller never learns this store's id, so leaving it behind
-            # would only accumulate indexes nobody can reach. Deleted here
-            # rather than scheduled: a cleanup cannot schedule cleanups.
+            # The caller never learns this id, and a cleanup cannot schedule cleanups.
             with suppress(ApiError, BotoCoreError, ClientError):
                 await delete_store(store.id)
             raise

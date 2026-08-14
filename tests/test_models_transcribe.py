@@ -943,16 +943,21 @@ class TestStartTranscriptionErrorMapping:
 
 
 class TestNoCandidateRegions:
-    """No usable bucket anywhere: documented 404 on requests.
+    """No usable bucket anywhere: the deployment-unavailable answer, not a 404.
+
+    A deployment that staged no bucket cannot transcribe at all, which is the
+    operator's to fix: the caller reads the same generic 503 every unavailable
+    feature returns, and the settings to set reach the operator through the
+    log instead.
 
     Ref: stdapi/models/audio/amazon_transcribe.py:AudioModel._transcribe
+         stdapi/api_errors.py:FeatureUnavailableError
     """
 
-    @pytest.mark.usefixtures("request_log")
-    async def test_request_raises_documented_404(
-        self, monkeypatch: pytest.MonkeyPatch
+    async def test_request_is_refused_as_a_feature_the_deployment_lacks(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
     ) -> None:
-        """A request without any candidate region fails with the 404 guard."""
+        """A request without any candidate region fails with the shared 503 guard."""
         monkeypatch.setattr(amazon_transcribe, "transcribe_job_candidates", list)
         with pytest.raises(ApiError) as excinfo:
             await AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt(
@@ -960,8 +965,17 @@ class TestNoCandidateRegions:
                 "json",
                 logprobs=False,
             )
-        assert excinfo.value.status == 404
-        assert "not available" in str(excinfo.value)
+
+        assert excinfo.value.status == 503
+        assert excinfo.value.code == "feature_unavailable"
+        message = str(excinfo.value)
+        assert "Please contact the administrator to enable it." in message
+        assert "AWS_S3_BUCKET" not in message
+        assert request_log["level"] == "warning"
+        assert any(
+            "AWS_TRANSCRIBE_S3_BUCKET" in str(detail)
+            for detail in request_log["error_detail"]
+        )
 
 
 class TestInitializeTranscribeModels:

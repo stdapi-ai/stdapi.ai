@@ -1658,15 +1658,17 @@ class TestSynthesisJobPath:
             [_StubSynthesisJobClient], _StubSynthesisJobClient
         ],
     ) -> None:
-        """A denied task start answers 403, not the input-length rejection.
+        """A denied task start is reported as a denial, not as an input-length limit.
 
         Only the two storage errors mean "this deployment cannot store the
-        audio". Anything else -- a missing ``polly:StartSpeechSynthesisTask``
-        permission first of all -- reaches the caller as itself, so an operator
-        whose IAM policy is incomplete is not told to split their text.
+        audio". A missing ``polly:StartSpeechSynthesisTask`` permission is
+        answered as a feature the deployment cannot run, so an operator whose
+        IAM policy is incomplete is not told to split their text, and the caller
+        is not blamed for a policy only that operator can fix.
 
         Ref: https://docs.aws.amazon.com/polly/latest/APIReference/API_StartSpeechSynthesisTask.html
              stdapi/models/audio/amazon_polly.py:_synthesize_long_text
+             stdapi/api_errors.py:denied_feature_unavailable
         """
         from stdapi.main import app  # noqa: PLC0415
         from stdapi.routes import openai_audio_speech  # noqa: PLC0415
@@ -1705,9 +1707,9 @@ class TestSynthesisJobPath:
                 },
             )
 
-        assert response.status_code == 403, response.text
+        assert response.status_code == 503, response.text
         error = response.json()["error"]
-        assert error["type"] == "permission_error"
+        assert error["code"] == "feature_unavailable"
         assert "3,000" not in error["message"], (
             "a permission failure must not be reported as an input too long"
         )

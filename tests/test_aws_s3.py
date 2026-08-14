@@ -23,6 +23,7 @@ from stdapi.aws_s3 import (
     copy_s3_object,
     get_s3_bucket_for_region,
     multipart_copy_parts,
+    put_object_and_get_url,
     require_s3_bucket_for_region,
 )
 from stdapi.config import SETTINGS
@@ -395,7 +396,10 @@ class TestBucketForRegion:
     in, so each additional Bedrock region needs its own bucket; only the primary
     region may use the single ``aws_s3_bucket``. When none is configured the
     operator gets the setting name in the server log while the client gets a
-    fixed sentence that names neither bucket, region nor setting.
+    fixed sentence that names neither bucket, region nor setting -- naming the
+    feature the caller was using, which is the caller's to pass: several of
+    them need the same bucket, and the Batch API answering as "async
+    invocation" sends the operator after the wrong one.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-files.html
          stdapi/aws_s3.py:get_s3_bucket_for_region
@@ -449,16 +453,56 @@ class TestBucketForRegion:
         """The client message is fixed; the setting to fix is logged server-side.
 
         Which of the two settings is missing depends on whether the region is
-        the primary one, and that distinction is what the operator needs.
+        the primary one, and that distinction is what the operator needs. The
+        status is 503 and the entry a warning: an unconfigured bucket is the
+        deployment's gap, not a request the caller could have sent differently.
+
+        Ref: stdapi/api_errors.py:FeatureUnavailableError
         """
         self._configure(monkeypatch)
         with pytest.raises(ApiError) as raised:
-            require_s3_bucket_for_region(region)
+            require_s3_bucket_for_region(region, feature="The Batch API")
 
+        assert raised.value.status == 503
         assert str(raised.value) == (
-            "Async invocation is not available on the current server. "
+            "The Batch API is not available on the current server. "
             "Please contact the administrator to enable it."
         )
         details = " ".join(str(detail) for detail in request_log["error_detail"])
         assert expected_setting in details
         assert expected_setting not in str(raised.value)
+        assert request_log["level"] == "warning"
+
+
+@pytest.mark.usefixtures("request_log")
+class TestPresignedUrlWithoutBucket:
+    """A URL response with no bucket to host it refuses like any other missing feature.
+
+    Request validation refuses ``response_format="url"`` through the same
+    helper the upload resolves its bucket with, so the misconfiguration has one
+    answer: the shared 503 sentence to the caller, and the setting that is
+    missing to the operator.
+
+    Ref: stdapi/api_errors.py:FeatureUnavailableError
+         stdapi/aws_s3.py:require_url_response_bucket
+         stdapi/aws_s3.py:put_object_and_get_url
+    """
+
+    async def test_missing_bucket_names_the_setting_only_in_the_server_log(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """The refusal is a 503 warning naming ``aws_s3_bucket`` to the operator only."""
+        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", "")
+
+        with pytest.raises(ApiError) as raised:
+            await put_object_and_get_url(b"payload", "image/png", "image.png")
+
+        assert raised.value.status == 503
+        assert str(raised.value) == (
+            "The 'url' response format is not available on the current server. "
+            "Please contact the administrator to enable it."
+        )
+        details = " ".join(str(detail) for detail in request_log["error_detail"])
+        assert "aws_s3_bucket" in details
+        assert "aws_s3_bucket" not in str(raised.value)
+        assert request_log["level"] == "warning"

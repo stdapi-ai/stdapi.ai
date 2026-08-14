@@ -258,6 +258,9 @@ Required for [`AWS_BEDROCK_MANTLE_ENABLED`](operations_configuration.md#bedrock-
 
 Required for the built-in [web search tool](api_openai_responses.md#openai-gpt-web-search) on the OpenAI GPT-5.x family, whichever settings are in use. Each action is authorized only when the model actually attempts that call, and a denied call does not fail the request: AWS documents the model continuing with the information it already has and telling you it could not retrieve enough current information ([Identity and access management for Web Search](https://docs.aws.amazon.com/bedrock/latest/userguide/security-web-search.html)).
 
+!!! warning "A missing web search permission produces no error and no server log entry"
+    The denial is handled inside the model call, so the request succeeds with a normal answer: the server sees nothing to report, and the response is indistinguishable from the model deciding it did not need to search. When answers never cite a source, check these permissions (and the Region the call was served in) before suspecting the model. AWS CloudTrail records the denied `bedrock-websearch` calls.
+
 Add `bedrock-websearch:ExternalWebAccess` on top when a request can reach external web access — that is, when [`AWS_BEDROCK_EXTERNAL_WEB_ACCESS`](operations_configuration.md#bedrock-external-web-access) is enabled, or when [`AWS_BEDROCK_ALLOW_EXTERNAL_WEB_ACCESS_OVERRIDE`](operations_configuration.md#bedrock-allow-external-web-access-override) lets a client ask for it per request. Leaving it out is what keeps every search inside the AWS boundary.
 
 ??? example "Web Search IAM Policy Statement"

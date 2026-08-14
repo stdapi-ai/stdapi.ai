@@ -2257,13 +2257,16 @@ class TestGuardrailChecksModerationsRoute:
     def test_explicit_model_access_denied_is_not_masked(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """An explicitly-selected checks model surfaces AccessDenied as 403.
+        """An explicitly-selected checks model surfaces AccessDenied as a failure.
 
         The Comprehend degradation exists only for the default-model
         resolution; a caller who asked for guardrail checks by ID gets the
-        real permission error instead of silently different results.
+        denial instead of silently different results. It is the server role's
+        missing `bedrock:InvokeGuardrailChecks`, so it reads as a feature this
+        deployment cannot run rather than as the caller's own key being
+        refused.
 
-        Ref: stdapi/aws_bedrock.py:AWS_ERROR_MAP
+        Ref: stdapi/api_errors.py:denied_feature_unavailable
              stdapi/models/moderation/amazon_bedrock_guardrail_checks.py:ModerationModel.moderate
         """
         _stub_checks(monkeypatch, _checks_response([]), error=_ACCESS_DENIED)
@@ -2273,8 +2276,8 @@ class TestGuardrailChecksModerationsRoute:
             "/v1/moderations", json={"input": "x", "model": _CHECKS_MODEL}
         )
 
-        assert response.status_code == 403
-        assert response.json()["error"]["type"] == "permission_error"
+        assert response.status_code == 503
+        assert response.json()["error"]["code"] == "feature_unavailable"
         assert batches == [], "no Comprehend fallback on explicit selection"
 
     def test_text_moderation_aliases_stay_on_comprehend(

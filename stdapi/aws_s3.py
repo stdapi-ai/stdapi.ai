@@ -3,30 +3,51 @@
 import contextlib
 from asyncio import Semaphore, Task, create_task, gather
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode
 from uuid import uuid4
 
 from botocore.exceptions import ClientError
 
-from stdapi.api_errors import ApiError
+from stdapi.api_errors import (
+    ACCESS_DENIED_CODES,
+    FeatureUnavailableError,
+    InputAccessDeniedError,
+)
 from stdapi.aws import get_client
 from stdapi.cleanup import schedule_cleanup
 from stdapi.config import SETTINGS
-from stdapi.monitoring import log_error_details
 from stdapi.server import AWS_APN_ID
 from stdapi.utils import async_iter, buffered_chunks, chain_async_iterators
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Generator
 
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_s3.client import S3Client
-    from types_aiobotocore_s3.type_defs import CopySourceTypeDef
+    from types_aiobotocore_s3.type_defs import CopySourceTypeDef, TagTypeDef
+
+#: The feature name a caller reads when a request's own media needs storage it lacks.
+_INPUT_STORAGE_FEATURE: Final[str] = "Attachment storage"
+
+#: The feature name a caller reads when no bucket can host a URL response.
+_PRESIGNED_URL_FEATURE: Final[str] = "The 'url' response format"
 
 #: Default S3 ``Tagging`` query string
 S3_TAGGING: Final[str] = urlencode({"aws-apn-id": AWS_APN_ID})
+
+#: S3 tag key a Lifecycle rule matches to delete an expired object.
+EXPIRING_S3_TAG_KEY: Final[str] = "stdapi-ai.expires"
+
+#: S3 ``Tagging`` query string marking an object for Lifecycle expiry cleanup.
+EXPIRING_S3_TAGGING: Final[str] = f"{S3_TAGGING}&{EXPIRING_S3_TAG_KEY}=true"
+
+#: :data:`EXPIRING_S3_TAGGING` in the ``TagSet`` shape ``PutObjectTagging`` takes.
+EXPIRING_S3_TAG_SET: Final[list[TagTypeDef]] = [
+    {"Key": key, "Value": value} for key, value in parse_qsl(EXPIRING_S3_TAGGING)
+]
 
 #: Maximum object size supported by S3 ``copy_object`` in a single request (5 GiB).
 _COPY_OBJECT_MAX_BYTES: Final[int] = 5 * 1024 * 1024 * 1024
@@ -68,6 +89,56 @@ def _bucket_to_region() -> dict[str, RegionName]:
 
 #: Reverse bucket → region mapping (includes the default and Transcribe buckets).
 BUCKET_TO_REGION: dict[str, RegionName] = _bucket_to_region()
+
+
+def _caller_input_buckets() -> frozenset[str]:
+    """Build the set of input buckets the deployment does not own itself.
+
+    Returns:
+        The buckets accepted as input sources, minus every bucket the
+        deployment writes to: a denial on one of those is its own
+        misconfiguration, never the caller's.
+    """
+    return frozenset(SETTINGS.aws_s3_accepted_buckets).difference(BUCKET_TO_REGION)
+
+
+#: Accepted input buckets the deployment does not own, so a denial there is the caller's.
+CALLER_INPUT_BUCKETS: Final[frozenset[str]] = _caller_input_buckets()
+
+#: Reads whose only resource is the object named, so a denial is attributable to it alone.
+_SINGLE_OBJECT_READS: Final[frozenset[str]] = frozenset({"GetObject", "HeadObject"})
+
+
+@contextmanager
+def caller_input_denial_guard(bucket: str, uri: str) -> Generator[None]:
+    """Answer a denial on an object the caller named as the caller's own error.
+
+    Three facts decide, none of them guessed: *bucket* is one the operator
+    declared as an external input source rather than deployment storage, the
+    refused operation reads that single object, and the code is a denial.  A
+    ``CopyObject`` denial is therefore left alone — it can equally be about the
+    destination, which is the deployment's own bucket.
+
+    Args:
+        bucket: Bucket the guarded call reads.
+        uri: The input reference to name back to the caller.
+
+    Yields:
+        None
+
+    Raises:
+        InputAccessDeniedError: The read of the caller's own object was denied.
+    """
+    try:
+        yield
+    except ClientError as error:
+        if (
+            bucket not in CALLER_INPUT_BUCKETS
+            or error.operation_name not in _SINGLE_OBJECT_READS
+            or error.response["Error"]["Code"] not in ACCESS_DENIED_CODES
+        ):
+            raise
+        raise InputAccessDeniedError(uri) from error
 
 
 @dataclass(slots=True)
@@ -131,34 +202,51 @@ def get_s3_bucket_for_region(region: RegionName) -> str | None:
     return None
 
 
-def require_s3_bucket_for_region(region: RegionName) -> str:
-    """Return S3 bucket for the region, raising :class:`ApiError` if missing.
+def require_s3_bucket_for_region(region: RegionName, *, feature: str) -> str:
+    """Return S3 bucket for the region, raising :class:`FeatureUnavailableError` if missing.
 
     Args:
         region: AWS region identifier.
+        feature: The feature the bucket serves here, as the caller knows it:
+            the same region is required by several of them, and the refusal
+            must name the one the request was actually asking for.
 
     Returns:
         S3 bucket name.
 
     Raises:
-        ApiError: If no S3 bucket is configured for the region.
+        FeatureUnavailableError: If no S3 bucket is configured for the region.
     """
     if bucket := get_s3_bucket_for_region(region):
         return bucket
-    if region == SETTINGS.aws_bedrock_regions[0]:
-        log_error_details(
-            "S3 bucket not configured (aws_s3_bucket): some features are disabled"
-        )
-    else:
-        log_error_details(
-            f"S3 {region} regional bucket not configured "
-            "(aws_s3_regional_buckets): some features are disabled"
-        )
-    msg = (
-        "Async invocation is not available on the current server. "
-        "Please contact the administrator to enable it."
+    detail = (
+        "S3 bucket not configured (aws_s3_bucket): some features are disabled"
+        if region == SETTINGS.aws_bedrock_regions[0]
+        else f"S3 {region} regional bucket not configured "
+        "(aws_s3_regional_buckets): some features are disabled"
     )
-    raise ApiError(msg)
+    raise FeatureUnavailableError(feature, detail)
+
+
+def require_url_response_bucket() -> str:
+    """Return the bucket a ``url`` response format is served from.
+
+    The single answer to that deployment gap: request validation calls it to
+    refuse the format up front, and the upload resolves its bucket through it,
+    so neither can answer differently from the other.
+
+    Returns:
+        S3 bucket name.
+
+    Raises:
+        FeatureUnavailableError: If no S3 bucket is configured.
+    """
+    if bucket := SETTINGS.aws_s3_bucket:
+        return bucket
+    raise FeatureUnavailableError(
+        _PRESIGNED_URL_FEATURE,
+        "S3 bucket not configured (aws_s3_bucket): URL responses are disabled.",
+    )
 
 
 async def put_object_and_get_url(body: bytes, content_type: str, filename: str) -> str:
@@ -173,19 +261,11 @@ async def put_object_and_get_url(body: bytes, content_type: str, filename: str) 
 
     Returns:
         A pre-signed URL for accessing the uploaded object in the S3 bucket.
-    """
-    s3_bucket = SETTINGS.aws_s3_bucket
-    if not s3_bucket:  # pragma: no cover
-        log_error_details(
-            "No S3 bucket configured for presigned URLs. "
-            "AWS_S3_BUCKET environment variable is not set."
-        )
-        msg = (
-            "The url response format is not enabled on this server. "
-            "Please contact the administrator to enabled it."
-        )
-        raise ApiError(msg)
 
+    Raises:
+        FeatureUnavailableError: No bucket is configured to host the object.
+    """
+    s3_bucket = require_url_response_bucket()
     s3_accelerate_client: S3Client = get_client("s3.accelerate")
     s3_key = f"{SETTINGS.aws_s3_tmp_prefix}{filename}"
     return (
@@ -337,7 +417,9 @@ async def copy_s3_object(
     size = (await s3.head_object(Bucket=source_bucket, Key=source_key))["ContentLength"]
 
     dest_bucket = dest_bucket or (
-        require_s3_bucket_for_region(dest_region) if dest_region else source_bucket
+        require_s3_bucket_for_region(dest_region, feature=_INPUT_STORAGE_FEATURE)
+        if dest_region
+        else source_bucket
     )
     dest_key = dest_key or _get_tmp_key(content_type)
     copy_source: CopySourceTypeDef = {"Bucket": source_bucket, "Key": source_key}
@@ -398,6 +480,7 @@ async def put_s3_object(
     temporary: bool = False,
     content_disposition: str | None = None,
     metadata: dict[str, str] | None = None,
+    expiring: bool = False,
 ) -> S3Object:
     """Upload data to S3, choosing the most efficient strategy.
 
@@ -421,17 +504,24 @@ async def put_s3_object(
         temporary: If ``True``, the object will be deleted when the request ends.
         content_disposition: Optional ``Content-Disposition`` header value.
         metadata: Optional user-defined S3 object metadata key/value pairs.
+        expiring: If ``True``, tag the object for Lifecycle expiry cleanup.
 
     Returns:
         An :class:`S3Object` referencing the uploaded object.
     """
-    bucket = bucket or (require_s3_bucket_for_region(region) if region else None)
+    bucket = bucket or (
+        require_s3_bucket_for_region(region, feature=_INPUT_STORAGE_FEATURE)
+        if region
+        else None
+    )
     if not bucket:
         msg = "Either 'bucket' or 'region' must be specified"
         raise ValueError(msg)
     key = key or _get_tmp_key(content_type)
     s3: S3Client = get_client("s3", BUCKET_TO_REGION.get(bucket))
-    kwargs: dict[str, str | dict[str, str]] = {"Tagging": S3_TAGGING}
+    kwargs: dict[str, str | dict[str, str]] = {
+        "Tagging": EXPIRING_S3_TAGGING if expiring else S3_TAGGING
+    }
     if content_type:
         kwargs["ContentType"] = content_type
     if content_disposition:

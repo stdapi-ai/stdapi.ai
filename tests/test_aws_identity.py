@@ -76,9 +76,7 @@ _TAG_VALUE_SHAPE = _STS_SHAPES["tagValueType"]
 #: RoleSessionName charset, directly usable: its wire pattern is ASCII already.
 _SESSION_NAME_RE = re.compile(f"^(?:{_SESSION_NAME_SHAPE['pattern']})$")
 
-#: Tag value charset: the wire model's Unicode classes translated to their
-#: Python equivalents, where the word character class is a strict subset of
-#: letters, digits and underscore, and only the ASCII space is ever emitted.
+#: Tag value charset: the wire model's Unicode classes as Python equivalents.
 _TAG_VALUE_RE = re.compile(r"^[\w .:/=+\-@]*$")
 
 

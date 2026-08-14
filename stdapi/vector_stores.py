@@ -22,7 +22,11 @@ from uuid import uuid7
 from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import BaseModel, Field, JsonValue
 
-from stdapi.api_errors import ApiError
+from stdapi.api_errors import (
+    ApiError,
+    FeatureUnavailableError,
+    feature_unavailable_guard,
+)
 from stdapi.aws import get_client
 from stdapi.aws_s3 import BUCKET_TO_REGION, S3_TAGGING
 from stdapi.cleanup import schedule_cleanup
@@ -44,11 +48,22 @@ from stdapi.utils import now_utc_timestamp, to_json_bytes, validation_error_hand
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
+    from contextlib import AbstractContextManager
 
     from types_aiobotocore_s3.client import S3Client
 
     from stdapi.input_file import InputFileUrl
     from stdapi.types import JsonMapping
+
+#: The feature name a caller reads when the deployment cannot serve vector stores.
+_FEATURE: str = "The Vector Stores API"
+
+#: What an unreachable vector endpoint means, for the operator.
+_UNREACHABLE_DETAIL: str = (
+    "The S3 Vectors endpoint is unreachable or timed out: S3 Vectors is offered "
+    "in fewer regions than model inference; set 'aws_s3_vectors_region' to a "
+    "region that provides it."
+)
 
 #: Regex pattern a vector store identifier must match on input.
 VECTOR_STORE_ID_PATTERN: str = r"^vs_[0-9a-v]{26}$"
@@ -327,18 +342,30 @@ def _raise_unavailable() -> NoReturn:
     """Raise the 503 answering a deployment with no vector storage configured.
 
     Raises:
-        ApiError: Always (503).
+        FeatureUnavailableError: Always (503).
     """
-    log_error_details(
+    raise FeatureUnavailableError(
+        _FEATURE,
         "Vector storage not configured (aws_s3_vectors_bucket, aws_s3_bucket): "
         "the Vector Stores API is disabled.",
-        level="warning",
     )
-    msg = (
-        "The Vector Stores API is not available on the current server. "
-        "Please contact the administrator to enable it."
+
+
+def _vectors_guard(*actions: str) -> AbstractContextManager[None]:
+    """Answer a denied index call as the Vector Stores API being unavailable.
+
+    Args:
+        *actions: The ``s3vectors`` actions the guarded call needs.
+
+    Returns:
+        The guard wrapping the call.
+    """
+    permissions = ", ".join(f"s3vectors:{action}" for action in actions)
+    return feature_unavailable_guard(
+        _FEATURE,
+        missing=f"{permissions} on the vector bucket set in 'aws_s3_vectors_bucket'",
+        unreachable=_UNREACHABLE_DETAIL,
     )
-    raise ApiError(msg, status=503)
 
 
 def records_bucket() -> str:
@@ -531,8 +558,7 @@ async def update_record[RecordT: BaseModel](
     for _ in range(_CAS_ATTEMPTS):
         current = await _read(model, key)
         if current is None:
-            # Deleted between the caller's read and this write; the key names
-            # internal storage, so it never reaches the message.
+            # Deleted between the read and this write; the key stays out of the message.
             msg = f"The {resource} was deleted while this request ran."
             raise ApiError(msg, status=404)
         record, etag = current
@@ -578,8 +604,7 @@ async def _release_expired(store_id: str) -> None:
     Args:
         store_id: A validated vector store identifier.
     """
-    # Deleted before it is recorded as deleted: the record is what stops a
-    # later read from retrying, so a failed delete must leave it unset.
+    # Recorded after the delete, so a failed delete is retried by a later read.
     with suppress(ApiError, BotoCoreError, ClientError):
         await _delete_index(store_id)
         await update_record(
@@ -591,13 +616,14 @@ async def _release_expired(store_id: str) -> None:
 
 async def _delete_index(store_id: str) -> None:
     """Delete the index backing *store_id*, ignoring an already-deleted one."""
-    try:
-        await _vectors_client().delete_index(
-            vectorBucketName=_vector_bucket(), indexName=index_name(store_id)
-        )
-    except ClientError as exc:
-        if exc.response["Error"]["Code"] != "NotFoundException":
-            raise
+    with _vectors_guard("DeleteIndex"):
+        try:
+            await _vectors_client().delete_index(
+                vectorBucketName=_vector_bucket(), indexName=index_name(store_id)
+            )
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] != "NotFoundException":
+                raise
 
 
 async def read_file(store_id: str, file_id: str) -> FileRecord:
@@ -660,8 +686,7 @@ async def _list_ids(
     if delimiter:
         arguments["Delimiter"] = delimiter
     if after:
-        # ``StartAfter`` excludes the key, not the identifier: the cursor's own
-        # records sort after it, so it comes back and is dropped below.
+        # ``StartAfter`` excludes the key, not the record; the extras drop below.
         arguments["StartAfter"] = f"{prefix}{after}"
         arguments["MaxKeys"] = limit + 2
     response = await _records_client().list_objects_v2(**arguments)  # type: ignore[arg-type]
@@ -807,8 +832,7 @@ def chunk_text(
     if max_characters:
         size = min(size, max_characters)
     overlap = min(chunk_overlap_tokens * _CHARACTERS_PER_TOKEN, size // 2)
-    # A cut is moved back at most this far to reach a separator, which also
-    # keeps every chunk long enough for the loop to make progress.
+    # How far a cut may move back to a separator, bounded so the loop progresses.
     reach = max(1, size - size // _CUT_SEARCH_FRACTION)
     chunks: list[str] = []
     start = 0
@@ -1006,14 +1030,17 @@ async def create_store(
     model_id, dimensions = await resolve_embedding_model()
     store_id = new_store_id()
     now = now_utc_timestamp()
-    await _vectors_client().create_index(
-        vectorBucketName=_vector_bucket(),
-        indexName=index_name(store_id),
-        dataType=_DATA_TYPE,
-        dimension=dimensions,
-        distanceMetric=_DISTANCE_METRIC,
-        metadataConfiguration={"nonFilterableMetadataKeys": list(_NON_FILTERABLE_KEYS)},
-    )
+    with _vectors_guard("CreateIndex"):
+        await _vectors_client().create_index(
+            vectorBucketName=_vector_bucket(),
+            indexName=index_name(store_id),
+            dataType=_DATA_TYPE,
+            dimension=dimensions,
+            distanceMetric=_DISTANCE_METRIC,
+            metadataConfiguration={
+                "nonFilterableMetadataKeys": list(_NON_FILTERABLE_KEYS)
+            },
+        )
     record = StoreRecord(
         id=store_id,
         created_at=now,
@@ -1167,8 +1194,7 @@ async def attach_files(
         ApiError: When one of the files does not exist (404).
     """
     now = now_utc_timestamp()
-    # One file is one record: counting a repeated id twice would leave the
-    # store and batch totals permanently above what the listing can show.
+    # One file is one record: a repeated id would inflate the totals for good.
     unique: dict[str, PendingFile] = {}
     for entry in pending:
         unique.setdefault(entry.file_id, entry)
@@ -1188,9 +1214,7 @@ async def attach_files(
         )
         for entry, source in zip(pending, sources, strict=True)
     ]
-    # Re-attaching a file replaces its record, so its previous outcome has to
-    # leave the counters with it -- otherwise the store counts it twice -- and
-    # the chunks it had are carried over for the worker to reclaim.
+    # Re-attaching replaces the record, so its outcome and chunks move with it.
     replaced = [
         existing[0]
         for existing in await _gather_records(
@@ -1198,8 +1222,7 @@ async def attach_files(
         )
         if existing is not None
     ]
-    # A replaced record that never finished indexing still owns the vectors of
-    # the version before it, so the larger of the two counts is what is stale.
+    # An unfinished replacement still owns the older vectors: take the larger.
     previous = {
         record.id: max(record.chunk_count, record.previous_chunk_count)
         for record in replaced
@@ -1271,8 +1294,7 @@ async def _index_files(
             try:
                 status, usage_bytes = await _index_one_file(store, file_id, batch_id)
             except (ApiError, BotoCoreError, ClientError, OSError) as exc:
-                # Nothing else settles these files: an error escaping here would
-                # strand this one and every file after it in ``in_progress``.
+                # Nothing else settles these files: an escape strands them in progress.
                 log_error_details(
                     f"Vector store indexing failed: {exc!r}", level="error"
                 )
@@ -1349,8 +1371,7 @@ async def _index_one_file(
         await _write(_file_key(store.id, file_id), record)
         return record.status, 0
 
-    # The planned chunk count is stored before the vectors exist, so a failure
-    # mid-write still leaves every written vector reachable for deletion.
+    # Stored before the vectors exist, so a mid-write failure orphans none.
     record.chunk_count = len(chunks)
     record.usage_bytes = sum(len(chunk.encode()) for chunk in chunks)
     await _write(_file_key(store.id, file_id), record)
@@ -1365,8 +1386,7 @@ async def _index_one_file(
         )
         await _write(_file_key(store.id, file_id), record)
         return record.status, 0
-    # A re-attached file may have had more chunks than it has now; the ones
-    # beyond the new count would otherwise stay searchable with stale text.
+    # Chunks beyond the new count would stay searchable with stale text.
     stale = record.previous_chunk_count
     record.previous_chunk_count = 0
     record.status = "completed"
@@ -1414,8 +1434,7 @@ async def _load_chunks(store: StoreRecord, record: FileRecord) -> list[str]:
     stream, content_type = await get_file_content(parse_file_id(record.id))
     if content_type.split(";", 1)[0].strip() in _BINARY_CONTENT_TYPES:
         raise _UnsupportedFileError(_UNSUPPORTED_MESSAGE)
-    # Zero is "no limit" everywhere this setting is read, and it is the
-    # default; indexing still buffers the whole file, so it keeps its own cap.
+    # Zero means no limit, but indexing buffers the file, so it caps its own.
     limit = SETTINGS.max_input_file_size
     limit = min(limit, _MAX_INDEXABLE_BYTES) if limit else _MAX_INDEXABLE_BYTES
     body = bytearray()
@@ -1479,26 +1498,27 @@ async def _write_vectors(
     for start in range(0, len(chunks), _PUT_VECTORS_BATCH):
         window = chunks[start : start + _PUT_VECTORS_BATCH]
         vectors = await _embed(store.embedding_model, window)
-        await client.put_vectors(
-            vectorBucketName=bucket,
-            indexName=name,
-            vectors=[
-                {
-                    "key": vector_key(record.id, start + offset),
-                    "data": {"float32": vector},
-                    "metadata": {
-                        _TEXT_KEY: chunk,
-                        _FILENAME_KEY: record.filename,
-                        _FILE_ID_KEY: record.id,
-                        _CHUNK_INDEX_KEY: start + offset,
-                        **attributes,
-                    },
-                }
-                for offset, (chunk, vector) in enumerate(
-                    zip(window, vectors, strict=True)
-                )
-            ],
-        )
+        with _vectors_guard("PutVectors"):
+            await client.put_vectors(
+                vectorBucketName=bucket,
+                indexName=name,
+                vectors=[
+                    {
+                        "key": vector_key(record.id, start + offset),
+                        "data": {"float32": vector},
+                        "metadata": {
+                            _TEXT_KEY: chunk,
+                            _FILENAME_KEY: record.filename,
+                            _FILE_ID_KEY: record.id,
+                            _CHUNK_INDEX_KEY: start + offset,
+                            **attributes,
+                        },
+                    }
+                    for offset, (chunk, vector) in enumerate(
+                        zip(window, vectors, strict=True)
+                    )
+                ],
+            )
 
 
 async def _settle_counters(
@@ -1575,7 +1595,11 @@ async def _delete_vector_keys(store_id: str, keys: list[str]) -> None:
     """Delete *keys* from the store's index, ignoring what is already gone."""
     client = _vectors_client()
     for start in range(0, len(keys), _DELETE_VECTORS_BATCH):
-        with suppress(BotoCoreError, ClientError):
+        # The guard's own error is suppressed too: its warning is the report.
+        with (
+            suppress(ApiError, BotoCoreError, ClientError),
+            _vectors_guard("DeleteVectors"),
+        ):
             await client.delete_vectors(
                 vectorBucketName=_vector_bucket(),
                 indexName=index_name(store_id),
@@ -1619,13 +1643,14 @@ async def _rewrite_attributes(store_id: str, record: FileRecord) -> None:
     attributes = {attribute_key(k): v for k, v in record.attributes.items()}
     keys = [vector_key(record.id, index) for index in range(record.chunk_count)]
     for start in range(0, len(keys), _GET_VECTORS_BATCH):
-        existing = await client.get_vectors(
-            vectorBucketName=bucket,
-            indexName=name,
-            keys=keys[start : start + _GET_VECTORS_BATCH],
-            returnData=True,
-            returnMetadata=True,
-        )
+        with _vectors_guard("GetVectors"):
+            existing = await client.get_vectors(
+                vectorBucketName=bucket,
+                indexName=name,
+                keys=keys[start : start + _GET_VECTORS_BATCH],
+                returnData=True,
+                returnMetadata=True,
+            )
         vectors = [
             {
                 "key": vector["key"],
@@ -1643,9 +1668,10 @@ async def _rewrite_attributes(store_id: str, record: FileRecord) -> None:
             if "data" in vector
         ]
         if vectors:
-            await client.put_vectors(
-                vectorBucketName=bucket, indexName=name, vectors=vectors
-            )
+            with _vectors_guard("PutVectors"):
+                await client.put_vectors(
+                    vectorBucketName=bucket, indexName=name, vectors=vectors
+                )
 
 
 async def read_file_chunks(store_id: str, record: FileRecord) -> list[str]:
@@ -1662,13 +1688,14 @@ async def read_file_chunks(store_id: str, record: FileRecord) -> list[str]:
     keys = [vector_key(record.id, index) for index in range(record.chunk_count)]
     texts: dict[int, str] = {}
     for start in range(0, len(keys), _GET_VECTORS_BATCH):
-        response = await client.get_vectors(
-            vectorBucketName=_vector_bucket(),
-            indexName=index_name(store_id),
-            keys=keys[start : start + _GET_VECTORS_BATCH],
-            returnData=False,
-            returnMetadata=True,
-        )
+        with _vectors_guard("GetVectors"):
+            response = await client.get_vectors(
+                vectorBucketName=_vector_bucket(),
+                indexName=index_name(store_id),
+                keys=keys[start : start + _GET_VECTORS_BATCH],
+                returnData=False,
+                returnMetadata=True,
+            )
         for vector in response.get("vectors", ()):
             metadata = vector.get("metadata", {})
             texts[int(metadata.get(_CHUNK_INDEX_KEY, 0))] = str(
@@ -1716,9 +1743,10 @@ async def search(
         if index_filter is not None:
             arguments["filter"] = index_filter
         queries_arguments.append(arguments)
-    responses = await _bounded(
-        [client.query_vectors(**arguments) for arguments in queries_arguments]
-    )
+    with _vectors_guard("QueryVectors"):
+        responses = await _bounded(
+            [client.query_vectors(**arguments) for arguments in queries_arguments]
+        )
     for response in responses:
         for hit in response.get("vectors", ()):
             score = score_from_distance(hit.get("distance", 1.0))

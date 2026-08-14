@@ -83,13 +83,14 @@ if TYPE_CHECKING:
     from openai.types.vector_stores import VectorStoreFile
     from starlette.testclient import TestClient
 
-#: The vector store namespace is account-wide, exactly like the Files API's:
-#: without a group, ``--dist=loadgroup`` spreads this module across workers and
-#: a listing assertion sees a sibling's half-deleted store.
+#: The vector store namespace is account-wide: keep this module on one worker.
 pytestmark = pytest.mark.xdist_group("openai_vector_stores")
 
 #: A planted sentence no other test content answers, for the search assertions.
 _PLANTED = "The maintenance hatch of the Kelvin observatory opens with code QUINCEY-7."
+
+#: What S3 Vectors answers when the server role lacks the action it used.
+_ACCESS_DENIED_CODE = "AccessDeniedException"
 
 #: File content built around the planted sentence, long enough to chunk.
 _TEXT_FILE: bytes = (
@@ -108,9 +109,7 @@ type ComparisonOperator = Literal["eq", "ne", "gt", "gte", "lt", "lte", "in", "n
 #: Seconds a test waits for asynchronous indexing to settle.
 _INDEX_TIMEOUT = 180.0
 
-#: Seconds a test waits for a listing to catch up with a just-written object.
-#: Generous on purpose: a vector store listing is eventually consistent, and
-#: lags noticeably behind a direct read of the same object.
+#: Seconds a test waits for an eventually consistent listing to catch up.
 _LIST_TIMEOUT = 120.0
 
 
@@ -136,11 +135,7 @@ def _wait_for_listed_files(client: OpenAI, store_id: str, expected: set[str]) ->
         time.sleep(2.0)
 
 
-#: The ``object`` a file batch carries. Typed as a plain string on purpose: the
-#: installed SDK's Literal says ``vector_store.files_batch`` while the SDK's own
-#: docstring says ``vector_store.file_batch`` — and the vendor lane
-#: (``--use-official-api``) answers ``vector_store.file_batch``, so the SDK
-#: Literal is what is wrong.
+#: The ``object`` a file batch carries; the installed SDK's Literal has it wrong.
 _BATCH_OBJECT: str = "vector_store.file_batch"
 
 
@@ -201,8 +196,7 @@ def _wait_for_file(
                 file_id, vector_store_id=store_id
             )
         except NotFoundError:
-            # The attachment is not visible yet: the listing behind it is
-            # eventually consistent on both targets.
+            # Not visible yet: the listing behind it is eventually consistent.
             attached = None
         if attached is not None and attached.status != "in_progress":
             return attached
@@ -1062,8 +1056,7 @@ def vector_backend(monkeypatch: pytest.MonkeyPatch) -> _FakeBackend:
     monkeypatch.setattr(vector_stores, "validate_model", _validate_model)
     monkeypatch.setattr(vector_stores, "get_file", backend.get_file)
     monkeypatch.setattr(vector_stores, "get_file_content", backend.get_file_content)
-    # Indexing is driven by the tests themselves: a task racing the assertions
-    # is the one thing this backend cannot make deterministic.
+    # Indexing is driven by the tests: a racing task is not deterministic.
     monkeypatch.setattr(vector_stores, "_start_indexing", backend.start_indexing)
     return backend
 
@@ -1173,8 +1166,7 @@ class TestVectorStoreCrud:
         ]
         wanted = {store.id for store in created}
         try:
-            # The listing is eventually consistent upstream: a store created a
-            # moment ago is not necessarily in the next page.
+            # The listing is eventually consistent: a new store may miss the next page.
             deadline = time.monotonic() + _LIST_TIMEOUT
             while not wanted <= {
                 entry.id for entry in openai_client.vector_stores.list(limit=100).data
@@ -1403,8 +1395,7 @@ class TestFileAttachment:
             assert settled.status == "failed"
             assert settled.last_error is not None
             assert settled.last_error.code == "unsupported_file"
-            # The store has to settle with it: a failure that never leaves the
-            # counters makes the store permanently `in_progress`.
+            # The store must settle too, or it stays `in_progress` for good.
             store = _wait_for_store(openai_client, empty_store, files=1)
             assert store.status == "completed"
             assert store.file_counts.failed == 1
@@ -1723,6 +1714,52 @@ class TestUnconfiguredDeployment:
         assert "administrator" in message
         assert "s3" not in message.lower()
         assert "bucket" not in message.lower()
+
+    @pytest.mark.parametrize(
+        ("method", "action"),
+        [("create_index", "CreateIndex"), ("query_vectors", "QueryVectors")],
+    )
+    def test_a_denied_index_call_answers_like_an_unconfigured_one(
+        self,
+        app_client: TestClient,
+        vector_backend: _FakeBackend,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+        method: str,
+        action: str,
+    ) -> None:
+        """A missing ``s3vectors`` action is answered as the API being unavailable.
+
+        The settings can be complete while the role is not, and that gap reached
+        the caller as a raw 403 blaming them for the operator's IAM policy.
+
+        Ref: stdapi/vector_stores.py:_vectors_guard
+             stdapi/api_errors.py:feature_unavailable_guard
+        """
+        store_id = app_client.post("/v1/vector_stores", json={}).json()["id"]
+
+        denial = make_client_error(_ACCESS_DENIED_CODE, action)
+
+        async def _denied(**_params: object) -> dict[str, Any]:
+            raise denial
+
+        monkeypatch.setattr(vector_backend.vectors, method, _denied)
+        capfd.readouterr()
+        response = (
+            app_client.post("/v1/vector_stores", json={})
+            if method == "create_index"
+            else app_client.post(
+                f"/v1/vector_stores/{store_id}/search", json={"query": "anything"}
+            )
+        )
+
+        assert response.status_code == 503, response.text
+        message = _error_of(response)["message"]
+        assert "not available on the current server" in message
+        assert "s3vectors" not in message
+        logged = capfd.readouterr().out
+        assert f"s3vectors:{action}" in logged
+        assert "aws_s3_vectors_bucket" in logged
 
 
 @pytest.mark.local
@@ -2258,8 +2295,7 @@ class TestIndexingOffline:
         Ref: stdapi/vector_stores.py:_index_one_file
         """
         store = await _create_store()
-        # Long enough to cross the embedding wave, which a single-chunk file
-        # never does: a wave-sized backend limit would break in production only.
+        # Long enough to cross the embedding wave, which one chunk never does.
         content = "\n".join(f"Paragraph {index} of the manual." for index in range(200))
         file_id = vector_backend.upload(content.encode())
         await _attach(store, [file_id])

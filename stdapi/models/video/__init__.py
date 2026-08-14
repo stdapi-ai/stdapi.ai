@@ -78,6 +78,9 @@ _SIZE_TAG = "stdapi-ai.size"
 #: Maximum async invocations scanned per region when listing videos.
 _LIST_SCAN_LIMIT: int = 1000
 
+#: The feature name a caller reads when no bucket can hold this deployment's videos.
+_VIDEO_FEATURE: str = "Video generation"
+
 
 class ReferenceImage(NamedTuple):
     """Resolved reference image passed to model input builders.
@@ -277,7 +280,7 @@ class VideoModelBase(ModelBase[Any, Any]):
         Returns:
             Tuple of (invocation ARN, region that served the call).
         """
-        bucket = require_s3_bucket_for_region(region)
+        bucket = require_s3_bucket_for_region(region, feature=_VIDEO_FEATURE)
         resolved_model_id = await resolve_routed_model_id(
             self._model_id, region, inference_profile=False
         )

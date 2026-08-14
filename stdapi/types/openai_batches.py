@@ -16,6 +16,12 @@ _METADATA_KEY_MAX_LEN: int = 64
 #: Maximum length of a metadata value, as upstream imposes.
 _METADATA_VALUE_MAX_LEN: int = 512
 
+#: Shortest accepted lifetime (seconds) for a batch's result files (1 hour).
+_OUTPUT_EXPIRES_AFTER_SECONDS_MIN: int = 3600
+
+#: Longest accepted lifetime (seconds) for a batch's result files (30 days).
+_OUTPUT_EXPIRES_AFTER_SECONDS_MAX: int = 2592000
+
 #: Batch lifecycle status.
 BatchStatus = Literal[
     "validating",
@@ -30,6 +36,22 @@ BatchStatus = Literal[
 
 #: API endpoints a batch may target.
 BatchEndpoint = Literal["/v1/chat/completions"]
+
+
+class BatchOutputExpiresAfter(BaseModelRequest):
+    """Expiration policy for the files a batch produces."""
+
+    anchor: Literal["created_at"] = Field(
+        description="Timestamp the expiration is counted from: the creation of "
+        "the result files, not of the batch. `created_at` is the only accepted "
+        "value."
+    )
+    seconds: int = Field(
+        ge=_OUTPUT_EXPIRES_AFTER_SECONDS_MIN,
+        le=_OUTPUT_EXPIRES_AFTER_SECONDS_MAX,
+        description="Number of seconds the result files stay readable, between "
+        "3600 (1 hour) and 2592000 (30 days).",
+    )
 
 
 class BatchCreateParams(BaseModelRequest):
@@ -54,6 +76,12 @@ class BatchCreateParams(BaseModelRequest):
         "returned on every read. Keys are at most 64 characters, values at "
         "most 512.",
         max_length=16,
+    )
+    output_expires_after: BatchOutputExpiresAfter | None = Field(
+        default=None,
+        description="Expiration policy for the result files. Once expired, "
+        "they are no longer readable and are deleted. Omit it to keep them "
+        "until they are deleted with `openai_file_delete`.",
     )
 
     @field_validator("metadata")

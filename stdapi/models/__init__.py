@@ -164,6 +164,9 @@ _BILLED_GROUNDING_TOOLS: Final[frozenset[str]] = frozenset({"nova_grounding"})
 #: Max upstream events drained after a client disconnect to still capture the trailing usage event.
 _DISCONNECT_DRAIN_MAX_EVENTS: Final[int] = 50
 
+#: The feature name a caller reads when an asynchronously served model has no bucket.
+_ASYNC_INVOCATION_FEATURE: Final[str] = "Async invocation"
+
 #: Output modality advertised by rerank models (relevance rankings, not text).
 RERANKING_MODALITY: str = "RERANKING"
 
@@ -775,7 +778,9 @@ class ModelBase[RequestT, ResponseT]:
             if REGION_ROUTER
             else candidates
         )[0]
-        s3_bucket_name = require_s3_bucket_for_region(effective_region)
+        s3_bucket_name = require_s3_bucket_for_region(
+            effective_region, feature=_ASYNC_INVOCATION_FEATURE
+        )
         bedrock: BedrockRuntimeClient = get_client("bedrock-runtime", effective_region)
         resolved_model_id = await resolve_routed_model_id(
             self._model_id, effective_region, inference_profile=inference_profile
@@ -1357,9 +1362,8 @@ def _model_capability_flags(model_id: str, *, mantle: bool) -> Capability:
 
     One model can be registered in more than one modality package -- a live
     speech model is also an audio one -- and each package answers for its own
-    routes, so the most specific class of each family is what decides. Taking
-    only the single most specific class overall would hide every route the
-    other families serve.
+    routes. Taking only the single most specific class overall would hide
+    every route the other families serve.
 
     Args:
         model_id: Bedrock model identifier to look up.
@@ -1427,7 +1431,8 @@ def _compute_model_capabilities(
         model: Model details containing modality information.
 
     Returns:
-        Tuple of (sorted list of route paths, sorted list of operation_ids / MCP tool names).
+        Tuple of (sorted list of route paths, sorted list of MCP tool names). A
+        route with no MCP tool contributes its path only.
     """
     capability_flags = _model_capability_flags(
         model_id, mantle=model.service == MANTLE_SERVICE
@@ -1454,7 +1459,8 @@ def _compute_model_capabilities(
         if cap.required_capability and not (cap.required_capability & capability_flags):
             continue
         routes.append(cap.path)
-        tools.append(op_id)
+        if cap.mcp_tool:
+            tools.append(op_id)
     return sorted(routes), sorted(tools)
 
 
@@ -1494,7 +1500,16 @@ def update_unified_models_collections() -> None:
         model.supported_routes, model.supported_mcp_tools = _compute_model_capabilities(
             model_id, model
         )
-        for route_or_tool in (*model.supported_routes, *model.supported_mcp_tools):
+        # A route without an MCP tool is still filterable by its operation ID.
+        for route_or_tool in (
+            *model.supported_routes,
+            *model.supported_mcp_tools,
+            *(
+                op_id
+                for op_id, cap in ROUTE_CAPABILITIES.items()
+                if not cap.mcp_tool and cap.path in model.supported_routes
+            ),
+        ):
             _ALL_MODELS_BY_ROUTE_OR_TOOL.setdefault(route_or_tool, set()).add(model_id)
         for region in model.regions:
             _ALL_MODELS_BY_REGION.setdefault(region, set()).add(model_id)
@@ -2335,10 +2350,9 @@ def _order_ids_mantle_first(all_models: dict[str, ModelDetails]) -> list[str]:
 def _populate_model_aliases(all_models: dict[str, ModelDetails]) -> None:
     """Rebuild ``MODEL_ALIASES`` from all registered model classes and user settings.
 
-    An operator alias carrying configuration contributes its target model to
-    ``MODEL_ALIASES``, like the plain form, and its resolved configuration to
-    ``MODEL_ALIAS_OVERLAYS``. Also sets ``ModelDetails.aliases`` for each model
-    that has aliases.
+    A configured alias also maps its target model into ``MODEL_ALIASES``, like a
+    plain alias, and stores its resolved settings in ``MODEL_ALIAS_OVERLAYS``.
+    Also sets ``ModelDetails.aliases`` for each model that has aliases.
 
     Args:
         all_models: All available models keyed by model ID.

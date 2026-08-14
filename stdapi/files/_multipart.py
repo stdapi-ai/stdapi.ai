@@ -33,7 +33,12 @@ from botocore.exceptions import ClientError
 
 from stdapi.api_errors import ApiError
 from stdapi.aws import get_client
-from stdapi.aws_s3 import BUCKET_TO_REGION, S3_TAGGING, track_temporary_s3_objects
+from stdapi.aws_s3 import (
+    BUCKET_TO_REGION,
+    EXPIRING_S3_TAGGING,
+    S3_TAGGING,
+    track_temporary_s3_objects,
+)
 from stdapi.config import SETTINGS
 from stdapi.files._core import (
     FileRecord,
@@ -58,9 +63,6 @@ _MAX_PART_NUMBER: int = 10000
 
 #: Minimum size in bytes for a part that is not the last one (S3 limit, 5 MiB).
 _MIN_PART_SIZE: int = 5 * 1024 * 1024
-
-#: S3 tagging query string marking an object for Lifecycle expiry cleanup.
-_EXPIRING_S3_TAGGING: str = f"{S3_TAGGING}&stdapi-ai.expires=true"
 
 #: Per-process cache: upload_id → (s3_upload_id, expires_monotonic) (bounded LRU).
 _cache: dict[str, tuple[str, float]] = {}
@@ -362,7 +364,7 @@ async def create_multipart_session(
                 if file_expires_at is not None
                 else "",
             },
-            Tagging=_EXPIRING_S3_TAGGING if file_expires_at is not None else S3_TAGGING,
+            Tagging=EXPIRING_S3_TAGGING if file_expires_at is not None else S3_TAGGING,
         ),
         s3.put_object(
             Bucket=bucket,

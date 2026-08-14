@@ -5,7 +5,7 @@ from contextlib import suppress
 from subprocess import PIPE
 from typing import TYPE_CHECKING
 
-from stdapi.api_errors import ApiError
+from stdapi.api_errors import ApiError, FeatureUnavailableError
 from stdapi.monitoring import log_error_details
 
 if TYPE_CHECKING:
@@ -152,7 +152,7 @@ def _ffmpeg_args(
         # -ar: resample the output to a specific sample rate in Hz
         args.extend(("-ar", str(output_sample_rate)))
     if output_channels:
-        # -ac after the input: mix the output down to this channel count
+        # -ac goes after the input, so it applies to the output
         args.extend(("-ac", str(output_channels)))
     args.extend(
         (
@@ -198,7 +198,7 @@ async def encode_audio_stream(
 
     Raises:
         ValueError: If raw PCM is specified without sample_rate or channels.
-        ApiError: If ffmpeg is not installed on the server.
+        FeatureUnavailableError: If ffmpeg is not installed on the server.
     """
     ffmpeg_args = _ffmpeg_args(
         output_format,
@@ -214,14 +214,9 @@ async def encode_audio_stream(
             *ffmpeg_args, stdin=PIPE, stdout=PIPE, stderr=PIPE
         )
     except FileNotFoundError as exception:
-        log_error_details(
-            "ffmpeg is not installed on the server. It is required for audio encoding."
-        )
-        msg = (
-            f"The '{output_format}' encoding is not supported by the server. "
-            "Please contact the administrator to enabled it."
-        )
-        raise ApiError(msg) from exception
+        feature = f"The '{output_format}' encoding"
+        detail = "ffmpeg is not installed on the server, and audio encoding needs it."
+        raise FeatureUnavailableError(feature, detail) from exception
 
     stderr_head = bytearray()
     input_task = create_task(_process_input_stream(stream, process.stdin))

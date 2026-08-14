@@ -22,7 +22,7 @@ from starlette.exceptions import HTTPException
 from starlette.routing import Match
 
 from stdapi import server
-from stdapi.api_errors import ApiError
+from stdapi.api_errors import ApiError, denied_feature_unavailable
 from stdapi.api_providers import (
     format_http_error,
     get_request_id_header,
@@ -154,8 +154,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                     ("s3", region)
                     for region in SETTINGS.aws_s3_accepted_buckets.values()
                 ),
-                # A vector bucket is a regional resource whose indexes are only
-                # reachable in its own region: one client, no failover.
+                # A vector bucket's indexes are regional: one client, no failover.
                 *(
                     (("s3vectors", SETTINGS.aws_s3_vectors_region),)
                     if SETTINGS.aws_s3_vectors_bucket
@@ -163,8 +162,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 ),
             )
         ):
-            # Bidirectional stream clients are not botocore clients, but they
-            # target the endpoints the pool above just resolved.
+            # Not botocore clients, but they target the endpoints just resolved above.
             initialize_bidi_clients()
             span_context = otel_manager.start_span(
                 "Application start", attributes={"server.id": server.SERVER_NAME}
@@ -226,9 +224,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 try:
                     yield
                 finally:
-                    # A termination signal kills an open WebSocket in
-                    # milliseconds with no close frame, and the server offers no
-                    # graceful drain of its own.
+                    # No graceful drain: a signal kills sockets without a close frame.
                     close_realtime_sessions()
             finally:
                 await stop_price_catalog()
@@ -313,8 +309,7 @@ if SETTINGS.cors_allow_origins:
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
-        # Not a CORS-safelisted response header, so a browser-hosted client only
-        # sees the authentication challenge when it is exposed explicitly.
+        # Not CORS-safelisted: a browser client sees the challenge only if exposed.
         expose_headers=["www-authenticate"],
     )
 
@@ -400,10 +395,7 @@ async def _middleware(
     return response
 
 
-# Registered after `_middleware`, and therefore wrapping it: `add_middleware`
-# inserts at the head of the stack, so the last one added runs first. The client
-# address and scheme have to carry the forwarded values before anything reads
-# them, and `_middleware` reads the client the moment it opens the request log.
+# Added last so it wraps `_middleware`, which reads the client on entry.
 if SETTINGS.enable_proxy_headers:
     from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
@@ -559,6 +551,8 @@ async def handle_botocore_client_error(
     Returns:
         JSONResponse with mapped HTTP status and the appropriate error schema.
     """
+    if (denied := denied_feature_unavailable(exc)) is not None:
+        return await handle_api_error(request, denied)
     error = exc.response["Error"]
     aws_code = error["Code"]
     status = AWS_ERROR_MAP.get(aws_code, (502, "server_error"))[0]

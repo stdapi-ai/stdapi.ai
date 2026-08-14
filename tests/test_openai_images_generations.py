@@ -17,7 +17,7 @@ import pytest
 from openai import BadRequestError, OpenAI
 from pydantic import ValidationError
 
-from stdapi.api_errors import UnsupportedModelError
+from stdapi.api_errors import FeatureUnavailableError, UnsupportedModelError
 from stdapi.config import SETTINGS
 from stdapi.models.image import ImageGenerationJobBase, ImageGenerationResponse
 from stdapi.monitoring import REQUEST_LOG, REQUEST_TIME, EventLog
@@ -1422,30 +1422,58 @@ class TestResponseFormatUrlRequiresBucket:
     """``response_format="url"`` is refused when the server has no S3 bucket.
 
     ``url`` is the default for all three image endpoints, so without this guard
-    a bucket-less deployment would fail deep in the S3 upload instead of at
-    request validation.
+    a bucket-less deployment would generate the images, bill them, and only
+    then fail on the upload that cannot happen. The refusal is the same one the
+    upload would have raised -- a feature this deployment cannot run, answered
+    like every other: 503 to the caller, the missing setting to the operator.
 
     Ref: https://stdapi.ai/api_openai_images_generations/
          stdapi/types/openai_images.py:_ImageBaseParams._validate_response_format
+         stdapi/aws_s3.py:require_url_response_bucket
     """
 
     def test_url_rejected_without_a_bucket(
         self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
     ) -> None:
-        """The default ``url`` format fails validation and logs an operator diagnostic."""
+        """Validation refuses the format as unavailable, and logs why for the operator."""
         monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
 
-        with pytest.raises(ValidationError) as exc_info:
+        with pytest.raises(FeatureUnavailableError) as exc_info:
             _generation_params(response_format="url")
 
-        errors = exc_info.value.errors()
-        assert len(errors) == 1
-        assert errors[0]["loc"] == ("response_format",)
-        assert "url response format is not enabled on this server" in errors[0]["msg"]
+        assert exc_info.value.status == 503
+        assert str(exc_info.value) == (
+            "The 'url' response format is not available on the current server. "
+            "Please contact the administrator to enable it."
+        )
+        assert "aws_s3_bucket" not in str(exc_info.value)
         assert any(
-            "No S3 bucket configured for presigned URLs" in str(detail)
-            for detail in request_log["error_detail"]
+            "aws_s3_bucket" in str(detail) for detail in request_log["error_detail"]
         ), request_log
+        assert request_log["level"] == "warning", (
+            "an unconfigured bucket is an operator warning, not a critical"
+        )
+
+    def test_the_route_answers_the_refusal_as_a_503(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The error raised during body validation still reaches the API envelope.
+
+        Raised from a field validator, it travels out of FastAPI's own request
+        parsing rather than out of the route body, which is the only thing that
+        decides whether the caller reads the shared sentence or a 422.
+        """
+        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
+
+        response = app_client.post(
+            "/v1/images/generations",
+            json={"model": "m", "prompt": "p", "response_format": "url"},
+        )
+
+        assert response.status_code == 503
+        error = response.json()["error"]
+        assert error["code"] == "feature_unavailable"
+        assert "not available on the current server" in error["message"]
 
     def test_b64_json_still_accepted_without_a_bucket(
         self, monkeypatch: pytest.MonkeyPatch

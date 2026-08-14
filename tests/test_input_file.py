@@ -13,13 +13,14 @@ from __future__ import annotations
 
 import re
 from asyncio import gather, sleep
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, NoReturn, Self
 
 import pytest
+from botocore.exceptions import ClientError
 from pybase64 import b64encode
 
-from stdapi import input_file
-from stdapi.api_errors import ApiError
+from stdapi import aws_s3, input_file
+from stdapi.api_errors import ApiError, denied_feature_unavailable
 from stdapi.aws_s3 import BUCKET_TO_REGION, UPLOAD_CHUNK_SIZE, S3Object
 from stdapi.config import SETTINGS
 from stdapi.files._multipart import create_multipart_session
@@ -31,6 +32,7 @@ from stdapi.input_file import (
     plan_bedrock_media_transport,
     resolve_all_bedrock_content_blocks,
 )
+from tests._helpers import make_client_error
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
@@ -178,6 +180,190 @@ def test_s3_uri_accepts_bucket_declared_only_as_accepted(
     assert file.region == "eu-west-3", (
         "the declared region must route the S3 calls, not the default region"
     )
+
+
+#: An S3 denial message, as IAM writes one: principal, action, resource.
+_S3_DENIAL_MESSAGE = (
+    "User: arn:aws:sts::123456789012:assumed-role/stdapi-ai/task is not "
+    "authorized to perform: s3:GetObject on resource: "
+    "arn:aws:s3:::a-caller-owned-bucket/private.png"
+)
+
+
+def _s3_denial(operation: str) -> ClientError:
+    """Build the denial S3 answers an ungranted read of *operation* with.
+
+    Args:
+        operation: The S3 API operation that was refused.
+
+    Returns:
+        The corresponding botocore error.
+    """
+    return make_client_error(
+        "AccessDenied", operation, message=_S3_DENIAL_MESSAGE, status=403
+    )
+
+
+class _DeniedS3Client:
+    """Stub S3 client refusing a metadata read the way S3 refuses one."""
+
+    async def head_object(self, **_kwargs: object) -> NoReturn:
+        """Refuse the read.
+
+        Raises:
+            ClientError: Always, with the bare ``AccessDenied`` code S3 uses.
+        """
+        denial = _s3_denial("HeadObject")
+        raise denial
+
+
+@pytest.fixture
+def denied_input_buckets(monkeypatch: pytest.MonkeyPatch) -> tuple[str, str]:
+    """Accept two input buckets whose reads are denied, one external, one the server's own.
+
+    Both are declared in ``aws_s3_accepted_buckets``, so only ownership tells
+    them apart -- which is the split the guard is built on, rebuilt here from
+    the settings rather than restated.
+
+    Returns:
+        The caller-owned bucket and the deployment-owned bucket, in that order.
+    """
+    caller_bucket = "a-caller-owned-bucket"
+    own_bucket = "a-deployment-owned-bucket"
+    monkeypatch.setitem(aws_s3.BUCKET_TO_REGION, own_bucket, "us-east-1")
+    monkeypatch.setattr(
+        SETTINGS,
+        "aws_s3_accepted_buckets",
+        {caller_bucket: "us-east-1", own_bucket: "us-east-1"},
+    )
+    monkeypatch.setattr(
+        aws_s3,
+        "CALLER_INPUT_BUCKETS",
+        aws_s3._caller_input_buckets(),  # noqa: SLF001
+    )
+    monkeypatch.setattr(
+        input_file, "_ACCEPTED_BUCKETS", frozenset({caller_bucket, own_bucket})
+    )
+    monkeypatch.setattr(input_file, "get_client", lambda *_a, **_k: _DeniedS3Client())
+    return caller_bucket, own_bucket
+
+
+class TestDeniedS3InputNamesWhoCanFixIt:
+    """A denied read of an S3 input answers the audience that can act on it.
+
+    A denial is normally the operator's misconfiguration, so it reads as a
+    feature this deployment cannot run.  An object the *request* named is the
+    exception: it sits in storage the deployment does not own, so the refusal
+    is attributable to that request -- the caller's own bucket policy, key or
+    typo -- exactly as a denial evaluated against an end user's own session is.
+
+    Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/troubleshoot-403-errors.html
+         stdapi/aws_s3.py:caller_input_denial_guard
+         stdapi/api_errors.py:denied_feature_unavailable
+    """
+
+    async def test_an_object_the_request_named_is_refused_as_the_callers_own(
+        self, denied_input_buckets: tuple[str, str]
+    ) -> None:
+        """A denied caller-supplied object answers 4xx, naming the input it could not read.
+
+        Answering "not available on this deployment, contact your administrator"
+        would send the caller to someone who cannot fix their bucket policy, and
+        hide the one input they had to correct.
+        """
+        caller_bucket, _own_bucket = denied_input_buckets
+        uri = f"s3://{caller_bucket}/private.png"
+
+        with pytest.raises(ApiError) as exc_info:
+            await InputFile(uri).get_size()
+
+        error = exc_info.value
+        message = error.args[0]
+        assert error.status == 400, "the caller's own input is a request error"
+        assert error.code == "input_access_denied"
+        assert uri in message, "the refusal must name the input that could not be read"
+        assert "administrator" not in message, (
+            "the caller can fix this one themselves; the operator cannot"
+        )
+        assert "arn:aws" not in message, "AWS's own denial names a role, and is not it"
+        assert "123456789012" not in message, "nor is the account it names"
+
+    async def test_the_deployments_own_storage_stays_a_feature_it_cannot_run(
+        self, denied_input_buckets: tuple[str, str]
+    ) -> None:
+        """A denied read of a deployment-owned bucket keeps the generic 503.
+
+        The very same code, operation and settings entry: only the bucket's
+        ownership differs, and it alone decides.  Nothing of that bucket reaches
+        the caller either -- naming it would map the deployment's storage.
+        """
+        _caller_bucket, own_bucket = denied_input_buckets
+
+        with pytest.raises(ClientError) as exc_info:
+            await InputFile(f"s3://{own_bucket}/private.png").get_size()
+
+        denied = denied_feature_unavailable(exc_info.value)
+        assert denied is not None, "an unattributable denial is the deployment's"
+        assert denied.status == 503
+        assert denied.code == "feature_unavailable"
+        assert own_bucket not in denied.args[0]
+
+    async def test_a_download_of_a_caller_named_object_is_refused_the_same_way(
+        self, denied_input_buckets: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The body read answers as the metadata read does, not only the ``HeadObject``.
+
+        Metadata and content are resolved by separate calls, so a guard on one
+        of them alone still surfaces the other denial as an outage.
+        """
+        caller_bucket, _own_bucket = denied_input_buckets
+        uri = f"s3://{caller_bucket}/private.png"
+
+        async def _denied_get(*_args: object, **_kwargs: object) -> NoReturn:
+            """Refuse the download.
+
+            Raises:
+                ClientError: Always, as S3 refuses an ungranted ``GetObject``.
+            """
+            denial = _s3_denial("GetObject")
+            raise denial
+
+        monkeypatch.setattr(input_file, "get_bytes_from_s3", _denied_get)
+
+        with pytest.raises(ApiError) as exc_info:
+            await InputFile(uri).to_bytes()
+
+        assert exc_info.value.code == "input_access_denied"
+        assert uri in exc_info.value.args[0]
+
+    async def test_a_copy_denial_is_not_attributed_to_the_caller(
+        self, denied_input_buckets: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A denied ``CopyObject`` keeps the 503: its resource may be either side.
+
+        A cross-region copy needs read on the caller's object *and* write on the
+        deployment's bucket, and one ``AccessDenied`` does not say which was
+        refused -- so it stays the answer that blames nobody.
+        """
+        caller_bucket, _own_bucket = denied_input_buckets
+
+        async def _denied_copy(*_args: object, **_kwargs: object) -> NoReturn:
+            """Refuse the copy.
+
+            Raises:
+                ClientError: Always, as S3 refuses an ungranted ``CopyObject``.
+            """
+            denial = _s3_denial("CopyObject")
+            raise denial
+
+        monkeypatch.setattr(input_file, "copy_s3_object", _denied_copy)
+
+        with pytest.raises(ClientError) as exc_info:
+            await InputFile(f"s3://{caller_bucket}/private.png").to_s3("eu-west-3")
+
+        denied = denied_feature_unavailable(exc_info.value)
+        assert denied is not None, "an ambiguous denial is still the deployment's"
+        assert denied.status == 503
 
 
 async def test_unsupported_document_type_is_a_caller_error() -> None:
@@ -673,8 +859,7 @@ class TestInlineMediaTransport:
             """Fail the test if the payload is decoded."""
             pytest.fail("the transport decision decoded the payload")
 
-        # A bare base64 payload is the one whose size the source can only
-        # otherwise learn by decoding a prefix of it for content sniffing.
+        # A bare base64 payload's size is otherwise learned by decoding a prefix.
         bare = InputFile("A" * 40, content_type="image/png")
         data_uri = InputFile(_data_uri(40))
         await bare.to_bedrock_content_block(content_type="image/png")

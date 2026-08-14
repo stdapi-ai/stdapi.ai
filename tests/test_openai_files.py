@@ -27,10 +27,11 @@ from openai import NotFoundError as OpenAINotFoundError
 from openai.types import FileObject
 
 from stdapi.api_errors import ApiError
-from stdapi.aws_s3 import S3Object
+from stdapi.aws_s3 import EXPIRING_S3_TAG_SET, S3Object
 from stdapi.config import SETTINGS
 from stdapi.files import FileRecord, _core, _multipart
 from stdapi.routes import openai_files as openai_files_routes
+from stdapi.server import AWS_APN_ID
 from tests._helpers import make_client_error
 
 if TYPE_CHECKING:
@@ -634,26 +635,28 @@ class TestRequireBucketUnit:
     Ref: stdapi/files/_core.py:_require_bucket
     """
 
-    def test_no_bucket_hides_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_no_bucket_hides_settings(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
         """Without a bucket, the 503 hides settings and warns the administrator.
 
         The client-facing message must not leak internal setting names; the
         operator gets them through the error log instead.
 
         Ref: stdapi/files/_core.py:_require_bucket
+             stdapi/api_errors.py:FeatureUnavailableError
         """
         monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
-        warnings: list[object] = []
-        monkeypatch.setattr(
-            _core, "log_error_details", lambda *args, **_kwargs: warnings.extend(args)
-        )
         with pytest.raises(ApiError) as exc_info:
             _core._require_bucket()  # noqa: SLF001
         assert exc_info.value.status == 503
         message = str(exc_info.value)
         assert "administrator" in message
         assert "aws_s3_bucket" not in message
-        assert any("aws_s3_bucket" in str(warning) for warning in warnings)
+        assert any(
+            "aws_s3_bucket" in str(warning) for warning in request_log["error_detail"]
+        )
+        assert request_log["level"] == "warning"
 
 
 class _StubMultipartS3Client:
@@ -834,6 +837,82 @@ class TestUploadFileS3SourceMetadataUnit:
         assert record.purpose == "batch"
         assert stub_s3.copy_object_kwargs is None
         assert stub_s3.head_object_calls == 1
+
+
+class _StubS3ExpiryTaggingClient(_StubS3SourceCorrectionClient):
+    """Stub S3 client also recording every tag set written onto the object."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.tag_sets: list[list[dict[str, str]]] = []
+
+    async def put_object_tagging(self, **kwargs: object) -> dict[str, Any]:
+        tagging = cast("dict[str, list[dict[str, str]]]", kwargs["Tagging"])
+        self.tag_sets.append(tagging["TagSet"])
+        return {}
+
+
+@pytest.mark.local
+class TestUploadFileExpiryTagUnit:
+    """``upload_file`` tags an expiring object for Lifecycle cleanup (unit, stubbed S3).
+
+    The ``expires-at`` metadata only decides what the API answers: the tag is
+    what a Lifecycle rule matches, so an expired file missing it stays stored
+    and billed forever while reading as ``not_found``. It is written after the
+    upload because a server-side copy source carries the source object's own
+    tags, whatever the upload asked for.
+
+    Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html
+         stdapi/files/_core.py:upload_file
+    """
+
+    @pytest.fixture
+    def stub_s3(self, monkeypatch: pytest.MonkeyPatch) -> _StubS3ExpiryTaggingClient:
+        """Patch the S3 client, bucket resolution, and region map with stubs."""
+        stub = _StubS3ExpiryTaggingClient()
+        monkeypatch.setattr(_core, "get_client", lambda *_: stub)
+        monkeypatch.setattr(_core, "_require_bucket", lambda: "bucket")
+        monkeypatch.setattr(_core, "BUCKET_TO_REGION", {"bucket": "us-east-1"})
+        return stub
+
+    async def test_expires_after_tags_the_object_for_lifecycle_cleanup(
+        self, stub_s3: _StubS3ExpiryTaggingClient
+    ) -> None:
+        """An upload with a TTL carries the expiry tag, alongside the attribution one.
+
+        The tag set is written whole, so the attribution tag must be part of
+        the same write or the upload silently drops it. It is the shared
+        constant every other expiring upload is tagged with, rather than a
+        second list saying the same thing today: a tag added there has to
+        reach this write too.
+
+        Ref: stdapi/files/_core.py:upload_file
+             stdapi/aws_s3.py:EXPIRING_S3_TAG_SET
+        """
+        fake_file = cast("InputFile", _FakeS3SourceInputFile("wanted.jsonl"))
+
+        record = await _core.upload_file(fake_file, purpose="batch", expires_after=3600)
+
+        assert record.expires_at is not None
+        assert len(stub_s3.tag_sets) == 1
+        assert stub_s3.tag_sets[0] is EXPIRING_S3_TAG_SET
+        tags = {tag["Key"]: tag["Value"] for tag in stub_s3.tag_sets[0]}
+        assert tags["stdapi-ai.expires"] == "true"
+        assert tags["aws-apn-id"] == AWS_APN_ID
+
+    async def test_an_upload_without_a_ttl_is_never_tagged_for_expiry(
+        self, stub_s3: _StubS3ExpiryTaggingClient
+    ) -> None:
+        """A file with no expiry must not be tagged: the rule would delete it.
+
+        Ref: stdapi/files/_core.py:upload_file
+        """
+        fake_file = cast("InputFile", _FakeS3SourceInputFile("wanted.jsonl"))
+
+        record = await _core.upload_file(fake_file, purpose="batch")
+
+        assert record.expires_at is None
+        assert stub_s3.tag_sets == []
 
 
 class TestForceS3MetadataMultipart:

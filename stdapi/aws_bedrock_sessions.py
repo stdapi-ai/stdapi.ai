@@ -345,8 +345,7 @@ async def end_and_delete_session(
         session_id: Session to delete.
     """
     try:
-        # Sessions must be ended before deletion; tolerate already-ended
-        # (state errors defer to the delete call, which surfaces real issues).
+        # Deletion requires an ended session; an already-ended one is tolerated below.
         await client.end_session(sessionIdentifier=session_id)
     except ClientError as exc:
         if exc.response["Error"]["Code"] not in _END_TOLERATED_CODES:

@@ -885,6 +885,30 @@ class TestMidStreamTerminalErrorEvent:
         assert stream_log["level"] == "warning"
         assert request_log["level"] == "warning"
 
+    async def test_a_denied_call_ends_the_stream_the_way_it_would_end_a_request(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """A denial mid-stream reports the deployment's missing permission, not a 403.
+
+        A stream that opened before the guardrail, tool or storage call it
+        needed was refused must not answer differently from the same
+        misconfiguration caught before the headers went out.
+
+        Ref: stdapi/api_errors.py:denied_feature_unavailable
+        """
+        error = ClientError(
+            {"Error": {"Code": "AccessDeniedException", "Message": _LEAKY_DETAIL}},
+            "ApplyGuardrail",
+        )
+
+        events, stream_log = await self._run(monkeypatch, error)
+
+        body = loads(str(events[-1].data))["error"]
+        assert body["code"] == "feature_unavailable"
+        assert body["message"].startswith("The requested feature is not available")
+        assert "arn:aws" not in str(events[-1].data)
+        assert any(_LEAKY_DETAIL in str(d) for d in stream_log["error_detail"])
+
     async def test_client_error_below_500_is_relayed_redacted(
         self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
     ) -> None:
@@ -1028,6 +1052,51 @@ class TestBackgroundEventLog:
         (written_log,) = written
         assert written_log["level"] == "info"
         assert "error_detail" not in written_log
+
+    def test_scope_receives_what_the_work_logs(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``log_error_details`` inside the scope writes into the background entry.
+
+        ``log_error_details`` is a no-op outside a request-log context, so
+        background work whose errors are its only report would log them nowhere
+        without the scope installing itself as that context.
+
+        Ref: stdapi/monitoring.py:log_background_event
+        """
+        written: list[EventLog] = []
+        monkeypatch.setattr(monitoring, "write_log_event", written.append)
+        assert REQUEST_LOG.get(None) is None
+
+        with log_background_event("vector_store_indexing", "rid-detail"):
+            monitoring.log_error_details("indexing failed", level="error")
+
+        (log,) = written
+        assert log["error_detail"] == ["indexing failed"]
+        assert log["level"] == "error"
+        # The context is the scope's own, and only for its duration.
+        assert REQUEST_LOG.get(None) is None
+
+    def test_scope_restores_the_request_log_it_replaced(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """Work scheduled by a request logs into its own entry, not the request's.
+
+        A background task inherits the request's context, whose log entry is
+        already written by the time the task runs.
+
+        Ref: stdapi/monitoring.py:log_background_event
+        """
+        written: list[EventLog] = []
+        monkeypatch.setattr(monitoring, "write_log_event", written.append)
+
+        with log_background_event("cleanup", "rid-nested"):
+            monitoring.log_error_details("cleanup warning", level="warning")
+
+        (log,) = written
+        assert log["error_detail"] == ["cleanup warning"]
+        assert "error_detail" not in request_log
+        assert REQUEST_LOG.get(None) is request_log
 
 
 @pytest.fixture

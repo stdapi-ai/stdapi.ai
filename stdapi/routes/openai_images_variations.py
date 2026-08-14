@@ -63,6 +63,9 @@ _KNOWN_PARAMS = set(ImageVariationParams.model_fields.keys()) | {"image"}
     responses={
         200: {"description": "Image variations successfully created."},
         400: {"description": "Invalid request or unsupported parameters."},
+        503: {
+            "description": "The 'url' response format is not enabled on this server."
+        },
     },
     openapi_extra={
         "requestBody": {

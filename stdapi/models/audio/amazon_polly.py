@@ -694,10 +694,7 @@ async def _synthesize_long_text(
         log_error_details(error.response["Error"]["Message"])
         raise ApiError(_LONG_INPUT_UNAVAILABLE) from error
 
-    # Deleted whatever happens next: the object is known as soon as the job is
-    # accepted, so a timeout, a poll error or a client disconnect leaves nothing
-    # behind. Polly cannot be cancelled, so a delete that runs before the job
-    # writes is a no-op, and the prefix's lifecycle rule is the failsafe.
+    # Tracked as soon as the job is accepted, so no path leaves the object behind.
     key = s3_key_from_uri(job["OutputUri"], bucket)
     track_temporary_s3_objects(bucket, key)
 
@@ -815,15 +812,12 @@ async def _stream_speech_audio(
                     event, StartSpeechSynthesisStreamEventStreamStreamClosedEvent
                 ):
                     billed = event.value.request_characters
-            # Sending ends before the service closes the session, so an error
-            # here is one that truncated the audio: it must not be swallowed.
+            # An error here truncated the audio, so it must not be swallowed.
             await sender
         finally:
             if not sender.done():
                 sender.cancel()
-            # Awaited on every path, including the one that already failed:
-            # a send error nobody retrieves is reported by asyncio at
-            # collection time instead, long after the request it belongs to.
+            # Awaited on every path: an unretrieved error surfaces late, in asyncio.
             with suppress(CancelledError, Exception):
                 await sender
             if billed is None:
@@ -889,9 +883,7 @@ async def _synthesize_streamed_text(
         _engine_voice_regions(engine, voice_id),
     )
     try:
-        # Nothing has been promised to the caller yet: the marker resolves once
-        # the service answered, which is the last point a failure can be a
-        # clean error and be retried elsewhere.
+        # Last point a failure can still be a clean error and be retried elsewhere.
         await anext(audio)
     except ApiError as error:
         if not candidates:
@@ -904,9 +896,7 @@ async def _synthesize_streamed_text(
         return await _synthesize_long_text(
             request, model_id, engine, voice_id, candidates
         )
-    # The count the response reports, known now; what Polly bills is its own
-    # normalisation of the same text (a paragraph break counts once), which is
-    # only known when the session ends and is what the usage record carries.
+    # The count the response reports; Polly bills its own normalisation, later.
     return audio, len(text)
 
 
@@ -1028,12 +1018,10 @@ class AudioModel(AudioModelBase[None, None]):
         log["voice_id"] = voice_id
         streamable = (
             engine == _STREAM_ENGINE
-            # Timing marks are not an audio format a stream produces, and a
-            # document the caller wrote must stay whole inside one event.
+            # A stream produces no timing marks, and an SSML document must stay whole.
             and not speech_marks
             and not text.startswith(_SSML_DOCUMENT_PREFIX)
-            # A voice a stream rejects would fail without naming the voices
-            # that do exist, which the other paths do.
+            # A stream's rejection would not name the voices that do exist.
             and voice_id in _VOICES_BY_ENGINE.get(engine, ())
         )
         plain_text = text
@@ -1059,8 +1047,7 @@ class AudioModel(AudioModelBase[None, None]):
                     # Polly pcm caps at 16 kHz; encode from Ogg Vorbis above it.
                     output_format = request["OutputFormat"] = "ogg_vorbis"
 
-        # Resolved before the length check, so an input no region can store is
-        # rejected with the length this server accepts, not with the job limit.
+        # Before the length check, so the rejection names the limit actually enforced.
         candidates = _synthesis_job_candidates(engine, voice_id)
         match _synthesis_transport(
             text, text_type, streamable=streamable, job_available=bool(candidates)

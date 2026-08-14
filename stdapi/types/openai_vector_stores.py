@@ -452,9 +452,7 @@ class CompoundFilter(BaseModelRequest):
     """Combines several filters."""
 
     type: Literal["and", "or"] = Field(description="How the filters are combined.")
-    # Typed one level deep on purpose: a self-referential request schema cannot
-    # be published, so a filter nested deeper is carried as an object and
-    # validated when the search runs.
+    # One level deep: a self-referential request schema cannot be published.
     filters: list[ComparisonFilter | JsonMapping] = Field(
         min_length=1,
         description=(

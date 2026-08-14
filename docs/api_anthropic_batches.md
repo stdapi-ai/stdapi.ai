@@ -130,12 +130,15 @@ Each line pairs a `custom_id` with its outcome:
 
 | Limit                        | Value                    |
 |------------------------------|--------------------------|
-| Minimum requests per model   | 100                      |
+| Minimum requests per model   | 100 (default quota)      |
 | Maximum requests per batch   | 100,000                  |
 | Distinct models per batch    | 8                        |
 | Processing window            | 24 hours from creation   |
 
 A batch below the minimum, or over the model cap, is refused when it is created and the message names the shortfall — a batch naming several models must reach the minimum **for each of them**.
+
+!!! note "The 100-request minimum is a quota default"
+    100 is the default of the Amazon Bedrock quota *Minimum number of records per batch inference job*, which is set **per model** and adjustable for some of them — see [Amazon Bedrock quotas](https://docs.aws.amazon.com/general/latest/gr/bedrock.html). The check applied here is the default, whatever your account's own value is: an account that raised the quota has its smaller batches accepted here and refused on creation, and one that lowered it still cannot submit fewer than 100 requests for a model.
 
 ## Feature Compatibility
 
