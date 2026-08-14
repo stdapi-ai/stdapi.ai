@@ -23,7 +23,7 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from anthropic import BadRequestError as AnthropicBadRequestError
@@ -41,7 +41,6 @@ pytestmark = [pytest.mark.xdist_group("mantle_live"), pytest.mark.gateway]
 
 if TYPE_CHECKING:
     from anthropic import Anthropic
-    from openai.types.responses import WebSearchToolParam
     from starlette.testclient import TestClient as TestClientType
 
 #: Cheap chat-completions-only Mantle model on the legacy /v1 surface.
@@ -789,7 +788,7 @@ class TestMantleWebSearch:
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
          https://developers.openai.com/api/docs/guides/tools-web-search
-         stdapi/models/chat/_mantle/_convert.py:_apply_external_web_access
+         stdapi/models/chat/_adapters/_common.py:resolve_external_web_access
          stdapi/aws_bedrock_mantle.py:web_search_queries
     """
 
@@ -934,18 +933,15 @@ class TestMantleWebSearch:
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
              stdapi/config.py:Settings.aws_bedrock_external_web_access
+             stdapi/models/chat/_adapters/_common.py:resolve_external_web_access
         """
         with pytest.raises(BadRequestError) as bad_request:
             openai_client.responses.create(
                 model=_LUNA,
                 input="Say OK.",
-                # external_web_access is an Amazon Bedrock extension of the tool.
-                tools=[
-                    cast(
-                        "WebSearchToolParam",
-                        {"type": "web_search", "external_web_access": True},
-                    )
-                ],
+                tools=[{"type": "web_search"}],
+                # The web access choice travels as an extra model parameter.
+                extra_body={"external_web_access": True},
                 max_output_tokens=_LUNA_MAX_TOKENS,
             )
         assert bad_request.value.status_code == 400

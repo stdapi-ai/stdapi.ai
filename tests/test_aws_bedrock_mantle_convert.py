@@ -36,11 +36,16 @@ from stdapi.types.openai_chat_completions import (
 from stdapi.types.openai_completions import (
     CompletionCreateParams as LegacyCompletionCreateParams,
 )
-from stdapi.types.openai_responses import ResponseCreateParams
+from stdapi.types.openai_responses import (
+    ResponseCreateParams,
+    WebSearchPreviewTool,
+    WebSearchTool,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
+    from pydantic import BaseModel
     from types_aiobotocore_bedrock.literals import RegionName
 
     from stdapi.aws_bedrock_mantle import SseEvent
@@ -2693,6 +2698,43 @@ class TestChatCompletionsPayloadBuilder:
         assert payload["messages"][1]["reasoning"] == "because"
         assert "reasoning_content" not in payload["messages"][1]
 
+    async def test_external_web_access_is_gated_and_never_passed_through(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The web access knob is answered here, not handed to the backend.
+
+        This passthrough forwards every undeclared field verbatim, so a knob
+        the operator owns has to be taken off the payload rather than travel
+        with it -- and this API serves no web search, so a request asking for
+        something else than the server does is refused rather than accepted
+        and ignored.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
+             stdapi/models/chat/_mantle/_convert.py:chat_completions_payload
+             stdapi/models/chat/_adapters/_common.py:resolve_external_web_access
+        """
+        monkeypatch.setattr(
+            SETTINGS, "aws_bedrock_allow_external_web_access_override", True
+        )
+        body = {
+            "model": "ignored",
+            "messages": [{"role": "user", "content": "hi"}],
+            "external_web_access": False,
+        }
+        payload = await mantle_convert.chat_completions_payload(
+            ChatCompletionCreateParams.model_validate(body), "model-id"
+        )
+        assert "external_web_access" not in payload
+
+        with pytest.raises(ApiError, match="external_web_access") as exc_info:
+            await mantle_convert.chat_completions_payload(
+                ChatCompletionCreateParams.model_validate(
+                    body | {"external_web_access": True}
+                ),
+                "model-id",
+            )
+        assert exc_info.value.status == 400
+
 
 class TestMessagesPayloadBuilder:
     """Validated Anthropic Messages requests dumped to the Mantle passthrough shape.
@@ -2761,6 +2803,42 @@ class TestMessagesPayloadBuilder:
         assert content[1]["source"]["data"] == "UERG"
         schema = payload["tools"][0]["input_schema"]
         assert "propertyNames" not in schema["properties"]["a"]
+
+    async def test_external_web_access_is_gated_and_never_passed_through(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """This route answers the web access knob instead of forwarding it.
+
+        The Anthropic Messages passthrough sends undeclared fields as they
+        arrive, so the operator's control has to be resolved before the
+        payload is built here too.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
+             stdapi/models/chat/_mantle/_convert.py:messages_payload
+             stdapi/models/chat/_adapters/_common.py:resolve_external_web_access
+        """
+        monkeypatch.setattr(
+            SETTINGS, "aws_bedrock_allow_external_web_access_override", True
+        )
+        body = {
+            "model": "ignored",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hi"}],
+            "external_web_access": False,
+        }
+        payload = await mantle_convert.messages_payload(
+            MessageCreateParams.model_validate(body), "model-id"
+        )
+        assert "external_web_access" not in payload
+
+        with pytest.raises(ApiError, match="external_web_access") as exc_info:
+            await mantle_convert.messages_payload(
+                MessageCreateParams.model_validate(
+                    body | {"external_web_access": True}
+                ),
+                "model-id",
+            )
+        assert exc_info.value.status == 400
 
     async def test_system_messages_forwarded_when_natively_supported(self) -> None:
         """Mid-conversation system messages stay in place for capable models.
@@ -2997,15 +3075,17 @@ class TestResponsesPayloadBuilder:
 
     @staticmethod
     def _web_search_request(
-        *, external_web_access: bool | None = None, tool_type: str = "web_search"
+        *, external_web_access: object = None, tool_type: str = "web_search"
     ) -> ResponseCreateParams:
         """Build a Responses request carrying one web search tool."""
-        tool: dict[str, Any] = {"type": tool_type}
+        body: dict[str, Any] = {
+            "model": "ignored",
+            "input": "Who won?",
+            "tools": [{"type": tool_type}],
+        }
         if external_web_access is not None:
-            tool["external_web_access"] = external_web_access
-        return ResponseCreateParams.model_validate(
-            {"model": "ignored", "input": "Who won?", "tools": [tool]}
-        )
+            body["external_web_access"] = external_web_access
+        return ResponseCreateParams.model_validate(body)
 
     async def test_external_web_access_enabled_by_configuration(
         self, monkeypatch: pytest.MonkeyPatch
@@ -3013,13 +3093,117 @@ class TestResponsesPayloadBuilder:
         """An operator that allows external web access gets it on every request.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
-             stdapi/models/chat/_mantle/_convert.py:_apply_external_web_access
+             stdapi/models/chat/_adapters/_common.py:resolve_external_web_access
         """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_external_web_access", True)
         payload, _ = await mantle_convert.responses_payload(
             self._web_search_request(), "model-id"
         )
         assert payload["tools"][0]["external_web_access"] is True
+
+    def test_external_web_access_is_not_a_field_of_the_web_search_tool(self) -> None:
+        """The knob is a request extra, not a field of the tool.
+
+        Upstream's tool carries only ``filters``, ``search_context_size`` and
+        ``user_location``; a request field this gateway alone declares is one
+        no client will ever send.
+
+        Ref: openai.types.responses.web_search_tool.WebSearchTool
+             openai.types.responses.web_search_preview_tool.WebSearchPreviewTool
+             stdapi/types/openai_responses.py:WebSearchTool
+        """
+        assert "external_web_access" not in WebSearchTool.model_fields
+        assert "external_web_access" not in WebSearchPreviewTool.model_fields
+
+    @pytest.mark.parametrize("tool", [WebSearchTool, WebSearchPreviewTool])
+    def test_the_web_search_tool_schema_names_the_parameter(
+        self, tool: type[BaseModel]
+    ) -> None:
+        """The published schema is where a client learns the parameter exists.
+
+        Carrying it as an extra keeps it out of the tool's fields, so the tool
+        description is the only thing an agent reading the OpenAPI or MCP
+        schema can discover it from.
+
+        Ref: https://developers.openai.com/api/docs/guides/tools-web-search
+             stdapi/types/openai_responses.py:WebSearchTool
+        """
+        description = tool.model_json_schema()["description"]
+
+        assert "external_web_access" in description
+        assert "server" in description
+
+    def test_the_override_setting_points_at_the_parameter_that_works(self) -> None:
+        """The override setting's reference names the extra model parameter.
+
+        The tool field it could have named exists on neither tool schema, so a
+        description pointing there would send an operator to a knob that
+        changes nothing.
+
+        Ref: stdapi/config.py:_Settings.aws_bedrock_allow_external_web_access_override
+             stdapi/models/chat/_adapters/_common.py:resolve_external_web_access
+        """
+        description = (
+            type(SETTINGS)
+            .model_fields["aws_bedrock_allow_external_web_access_override"]
+            .description
+        )
+
+        assert description is not None
+        assert "extra model parameter" in description
+        assert "tool" not in description
+
+    async def test_external_web_access_extra_is_not_forwarded_upstream(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The extra parameter is consumed here, never sent as a request field.
+
+        Ref: stdapi/models/chat/_adapters/_common.py:resolve_external_web_access
+        """
+        monkeypatch.setattr(
+            SETTINGS, "aws_bedrock_allow_external_web_access_override", True
+        )
+        payload, _ = await mantle_convert.responses_payload(
+            self._web_search_request(external_web_access=True), "model-id"
+        )
+        assert "external_web_access" not in payload
+        assert payload["tools"][0]["external_web_access"] is True
+
+    async def test_a_request_that_searches_nothing_keeps_its_choice_harmlessly(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no web search tool the choice is accepted, and applies to nothing.
+
+        Nothing is searched, so the answer is the one the caller asked for and
+        the knob is incidental: refusing it would break a client that sets the
+        parameter once for every request it sends. The value still never
+        travels upstream.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:responses_payload
+             stdapi/models/chat/_adapters/_common.py:resolve_external_web_access
+        """
+        monkeypatch.setattr(
+            SETTINGS, "aws_bedrock_allow_external_web_access_override", True
+        )
+        request = ResponseCreateParams.model_validate(
+            {"model": "ignored", "input": "Who won?", "external_web_access": True}
+        )
+
+        payload, _ = await mantle_convert.responses_payload(request, "model-id")
+
+        assert "external_web_access" not in payload
+        assert "tools" not in payload
+
+    async def test_non_boolean_external_web_access_is_rejected(self) -> None:
+        """A value that is not a boolean cannot decide web access.
+
+        Ref: stdapi/models/chat/_adapters/_common.py:resolve_external_web_access
+        """
+        with pytest.raises(ApiError, match="must be a boolean") as exc_info:
+            await mantle_convert.responses_payload(
+                self._web_search_request(external_web_access="yes"), "model-id"
+            )
+        assert exc_info.value.status == 400
 
     @pytest.mark.parametrize("configured", [False, True])
     async def test_external_web_access_request_rejected_when_override_disabled(
@@ -3033,7 +3217,7 @@ class TestResponsesPayloadBuilder:
         cannot quietly opt back into the boundary it was not given.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
-             stdapi/models/chat/_mantle/_convert.py:_apply_external_web_access
+             stdapi/models/chat/_adapters/_common.py:resolve_external_web_access
         """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_external_web_access", configured)
         with pytest.raises(ApiError, match="external_web_access") as exc_info:
@@ -3048,42 +3232,20 @@ class TestResponsesPayloadBuilder:
     def _nested_web_search_request(
         item_type: str = "additional_tools",
         *,
-        external_web_access: bool | None = None,
+        external_web_access: object = None,
         tool_type: str = "web_search",
     ) -> ResponseCreateParams:
         """Build a Responses request carrying a web search tool inside an input item."""
-        tool: dict[str, Any] = {"type": tool_type}
-        if external_web_access is not None:
-            tool["external_web_access"] = external_web_access
-        item: dict[str, Any] = {"type": item_type, "tools": [tool]}
+        item: dict[str, Any] = {"type": item_type, "tools": [{"type": tool_type}]}
         if item_type == "additional_tools":
             item["role"] = "user"
-        return ResponseCreateParams.model_validate(
-            {
-                "model": "ignored",
-                "input": [item, {"role": "user", "content": "Who won?"}],
-            }
-        )
-
-    @pytest.mark.parametrize("item_type", ["additional_tools", "tool_search_output"])
-    async def test_external_web_access_rejected_on_tool_inside_input_item(
-        self, item_type: str
-    ) -> None:
-        """A tool nested in a conversation item obeys the same web access gate.
-
-        Tool definitions also travel inside the conversation, so a gate that only
-        read the top-level ``tools`` array would let the request advertise a tool
-        the operator's configuration forbids.
-
-        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
-             stdapi/models/chat/_mantle/_convert.py:_apply_nested_external_web_access
-        """
-        with pytest.raises(ApiError, match="external_web_access") as exc_info:
-            await mantle_convert.responses_payload(
-                self._nested_web_search_request(item_type, external_web_access=True),
-                "model-id",
-            )
-        assert exc_info.value.status == 400
+        body: dict[str, Any] = {
+            "model": "ignored",
+            "input": [item, {"role": "user", "content": "Who won?"}],
+        }
+        if external_web_access is not None:
+            body["external_web_access"] = external_web_access
+        return ResponseCreateParams.model_validate(body)
 
     @pytest.mark.parametrize("item_type", ["additional_tools", "tool_search_output"])
     async def test_external_web_access_resolved_on_tool_inside_input_item(
@@ -3104,12 +3266,9 @@ class TestResponsesPayloadBuilder:
 
     @staticmethod
     def _tool_choice_web_search_request(
-        *, external_web_access: bool | None = None, tool_type: str = "web_search"
+        *, tool_type: str = "web_search"
     ) -> ResponseCreateParams:
         """Build a Responses request referencing a web search tool in ``tool_choice``."""
-        tool: dict[str, Any] = {"type": tool_type}
-        if external_web_access is not None:
-            tool["external_web_access"] = external_web_access
         return ResponseCreateParams.model_validate(
             {
                 "model": "ignored",
@@ -3117,31 +3276,18 @@ class TestResponsesPayloadBuilder:
                 "tool_choice": {
                     "type": "allowed_tools",
                     "mode": "auto",
-                    "tools": [tool],
+                    "tools": [{"type": tool_type}],
                 },
             }
         )
 
-    async def test_external_web_access_rejected_on_tool_choice_tool(self) -> None:
-        """A web search tool advertised through ``tool_choice`` obeys the gate too.
-
-        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
-             stdapi/models/chat/_mantle/_convert.py:_apply_nested_external_web_access
-        """
-        with pytest.raises(ApiError, match="external_web_access") as exc_info:
-            await mantle_convert.responses_payload(
-                self._tool_choice_web_search_request(external_web_access=True),
-                "model-id",
-            )
-        assert exc_info.value.status == 400
-
     async def test_external_web_access_request_matching_configuration_accepted(
         self,
     ) -> None:
-        """The documented ``external_web_access: false`` call is forwarded as sent.
+        """Asking for exactly what the server does is accepted, override or not.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
-             stdapi/models/chat/_mantle/_convert.py:_apply_external_web_access
+             stdapi/models/chat/_adapters/_common.py:resolve_external_web_access
         """
         payload, _ = await mantle_convert.responses_payload(
             self._web_search_request(external_web_access=False), "model-id"
@@ -3154,7 +3300,7 @@ class TestResponsesPayloadBuilder:
         """With the override allowed, the request decides in both directions.
 
         Ref: stdapi/config.py:Settings.aws_bedrock_allow_external_web_access_override
-             stdapi/models/chat/_mantle/_convert.py:_apply_external_web_access
+             stdapi/models/chat/_adapters/_common.py:resolve_external_web_access
         """
         monkeypatch.setattr(
             SETTINGS, "aws_bedrock_allow_external_web_access_override", True
@@ -3191,22 +3337,6 @@ class TestResponsesPayloadBuilder:
             "model-id",
         )
         assert payload["input"][0]["tools"][0]["external_web_access"] is True
-
-    async def test_external_web_access_tool_choice_wins_when_override_allowed(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A ``tool_choice`` tool keeps the requested value once the override is on.
-
-        Ref: stdapi/config.py:Settings.aws_bedrock_allow_external_web_access_override
-             stdapi/models/chat/_mantle/_convert.py:_apply_nested_external_web_access
-        """
-        monkeypatch.setattr(
-            SETTINGS, "aws_bedrock_allow_external_web_access_override", True
-        )
-        payload, _ = await mantle_convert.responses_payload(
-            self._tool_choice_web_search_request(external_web_access=True), "model-id"
-        )
-        assert payload["tool_choice"]["tools"][0]["external_web_access"] is True
 
     async def test_tool_choice_reference_is_forwarded_as_sent(self) -> None:
         """A ``tool_choice`` entry that omits the field keeps the shape it was sent in.
@@ -3248,32 +3378,25 @@ class TestResponsesPayloadBuilder:
         )
         assert payload["input"][0]["tools"][0]["external_web_access"] is False
 
-    @pytest.mark.parametrize("tool_type", _WEB_SEARCH_TOOL_TYPES)
     @pytest.mark.parametrize(
         "build",
-        [
-            _web_search_request,
-            _nested_web_search_request,
-            _tool_choice_web_search_request,
-        ],
-        ids=["tools", "input_item", "tool_choice"],
+        [_web_search_request, _nested_web_search_request],
+        ids=["tools", "input_item"],
     )
-    async def test_external_web_access_rejected_for_every_tool_spelling(
-        self, build: Callable[..., ResponseCreateParams], tool_type: str
+    async def test_external_web_access_rejected_wherever_the_tool_travels(
+        self, build: Callable[..., ResponseCreateParams]
     ) -> None:
-        """Every spelling is refused external web access in every carrier.
+        """The gate answers before any carrier is served.
 
         The gate is what keeps a request from reaching web access the operator
-        forbade; a spelling it does not recognise is a way around it, wherever
-        the tool travels.
+        forbade, so it must not depend on where the tool it applies to travels.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
-             stdapi/models/chat/_mantle/_convert.py:responses_payload
-             stdapi/models/chat/_mantle/_convert.py:_web_search_tools
+             stdapi/models/chat/_adapters/_common.py:resolve_external_web_access
         """
         with pytest.raises(ApiError, match="external_web_access") as exc_info:
             await mantle_convert.responses_payload(
-                build(external_web_access=True, tool_type=tool_type), "model-id"
+                build(external_web_access=True), "model-id"
             )
         assert exc_info.value.status == 400
 

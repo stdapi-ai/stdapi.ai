@@ -17,14 +17,9 @@ the primary Bedrock region. The session wire calls themselves live in
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Literal, Never
 
-from botocore.exceptions import (
-    ClientError,
-    ConnectTimeoutError,
-    EndpointConnectionError,
-    EndpointResolutionError,
-)
+from botocore.exceptions import ClientError
 
-from stdapi.api_errors import ApiError
+from stdapi.api_errors import ACCESS_DENIED_CODES, UNREACHABLE_ENDPOINT_ERRORS, ApiError
 from stdapi.aws import get_client
 from stdapi.aws_bedrock import handle_bedrock_client_error
 from stdapi.aws_bedrock_sessions import (
@@ -82,16 +77,6 @@ _KIND_CACHE_LIMIT: int = 4_096
 
 #: Sentinel cached value meaning the session has no kind tag (untagged/foreign).
 _UNTAGGED: str = ""
-
-#: AWS error code meaning session storage is not enabled on this server.
-_ACCESS_DENIED_CODE = "AccessDeniedException"
-
-#: Botocore failures meaning the session API endpoint is unreachable or timed out.
-_UNREACHABLE_ERRORS = (
-    EndpointConnectionError,
-    EndpointResolutionError,
-    ConnectTimeoutError,
-)
 
 #: Stored object kind declared by each document ``response.object`` field.
 _KIND_BY_OBJECT: dict[str, StoredObjectKind] = {
@@ -198,7 +183,7 @@ async def try_create_stored_response_session(kind: StoredObjectKind) -> str | No
     try:
         return await create_stored_response_session(kind)
     except ClientError as exc:
-        if exc.response["Error"]["Code"] != _ACCESS_DENIED_CODE:
+        if exc.response["Error"]["Code"] not in ACCESS_DENIED_CODES:
             raise
         log_error_details(
             "Bedrock session storage is not enabled (AccessDenied on "
@@ -208,7 +193,7 @@ async def try_create_stored_response_session(kind: StoredObjectKind) -> str | No
             level="warning",
         )
         return None
-    except _UNREACHABLE_ERRORS:
+    except UNREACHABLE_ENDPOINT_ERRORS:
         log_error_details(
             "Amazon Bedrock session storage endpoint is unreachable or timed "
             "out: 'store' was ignored. Session storage is offered in fewer "

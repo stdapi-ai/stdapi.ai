@@ -763,18 +763,15 @@ def _handle_system_tool(
             tool_type = getattr(tool, "type", type(tool).__name__)
             msg = f"Server tool '{tool_type}' is not supported by this model."
             raise ApiError(msg)
-        if isinstance(tool, WebSearchToolParam) and (
-            tool.allowed_domains
-            or tool.blocked_domains
-            or tool.max_uses is not None
-            or tool.user_location is not None
-        ):
-            msg = (
-                "web_search allowed_domains, blocked_domains, max_uses, and "
-                "user_location are not supported by this model. Remove them, "
-                "or use a model whose web search supports them."
+        if isinstance(tool, WebSearchToolParam):
+            _common.reject_unsupported_web_search_fields(
+                {
+                    "allowed_domains": tool.allowed_domains,
+                    "blocked_domains": tool.blocked_domains,
+                    "max_uses": tool.max_uses,
+                    "user_location": tool.user_location,
+                }
             )
-            raise ApiError(msg)
         bedrock_name: str = tool_name_map[tool.name]  # type: ignore[index]
     else:
         bedrock_name = tool.name

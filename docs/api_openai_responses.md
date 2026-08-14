@@ -66,7 +66,9 @@ Generate model responses with Amazon Bedrock foundation models through an OpenAI
 | `tool_choice: allowed_tools`                                          |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Approximated: `required` + 1 function → forced tool; `required` + many → any tool; `auto` → auto; type-variants add no constraint |
 | `parallel_tool_calls`                                                 |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Accepted for every model and honored by models able to constrain tool use; echoed in the response, which reports the tool calls actually made |
 | Built-in tools (`code_interpreter`, `web_search`, `image_generation`) |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | See [OpenAI Integrated Tools](#openai-integrated-tools)                      |
-| `file_search` tool                                                    |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | No Converse equivalent — accepted and dropped; forwarded upstream on Bedrock Mantle native models |
+| `file_search` tool                                                    |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Rejected with a `400` — an answer that ignored the attached stores would read as grounded in them; forwarded upstream on Bedrock Mantle native models |
+| `web_search` `filters.allowed_domains` / `user_location`              |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Rejected with a `400` where the search cannot be restricted; honored on Bedrock Mantle native models |
+| `web_search` `search_context_size`                                    |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Accepted and ignored — the answer is still searched and cited; honored on Bedrock Mantle native models |
 | `computer` / `computer_use_preview` tools                             |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | No Converse equivalent — accepted and dropped (see [Computer Use Not Supported](#computer-use-not-supported)); forwarded upstream on Bedrock Mantle native models |
 | `mcp` tool                                                            |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | No Converse equivalent — accepted and dropped; forwarded upstream on Bedrock Mantle native models |
 | `local_shell` / `shell` tools                                         | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and dropped; no Bedrock equivalent                                  |
@@ -89,6 +91,7 @@ Generate model responses with Amazon Bedrock foundation models through an OpenAI
 | `prompt_cache_breakpoint` (input content part)                        |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Explicit cache boundary mapped to an Amazon Bedrock `cachePoint` (max. 4 per request) |
 | `prompt_cache_retention`                                              |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Cache TTL: `in_memory`, `24h`, `1h`, or `5m`                                 |
 | `service_tier`                                                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Maps to Bedrock service tier header                                          |
+| Extra model-specific params                                           | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra model-specific parameters not supported by the OpenAI API              |
 | `truncation`                                                          | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Returns `400`; Bedrock manages context automatically                         |
 | `max_tool_calls`                                                      | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Returns `400`; not supported                                                 |
 | `context_management`                                                  | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Returns `400`; not supported                                                 |
@@ -137,7 +140,7 @@ Generate model responses with Amazon Bedrock foundation models through an OpenAI
 </div>
 
 !!! note "Bedrock Mantle passthrough"
-    On [Mantle](features.md#bedrock-mantle-models) models served natively by the upstream Responses API, the parameters that the Converse path accepts but ignores — `background`, `include` (values other than `reasoning.encrypted_content`), `stream_options`, `reasoning.summary`, `text.verbosity`, `client_metadata`, `top_logprobs` — and the hosted tools (`file_search`, `code_interpreter`, `computer`, `mcp`, `image_generation`) are forwarded verbatim upstream: the upstream API decides whether they take effect or return a clean error. `web_search` is the exception: on every Mantle model its `external_web_access` field is set by the server, and unless the deployment allows the override, a request that asks for a different value is rejected with a `400` — see [OpenAI GPT web search](#openai-gpt-web-search), where the tool is served natively.
+    On [Mantle](features.md#bedrock-mantle-models) models served natively by the upstream Responses API, the parameters that the Converse path accepts but ignores — `background`, `include` (values other than `reasoning.encrypted_content`), `stream_options`, `reasoning.summary`, `text.verbosity`, `client_metadata`, `top_logprobs` — the hosted tools (`file_search`, `code_interpreter`, `computer`, `mcp`, `image_generation`) and the `web_search` search options (`filters`, `search_context_size`, `user_location`) are forwarded verbatim upstream: the upstream API decides whether they take effect or return a clean error. Web access is the exception: on every Mantle model the server decides whether a search may reach the external web, and unless the deployment allows the override, a request asking for a different value is rejected with a `400` — see [OpenAI GPT web search](#openai-gpt-web-search), where the tool is served natively.
 
 ## Model Support
 
@@ -171,10 +174,17 @@ Define function tools and submit results in a round-trip conversation.
     For multi-turn conversations, pass the full message history in the `input` array, or store a response with `store=true` and continue it via `previous_response_id` (see [Stored Responses](#stored-responses)).
 
 !!! warning "Unsupported Built-In Tools"
-    `file_search`, `computer`, `computer_use_preview`, `mcp`, `local_shell`, `shell`,
-    `custom`, `namespace`, `tool_search`, and `apply_patch` tools have no backend
+    `computer`, `computer_use_preview`, `mcp`, `local_shell`, `shell`, `custom`,
+    `namespace`, `tool_search`, and `apply_patch` tools have no backend
     equivalent: they are **accepted for compatibility and dropped** from the tool
     configuration, so the model cannot call them.
+
+    `file_search` is **rejected with a `400`** instead: an answer produced
+    without searching the vector stores the request attached would still read as
+    grounded in them. Search the stores with
+    [`POST /v1/vector_stores/{id}/search`](api_openai_vector_stores.md) and pass
+    the results in the input. Bedrock Mantle native models receive the tool
+    unchanged and answer it themselves when the model supports it.
 
 !!! warning "Programmatic Tool Calling"
     The `programmatic_tool_calling` tool — and `tool_choice: {"type": "programmatic_tool_calling"}` —
@@ -579,6 +589,20 @@ curl -X POST "$BASE/v1/responses" \
     reports its own spans — see
     [OpenAI GPT Web Search](#openai-gpt-web-search).
 
+!!! warning "Search options"
+    `filters.allowed_domains` and `user_location` restrict which sources a
+    search may use, and Nova's grounding cannot apply either: a request
+    carrying one is **rejected with a `400`** rather than searched
+    unrestricted. `search_context_size` is accepted and ignored — the answer is
+    still searched and cited. All three are honored on the models that serve
+    web search natively, listed below.
+
+    The `external_web_access` extra model parameter is refused the same way: a
+    Nova search runs with the web access the server is configured for, so a
+    request asking for a different one is **rejected with a `400`** instead of
+    being searched under the server's value. Sending the configured value, or
+    omitting the parameter, always works.
+
 !!! warning "Region Compatibility"
     `web_search` is available on Amazon Nova 2 and Nova Premier models, in US regions only. Not available on EU inference profiles.
 
@@ -622,10 +646,22 @@ citation as a `response.output_text.annotation.added` event.
     request data may leave it. Enabling this is therefore an advance decision
     about behaviour that can change: leave it off unless you intend that.
 
-    A request may only set the tool's `external_web_access` field to something
-    other than the configured value when
+    A request may choose its own web access by sending `external_web_access` as
+    an extra model parameter (a top-level field, or `extra_body` in the OpenAI
+    SDK), and only when
     [`AWS_BEDROCK_ALLOW_EXTERNAL_WEB_ACCESS_OVERRIDE`](operations_configuration.md#bedrock-allow-external-web-access-override)
-    is enabled; otherwise the request is rejected with a `400`.
+    is enabled; otherwise a value differing from the configured one is rejected
+    with a `400`. These are the models whose search takes the choice per
+    request: everywhere else the parameter must match the server's value.
+
+    ```json
+    {
+      "model": "openai.gpt-5.6-luna",
+      "input": "What shipped this week?",
+      "tools": [{"type": "web_search"}],
+      "external_web_access": true
+    }
+    ```
 
 !!! warning "Availability and cost"
     Web search is available on the OpenAI GPT-5.x models in `us-east-1`,

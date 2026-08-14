@@ -314,7 +314,7 @@ class FileSearchRankingOptions(BaseModelRequest):
 class FileSearchTool(BaseModelRequest):
     """A tool that searches for relevant content from uploaded files.
 
-    UNSUPPORTED on this implementation.
+    Served only by models that host it themselves; rejected otherwise.
     """
 
     type: Literal["file_search"] = Field(description="File search tool type.")
@@ -352,7 +352,13 @@ class WebSearchUserLocation(BaseModelRequest):
 
 # Ref: openai.types.responses.web_search_tool.WebSearchTool
 class WebSearchTool(BaseModelRequest):
-    """Search the web for sources related to the prompt."""
+    """Search the web for sources related to the prompt.
+
+    Whether a search may reach the external web is a server setting. Where the
+    server allows choosing it, send the boolean `external_web_access` as a
+    top-level extra parameter of the request; a value the server does not
+    allow is rejected.
+    """
 
     type: Literal["web_search", "web_search_2025_08_26"] = Field(
         description="Web search tool type."
@@ -366,14 +372,6 @@ class WebSearchTool(BaseModelRequest):
     )
     user_location: WebSearchUserLocation | None = Field(
         default=None, description="User's approximate location."
-    )
-    external_web_access: bool | None = Field(
-        default=None,
-        description=(
-            "Let the search reach the public web instead of a cached index. "
-            "Omit it to use the server's configured value; setting a different "
-            "one is rejected unless the server allows it per request."
-        ),
     )
 
 
@@ -390,7 +388,13 @@ class WebSearchPreviewUserLocation(BaseModelRequest):
 
 # Ref: openai.types.responses.web_search_preview_tool.WebSearchPreviewTool
 class WebSearchPreviewTool(BaseModelRequest):
-    """This tool searches the web for relevant results to use in a response."""
+    """This tool searches the web for relevant results to use in a response.
+
+    Whether a search may reach the external web is a server setting. Where the
+    server allows choosing it, send the boolean `external_web_access` as a
+    top-level extra parameter of the request; a value the server does not
+    allow is rejected.
+    """
 
     type: Literal["web_search_preview", "web_search_preview_2025_03_11"] = Field(
         description="Web search preview tool type."
@@ -404,14 +408,6 @@ class WebSearchPreviewTool(BaseModelRequest):
     )
     user_location: WebSearchPreviewUserLocation | None = Field(
         default=None, description="User's location."
-    )
-    external_web_access: bool | None = Field(
-        default=None,
-        description=(
-            "Let the search reach the public web instead of a cached index. "
-            "Omit it to use the server's configured value; setting a different "
-            "one is rejected unless the server allows it per request."
-        ),
     )
 
 
@@ -4153,8 +4149,11 @@ class PromptCacheOptions(BaseModelRequest):
 
 
 # Ref: openai.types.responses.response_create_params.ResponseCreateParamsBase
-class ResponseCreateParams(BaseModelRequest):
-    """Request body for POST /v1/responses."""
+class ResponseCreateParams(BaseModelRequestWithExtra):
+    """Request body for POST /v1/responses.
+
+    Undeclared fields are forwarded to the model as extra parameters.
+    """
 
     model: str = Field(description="Model ID used to generate the response.")
     input: str | ResponseInputParam | None = Field(
@@ -4327,9 +4326,9 @@ class ResponseCreateParams(BaseModelRequest):
     def _unsupported(self) -> Self:
         """Validate that unsupported parameters are not used.
 
-        Tool types without a backend equivalent (file search, computer use,
-        MCP, shells, custom/namespace tools, ...) are accepted for
-        compatibility and dropped from the Bedrock tool configuration.
+        Tool types without a backend equivalent (computer use, MCP, shells,
+        custom/namespace tools, ...) are accepted for compatibility and dropped
+        from the Bedrock tool configuration.
 
         A ``prompt`` request body carries only the prompt variables: Amazon
         Bedrock renders the messages, system prompt, tools and inference

@@ -1687,17 +1687,18 @@ class TestUnsupportedFeatures:
     ) -> None:
         """Tool types without a backend equivalent are accepted, echoed and dropped.
 
-        ``file_search``, ``computer``/``computer_use_preview``, ``mcp``,
-        ``local_shell``, ``shell``, ``custom``, ``namespace``, ``tool_search``
-        and ``apply_patch`` are parsed and echoed on the response, but none of
-        them reaches the Bedrock tool configuration, so the model can only
-        answer with text.
+        ``computer``/``computer_use_preview``, ``mcp``, ``local_shell``,
+        ``shell``, ``custom``, ``namespace``, ``tool_search`` and
+        ``apply_patch`` are parsed and echoed on the response, but none of them
+        reaches the Bedrock tool configuration, so the model can only answer
+        with text.  ``file_search`` is not among them: it is refused, since a
+        dropped one answers from the model's own knowledge while the caller
+        believes the answer comes from the attached stores.
 
         Ref: https://developers.openai.com/api/docs/guides/tools
              stdapi/models/chat/_adapters/_openai_responses.py:_build_tool_config
         """
         tools: list[Any] = [
-            {"type": "file_search", "vector_store_ids": ["vs_123"]},
             {"type": "computer"},
             {
                 "type": "computer_use_preview",
@@ -2861,6 +2862,38 @@ class TestStreamErrorMirrorsTheMonitoringTwin:
         )
         assert log_message == "internal endpoint details", (
             "the raw AWS message must still reach the server-side log"
+        )
+
+    @pytest.mark.usefixtures("request_log")
+    def test_a_denied_call_reports_the_deployments_missing_permission(self) -> None:
+        """A server-role denial classifies as 503 ``feature_unavailable`` here too.
+
+        A Responses stream must not be the one surface that still blames the
+        caller for the operator's IAM policy.
+
+        Ref: stdapi/api_errors.py:denied_feature_unavailable
+        """
+        exc = ClientError(
+            {
+                "Error": {
+                    "Code": "AccessDeniedException",
+                    "Message": "is not authorized to perform: bedrock:InvokeModel",
+                }
+            },
+            "ConverseStream",
+        )
+
+        status, client_message, _param, code, log_message, _level = (
+            _classify_stream_error(exc)
+        )
+
+        assert status == 503
+        assert code == "feature_unavailable"
+        assert client_message.startswith("The requested feature is not available")
+        assert "bedrock:InvokeModel" not in client_message
+        assert "bedrock:InvokeModel" not in log_message, (
+            "the client-facing message is logged here; the denial itself is "
+            "logged as its own operator warning"
         )
 
 

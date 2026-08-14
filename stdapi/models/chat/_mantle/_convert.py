@@ -29,8 +29,11 @@ from sse_starlette import ServerSentEvent
 
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock_mantle import MantleError, decode_mantle_response_id
-from stdapi.config import SETTINGS
 from stdapi.input_file import FileIdInputFile, InputFile, prefetch_all_content_types
+from stdapi.models.chat._adapters._common import (
+    EXTERNAL_WEB_ACCESS_PARAM,
+    resolve_external_web_access,
+)
 from stdapi.models.chat._adapters._openai_responses import COMPACTION_CONTENT_PREFIX
 from stdapi.types.anthropic_messages import (
     Base64ImageSource,
@@ -50,14 +53,7 @@ from stdapi.types.openai_completions import Completion
 from stdapi.utils import to_json_str
 
 if TYPE_CHECKING:
-    from collections.abc import (
-        AsyncGenerator,
-        Callable,
-        Coroutine,
-        Iterator,
-        Mapping,
-        Sequence,
-    )
+    from collections.abc import AsyncGenerator, Callable, Coroutine, Iterator, Sequence
 
     from types_aiobotocore_bedrock.literals import RegionName
 
@@ -511,12 +507,15 @@ async def chat_completions_payload(
         JSON-ready request payload.
 
     Raises:
-        ApiError: When the request sets the ``moderation`` parameter.
+        ApiError: When the request sets the ``moderation`` parameter, or asks
+            for web access this API cannot give it.
     """
     _reject_moderation_param(request.moderation)
     await prefetch_all_content_types()
     payload = request.model_dump(mode="json", by_alias=True, exclude_unset=True)
     payload["model"] = model_id
+    # This API serves no web search, so the choice is gated but goes nowhere.
+    _take_external_web_access(payload, per_request=False)
     for tool in payload.get("tools") or ():
         if parameters := (tool.get("function") or {}).get("parameters"):
             sanitize_tool_schema(parameters)
@@ -625,10 +624,15 @@ async def messages_payload(
 
     Returns:
         JSON-ready request payload.
+
+    Raises:
+        ApiError: When the request asks for web access this API cannot give it.
     """
     await prefetch_all_content_types()
     payload = request.model_dump(mode="json", by_alias=True, exclude_unset=True)
     payload["model"] = model_id
+    # This API serves no web search, so the choice is gated but goes nowhere.
+    _take_external_web_access(payload, per_request=False)
     for tool in payload.get("tools") or ():
         if schema := tool.get("input_schema"):
             sanitize_tool_schema(schema)
@@ -781,8 +785,9 @@ async def responses_payload(
 
     Raises:
         ApiError: When the request sets the ``moderation`` parameter, when
-            ``previous_response_id`` is not a Mantle-tagged ID, or when the
-            input contains a locally-produced ``compaction`` item.
+            ``previous_response_id`` is not a Mantle-tagged ID, when the input
+            contains a locally-produced ``compaction`` item, or when it asks
+            for web access the configuration forbids.
     """
     _reject_moderation_param(request.moderation)
     payload = request.model_dump(mode="json", by_alias=True, exclude_unset=True)
@@ -791,39 +796,35 @@ async def responses_payload(
         payload.pop(name, None)
     _reject_local_compaction_items(payload.get("input"))
     region = _pin_previous_response(payload)
+    # This API takes the choice per search: a request naming none runs none, so
+    # the value applies to nothing rather than being denied.
+    external_web_access = _take_external_web_access(payload, per_request=True)
     for tool in payload.get("tools") or ():
         if str(tool.get("type", "")).startswith("web_search"):
-            _apply_external_web_access(tool)
+            tool["external_web_access"] = external_web_access
         if parameters := tool.get("parameters"):
             sanitize_tool_schema(parameters)
-    _apply_nested_external_web_access(payload)
+    _apply_nested_external_web_access(payload, access=external_web_access)
     if pairs := _collect_responses_files(payload.get("input")):
         await prefetch_all_content_types()
         await gather(*(_apply_responses_file(part, file) for part, file in pairs))
     return payload, region
 
 
-def _apply_nested_external_web_access(payload: dict[str, Any]) -> None:
-    """Resolve the web access of every web search tool outside ``tools``.
+def _apply_nested_external_web_access(payload: dict[str, Any], *, access: bool) -> None:
+    """Set the web access of every web search tool outside ``tools``.
 
     A tool definition also travels in the conversation items that carry their
-    own tool list, which would otherwise reach the backend with the request's
-    own value. ``tool_choice`` carries tool references rather than
-    definitions -- they only narrow the set declared in ``tools`` -- so its
-    entries are gated but left as sent.
+    own tool list, which would otherwise reach the backend without one.
 
     Args:
         payload: Responses request payload (mutated in place).
-
-    Raises:
-        ApiError: When the request sets a value the configuration forbids.
+        access: Web access resolved for this request.
     """
     items = payload.get("input")
     for carrier in items if isinstance(items, list) else ():
         for tool in _web_search_tools(carrier):
-            _apply_external_web_access(tool)
-    for tool in _web_search_tools(payload.get("tool_choice")):
-        _reject_forbidden_external_web_access(tool)
+            tool["external_web_access"] = access
 
 
 def _web_search_tools(carrier: object) -> Iterator[dict[str, Any]]:
@@ -843,52 +844,28 @@ def _web_search_tools(carrier: object) -> Iterator[dict[str, Any]]:
             yield tool
 
 
-def _apply_external_web_access(tool: dict[str, Any]) -> None:
-    """Resolve a web search tool's ``external_web_access`` against the configuration.
+def _take_external_web_access(payload: dict[str, Any], *, per_request: bool) -> bool:
+    """Take the web access choice off a passthrough payload and resolve it.
 
-    The field defaults to enabled upstream, so an omitted one is pinned to the
-    configured value rather than left to the backend.
+    The knob is an extra model parameter, so it never travels upstream: it is
+    removed here and the resolved value is what the request's searches run
+    with.
 
     Args:
-        tool: Web search tool definition (mutated in place).
+        payload: Passthrough request payload (mutated in place).
+        per_request: Whether this Mantle API takes a web access choice per
+            request at all.
+
+    Returns:
+        Web access to apply to this request's searches.
 
     Raises:
-        ApiError: When the request sets a value the configuration forbids.
+        ApiError: When the request asks for a value it cannot be given, or one
+            that is not a boolean.
     """
-    _reject_forbidden_external_web_access(tool)
-    requested = tool.get("external_web_access")
-    tool["external_web_access"] = (
-        SETTINGS.aws_bedrock_external_web_access if requested is None else requested
+    return resolve_external_web_access(
+        payload.pop(EXTERNAL_WEB_ACCESS_PARAM, None), per_request=per_request
     )
-
-
-def _reject_forbidden_external_web_access(tool: Mapping[str, Any]) -> None:
-    """Refuse a web search tool asking for web access the operator forbids.
-
-    Web access decides whether the search leaves the AWS boundary, so the
-    request only wins when the operator allows the override; otherwise an
-    explicit value that disagrees is rejected rather than silently replaced.
-
-    Args:
-        tool: Web search tool definition or reference.
-
-    Raises:
-        ApiError: When the request sets a value the configuration forbids.
-    """
-    configured = SETTINGS.aws_bedrock_external_web_access
-    requested = tool.get("external_web_access")
-    if (
-        requested is not None
-        and requested != configured
-        and not SETTINGS.aws_bedrock_allow_external_web_access_override
-    ):
-        state = "enabled" if configured else "disabled"
-        msg = (
-            "The web search tool's 'external_web_access' cannot be changed on "
-            f"this server: external web access is {state}. Remove the field, or "
-            f"set it to {str(configured).lower()}."
-        )
-        raise ApiError(msg, status=400)
 
 
 def _reject_moderation_param(moderation: object) -> None:

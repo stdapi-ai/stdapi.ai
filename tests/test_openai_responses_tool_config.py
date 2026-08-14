@@ -19,10 +19,15 @@ from stdapi.api_errors import ApiError
 from stdapi.models.chat._adapters._anthropic_message import _handle_system_tool
 from stdapi.models.chat._adapters._openai_responses import (
     _build_output_config,
+    _build_tool_config,
     _resolve_integrated_tool_name,
 )
 from stdapi.types.anthropic_messages import WebSearchToolParam
-from stdapi.types.openai_responses import ResponseTextConfig, WebSearchTool
+from stdapi.types.openai_responses import (
+    ResponseCreateParams,
+    ResponseTextConfig,
+    WebSearchTool,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -36,6 +41,9 @@ _NO_SERVER_TOOLS: Mapping[ServerTools, str] = {}
 
 #: Server tool map of a model serving a different tool than the one requested.
 _OTHER_SERVER_TOOL: Mapping[ServerTools, str] = {"code_execution": "code_interpreter"}
+
+#: Server tool map of a model serving web search as its own grounding tool.
+_NOVA_SERVER_TOOL: Mapping[ServerTools, str] = {"web_search": "nova_grounding"}
 
 
 def test_build_output_config_returns_none_for_json_object() -> None:
@@ -133,4 +141,110 @@ class TestServerToolParity:
         with pytest.raises(ApiError, match="not supported by this model"):
             _resolve_integrated_tool_name(
                 WebSearchTool(type="web_search"), _OTHER_SERVER_TOOL or None
+            )
+
+
+def _request(*tools: dict[str, Any]) -> ResponseCreateParams:
+    """Build a Responses request declaring *tools*."""
+    return ResponseCreateParams.model_validate(
+        {"model": "ignored", "input": "Who won?", "tools": list(tools)}
+    )
+
+
+class TestWebSearchRestrictions:
+    """Search restrictions the backend cannot apply are refused, not dropped.
+
+    A backend-served web search takes no parameters, so a dropped restriction
+    runs a wider search than the caller asked for -- with ``allowed_domains``,
+    one reaching the very domains the caller excluded.  The same request is
+    refused on the Anthropic Messages surface, on the same backend.
+
+    Ref: https://developers.openai.com/api/docs/guides/tools-web-search
+         https://docs.aws.amazon.com/nova/latest/nova2-userguide/web-grounding.html
+         stdapi/models/chat/_adapters/_openai_responses.py:_reject_web_search_restrictions
+    """
+
+    @pytest.mark.parametrize(
+        "tool_name_map",
+        [_NO_SERVER_TOOLS or None, _NOVA_SERVER_TOOL],
+        ids=["none", "nova"],
+    )
+    def test_allowed_domains_is_refused(
+        self, tool_name_map: Mapping[ServerTools, str] | None
+    ) -> None:
+        """A domain allowlist is a security filter: silently dropping it is not an option."""
+        tool = {"type": "web_search", "filters": {"allowed_domains": ["example.com"]}}
+        with pytest.raises(ApiError) as excinfo:
+            _build_tool_config(_request(tool), tool_name_map)
+        assert excinfo.value.status == 400
+        message = str(excinfo.value)
+        assert "filters.allowed_domains" in message
+        assert "not supported by this model" in message
+
+    @pytest.mark.parametrize(
+        "tool_type", ["web_search", "web_search_preview"], ids=["search", "preview"]
+    )
+    def test_user_location_is_refused_on_both_tool_spellings(
+        self, tool_type: str
+    ) -> None:
+        """Both spellings of the tool carry ``user_location``, and both are refused."""
+        tool = {
+            "type": tool_type,
+            "user_location": {"type": "approximate", "city": "Paris"},
+        }
+        with pytest.raises(ApiError, match="user_location") as excinfo:
+            _build_tool_config(_request(tool), _NOVA_SERVER_TOOL)
+        assert excinfo.value.status == 400
+
+    def test_search_context_size_is_accepted_and_ignored(self) -> None:
+        """A context-size hint still yields the searched answer, so it is kept.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:_build_tool_config
+        """
+        tool = {"type": "web_search", "search_context_size": "high"}
+        tool_config = _build_tool_config(_request(tool), _NOVA_SERVER_TOOL)
+        assert tool_config is not None
+        (spec,) = tool_config["tools"]
+        assert spec["toolSpec"]["name"] == "nova_grounding"
+        assert spec["toolSpec"]["inputSchema"] == {"json": {"type": "object"}}
+
+    def test_a_plain_web_search_tool_is_untouched(self) -> None:
+        """The control case: a tool restricting nothing reaches the backend."""
+        tool_config = _build_tool_config(
+            _request({"type": "web_search"}), _NOVA_SERVER_TOOL
+        )
+        assert tool_config is not None
+        assert tool_config["tools"][0]["toolSpec"]["name"] == "nova_grounding"
+
+
+class TestFileSearchTool:
+    """``file_search`` is refused rather than dropped.
+
+    Retrieval over the attached vector stores has no backend equivalent here,
+    and a dropped tool answers from the model's own knowledge while the caller
+    reads the answer as grounded in the stores it attached.
+
+    Ref: https://developers.openai.com/api/docs/guides/tools-file-search
+         stdapi/models/chat/_adapters/_openai_responses.py:_build_tool_config
+    """
+
+    def test_file_search_is_refused(self) -> None:
+        """A ``file_search`` tool fails with a 400 naming what is unavailable."""
+        tool = {"type": "file_search", "vector_store_ids": ["vs_123"]}
+        with pytest.raises(ApiError) as excinfo:
+            _build_tool_config(_request(tool), _NO_SERVER_TOOLS or None)
+        assert excinfo.value.status == 400
+        message = str(excinfo.value)
+        assert "file_search" in message
+        assert "vector store" in message
+
+    def test_it_is_refused_beside_a_function_tool(self) -> None:
+        """The refusal does not depend on the tool being alone in the request."""
+        with pytest.raises(ApiError, match="file_search"):
+            _build_tool_config(
+                _request(
+                    {"type": "function", "name": "get_weather"},
+                    {"type": "file_search", "vector_store_ids": ["vs_123"]},
+                ),
+                None,
             )

@@ -208,7 +208,7 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_BEDROCK_MANTLE_PROJECT`](#bedrock-mantle-project)                     | None                  | Default Bedrock Project/Workspace ID applied to Mantle requests for cost tracking and observability  |
 | [`AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE`](#bedrock-allow-mantle-project-override) | `false`     | Allow requests to override the configured Mantle project via the `OpenAI-Project` / `anthropic-workspace` header |
 | [`AWS_BEDROCK_EXTERNAL_WEB_ACCESS`](#bedrock-external-web-access)           | `false`               | Let the built-in web search tool reach the public web instead of the Amazon Bedrock web index        |
-| [`AWS_BEDROCK_ALLOW_EXTERNAL_WEB_ACCESS_OVERRIDE`](#bedrock-allow-external-web-access-override) | `false` | Allow requests to override external web access with the tool's `external_web_access` field  |
+| [`AWS_BEDROCK_ALLOW_EXTERNAL_WEB_ACCESS_OVERRIDE`](#bedrock-allow-external-web-access-override) | `false` | Allow requests to override external web access with the `external_web_access` extra model parameter |
 
 ### :material-shield-check: Bedrock Advanced { #summary-bedrock-advanced }
 
@@ -261,11 +261,11 @@ Amazon Cognito user pool tokens are an alternative to the API key — see [Amazo
 
 Publishing where tokens come from lets an AI agent authenticate itself — see [Authentication Discovery](#oauth-discovery):
 
-| Variable                                                              | Default | Description                                                          |
-|-----------------------------------------------------------------------|---------|----------------------------------------------------------------------|
-| [`OAUTH_RESOURCE_IDENTIFIER`](#oauth-resource-identifier)             | None    | Public URL clients dial (publishes the discovery document)           |
-| [`OAUTH_AUTHORIZATION_SERVERS`](#oauth-authorization-servers)         | None    | Issuer URLs of the authorization servers (required with the above)   |
-| [`OAUTH_SCOPES_SUPPORTED`](#oauth-scopes-supported)                   | None    | Scopes a token needs, advertised to clients                          |
+| Variable                                                              | Default              | Description                                                        |
+|-----------------------------------------------------------------------|----------------------|--------------------------------------------------------------------|
+| [`OAUTH_RESOURCE_IDENTIFIER`](#oauth-resource-identifier)             | None                 | Public URL clients dial (publishes the discovery document)         |
+| [`OAUTH_AUTHORIZATION_SERVERS`](#oauth-authorization-servers)         | The user pool issuer | Issuer URLs of the authorization servers                           |
+| [`OAUTH_SCOPES_SUPPORTED`](#oauth-scopes-supported)                   | Required scopes      | Scopes a token needs, advertised to clients                        |
 
 ### :material-api: API Compatibility { #summary-api-compatibility }
 
@@ -1381,7 +1381,7 @@ export AWS_BEDROCK_EXTERNAL_WEB_ACCESS=true
 #### `AWS_BEDROCK_ALLOW_EXTERNAL_WEB_ACCESS_OVERRIDE` { #bedrock-allow-external-web-access-override }
 
 :octicons-package-24: **Purpose**
-:   Allow a request to override [`AWS_BEDROCK_EXTERNAL_WEB_ACCESS`](#bedrock-external-web-access) with the web search tool's `external_web_access` field
+:   Allow a request to override [`AWS_BEDROCK_EXTERNAL_WEB_ACCESS`](#bedrock-external-web-access) with the `external_web_access` extra model parameter
 
 :octicons-database-24: **Type**
 :   Boolean
@@ -1390,7 +1390,7 @@ export AWS_BEDROCK_EXTERNAL_WEB_ACCESS=true
 :   `false`
 
 :octicons-workflow-24: **Behavior**
-:   When `true`, a request that sets `external_web_access` on its `web_search` tool decides for that request. When `false`, a request that sets it to anything other than the configured value is rejected with `400` rather than being silently overridden; a request that omits the field always gets the configured value.
+:   When `true`, a request that sends `external_web_access` as an extra model parameter decides for that request, on the models whose web search takes a web access choice per request — the OpenAI GPT-5.x family. When `false`, a request that sets it to anything other than the configured value is rejected with `400` rather than being silently overridden; a request that omits it always gets the configured value. A request asking for a value a model cannot be given is rejected with `400` as well, rather than accepted and quietly ignored. On the models that do take it, a request naming no web search tool is accepted: nothing is searched, so the value has no search to apply to.
 
 ```bash
 export AWS_BEDROCK_ALLOW_EXTERNAL_WEB_ACCESS_OVERRIDE=true
@@ -2076,6 +2076,9 @@ export AWS_COGNITO_CLIENT_IDS=1example23456789abcdefghij
 !!! warning "Incomplete configuration fails startup"
     A user pool without `AWS_COGNITO_CLIENT_IDS`, a Cognito setting without a pool, or an `AUTHENTICATION_MODE` that contradicts what is configured, all stop the server at startup with an explicit message — a partially configured pool never degrades into an unauthenticated deployment.
 
+!!! tip "The pool also configures agent discovery"
+    Add [`OAUTH_RESOURCE_IDENTIFIER`](#oauth-resource-identifier) and an AI agent can authenticate itself against the deployment. Nothing else is needed: the pool's issuer and required scopes are what get published — see [Authentication Discovery for Agents](#oauth-discovery).
+
 #### `AUTHENTICATION_MODE` { #authentication-mode }
 
 :octicons-package-24: **Purpose**
@@ -2173,7 +2176,7 @@ export AWS_COGNITO_ISSUER_TYPE=updated
 
 Publishes, at `/.well-known/oauth-protected-resource`, where clients obtain a token, and points every `401 Unauthorized` at that document. An AI agent — or any MCP client — can then authenticate against this deployment without having been configured for it first. See [Authentication Discovery for Agents](operations_authentication_security.md#authentication-discovery-for-agents) for the full flow.
 
-Nothing is published until `OAUTH_RESOURCE_IDENTIFIER` is set. The document is public and unauthenticated, since a client reads it before it has any credential.
+Nothing is published until `OAUTH_RESOURCE_IDENTIFIER` is set. With an [Amazon Cognito user pool](#cognito-authentication) configured, that variable is the only one to set: the pool already names the issuer and the scopes, and both are published from it. The document is public and unauthenticated, since a client reads it before it has any credential.
 
 #### `OAUTH_RESOURCE_IDENTIFIER` { #oauth-resource-identifier }
 
@@ -2184,7 +2187,7 @@ Nothing is published until `OAUTH_RESOURCE_IDENTIFIER` is set. The document is p
 :   None — no discovery document is published, and `401` responses only state that a bearer token is expected
 
 :octicons-alert-24: **Requirement**
-:   Must be the exact origin clients dial — scheme and host, an explicit port only when it is not the default one for the scheme, and no path, query or fragment. Clients compare it character by character against the URL they used, so `https://api.example.com` and `https://api.example.com:443` are not interchangeable. Requires `OAUTH_AUTHORIZATION_SERVERS`.
+:   Must be the exact origin clients dial — scheme and host, an explicit port only when it is not the default one for the scheme, and no path, query or fragment. Clients compare it character by character against the URL they used, so `https://api.example.com` and `https://api.example.com:443` are not interchangeable. Requires `OAUTH_AUTHORIZATION_SERVERS`, unless a user pool supplies the issuer.
 
 ```bash
 export OAUTH_RESOURCE_IDENTIFIER=https://api.example.com
@@ -2196,13 +2199,15 @@ export OAUTH_RESOURCE_IDENTIFIER=https://api.example.com
 :   Issuer URLs of the OAuth 2.0 authorization servers that issue tokens for this deployment, comma-separated
 
 :octicons-gear-24: **Default**
-:   None
+:   The issuer of the [`AWS_COGNITO_USER_POOL_ID`](#aws-cognito-user-pool-id) pool, when one is configured — otherwise none
 
 :octicons-workflow-24: **Effect**
-:   A client reads each issuer's own metadata to find where to sign in, so this deployment never describes the sign-in flow itself. An [Amazon Cognito user pool](https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-tokens-verifying-a-jwt.html) issues `https://cognito-idp.<region>.amazonaws.com/<pool-id>`, or `https://issuer-cognito-idp.<region>.amazonaws.com/<pool-id>` when [`AWS_COGNITO_ISSUER_TYPE`](#aws-cognito-issuer-type) is `updated`. A load balancer or API gateway authenticating in front of stdapi.ai publishes the issuer of whichever provider it uses.
+:   A client reads each issuer's own metadata to find where to sign in, so this deployment never describes the sign-in flow itself. A load balancer or API gateway authenticating in front of stdapi.ai publishes the issuer of whichever provider it uses.
+
+    With a user pool configured, leave this unset: the pool issues the tokens the deployment accepts, so its own issuer is published — `https://cognito-idp.<region>.amazonaws.com/<pool-id>`, or `https://issuer-cognito-idp.<region>.amazonaws.com/<pool-id>` when [`AWS_COGNITO_ISSUER_TYPE`](#aws-cognito-issuer-type) is `updated`. `<region>` and `<pool-id>` come from the pool ID itself, and the host follows the pool Region's AWS partition (`amazonaws.com.cn` in China, `amazonaws.eu` in the European Sovereign Cloud). Set the variable only to publish further issuers.
 
 :octicons-alert-24: **Requirement**
-:   Each entry is an `https` URL with no query or fragment. Required when `OAUTH_RESOURCE_IDENTIFIER` is set.
+:   Each entry is an `https` URL with no query or fragment. Required when `OAUTH_RESOURCE_IDENTIFIER` is set and no user pool is configured. When one is, the list must include the pool's own issuer — a client sent anywhere else obtains a token every request refuses, so startup fails instead.
 
 ```bash
 export OAUTH_AUTHORIZATION_SERVERS=https://cognito-idp.eu-west-3.amazonaws.com/eu-west-3_a1b2c3d4e
@@ -2214,10 +2219,10 @@ export OAUTH_AUTHORIZATION_SERVERS=https://cognito-idp.eu-west-3.amazonaws.com/e
 :   Scopes a token needs to call this API, comma-separated
 
 :octicons-gear-24: **Default**
-:   None — no scope is advertised, and a client asks for whatever its own configuration names
+:   [`AWS_COGNITO_REQUIRED_SCOPES`](#aws-cognito-required-scopes) — with neither set, no scope is advertised and a client asks for whatever its own configuration names
 
 :octicons-workflow-24: **Effect**
-:   Advertised both in the discovery document and in the `401` challenge, so a client asks its authorization server for the right scopes on its first attempt. Set it to the same value as [`AWS_COGNITO_REQUIRED_SCOPES`](#aws-cognito-required-scopes) when a user pool authenticates clients.
+:   Advertised both in the discovery document and in the `401` challenge, so a client asks its authorization server for the right scopes on its first attempt. The scopes a token must carry to be accepted are exactly the scopes to ask for, so they are published unless this variable names others.
 
 ```bash
 export OAUTH_SCOPES_SUPPORTED=stdapi/invoke

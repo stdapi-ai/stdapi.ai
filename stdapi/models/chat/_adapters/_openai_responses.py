@@ -18,7 +18,7 @@ from botocore.exceptions import ClientError, HTTPClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
 from pydantic_core import from_json, to_json
 
-from stdapi.api_errors import ApiError
+from stdapi.api_errors import ApiError, denied_feature_unavailable
 from stdapi.aws import get_client
 from stdapi.aws_bedrock import (
     AWS_ERROR_MAP,
@@ -48,6 +48,7 @@ from stdapi.types.openai_responses import (
     CustomToolCallInput,
     CustomToolCallOutput,
     EasyInputMessage,
+    FileSearchTool,
     FunctionCallInput,
     FunctionCallOutput,
     FunctionTool,
@@ -172,6 +173,19 @@ if TYPE_CHECKING:
 
 #: Empty tool schema for Bedrock tool configuration.
 _EMPTY_TOOL: dict[str, str] = {"type": "object"}
+
+#: ``set_inference_configuration`` argument names a request extra cannot reuse.
+_RESERVED_INFERENCE_PARAMS: frozenset[str] = frozenset(
+    {
+        "additional_request_fields",
+        "max_tokens",
+        "model_id",
+        "stop_sequences",
+        "temperature",
+        "top_logprobs",
+        "top_p",
+    }
+)
 
 #: Role names that map to Bedrock system blocks.
 _SYSTEM_ROLES: frozenset[str] = frozenset({"system", "developer"})
@@ -307,10 +321,14 @@ def _resolve_integrated_tool_name(
         ``_TOOL_TYPE_TO_BEDROCK_NAME``.
 
     Raises:
-        ApiError: If *tool_name_map* is provided and the canonical name is absent.
+        ApiError: If *tool_name_map* is provided and the canonical name is
+            absent, or if *tool* is a web search tool carrying restrictions no
+            backend-served web search can apply.
     """
     if (canonical_name := _TOOL_TYPE_TO_BEDROCK_NAME.get(type(tool))) is None:
         return None
+    if isinstance(tool, WebSearchTool | WebSearchPreviewTool):
+        _reject_web_search_restrictions(tool)
     if tool_name_map is None:
         return canonical_name
     if canonical_name not in tool_name_map:
@@ -318,6 +336,26 @@ def _resolve_integrated_tool_name(
         msg = f"Server tool '{tool_type}' is not supported by this model."
         raise ApiError(msg)
     return tool_name_map[canonical_name]  # type: ignore[index]
+
+
+def _reject_web_search_restrictions(tool: WebSearchTool | WebSearchPreviewTool) -> None:
+    """Refuse a web search tool restricting a search this backend runs unrestricted.
+
+    Args:
+        tool: Web search or web search preview tool.
+
+    Raises:
+        ApiError: If the tool restricts the domains searched or the location
+            searched from.
+    """
+    _common.reject_unsupported_web_search_fields(
+        {
+            "filters.allowed_domains": tool.filters.allowed_domains
+            if isinstance(tool, WebSearchTool) and tool.filters
+            else None,
+            "user_location": tool.user_location,
+        }
+    )
 
 
 def _function_tool_spec(tool: FunctionTool) -> ToolTypeDef:
@@ -348,7 +386,9 @@ def _build_tool_config(
     tool types (code_interpreter, web_search, image_generation) to their
     Bedrock equivalents.  Tool types without a backend equivalent, such as
     ``programmatic_tool_calling``, are accepted for compatibility and dropped;
-    the model then calls the declared function tools directly.
+    the model then calls the declared function tools directly.  ``file_search``
+    is the exception: dropping it would answer from the model's own knowledge
+    while the caller believes the answer is grounded in the attached stores.
 
     When ``tool_choice="none"``, no tool config is returned so that the model
     cannot call any tools.
@@ -366,7 +406,9 @@ def _build_tool_config(
 
     Raises:
         ApiError: If ``tool_name_map`` is provided and an integrated tool's
-            canonical name is absent from the map.
+            canonical name is absent from the map, if a ``web_search`` tool
+            carries search restrictions, or if a ``file_search`` tool is
+            declared.
     """
     if request.tool_choice == "none" or not request.tools:
         return None
@@ -377,6 +419,14 @@ def _build_tool_config(
     for tool in request.tools:
         if isinstance(tool, FunctionTool):
             tools.append(_function_tool_spec(tool))
+        elif isinstance(tool, FileSearchTool):
+            msg = (
+                "The 'file_search' tool is not available on this model. Search "
+                "your vector stores with the vector store search endpoint and "
+                "pass the results in the input, or use a model that serves "
+                "file_search."
+            )
+            raise ApiError(msg)
         elif isinstance(tool, ImageGeneration):
             # Gateway handles ImageGeneration; expose a synthetic function tool so the LLM can request it.
             if not has_image_gen:
@@ -762,7 +812,8 @@ def translate_request(
 
     Raises:
         ApiError: If ``tool_name_map`` is provided and an integrated tool's
-            canonical name is absent from the map.
+            canonical name is absent from the map, or if an extra parameter
+            reuses a name the translation already binds.
     """
     additional_request_fields: JsonMapping = {}
     return (
@@ -773,6 +824,7 @@ def translate_request(
             top_p=request.top_p,
             max_tokens=request.max_output_tokens,
             top_logprobs=request.top_logprobs,
+            **_common.inference_extras(request.model_extra, _RESERVED_INFERENCE_PARAMS),
         ),
         additional_request_fields,
         _build_tool_config(request, tool_name_map),
@@ -2709,6 +2761,11 @@ def _classify_stream_error(
     Returns:
         Tuple of ``(status, client_message, param, code, log_message, log_level)``.
     """
+    if (
+        isinstance(exc, ClientError)
+        and (denied := denied_feature_unavailable(exc)) is not None
+    ):
+        exc = denied
     if isinstance(exc, ApiError):
         return (
             exc.status,

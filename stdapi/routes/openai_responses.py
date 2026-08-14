@@ -834,8 +834,7 @@ async def create_response(
             request.model, input_modality="TEXT", output_modality="TEXT"
         )
     ).id
-    # After the model: an alias may carry the guardrail this request is checked
-    # against, and 'moderation' reports on the guardrail that ends up applying.
+    # After the model: an alias may carry the guardrail 'moderation' reports on.
     apply_request_moderation(request.moderation)
     chat_model = get_chat_model(model_id)
     await _apply_prompt_template(request.prompt, chat_model, model_id)

@@ -1494,8 +1494,7 @@ class UserLocationParam(BaseModelRequest):
 class WebSearchToolParam(BaseModelRequest):
     """Web search tool definition.
 
-    Supported on models that declare web search as a system tool
-    (e.g., Amazon Nova 2 via ``nova_grounding``).
+    Supported on models that declare web search as a system tool.
     """
 
     type: str = Field(pattern=r"^web_search(?:_[0-9]{8})?$", description="Tool type.")

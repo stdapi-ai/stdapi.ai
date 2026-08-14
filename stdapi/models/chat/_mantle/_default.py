@@ -334,8 +334,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             api, raw.get("usage") or {}, serving_region, raw.get("service_tier")
         )
         if api == "responses":
-            # Web search is billed per query, separately from the tokens, and
-            # the usage block never reports it.
+            # Web search is billed per query and never appears in the usage block.
             record_web_search_usage(
                 response_web_search_queries(raw), region=serving_region
             )
