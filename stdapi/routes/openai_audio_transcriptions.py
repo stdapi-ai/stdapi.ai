@@ -151,6 +151,7 @@ async def _transcript_audio_sse(
         200: {"description": "Transcription completed (or streaming)."},
         400: {"description": "Invalid request or unsupported parameters."},
         404: {"description": "Model not found."},
+        503: {"description": "Transcription is not enabled on this server."},
     },
     openapi_extra={
         "requestBody": {
@@ -247,9 +248,10 @@ async def create_transcription(
             description=(
                 "Literal terms that may appear in the audio (e.g. product names or "
                 "acronyms).\n"
-                "Supported by Bedrock models (e.g. Mistral Voxtral); rejected by "
-                "`amazon.transcribe` — use a pre-created custom vocabulary via the "
-                "`VocabularyName` extra parameter instead."
+                "Supported by speech-to-text models that accept a transcription "
+                "context (e.g. Mistral Voxtral); rejected by `amazon.transcribe` — "
+                "use a pre-created custom vocabulary via the `VocabularyName` extra "
+                "parameter instead."
             )
         ),
     ] = None,

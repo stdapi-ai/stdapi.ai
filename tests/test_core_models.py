@@ -1666,3 +1666,58 @@ class TestModelDiscoveryHints:
             value for _name, value in self._hints(spec) if value not in filterable
         )
         assert not unknown, f"hints name routes the server does not expose: {unknown}"
+
+
+class TestModelPricingDescriptionSurface:
+    """Every published route description names identifiers, not the backend.
+
+    These strings ship in the OpenAPI document and as MCP tool descriptions,
+    so ``model_pricing`` must carry the identifier a caller passes to
+    ``model`` while saying nothing about where the prices come from -- and
+    every other route's description must stay just as silent about which
+    service implements it.
+
+    Ref: https://modelcontextprotocol.io/specification/server/tools
+         stdapi/routes/core_models.py:model_pricing
+    """
+
+    #: Backend words that must not reach a published description.
+    _INTERNALS = ("AWS", "Amazon", "Bedrock", "Price List")
+
+    @staticmethod
+    def _description() -> str:
+        """Return the published ``model_pricing`` description."""
+        spec = app.openapi()
+        return str(
+            next(
+                operation["description"]
+                for methods in spec["paths"].values()
+                for operation in methods.values()
+                if isinstance(operation, dict)
+                and operation.get("operationId") == "model_pricing"
+            )
+        )
+
+    @classmethod
+    def _descriptions_by_operation(cls) -> dict[str, str]:
+        """Return every published operation's description, keyed by operation ID."""
+        spec = app.openapi()
+        return {
+            operation["operationId"]: operation["description"]
+            for methods in spec["paths"].values()
+            for operation in methods.values()
+            if isinstance(operation, dict) and operation.get("description")
+        }
+
+    def test_the_priced_identifier_stays_in_the_description(self) -> None:
+        """The rates asked for by identifier still name the identifier to pass."""
+        assert "`model=amazon.bedrock-web-search`" in self._description()
+
+    def test_the_description_names_no_backend(self) -> None:
+        """No backend service, catalogue or vendor name reaches any route's caller."""
+        offenders = {
+            operation_id: hits
+            for operation_id, description in self._descriptions_by_operation().items()
+            if (hits := [word for word in self._INTERNALS if word in description])
+        }
+        assert not offenders

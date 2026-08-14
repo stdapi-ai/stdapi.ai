@@ -61,6 +61,7 @@ router = APIRouter(
         200: {"description": "Translation completed."},
         400: {"description": "Invalid request or unsupported parameters."},
         404: {"description": "Model not found."},
+        503: {"description": "Translation is not enabled on this server."},
     },
     openapi_extra={
         "requestBody": {

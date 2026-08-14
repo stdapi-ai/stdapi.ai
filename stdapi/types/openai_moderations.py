@@ -54,15 +54,15 @@ class ModerationCreateParams(BaseModelRequest):
         default=None,
         min_length=1,
         max_length=2048,
-        description="The moderation model: an AWS Bedrock guardrail "
+        description="The moderation model: a guardrail "
         "(`amazon.bedrock-runtime-guardrail` for the server's default "
         "guardrail, or an explicit `<id>`, `<id>:<version>`, or ARN), or "
-        "`amazon.comprehend-toxicity` for Amazon Comprehend toxicity "
-        "detection. Omitted resolves to the server's default moderation "
+        "`amazon.comprehend-toxicity` for toxicity detection. Omitted "
+        "resolves to the server's default moderation "
         "model; OpenAI moderation model names are aliases "
         "(`omni-moderation-*` for the default guardrail, falling back to "
-        "Comprehend when none is configured; `text-moderation-*` for "
-        "Comprehend).",
+        "toxicity detection when none is configured; `text-moderation-*` for "
+        "toxicity detection).",
     )
 
 

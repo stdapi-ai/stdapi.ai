@@ -176,6 +176,10 @@ When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, s
 | `openai_vector_store_file_batch_get` | `GET /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}` |
 | `openai_vector_store_file_batch_cancel` | `POST /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/cancel` |
 | `openai_vector_store_file_batch_file_list` | `GET /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/files` |
+| `openai_batch`                   | `POST /v1/batches`                          |
+| `openai_batch_list`              | `GET /v1/batches`                           |
+| `openai_batch_get`               | `GET /v1/batches/{batch_id}`                |
+| `openai_batch_cancel`            | `POST /v1/batches/{batch_id}/cancel`        |
 | `openai_upload`                  | `POST /v1/uploads`                          |
 | `openai_upload_part`             | `POST /v1/uploads/{upload_id}/parts`        |
 | `openai_upload_complete`         | `POST /v1/uploads/{upload_id}/complete`     |
@@ -190,6 +194,12 @@ When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, s
 | `anthropic_files_get`            | `GET /anthropic/v1/files/{file_id}`         |
 | `anthropic_files_delete`         | `DELETE /anthropic/v1/files/{file_id}`      |
 | `anthropic_file_content`         | `GET /anthropic/v1/files/{file_id}/content` |
+| `anthropic_message_batch`        | `POST /anthropic/v1/messages/batches`       |
+| `anthropic_message_batch_list`   | `GET /anthropic/v1/messages/batches`        |
+| `anthropic_message_batch_get`    | `GET /anthropic/v1/messages/batches/{message_batch_id}` |
+| `anthropic_message_batch_results` | `GET /anthropic/v1/messages/batches/{message_batch_id}/results` |
+| `anthropic_message_batch_cancel` | `POST /anthropic/v1/messages/batches/{message_batch_id}/cancel` |
+| `anthropic_message_batch_delete` | `DELETE /anthropic/v1/messages/batches/{message_batch_id}` |
 | **Cohere Tools**                 |                                             |
 | `cohere_rerank`                  | `POST /cohere/v2/rerank`                    |
 | `cohere_rerank_v1`               | `POST /cohere/v1/rerank`                    |

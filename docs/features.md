@@ -354,8 +354,8 @@ Configure multiple AWS regions to draw on more than one Bedrock quota and to kee
 | **Application Inference Profiles** | Custom profiles for workload isolation and cost attribution                                                            |
 | **Prompt Routers**                 | Bedrock prompt routers for intelligent model selection                                                                 |
 | **Cross-Region Inference**         | Geography-pinned (US, EU, APAC) and global profiles with data residency control                                        |
-| **System Tools (Nova)**            | Web grounding with URL citations; code interpreter                                                                     |
-| **Web Search (OpenAI GPT)**        | Built-in web search with source citations on `/v1/responses`, billed per query                                          |
+| **Web Search / Grounding**         | Built-in web search with source citations, billed per query: Amazon Nova grounding (Chat Completions, Responses, and Messages) and OpenAI GPT built-in search (`/v1/responses` only) |
+| **System Tools (Nova)**            | Code interpreter                                                                                                        |
 | **Claude Server Tools**            | Bash, text editor, computer use (Claude 3.5+), memory (Claude 3.7+)                                                    |
 | **Extra Model Parameters**         | Any model-specific parameter forwarded via `extra_body` or top-level field                                             |
 

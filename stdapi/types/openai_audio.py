@@ -363,7 +363,7 @@ class SpeechCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=True):
         validation_alias=AliasChoices("input", "Text"),
         min_length=1,
         description="Text to generate audio for. "
-        "Amazon Polly models accept SSML documents.",
+        "Models that support SSML also accept an SSML document.",
     )
     model: str = Field(
         default=SETTINGS.default_tts_model,
@@ -444,8 +444,8 @@ class TranscriptionCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=
     keywords: list[str] | None = Field(
         default=None,
         description="Literal terms that may appear in the audio (e.g. product "
-        "names or acronyms). Supported by Bedrock models (folded into the "
-        "transcription context); rejected by `amazon.transcribe` — use a "
+        "names or acronyms). Supported by speech-to-text models that accept a "
+        "transcription context; rejected by `amazon.transcribe` — use a "
         "pre-created custom vocabulary via the `VocabularyName` extra parameter.",
     )
     language: str | None = Field(

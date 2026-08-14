@@ -136,8 +136,7 @@ class TestAudioSpeech:
         assert isinstance(audio_data, bytes)
         assert response.response.headers.get("content-type") == "audio/mpeg"
         _assert_is_mp3(audio_data)
-        # Text silently cut at the single-call limit would still be valid mp3:
-        # only the same text cut at 3000 characters says how long it should be.
+        # A silent cut at the single-call limit would still be valid mp3.
         assert len(audio_data) > len(truncated.content) * 1.2, (
             "the audio is no longer than the first 3000 characters spoken"
         )
@@ -169,8 +168,7 @@ class TestAudioSpeech:
 
         response = test_client.post(
             "/v1/audio/speech",
-            # A Polly voice name skips the Comprehend detection call, leaving
-            # the synthesis as the only billed unit of the request.
+            # A Polly voice skips Comprehend: synthesis is the only billed unit.
             json={
                 "model": speech_generative_model,
                 "voice": "Joanna",

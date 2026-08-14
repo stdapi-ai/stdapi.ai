@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Annotated, Final
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from stdapi.api_errors import ApiError
+from stdapi.api_errors import ApiError, FeatureUnavailableError
 from stdapi.auth import authenticate
 from stdapi.config import SETTINGS
 from stdapi.models import (
@@ -18,7 +18,7 @@ from stdapi.models import (
     initialize_bedrock_models,
     resolve_model_alias,
 )
-from stdapi.monitoring import log_error_details, log_request_params, log_response_params
+from stdapi.monitoring import log_request_params, log_response_params
 from stdapi.pricing import (
     Dimension,
     PriceKey,
@@ -34,6 +34,9 @@ if TYPE_CHECKING:
     from types_aiobotocore_bedrock.literals import RegionName
 
 router = APIRouter(prefix="", tags=["Models"])
+
+#: The feature name a caller reads when this server publishes no prices.
+_PRICING_FEATURE: Final[str] = "Model pricing"
 
 #: Service tiers accepted by the model_pricing tier filter.
 _PRICING_TIERS: Final[frozenset[str]] = frozenset(
@@ -102,7 +105,7 @@ class ModelPricing(BaseModel):
     operation_id="search_models",
     description=(
         "Search the catalogue of currently available models and return extended metadata "
-        "(modalities, supported API routes, MCP tool names, AWS regions, streaming support, "
+        "(modalities, supported API routes, MCP tool names, regions, streaming support, "
         "legacy status). Supplements the standard `/v1/models` list.\n\n"
         "All filters are optional and combined with **AND** logic — only models matching every "
         "supplied filter are returned, sorted by ID.\n\n"
@@ -123,10 +126,12 @@ class ModelPricing(BaseModel):
         "- Vision (image input): `route=openai_chat_completion&input_modalities=IMAGE`\n"
         "- Audio understanding: `route=openai_chat_completion&input_modalities=SPEECH`\n"
         "- Embeddings: `route=openai_embedding`\n"
-        "- Image generation: `route=openai_image_generation`\n\n"
+        "- Image generation: `route=openai_image_generation`\n"
+        "- Live speech-to-speech: `route=openai_realtime`\n\n"
         '**Note:** Audio *output* from `openai_chat_completion` (via `modalities=["text","audio"]`) '
         "is a model-specific capability not separately tracked — use a `route` search "
-        "and verify audio output support in the model documentation."
+        "and verify audio output support in the model documentation. The built-in "
+        "`web_search` tool on `openai_response` is model-specific and not tracked either."
     ),
     response_description="A list of extended model details sorted by model ID",
     response_model_exclude_none=True,
@@ -362,7 +367,7 @@ def _pricing_defaults(
     Returns:
         Tuple of (service tier, serving profiles): the tier from the alias or
         ``default_model_service_tiers`` (``standard`` when unset) and the
-        distinct serving profiles across the configured Bedrock regions —
+        distinct serving profiles across the regions this server is configured for —
         ``["global"]``, or per region the geography prefix of the model's
         inference profile or the region itself, restricted to the model's
         regions when known.
@@ -409,12 +414,12 @@ def _row_routing(key: PriceKey, details: ModelDetails | None) -> str:
 
 @router.get(
     "/model_pricing",
-    summary="Get exact AWS unit prices for one or more models",
+    summary="Get exact unit prices for one or more models",
     operation_id="model_pricing",
     description=(
-        "Return the exact AWS unit prices for the requested models (or every "
-        "available model when `model` is omitted), straight from the same AWS "
-        "Price List catalog used for request cost tracking.\n\n"
+        "Return the exact published unit prices for the requested models (or "
+        "every available model when `model` is omitted), from the same catalog "
+        "used for request cost tracking.\n\n"
         "Each row is one published price: a billed dimension (same vocabulary as "
         "the request-log usage entries) plus its published variants — service "
         "tier, prompt-cache write TTL, serving profile (routing), media spec "
@@ -422,15 +427,19 @@ def _row_routing(key: PriceKey, details: ModelDetails | None) -> str:
         "is an exact decimal string per **one** billed unit (token, image, "
         "second, character, request, search unit) in `currency`.\n\n"
         "By default the card reflects **this server's configuration**: only the "
-        "configured Bedrock regions, the model's default service tier, and its "
+        "regions this server is configured for, the model's default service tier, and its "
         "effective serving profile (routing), with the same fallbacks billing "
         "applies. Pass `all_prices=true` for the model's full published price "
         "table, and explicit `region`/`tier`/`routing` filters to override any "
         "axis in either mode.\n\n"
+        "A few rates are priced under an identifier of their own and are not "
+        "part of the unfiltered listing: pass `model=amazon.bedrock-web-search` "
+        "for the built-in web search tool's per-query rate "
+        "(`grounding_requests`), or a guardrail policy's own identifier.\n\n"
         "Prices are indexed eagerly: models not currently accessible to this "
-        "deployment can still be priced. An empty `prices` list means AWS "
-        "publishes no rows for that model (or none match the filters). A missing "
-        "variant row means AWS publishes no distinct rate for it — billing then "
+        "deployment can still be priced. An empty `prices` list means no rate "
+        "is published for that model (or none match the filters). A missing "
+        "variant row means no distinct rate is published for it — billing then "
         "falls back the same way cost tracking does.\n\n"
         "All filters are optional and combined with **AND** logic.\n\n"
         "**Agent workflow:**\n"
@@ -523,9 +532,9 @@ async def model_pricing(
             description=(
                 "true = the model's full published price table. false "
                 "(default) = only the prices matching this server's "
-                "configuration: configured Bedrock regions, the model's "
-                "default service tier, and its effective serving profile "
-                "(routing), with the same fallbacks billing applies."
+                "configuration: the regions this server is configured for, "
+                "the model's default service tier, and its effective serving "
+                "profile (routing), with the same fallbacks billing applies."
             )
         ),
     ] = False,
@@ -568,16 +577,11 @@ async def model_pricing(
         }
     )
     if not SETTINGS.cost_tracking:
-        log_error_details(
+        raise FeatureUnavailableError(
+            _PRICING_FEATURE,
             "Cost tracking is disabled (cost_tracking): the model pricing API "
             "is unavailable.",
-            level="warning",
         )
-        msg = (
-            "Model pricing is not available on the current server. "
-            "Please contact the administrator to enable it."
-        )
-        raise ApiError(msg, status=503)
     if not price_catalog_ready():
         msg = "The price catalog is not loaded yet. Please try again later."
         raise ApiError(msg, status=503)
