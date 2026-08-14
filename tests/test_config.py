@@ -10,6 +10,8 @@ Ref: stdapi/config.py:_Settings
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from pydantic import ValidationError
 
@@ -794,7 +796,8 @@ class TestOAuthDiscoverySettings:
 
         Such a document leaves a client unable to obtain a token, and the
         TypeScript MCP client reads the omission as this server being its own
-        authorization server.
+        authorization server. With no user pool configured there is nothing to
+        derive the issuer from, so the value has to be given.
         """
         with pytest.raises(
             ValidationError, match="oauth_authorization_servers is required"
@@ -802,6 +805,7 @@ class TestOAuthDiscoverySettings:
             _Settings(
                 oauth_resource_identifier="https://api.example.com",
                 oauth_authorization_servers="",  # type: ignore[arg-type]
+                aws_cognito_user_pool_id=None,
             )
 
     @pytest.mark.parametrize(
@@ -831,5 +835,141 @@ class TestOAuthDiscoverySettings:
             monkeypatch.delenv(name.upper(), raising=False)
         settings = _Settings()
         assert settings.oauth_resource_identifier is None
+        assert settings.oauth_authorization_servers == []
+        assert settings.oauth_scopes_supported == []
+
+
+#: User pool the derivation cases publish discovery for.
+_POOL_ID = "eu-west-3_a1b2c3d4e"
+
+#: Issuer that pool puts in every token it signs.
+_POOL_ISSUER = f"https://cognito-idp.eu-west-3.amazonaws.com/{_POOL_ID}"
+
+
+class TestOAuthDerivedFromCognito:
+    """Discovery settings the configured user pool already answers.
+
+    The pool issues the tokens this deployment accepts, so it is the
+    authorization server clients must be sent to and the scopes it requires are
+    the scopes they must ask for: both are derived rather than typed twice. An
+    explicit value stays in force, and one the pool contradicts fails startup
+    instead of publishing an issuer whose tokens every request refuses.
+
+    Ref: https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-tokens-verifying-a-jwt.html
+         stdapi/config.py:_Settings._validate_oauth
+    """
+
+    @staticmethod
+    def _settings(**overrides: Any) -> _Settings:  # noqa: ANN401
+        """Build the settings of a deployment publishing discovery for a pool.
+
+        The discovery settings are empty unless a case sets them: the suite's
+        own environment carries all three, which would otherwise stand in for
+        every derived value.
+        """
+        return _Settings(
+            aws_bedrock_regions=["us-east-1"],
+            **{
+                "aws_cognito_user_pool_id": _POOL_ID,
+                "aws_cognito_client_ids": ["1example23456789abcdefghij"],
+                "oauth_resource_identifier": "https://api.example.com",
+                "oauth_authorization_servers": [],
+                "oauth_scopes_supported": [],
+                **overrides,
+            },
+        )
+
+    @pytest.mark.parametrize(
+        ("issuer_type", "expected"),
+        [
+            ("original", _POOL_ISSUER),
+            (
+                "updated",
+                f"https://issuer-cognito-idp.eu-west-3.amazonaws.com/{_POOL_ID}",
+            ),
+        ],
+    )
+    def test_authorization_server_defaults_to_the_pool_issuer(
+        self, issuer_type: str, expected: str
+    ) -> None:
+        """The published issuer is the one the pool's own tokens carry.
+
+        Both issuer configurations are covered because the two hosts differ,
+        and a client sent to the wrong one obtains a token this deployment
+        rejects on every request.
+        """
+        settings = self._settings(aws_cognito_issuer_type=issuer_type)
+        assert settings.oauth_authorization_servers == [expected]
+
+    def test_the_pool_issuer_host_follows_its_partition(self) -> None:
+        """A pool outside the commercial partition publishes its own host.
+
+        The host is resolved from the pool's Region rather than assembled from
+        ``amazonaws.com``, so a sovereign or China deployment publishes an
+        issuer that resolves.
+        """
+        settings = self._settings(aws_cognito_user_pool_id="cn-north-1_a1b2c3d4e")
+        assert settings.oauth_authorization_servers == [
+            "https://cognito-idp.cn-north-1.amazonaws.com.cn/cn-north-1_a1b2c3d4e"
+        ]
+
+    def test_configured_authorization_servers_win(self) -> None:
+        """An explicit list is published as given, in its own order.
+
+        A deployment also fronted by an identity-aware proxy publishes both
+        issuers, which no derivation can guess.
+        """
+        edge_issuer = "https://login.example.com"
+        settings = self._settings(
+            oauth_authorization_servers=[edge_issuer, _POOL_ISSUER]
+        )
+        assert settings.oauth_authorization_servers == [edge_issuer, _POOL_ISSUER]
+
+    def test_an_authorization_server_contradicting_the_pool_is_rejected(self) -> None:
+        """Publishing only an issuer the pool did not sign fails startup.
+
+        Every token obtained from it is refused, which reads to the client as
+        an unusable deployment rather than a configuration mistake.
+        """
+        with pytest.raises(
+            ValidationError, match="oauth_authorization_servers must name the issuer"
+        ):
+            self._settings(
+                oauth_authorization_servers=[
+                    "https://cognito-idp.eu-west-3.amazonaws.com/eu-west-3_9z8y7x6w5"
+                ]
+            )
+
+    def test_scopes_default_to_the_required_scopes(self) -> None:
+        """The advertised scopes are the ones a token must carry to be accepted."""
+        settings = self._settings(aws_cognito_required_scopes=["stdapi/invoke"])
+        assert settings.oauth_scopes_supported == ["stdapi/invoke"]
+
+    def test_configured_scopes_win(self) -> None:
+        """An explicit scope list is published even when the pool requires others."""
+        settings = self._settings(
+            aws_cognito_required_scopes=["stdapi/invoke"],
+            oauth_scopes_supported=["stdapi/read"],
+        )
+        assert settings.oauth_scopes_supported == ["stdapi/read"]
+
+    def test_a_required_scope_a_challenge_cannot_carry_is_rejected(self) -> None:
+        """A required scope is validated too, since it becomes a published one.
+
+        The published value is interpolated into a quoted ``WWW-Authenticate``
+        parameter, so a double quote would let the setting inject further
+        challenge parameters.
+        """
+        with pytest.raises(
+            ValidationError, match="Invalid aws_cognito_required_scopes entry"
+        ):
+            self._settings(aws_cognito_required_scopes=['sco"pe'])
+
+    def test_nothing_is_derived_without_a_resource_identifier(self) -> None:
+        """A pool alone publishes no document, so it fills no discovery setting."""
+        settings = self._settings(
+            oauth_resource_identifier=None,
+            aws_cognito_required_scopes=["stdapi/invoke"],
+        )
         assert settings.oauth_authorization_servers == []
         assert settings.oauth_scopes_supported == []

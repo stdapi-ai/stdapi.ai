@@ -715,8 +715,7 @@ class TestWwwAuthenticateChallenge:
             extract_scope_from_www_auth,
         )
 
-        # Starlette types its TestClient against httpx2; the alias in conftest makes
-        # the response it returns at runtime the httpx one the SDK extractors take.
+        # Starlette types TestClient against httpx2; the alias fixes runtime only.
         response: httpx.Response = enforced_auth_client.get(  # type: ignore[assignment]
             self._AUTHENTICATED_PATH
         )

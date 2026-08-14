@@ -505,6 +505,27 @@ class TestRejectedSignatures:
             "signature" in str(detail).lower() for detail in request_log["error_detail"]
         )
 
+    async def test_a_refused_credential_is_a_warning_not_an_incident(
+        self,
+        make_authenticator: Callable[..., Coroutine[Any, Any, Harness]],
+        foreign_key: RSAPrivateKey,
+        request_log: dict[str, Any],
+    ) -> None:
+        """The entry keeps the severity an ordinary 401 deserves.
+
+        An expired browser token is a daily event; logged without its status it
+        resolves to ``critical`` and every one of them reads as an outage.
+
+        Ref: stdapi/auth_cognito.py:_unauthorized
+             stdapi/monitoring.py:_error_level
+        """
+        harness = await make_authenticator()
+
+        with pytest.raises(ApiError):
+            await harness.authenticator.verify(mint(access_claims(), foreign_key))
+
+        assert request_log["level"] == "warning"
+
 
 @pytest.mark.usefixtures("request_log")
 class TestRejectedClaims:
@@ -1300,9 +1321,10 @@ class TestConfigurationValidation:
     def _settings(**overrides: Any) -> _Settings:  # noqa: ANN401
         """Build a settings object with the Cognito fields under test.
 
-        The API key sources are unset unless a case sets them: the suite's own
-        environment carries one, which would otherwise decide the outcome of
-        every ``authentication_mode`` case.
+        The API key sources and the OAuth discovery settings are unset unless a
+        case sets them: the suite's own environment carries both, which would
+        otherwise decide the outcome of every ``authentication_mode`` case and
+        publish an issuer naming a pool no case configures.
         """
         return _Settings(
             aws_bedrock_regions=["us-east-1"],
@@ -1310,6 +1332,9 @@ class TestConfigurationValidation:
                 "api_key": None,
                 "api_key_ssm_parameter": None,
                 "api_key_secretsmanager_secret": None,
+                "oauth_resource_identifier": None,
+                "oauth_authorization_servers": [],
+                "oauth_scopes_supported": [],
                 **overrides,
             },
         )

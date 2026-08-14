@@ -12,7 +12,7 @@ from jwt.exceptions import PyJWTError
 from pydantic_core import from_json
 
 from stdapi.api_errors import ApiError
-from stdapi.config import AWS_SESSION, SETTINGS
+from stdapi.config import SETTINGS, cognito_issuer_url
 from stdapi.exceptions import ServerError
 from stdapi.monitoring import Principal, log_error_details
 from stdapi.server import HTTP_CLIENT_HEADERS
@@ -20,9 +20,6 @@ from stdapi.server import HTTP_CLIENT_HEADERS
 if TYPE_CHECKING:
     from jwt import PyJWK
     from jwt.types import Options
-
-#: Endpoint resolver, used to build the partition-correct user pool issuer host.
-_ENDPOINT_RESOLVER = AWS_SESSION.get_component("endpoint_resolver")
 
 #: Signing algorithm Amazon Cognito uses; no other one is accepted.
 _ALGORITHMS = ["RS256"]
@@ -81,35 +78,9 @@ def _unauthorized(reason: str) -> NoReturn:
     Raises:
         ApiError: Always, with status 401.
     """
-    log_error_details(reason)
+    log_error_details(reason, status=401)
     msg = "Unauthorized"
     raise ApiError(msg, status=401)
-
-
-def _issuer_url(user_pool_id: str) -> str:
-    """Build the token issuer URL of a user pool.
-
-    The host is resolved through the AWS SDK, so a pool in the AWS GovCloud or
-    the European Sovereign Cloud partition gets its own hostname.
-
-    Args:
-        user_pool_id: User pool identifier, prefixed by its AWS Region.
-
-    Returns:
-        Issuer URL that every token of that pool carries.
-
-    Raises:
-        ServerError: If Amazon Cognito has no endpoint in the pool's Region.
-    """
-    region = user_pool_id.split("_", 1)[0]
-    endpoint = _ENDPOINT_RESOLVER.construct_endpoint("cognito-idp", region)
-    if not endpoint:
-        msg = f"Amazon Cognito is not available in the '{region}' region"
-        raise ServerError(msg)
-    host = endpoint["hostname"]
-    if SETTINGS.aws_cognito_issuer_type == "updated":
-        host = f"issuer-{host}"
-    return f"https://{host}/{user_pool_id}"
 
 
 async def _fetch_key_set(url: str) -> Any:  # noqa: ANN401
@@ -180,13 +151,17 @@ class CognitoAuthenticator:
             True if user pool authentication is enabled, False otherwise.
 
         Raises:
-            ServerError: If the pool's signing keys cannot be loaded, so the
-                server never serves requests it could not authenticate.
+            ServerError: If Amazon Cognito has no endpoint in the pool's Region,
+                or the pool's signing keys cannot be loaded, so the server never
+                serves requests it could not authenticate.
         """
         user_pool_id = SETTINGS.aws_cognito_user_pool_id
         if not user_pool_id:
             return False
-        issuer = _issuer_url(user_pool_id)
+        try:
+            issuer = cognito_issuer_url(user_pool_id, SETTINGS.aws_cognito_issuer_type)
+        except ValueError as exception:
+            raise ServerError(str(exception)) from exception
         self._key_set_url = f"{issuer}/.well-known/jwks.json"
         self._client_ids = frozenset(SETTINGS.aws_cognito_client_ids)
         self._required_scopes = frozenset(SETTINGS.aws_cognito_required_scopes)

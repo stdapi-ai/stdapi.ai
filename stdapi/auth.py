@@ -52,9 +52,7 @@ class AuthenticationHandler:
                 salt=self._api_key_salt.get_secret_value(),
             ).digest()
         )
-        # Unsalted on purpose: a key derived from the salted hash would differ
-        # on every instance, and a token one instance signs has to verify on
-        # every other one behind the same load balancer.
+        # Unsalted: a per-instance seed would break tokens across the load balancer.
         self._derivation_seed = SecretBytes(
             blake2b(
                 api_key.get_secret_value().encode("utf-8"), person=_DERIVATION_PERSON
@@ -217,7 +215,7 @@ class AuthenticationHandler:
 #: Global authentication handler instance
 _auth_handler = AuthenticationHandler()
 
-#: Global user pool authenticator instance
+#: Authenticator verifying tokens against the configured Amazon Cognito pool.
 _cognito_authenticator = CognitoAuthenticator()
 
 
@@ -278,7 +276,7 @@ async def authenticate(
     Amazon Cognito user pool and identifies the caller; anything else is
     compared against the API key, which identifies the deployment rather than a
     person and so leaves the request with no principal. Both headers carry
-    either kind, ``x-api-key`` taking precedence as it always has. No-op when
+    either kind, ``x-api-key`` taking precedence. No-op when
     no authentication method is configured, allowing all requests.
 
     Args:
@@ -288,9 +286,7 @@ async def authenticate(
     Raises:
         ApiError: 401 if authentication is required but missing/invalid.
     """
-    # Set before anything can fail, and on every request: a tool call reaches
-    # the API as a second request running inside the first one's context, which
-    # would otherwise inherit a principal this request never authenticated.
+    # Cleared first, every request: a nested tool call must not inherit a principal.
     PRINCIPAL.set(None)
     credential = x_api_key
     if credentials is not None:
@@ -309,8 +305,7 @@ async def verify_credential(credential: str | None) -> None:
         ApiError: 401 if authentication is required but missing/invalid.
     """
     if _cognito_authenticator.enabled:
-        # A signed token carries three segments; an API key shaped like one
-        # merely fails verification and falls back to the comparison below.
+        # Three segments is a signed token; a key shaped like one falls through below.
         if credential and credential.count(".") == 2:
             try:
                 PRINCIPAL.set(await _cognito_authenticator.verify(credential))
@@ -320,8 +315,7 @@ async def verify_credential(credential: str | None) -> None:
             else:
                 return
         if not _auth_handler.enabled:
-            # A credential the user pool did not verify must never reach an
-            # API key comparison that is disabled, as that one accepts anything.
+            # A disabled API key comparison accepts anything, so reject here instead.
             log_error_details("Credentials rejected by the user pool")
             msg = "Unauthorized"
             raise ApiError(msg, status=401)
@@ -342,8 +336,7 @@ async def verify_websocket_credentials(credential: str | None) -> None:
     Raises:
         ApiError: 401 if authentication is required but missing/invalid.
     """
-    # Set on every connection, for the same reason the HTTP path sets it: a
-    # session must never inherit a principal it did not itself authenticate.
+    # Cleared per connection: a session must not inherit another's principal.
     PRINCIPAL.set(None)
     await verify_credential(credential)
 

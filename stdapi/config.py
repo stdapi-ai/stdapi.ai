@@ -227,6 +227,38 @@ def _model_alias_kind(value: object) -> str:
     return "configuration" if isinstance(value, dict | ModelAliasConfig) else "model"
 
 
+#: Endpoint resolver, used to build the partition-correct user pool issuer host.
+_ENDPOINT_RESOLVER = AWS_SESSION.get_component("endpoint_resolver")
+
+
+def cognito_issuer_url(user_pool_id: str, issuer_type: str) -> str:
+    """Build the token issuer URL of an Amazon Cognito user pool.
+
+    The host is resolved through the AWS SDK, so a pool in the AWS GovCloud or
+    the European Sovereign Cloud partition gets its own hostname.
+
+    Args:
+        user_pool_id: User pool identifier, prefixed by its AWS Region.
+        issuer_type: Issuer configuration of the pool, ``"original"`` or
+            ``"updated"``.
+
+    Returns:
+        Issuer URL that every token of that pool carries.
+
+    Raises:
+        ValueError: If Amazon Cognito has no endpoint in the pool's Region.
+    """
+    region = user_pool_id.split("_", 1)[0]
+    endpoint = _ENDPOINT_RESOLVER.construct_endpoint("cognito-idp", region)
+    if not endpoint:
+        msg = f"Amazon Cognito is not available in the '{region}' region"
+        raise ValueError(msg)
+    host = endpoint["hostname"]
+    if issuer_type == "updated":
+        host = f"issuer-{host}"
+    return f"https://{host}/{user_pool_id}"
+
+
 #: A ``MODEL_ALIASES`` entry: a target model ID, or that model plus its configuration.
 type ModelAliasTarget = Annotated[
     Annotated[str, Tag("model")] | Annotated[ModelAliasConfig, Tag("configuration")],
@@ -642,9 +674,13 @@ class _Settings(BaseSettings):
         default=False,
         description=(
             "Allow users to override aws_bedrock_external_web_access at request level "
-            "with the web search tool's 'external_web_access' field. When disabled, a "
-            "request that sets the field to anything other than the configured value is "
-            "rejected instead of being silently overridden. Defaults to False."
+            "with the 'external_web_access' extra model parameter. When disabled, a "
+            "request that sets it to anything other than the configured value is "
+            "rejected instead of being silently overridden.\n\n"
+            "Only the models whose web search takes its own web access apply a "
+            "per-request value; elsewhere a request asking for a different one is "
+            "rejected rather than accepted and ignored.\n\n"
+            "Defaults to False."
         ),
     )
 
@@ -1239,9 +1275,10 @@ class _Settings(BaseSettings):
             "by character, so it must be the exact origin they use: scheme and "
             "host, an explicit port only when it is not the default one for the "
             "scheme, and no path, query or fragment.\n\n"
-            "Requires oauth_authorization_servers. If not specified, no "
-            "metadata document is published and 401 responses only state that a "
-            "bearer token is expected.\n"
+            "Requires oauth_authorization_servers, unless "
+            "aws_cognito_user_pool_id is set, from which it is derived. If not "
+            "specified, no metadata document is published and 401 responses "
+            "only state that a bearer token is expected.\n"
             "Example: 'https://api.example.com'"
         ),
     )
@@ -1254,13 +1291,17 @@ class _Settings(BaseSettings):
             "protected resource metadata. A client reads each issuer's own "
             "metadata to find where to sign in, so this deployment never has to "
             "describe the sign-in flow itself.\n\n"
-            "An Amazon Cognito user pool issues "
+            "Defaults to the issuer of the aws_cognito_user_pool_id pool when "
+            "one is configured: "
             "'https://cognito-idp.<region>.amazonaws.com/<pool-id>', or "
             "'https://issuer-cognito-idp.<region>.amazonaws.com/<pool-id>' when "
-            "the pool uses the updated issuer (see aws_cognito_issuer_type). A "
-            "load balancer or API gateway authenticating in front of this "
-            "server publishes the issuer of whichever provider it uses.\n\n"
-            "Required when oauth_resource_identifier is set.\n"
+            "the pool uses the updated issuer (see aws_cognito_issuer_type), "
+            "with the host of the pool Region's AWS partition. Specify it to "
+            "publish further issuers, such as the one a load balancer or API "
+            "gateway authenticating in front of this server uses; the "
+            "configured pool's own issuer must then be one of them.\n\n"
+            "Required when oauth_resource_identifier is set and no user pool "
+            "is configured.\n"
             "Example: 'https://cognito-idp.eu-west-3.amazonaws.com/eu-west-3_a1b2c3d4e'"
         ),
     )
@@ -1272,11 +1313,11 @@ class _Settings(BaseSettings):
             "comma-separated list. Published in the protected resource metadata "
             "and requested in the 401 challenge, so a client asks its "
             "authorization server for the right scopes on its first attempt.\n\n"
-            "Set it to the same value as aws_cognito_required_scopes when an "
-            "Amazon Cognito user pool authenticates clients.\n\n"
-            "Requires oauth_resource_identifier. If not specified, no scope is "
-            "advertised and the client asks for whatever its own configuration "
-            "names.\n"
+            "Defaults to aws_cognito_required_scopes, the scopes a token needs "
+            "to be accepted.\n\n"
+            "Requires oauth_resource_identifier. If neither is specified, no "
+            "scope is advertised and the client asks for whatever its own "
+            "configuration names.\n"
             "Example: 'stdapi/invoke'"
         ),
     )
@@ -2395,13 +2436,17 @@ class _Settings(BaseSettings):
                 raise ValueError(msg)
         return issuers
 
-    @field_validator("oauth_scopes_supported")
+    @field_validator("oauth_scopes_supported", "aws_cognito_required_scopes")
     @classmethod
-    def _validate_oauth_scopes_supported(cls, value: list[str]) -> list[str]:
-        """Validate the published OAuth 2.0 scopes.
+    def _validate_scopes(cls, value: list[str], info: ValidationInfo) -> list[str]:
+        """Validate OAuth 2.0 scopes, whichever setting carries them.
+
+        The required scopes are checked too because they are the default of the
+        published ones, which are interpolated into a quoted challenge parameter.
 
         Args:
             value: Scopes a token needs to call this API.
+            info: Validation context, naming the setting being validated.
 
         Returns:
             The scopes, unchanged.
@@ -2412,32 +2457,55 @@ class _Settings(BaseSettings):
         for scope in value:
             if not _OAUTH_SCOPE_PATTERN.fullmatch(scope):
                 msg = (
-                    f'Invalid oauth_scopes_supported entry "{scope}": an OAuth '
+                    f'Invalid {info.field_name} entry "{scope}": an OAuth '
                     "2.0 scope carries no space, double quote or backslash."
                 )
                 raise ValueError(msg)
         return value
 
     def _validate_oauth(self) -> None:
-        """Ensure the OAuth 2.0 discovery configuration is complete.
+        """Complete and check the OAuth 2.0 discovery configuration.
 
-        A resource identifier with no authorization server would publish a
-        document telling clients nothing about where to obtain a token, and the
-        remaining settings describe a document that is not published at all.
+        What the configured user pool already implies is derived rather than
+        asked for: it issues the tokens this deployment accepts, so it is the
+        authorization server clients are sent to, and the scopes it requires are
+        the scopes they must ask for. An explicit value is kept as it is, and
+        only checked against the pool it must agree with.
 
         Raises:
-            ValueError: If the discovery configuration is incomplete.
+            ValueError: If the discovery configuration is incomplete, or names
+                an issuer the configured user pool contradicts.
         """
         if self.oauth_resource_identifier:
+            pool_issuer = (
+                cognito_issuer_url(
+                    self.aws_cognito_user_pool_id, self.aws_cognito_issuer_type
+                )
+                if self.aws_cognito_user_pool_id
+                else None
+            )
             if not self.oauth_authorization_servers:
+                if not pool_issuer:
+                    msg = (
+                        "oauth_authorization_servers is required with "
+                        "oauth_resource_identifier: metadata naming no authorization "
+                        "server leaves a client unable to obtain a token, and is read "
+                        "by some clients as this server being its own authorization "
+                        "server."
+                    )
+                    raise ValueError(msg)
+                self.oauth_authorization_servers = [pool_issuer]
+            elif pool_issuer and pool_issuer not in self.oauth_authorization_servers:
                 msg = (
-                    "oauth_authorization_servers is required with "
-                    "oauth_resource_identifier: metadata naming no authorization "
-                    "server leaves a client unable to obtain a token, and is read "
-                    "by some clients as this server being its own authorization "
-                    "server."
+                    "oauth_authorization_servers must name the issuer of the "
+                    f'aws_cognito_user_pool_id pool, "{pool_issuer}": a client '
+                    "obtaining its token from any other published issuer is "
+                    "refused on every request. Leave oauth_authorization_servers "
+                    "empty to publish the pool issuer, or add it to the list."
                 )
                 raise ValueError(msg)
+            if not self.oauth_scopes_supported:
+                self.oauth_scopes_supported = list(self.aws_cognito_required_scopes)
         elif self.oauth_authorization_servers or self.oauth_scopes_supported:
             msg = (
                 "oauth_resource_identifier is required to publish OAuth 2.0 "
@@ -2570,18 +2638,6 @@ class _Settings(BaseSettings):
     def _validate(self) -> Self:
         """Perform cross-field validation and apply configuration defaults.
 
-        Validation rules:
-        1. Bedrock Guardrails require both identifier and version
-        2. The Mantle service header requires Mantle and excludes Guardrails
-        3. API key sources are mutually exclusive
-        4. Transcribe S3 bucket defaults to main S3 bucket if not specified
-        5. When both MCP include/exclude are specified, include is filtered by exclude
-        6. Non-empty API routes prefixes must be unique across providers
-        7. The Amazon Cognito configuration is complete
-        8. The accepted authentication methods are the configured ones
-        9. The OAuth 2.0 discovery configuration is complete
-        10. The Vector Stores API is configured completely or not at all
-
         Returns:
             Self with validated and defaulted configuration.
 
@@ -2606,9 +2662,7 @@ class _Settings(BaseSettings):
             )
             raise ValueError(msg)
 
-        # An alias-borne guardrail is operator configuration too: it must not
-        # open the request-level override gate, and must not be silently
-        # dropped by a Mantle-served deployment.
+        # An alias guardrail is operator configuration: no override gate, no Mantle.
         alias_guardrail = any(
             isinstance(alias, ModelAliasConfig) and alias.guardrail_identifier
             for alias in self.model_aliases.values()

@@ -85,7 +85,7 @@ curl https://your-gateway.example.com/anthropic/v1/models \
 
 #### What you configure in AWS
 
-1. **A user pool**, in any Region. Its ID (for example `eu-west-3_a1b2c3d4e`) goes into [`AWS_COGNITO_USER_POOL_ID`](operations_configuration.md#aws-cognito-user-pool-id); the Region is read from the ID itself.
+1. **A user pool**, in any Region. Its ID (for example `eu-west-3_a1b2c3d4e`) goes into [`AWS_COGNITO_USER_POOL_ID`](operations_configuration.md#aws-cognito-user-pool-id); the Region is read from the ID itself, and so is the issuer URL — nothing else names it, here or in [agent discovery](#authentication-discovery-for-agents).
 2. **One or more app clients** in that pool. Their IDs go into [`AWS_COGNITO_CLIENT_IDS`](operations_configuration.md#aws-cognito-client-ids) — a token issued to any other app client is rejected, so this list is required.
 3. **A [pool domain](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools-assign-domain.html)**, which is what gives the pool its OAuth 2.0 authorization and token endpoints. It is needed in two cases: to demand a scope such as `stdapi/invoke` through [`AWS_COGNITO_REQUIRED_SCOPES`](operations_configuration.md#aws-cognito-required-scopes), since custom scopes exist only on tokens those endpoints issue and on a resource server that defines them; and for the [agent discovery flow](#authentication-discovery-for-agents), scope or no scope, since an agent has nowhere to obtain a token otherwise. Machine-to-machine clients use the `client_credentials` grant there.
 
@@ -130,8 +130,18 @@ An AI agent that meets an API it has never been configured for has one thing to 
 | Setting | Value |
 |---|---|
 | [`OAUTH_RESOURCE_IDENTIFIER`](operations_configuration.md#oauth-resource-identifier) | The public URL clients dial, exactly as they dial it — for example `https://api.example.com` |
-| [`OAUTH_AUTHORIZATION_SERVERS`](operations_configuration.md#oauth-authorization-servers) | The issuer URL of whatever issues your tokens |
-| [`OAUTH_SCOPES_SUPPORTED`](operations_configuration.md#oauth-scopes-supported) | Optional, but set it to the same value as [`AWS_COGNITO_REQUIRED_SCOPES`](operations_configuration.md#aws-cognito-required-scopes) whenever a scope is required: an agent that is not told which scope to ask for obtains a token without it and is refused on every retry |
+| [`OAUTH_AUTHORIZATION_SERVERS`](operations_configuration.md#oauth-authorization-servers) | The issuer URL of whatever issues your tokens. Leave it unset with a user pool configured: its issuer is published for you |
+| [`OAUTH_SCOPES_SUPPORTED`](operations_configuration.md#oauth-scopes-supported) | Leave it unset too — [`AWS_COGNITO_REQUIRED_SCOPES`](operations_configuration.md#aws-cognito-required-scopes) is published, since an agent that is not told which scope to ask for obtains a token without it and is refused on every retry |
+
+!!! success "With a user pool, one variable turns discovery on"
+    The pool named by [`AWS_COGNITO_USER_POOL_ID`](operations_configuration.md#aws-cognito-user-pool-id) issues the tokens this deployment accepts, so it *is* the authorization server clients must be sent to, and the scopes it requires are the scopes they must ask for. Both are published from it, and the issuer is exactly what the pool signs into `iss`:
+
+    ```text
+    https://cognito-idp.<region>.amazonaws.com/<pool-id>
+    https://issuer-cognito-idp.<region>.amazonaws.com/<pool-id>   # AWS_COGNITO_ISSUER_TYPE=updated
+    ```
+
+    `<region>` and `<pool-id>` are read from the pool ID itself, and the host follows that Region's AWS partition — `amazonaws.com.cn` in China, `amazonaws.eu` in the European Sovereign Cloud. Set the two variables only for an issuer no pool can supply, such as an identity-aware proxy in front of the deployment; the pool's own issuer must stay in the list, or startup fails rather than sending clients to an authorization server whose tokens are refused.
 
 **What an agent then sees:**
 
