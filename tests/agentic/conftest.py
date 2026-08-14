@@ -37,20 +37,14 @@ if TYPE_CHECKING:
     from ._tools import AgenticTool
 
 
-#: Import name to distribution name of every client library the lane drives
-#: in-process, keyed by the module that imports it.
-#:
-#: These live in ``requirements.txt`` and are layered over the project environment
-#: at run time, so a plain ``uv run pytest`` has none of them: their modules are
-#: dropped from collection below rather than failing to import. Keeping them out of
-#: ``uv.lock`` is what lets them float -- uv resolves the lock as one universal
-#: resolution, which would pin every client to whatever also satisfies the gateway.
+#: Distribution name of each client library the lane drives, keyed by module.
 _HOST_CLIENTS: Mapping[str, Mapping[str, str]] = {
     "test_langchain.py": {
         "langchain_openai": "langchain-openai",
         "langchain_anthropic": "langchain-anthropic",
     },
     "test_litellm.py": {"litellm": "litellm"},
+    "test_openai_agents.py": {"agents": "openai-agents"},
     "test_pydantic_ai.py": {"pydantic_ai": "pydantic-ai-slim"},
     "test_wyoming_audio.py": {"wyoming": "wyoming"},
 }

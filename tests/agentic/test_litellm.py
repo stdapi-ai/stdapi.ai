@@ -72,8 +72,7 @@ _TOOL = AgenticTool(
     build=_unused_build,
     parse=_unused_parse,
     prepare_workdir=_unused_prepare_workdir,
-    # litellm sends no per-run identifier the gateway records, so its requests can
-    # only be attributed positionally.
+    # litellm sends no per-run identifier, so attribution is positional.
     attributes_sessions=False,
 )
 
@@ -105,9 +104,6 @@ _PLANET_PROMPT = (
 )
 
 #: Body field name that is neither a model parameter nor a litellm control one.
-#:
-#: The denylist has to keep rejecting this: a gateway that dropped every
-#: unrecognized field would hide a caller's typo instead of reporting it.
 _NOT_A_PARAMETER = "not_a_model_parameter"
 
 

@@ -1,17 +1,9 @@
 # Client libraries the agentic lane drives in-process, layered over the project
 # environment by `uv run --with-requirements` (see tests/agentic/README.md).
 #
-# Deliberately kept out of pyproject.toml: uv.lock is a single universal resolution
-# covering every dependency group at once, so a client declared there would be
-# resolved against the gateway's own constraints and pinned to whatever satisfies
-# them both. Every other tool in this lane floats -- the container images install
-# unpinned packages so an upstream regression surfaces here -- and these clients
-# float for the same reason. `--refresh` re-resolves them, mirroring what
-# `--agentic-rebuild` does for the images.
-#
-# Nothing outside tests/agentic/ may import these: the rest of the suite runs
-# without the overlay, and tests/agentic/conftest.py skips whichever modules are
-# missing their client.
+# Kept out of pyproject.toml: uv.lock's single universal resolution would pin these
+# to whatever also satisfies the gateway. Only tests/agentic/ may import them; other
+# modules are skipped when their client is missing (see tests/agentic/conftest.py).
 
 # tests/agentic/test_langchain.py
 langchain-openai
@@ -26,3 +18,8 @@ wyoming
 
 # tests/agentic/test_litellm.py
 litellm
+
+# tests/agentic/test_openai_agents.py -- the OpenAI Agents SDK, whose RealtimeRunner
+# is the lane's only client for /v1/realtime. It caps `openai` below 3, so the
+# overlay resolves the SDK one major behind the project environment's.
+openai-agents[realtime]

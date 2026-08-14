@@ -48,38 +48,22 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.agentic
 
-#: Image driven here. ":latest" moves with upstream, as the CLIs' "@latest" does.
-#:
-#: The deployment sample pins a release instead, and the divergence is deliberate:
-#: the custom-preset schema below is not the one Docling Serve's own documentation
-#: shows -- it was read off the release's pydantic models -- so this floating tag
-#: is what reports that the sample's wiring has gone stale, in the run after the
-#: schema changes rather than in a customer's ingestion stage.
+#: Image driven here; ":latest" moves with upstream, as the CLIs' "@latest" does.
 _IMAGE = "quay.io/docling-project/docling-serve-cpu:latest"
 
 #: Vision-capable model the VLM pipeline is pointed at, as in the sample.
 _VLM_MODEL = "anthropic.claude-haiku-4-5-20251001-v1:0"
 
-#: Identifier of the custom preset; requests name it directly.
-#:
-#: ``"default"`` cannot be used even with ``DOCLING_SERVE_DEFAULT_VLM_PRESET``
-#: set: the jobkit's registry always tags its synthetic ``"default"`` entry as a
-#: Docling built-in, so resolving a custom preset under that name fails.
+#: Identifier of the custom preset; ``"default"`` is reserved by the jobkit.
 _PRESET_ID = "stdapi_bedrock"
 
 #: Seconds allowed for the service to answer ``/health`` after launch.
-#:
-#: Model weights are baked into the image, so this is process start rather than a
-#: download; the classical pipeline still loads its layout and OCR models first.
 _STARTUP_TIMEOUT = 300
 
 #: Seconds one conversion may take; a per-page Bedrock call runs behind the VLM one.
 _REQUEST_TIMEOUT = 600.0
 
-#: Word rendered into the page image and nowhere else in the request.
-#:
-#: Not a real word, so a model answering from its own knowledge instead of from
-#: the page cannot produce it.
+#: Word rendered into the page image and nowhere else; not a real word.
 _PLANTED_WORD = "ZEPHYRQUILL-9"
 
 #: Rest of the rendered page, giving the model ordinary prose to transcribe too.
@@ -159,9 +143,7 @@ def _environment(server: AgenticServer, port: int) -> Mapping[str, str]:
         The environment to start the container with.
     """
     return {
-        # Named UVICORN_*, not DOCLING_SERVE_*: `docling-serve run` reads its
-        # server options straight from uvicorn's own variables, and setting the
-        # DOCLING_SERVE_ spelling leaves it on its built-in 5001.
+        # UVICORN_*, not DOCLING_SERVE_*: the server options come from uvicorn.
         "UVICORN_PORT": str(port),
         "UVICORN_HOST": "0.0.0.0",  # noqa: S104
         # Without this the VLM pipeline refuses to call out at all.

@@ -1080,7 +1080,9 @@ def openai_client(
             api_key=api_key,
             max_retries=0,
             organization=_OPENAI_ORGANIZATION,
-            http_client=test_client,
+            # The agentic overlay pins an older `openai` whose client is typed
+            # against httpx 1.x, where the suite runs on httpx 2.
+            http_client=test_client,  # type: ignore[arg-type]
         )
 
     # Official API test

@@ -148,9 +148,10 @@ uv run pytest tests/agentic/test_wyoming_audio.py --agentic   # streamed TTS
 uv run pytest tests/agentic/test_langchain.py --agentic      # both langchain routes
 uv run pytest tests/agentic/test_pydantic_ai.py --agentic    # the reasoning-replay proof
 uv run pytest tests/agentic/test_litellm.py --agentic        # the control-parameter denylist
+uv run pytest tests/agentic/test_openai_agents.py --agentic   # the realtime voice session
 ```
 
-The last four need the client overlay described under
+The last five need the client overlay described under
 [In-process clients](#in-process-clients); without it they are dropped from
 collection and the run says so.
 
@@ -167,7 +168,7 @@ CC-METRICS | amazon.nova-2-lite-v1:0 | test_trace_request_pipeline | steps=  7 |
   user namespace a rootless container needs, so `--remote` is used automatically
   against the host's podman socket
 - Bedrock credentials, as for the rest of the suite
-- the client overlay, for the four modules listed below
+- the client overlay, for the five modules listed below
 
 The CLIs are **never executed on the host**. If podman is unavailable the lane
 skips rather than falling back to a host binary, so a run always reports the tool
@@ -175,10 +176,10 @@ version it actually tested.
 
 ## In-process clients
 
-Four clients are Python libraries rather than binaries, so they run in the test
-process: `test_langchain.py`, `test_pydantic_ai.py`, `test_wyoming_audio.py` and
-`test_litellm.py`. Their packages are listed in `requirements.txt` and layered
-over the project environment at run time:
+Five clients are Python libraries rather than binaries, so they run in the test
+process: `test_langchain.py`, `test_pydantic_ai.py`, `test_wyoming_audio.py`,
+`test_litellm.py` and `test_openai_agents.py`. Their packages are listed in
+`requirements.txt` and layered over the project environment at run time:
 
 ```bash
 uv run --with-requirements tests/agentic/requirements.txt pytest tests/agentic --agentic
@@ -198,8 +199,12 @@ gateway surfaces here. The versions a session actually resolved are printed in i
 header:
 
 ```
-agentic clients: langchain-anthropic==1.5.3, langchain-openai==1.4.1, litellm==1.95.0, pydantic-ai-slim==2.23.0, wyoming==1.10.0
+agentic clients: langchain-anthropic==1.5.3, langchain-openai==1.4.1, litellm==1.95.0, openai-agents==0.20.0, pydantic-ai-slim==2.23.0, wyoming==1.10.0
 ```
+
+`openai-agents` caps `openai` below 3, so the overlay resolves that dependency one
+major version behind the project environment. Nothing under `stdapi/` imports the
+vendor SDKs, and the lane's own modules run on either.
 
 Without the overlay, those modules are dropped from collection and the header
 names them rather than letting the run look complete. `mypy` needs the overlay too,
@@ -468,8 +473,9 @@ program and makes both synthesis paths reachable from one boot. Four things bite
 
 ## The pure-Python HTTP clients
 
-`test_langchain.py`, `test_pydantic_ai.py` and `test_litellm.py` drive their
-libraries in-process against `agentic_server`, with no container at all: unlike
+`test_langchain.py`, `test_pydantic_ai.py`, `test_litellm.py` and
+`test_openai_agents.py` drive their libraries in-process against
+`agentic_server`, with no container at all: unlike
 every other module here, they are plain HTTP client libraries, not third-party
 binaries, so there is nothing for podman to sandbox. Each still declares a real
 `AgenticTool` (or an `agentic_tool` fixture, for `test_langchain.py`'s two routes)
@@ -477,7 +483,7 @@ purely so the autouse model-identity check runs for free; its
 `build`/`parse`/`prepare_workdir` are never called, since none of them ever
 requests `agentic_image` or calls `run_agent`. Their packages come from the
 overlay, not from `uv.lock` — see [In-process clients](#in-process-clients).
-Three things bite:
+Four things bite:
 
 - **the shared podman skip still applies.** `_model_identity_check` checks for
   podman before resolving `agentic_server`, for every module in this directory —
@@ -504,6 +510,17 @@ Three things bite:
   rather than a structural rule. Its `drop_params` flag is unrelated to what
   reaches us: it removes parameters litellm knows a provider rejects, and forwards
   unknown keyword arguments either way.
+- **openai-agents is the lane's only Realtime client.** `RealtimeRunner` is handed
+  the WebSocket URL through `model_config["url"]`, because it otherwise dials
+  `api.openai.com`, and its tracing is disabled at import so no run is exported to
+  OpenAI's backend. Turn detection is switched off in `initial_model_settings`, so
+  the caller's own `commit` ends the turn rather than the backend's voice activity
+  detector. Its written-turn API (`send_message`) is deliberately not exercised:
+  the gateway's realtime models only answer a turn that ends with a closed audio
+  block, so a text-only turn leaves the session waiting until the backend's idle
+  timeout. The SDK validates every frame against the `openai` package's Realtime
+  types and reports a rejected one as an `error` event, which is what
+  `test_every_event_of_a_spoken_turn_parses_with_the_official_types` reads.
 
 ## What the tests actually assert
 
