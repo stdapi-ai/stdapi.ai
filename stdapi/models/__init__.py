@@ -8,7 +8,8 @@ from datetime import timedelta
 from functools import partial
 from importlib import import_module
 from pkgutil import iter_modules
-from re import Pattern
+from re import IGNORECASE, Pattern
+from re import compile as re_compile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Never, TypedDict
 
@@ -76,9 +77,11 @@ from stdapi.monitoring import (
 )
 from stdapi.pricing import (
     Routing,
+    batch_priced_models,
     refresh_price_catalog_for_new_models,
     register_default_prices,
     register_model_key_overrides,
+    resolve_model_key,
 )
 from stdapi.region_routing import REGION_ROUTER, ROUTING_RETRYABLE_CODES
 from stdapi.usage import get_model_state, record_bedrock_usage
@@ -129,6 +132,7 @@ if TYPE_CHECKING:
         access_lock: Lock
         user_profiles_access_lock: Lock
         prompts_access_lock: Lock
+        batch_price_source: frozenset[str] | None
 
 else:
     type RegionName = str
@@ -271,6 +275,9 @@ _MODELS: dict[str, ModelDetails] = {}
 #: Service label for models served by the Amazon Bedrock Mantle endpoint.
 MANTLE_SERVICE = "AWS Bedrock Mantle"
 
+#: Service label for models served by the Amazon Bedrock runtime endpoint.
+RUNTIME_SERVICE = "AWS Bedrock Runtime"
+
 #: SPEECH-input model ID prefixes without Bedrock Converse support (bidirectional streaming only).
 NON_CONVERSE_SPEECH_MODEL_PREFIXES: tuple[str, ...] = (
     "amazon.nova-2-sonic",
@@ -338,6 +345,23 @@ _ALL_MODELS_LEGACY: set[str] = set()
 #: Model IDs with legacy is not True (search_models filter index)
 _ALL_MODELS_NON_LEGACY: set[str] = set()
 
+#: Model IDs advertised as batch-capable (search_models filter index)
+_ALL_MODELS_BATCH: set[str] = set()
+
+#: Model IDs known not to be batch-capable (search_models filter index)
+_ALL_MODELS_NON_BATCH: set[str] = set()
+
+#: Mantle-served model ID to the bedrock-runtime model ID naming the same model
+_MANTLE_RUNTIME_TWINS: dict[str, str] = {}
+
+#: Qualifiers, versions and dates two names of one model may differ by.
+_TWIN_QUALIFIERS = re_compile(
+    r"\([^)]*\)|-instruct\b|-it\b|-v\d+(?::\d+)?$|-\d+:\d+$|-\d{8}(?=-|$)", IGNORECASE
+)
+
+#: Everything a normalised model name drops once its qualifiers are gone.
+_TWIN_SEPARATORS = re_compile(r"[^a-z0-9]+")
+
 #: Model cache state
 _CACHE: _ModelCache = {
     "update_next": None,
@@ -346,6 +370,7 @@ _CACHE: _ModelCache = {
     "access_lock": Lock(),
     "user_profiles_access_lock": Lock(),
     "prompts_access_lock": Lock(),
+    "batch_price_source": None,
 }
 
 #: Always-allowed inference types
@@ -405,6 +430,8 @@ class ModelDetails(BaseModel):
         input_modalities: Accepted input types (e.g. TEXT, IMAGE).
         output_modalities: Produced output types (e.g. TEXT, IMAGE).
         response_streaming: Whether the model supports streaming responses.
+        batch: Whether the model is advertised for the Batch API (best effort;
+            omitted when unknown).
         legacy: Whether the model is deprecated.
         start_of_life_time: GA date, if known.
         end_of_life_time: Deprecation date, if known.
@@ -420,10 +447,11 @@ class ModelDetails(BaseModel):
     id: str
     name: str
     provider: str
-    service: str = "AWS Bedrock Runtime"
+    service: str = RUNTIME_SERVICE
     input_modalities: list[str]
     output_modalities: list[str]
     response_streaming: bool | None = None
+    batch: bool | None = None
     legacy: bool | None = None
     start_of_life_time: AwareDatetime | None = None
     end_of_life_time: AwareDatetime | None = None
@@ -1274,6 +1302,7 @@ async def get_all_models_details() -> dict[str, ModelDetails]:
         All models keyed by model ID.
     """
     async with _CACHE["access_lock"]:
+        sync_batch_support()
         return _ALL_MODELS
 
 
@@ -1286,24 +1315,33 @@ async def get_all_models_details_and_modalities() -> tuple[
         Tuple of (models dict, output-modality index, input-modality index).
     """
     async with _CACHE["access_lock"]:
+        sync_batch_support()
         return _ALL_MODELS, _ALL_MODELS_OUTPUT_MODALITY, _ALL_MODELS_INPUT_MODALITY
 
 
 async def get_all_models_search_indexes() -> tuple[
-    dict[str, set[str]], dict[str, set[str]], set[str], set[str], set[str], set[str]
+    dict[str, set[str]],
+    dict[str, set[str]],
+    set[str],
+    set[str],
+    set[str],
+    set[str],
+    set[str],
+    set[str],
 ]:
     """Return inverted indexes over the catalogue used by the search_models filters.
 
     Rebuilt alongside the catalogue in :func:`update_unified_models_collections`,
-    so filtering by route/MCP tool, region, streaming, or legacy status is a
-    O(1) set lookup instead of a full-catalog scan.
+    so filtering by route/MCP tool, region, streaming, batch, or legacy status
+    is a O(1) set lookup instead of a full-catalog scan.
 
     Returns:
         Tuple of (route path/MCP tool name to model IDs, AWS region to model
         IDs, streaming model IDs, non-streaming model IDs, legacy model IDs,
-        non-legacy model IDs).
+        non-legacy model IDs, batch model IDs, non-batch model IDs).
     """
     async with _CACHE["access_lock"]:
+        sync_batch_support()
         return (
             _ALL_MODELS_BY_ROUTE_OR_TOOL,
             _ALL_MODELS_BY_REGION,
@@ -1311,6 +1349,8 @@ async def get_all_models_search_indexes() -> tuple[
             _ALL_MODELS_NON_STREAMING,
             _ALL_MODELS_LEGACY,
             _ALL_MODELS_NON_LEGACY,
+            _ALL_MODELS_BATCH,
+            _ALL_MODELS_NON_BATCH,
         )
 
 
@@ -1464,12 +1504,134 @@ def _compute_model_capabilities(
     return sorted(routes), sorted(tools)
 
 
+def _comparable_name(value: str) -> str:
+    """Return a model name in the form two catalogues can be compared on.
+
+    Args:
+        value: A model identifier's name part, or a display name.
+
+    Returns:
+        The name without its qualifiers, versions, dates and separators.
+    """
+    previous = ""
+    while previous != value:
+        # Qualifiers stack, as in "-20251001-v1:0".
+        previous = value
+        value = _TWIN_QUALIFIERS.sub("", value).strip("- ")
+    return _TWIN_SEPARATORS.sub("", value.lower())
+
+
+def build_runtime_twins() -> None:
+    """Index every Mantle-served model against the runtime model naming it.
+
+    Two catalogues name the same model differently, so the pairing is derived
+    rather than listed: a list of identifiers is stale by the next model
+    release. A Mantle-served model is paired with the runtime model whose name
+    matches once versions, dates and qualifiers are dropped, providers being
+    prefix-compatible (``moonshotai`` and ``moonshot``).
+    """
+    _MANTLE_RUNTIME_TWINS.clear()
+    runtime: dict[str, list[tuple[str, str]]] = {}
+    mantle: list[tuple[str, str, str]] = []
+    for model_id, model in _ALL_MODELS.items():
+        provider, _, name = model_id.partition(".")
+        provider = _TWIN_SEPARATORS.sub("", provider.lower())
+        if model.service == MANTLE_SERVICE:
+            mantle.append((model_id, provider, _comparable_name(name)))
+        elif model.service == RUNTIME_SERVICE:
+            display = _comparable_name(model.name)
+            # A display name repeating its provider ("DeepSeek-V3.1") is also
+            # comparable without it, which is how the identifier names it.
+            for key in {
+                _comparable_name(name),
+                display,
+                display.removeprefix(provider),
+            }:
+                if key:
+                    runtime.setdefault(key, []).append((provider, model_id))
+    for model_id, provider, key in mantle:
+        for twin_provider, twin_id in runtime.get(key, ()):
+            if provider.startswith(twin_provider) or twin_provider.startswith(provider):
+                _MANTLE_RUNTIME_TWINS[model_id] = twin_id
+                break
+
+
+def runtime_twin(model_id: str) -> str | None:
+    """Return the runtime model identifier a Mantle-served model batches under.
+
+    Args:
+        model_id: Model identifier, Mantle-served or not.
+
+    Returns:
+        The bedrock-runtime identifier of the same model, or ``None`` when the
+        model is not Mantle-served or exists on that endpoint under no name.
+    """
+    return _MANTLE_RUNTIME_TWINS.get(model_id)
+
+
+def _advertises_batch(model: ModelDetails, batch_priced: frozenset[str]) -> bool:
+    """Whether the catalogue advertises a model for the Batch API.
+
+    Best effort, and never a gate: a batched request naming a model this
+    returns False for is still submitted, and only the backend refuses it.
+
+    Args:
+        model: The model's catalogue entry.
+        batch_priced: Price-catalog keys holding a batch-tier rate.
+
+    Returns:
+        True when the Batch API accepts the model's shape (a text-to-text
+        model) and a batch rate is published for it — for a Mantle-served
+        model, for the runtime model that batches on its behalf, whose own rows
+        are the only ones that follow what batching actually accepts.
+    """
+    if "TEXT" not in model.input_modalities or "TEXT" not in model.output_modalities:
+        return False
+    if model.service == MANTLE_SERVICE:
+        twin = _MANTLE_RUNTIME_TWINS.get(model.id)
+        return twin is not None and resolve_model_key(twin) in batch_priced
+    return resolve_model_key(model.id) in batch_priced
+
+
+def sync_batch_support(*, force: bool = False) -> None:
+    """Re-derive the catalogue's batch advertisement when the price catalog changed.
+
+    The price catalog loads in the background, so it is usually still empty
+    when the catalogue is first built; this brings the ``batch`` flags and
+    their search indexes up to date once prices are published. A no-op while
+    the catalog is unchanged, which leaves every ``batch`` flag ``None`` when
+    no price is published at all (cost tracking disabled).
+
+    Args:
+        force: Re-derive even when the price catalog is unchanged, for a
+            catalogue that changed under it. An unloaded catalog is itself an
+            unchanged one, so without this a rebuilt catalogue would keep the
+            flags and indexes derived for the models it no longer holds.
+    """
+    batch_priced = batch_priced_models()
+    if not force and _CACHE["batch_price_source"] is batch_priced:
+        return
+    _CACHE["batch_price_source"] = batch_priced
+    _ALL_MODELS_BATCH.clear()
+    _ALL_MODELS_NON_BATCH.clear()
+    for model_id, model in _ALL_MODELS.items():
+        if batch_priced is None:
+            model.batch = None
+            continue
+        model.batch = _advertises_batch(model, batch_priced)
+        if model.batch:
+            _ALL_MODELS_BATCH.add(model_id)
+        else:
+            _ALL_MODELS_NON_BATCH.add(model_id)
+
+
 def update_unified_models_collections() -> None:
     """Merge Bedrock and extra-service model collections into the unified ``_ALL_*`` dicts.
 
     Rebuilds ``_ALL_MODELS``, ``_ALL_MODELS_OUTPUT_MODALITY``,
-    ``_ALL_MODELS_INPUT_MODALITY``, the model-alias index, and the
-    search_models inverted indexes (route/MCP tool, region, streaming, legacy).
+    ``_ALL_MODELS_INPUT_MODALITY``, the model-alias index, the Mantle-to-runtime
+    twin index, and the search_models inverted indexes (route/MCP tool, region,
+    streaming, batch, legacy).
     """
     _ALL_MODELS.clear()
     _ALL_MODELS.update(_MODELS | EXTRA_MODELS)
@@ -1521,6 +1683,10 @@ def update_unified_models_collections() -> None:
             _ALL_MODELS_LEGACY.add(model_id)
         else:
             _ALL_MODELS_NON_LEGACY.add(model_id)
+    build_runtime_twins()
+    # The catalogue just changed, so the derived flags have to be rebuilt even
+    # when the price catalog itself did not.
+    sync_batch_support(force=True)
 
 
 async def _get_provisioned_models(bedrock_client: BedrockClient) -> set[str]:

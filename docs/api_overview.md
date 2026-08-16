@@ -82,7 +82,7 @@ stdapi.ai provides multiple resources for exploring and testing the API—choose
 
 | Category | Endpoint | Capability | Documentation |
 |----------|----------|------------|---------------|
-| **🔍 Models** | `GET /search_models` | Search models by capability: modality, route, MCP tool, region, streaming, legacy status | [Search Models →](api_search_models.md) |
+| **🔍 Models** | `GET /search_models` | Search models by capability: modality, route, MCP tool, region, streaming, batch, legacy status | [Search Models →](api_search_models.md) |
 | **💰 Pricing** | `GET /model_pricing` | Exact AWS unit prices per model: tokens, tiers, cache TTLs, routing, media specs | [Model Pricing →](api_model_pricing.md) |
 
 ### ![Anthropic](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic-Compatible API

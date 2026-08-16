@@ -20,8 +20,9 @@ Ref: https://developers.openai.com/api/docs/guides/batch.md
 
 import contextlib
 from datetime import UTC, datetime
-from json import dumps
-from typing import TYPE_CHECKING, Any
+from json import dumps, loads
+from time import monotonic, sleep
+from typing import TYPE_CHECKING, Any, Literal
 
 import pytest
 from botocore.exceptions import ClientError
@@ -32,6 +33,7 @@ from tests._batches import chat_lines, converse_output
 
 if TYPE_CHECKING:
     from openai import OpenAI
+    from openai.types import Batch
     from starlette.testclient import TestClient
 
 
@@ -598,6 +600,52 @@ class TestOpenAIBatchValidation:
         logged = capfd.readouterr().out
         assert "marked by provider as Legacy" in logged
         assert "aws_bedrock_batch_role_arn" in logged
+
+    def test_a_model_not_advertised_for_batch_is_still_submitted(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The catalogue's batch flag is a hint, never admission control.
+
+        It is derived from the published rates, which lag a model's real
+        support, so refusing on it locally would lock clients out of models
+        the backend accepts. The batch below names a model the catalogue does
+        not advertise and must still reach the job service.
+
+        Ref: https://stdapi.ai/api_search_models/
+             stdapi/models/__init__.py:sync_batch_support
+             stdapi/batches.py:_submit_job
+        """
+        from stdapi import models as registry  # noqa: PLC0415
+        from stdapi.models import EXTRA_MODELS  # noqa: PLC0415
+        from stdapi.pricing import Dimension  # noqa: PLC0415
+        from tests._helpers import make_model_details  # noqa: PLC0415
+        from tests.conftest import set_test_price  # noqa: PLC0415
+
+        model = "amazon.nova-micro-v1:0"
+        saved = dict(EXTRA_MODELS)
+        try:
+            # Priced, but with no batch rate: the model is not advertised.
+            set_test_price(
+                "amazonnovamicro",
+                "us-east-1",
+                Dimension.INPUT_TOKENS,
+                "0.000001",
+                "USD",
+            )
+            EXTRA_MODELS[model] = make_model_details(model)
+            registry.update_unified_models_collections()
+            assert EXTRA_MODELS[model].batch is False
+
+            _, bedrock = _batches.install(monkeypatch)
+            file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+            body = _create(app_client, file_id)
+        finally:
+            EXTRA_MODELS.clear()
+            EXTRA_MODELS.update(saved)
+            registry.update_unified_models_collections()
+
+        assert body["http_status"] == 200
+        assert [job["modelId"] for job in bedrock.created] == [model]
 
     def test_a_failed_job_reports_its_reason_to_the_operator(
         self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
@@ -1512,6 +1560,92 @@ class TestBatchResultTranslation:
         )
 
 
+@pytest.mark.local
+class TestBatchModelRouting:
+    """A batch names a model; the job runs the identifier that can batch it.
+
+    Batches run on one backend only, so a model this server normally reaches
+    through another one is submitted under the identifier the batching backend
+    knows it by. A model that backend knows under no name keeps a refusal of
+    its own, which says something different to the caller.
+
+    Ref: audit/milestone-1-16/probe-150-mantle-batch.md
+         stdapi/batches.py:_batch_model_id
+    """
+
+    @staticmethod
+    def _install_mantle(
+        monkeypatch: pytest.MonkeyPatch, twin: str | None
+    ) -> _batches.FakeBedrock:
+        """Make every model Mantle-served, resolving to *twin* when there is one."""
+        _, bedrock = _batches.install(monkeypatch)
+        monkeypatch.setattr(batches, "serves_via_mantle", lambda _model_id: True)
+        monkeypatch.setattr(batches, "runtime_twin", lambda _model_id: twin)
+        return bedrock
+
+    def test_the_runtime_form_of_the_model_is_submitted(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A model served elsewhere is batched under the identifier that batches."""
+        bedrock = self._install_mantle(monkeypatch, "openai.gpt-oss-120b-1:0")
+        file_id = _batches.install_input_file(
+            monkeypatch, chat_lines(100, model="openai.gpt-oss-120b")
+        )
+        body = _create(app_client, file_id)
+        assert body["http_status"] == 200
+        assert bedrock.created[0]["modelId"] == "openai.gpt-oss-120b-1:0"
+
+    def test_a_model_with_no_runtime_form_is_refused(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A model no backend can batch is refused before anything is written.
+
+        The message differs from the routing case on purpose: this one is a
+        capability the model does not have, not an identifier to translate.
+        """
+        bedrock = self._install_mantle(monkeypatch, None)
+        file_id = _batches.install_input_file(
+            monkeypatch, chat_lines(100, model="xai.grok-4.3")
+        )
+        body = _create(app_client, file_id)
+        assert body["http_status"] == 400
+        assert "cannot run batched requests" in body["error"]["message"]
+        assert not bedrock.created
+
+    def test_a_refusal_naming_no_model_still_answers_the_caller(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A refusal on model grounds is a 400, even when it names no model.
+
+        Both wordings the backend answers a model it will not batch with name
+        no identifier at all, so matching on the identifier alone reported the
+        deployment as broken instead of the model as unsupported.
+
+        Ref: audit/milestone-1-16/probe-150-mantle-batch.md
+             stdapi/batches.py:_refused_job
+        """
+        _, bedrock = _batches.install(monkeypatch)
+        bedrock.reject_models = {"amazon.nova-micro-v1:0"}
+        bedrock.reject_message = (
+            "Batch inference is not supported for the requested model"
+        )
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        body = _create(app_client, file_id)
+        assert body["http_status"] == 400
+        assert "amazon.nova-micro-v1:0" in body["error"]["message"]
+
+    def test_a_deployment_failure_is_still_told_apart(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A refusal about the deployment is not reported as an unusable model."""
+        _, bedrock = _batches.install(monkeypatch)
+        bedrock.reject_models = {"amazon.nova-micro-v1:0"}
+        bedrock.reject_message = "The specified bucket does not exist"
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        body = _create(app_client, file_id)
+        assert body["http_status"] == 503
+
+
 @pytest.mark.slow
 @pytest.mark.usefixtures("batches_api")
 class TestOpenAIBatchLive:
@@ -1587,3 +1721,193 @@ class TestOpenAIBatchLive:
                     openai_client.batches.cancel(batch.id)
             with contextlib.suppress(Exception):
                 openai_client.files.delete(input_file.id)
+
+
+#: Statuses a batch has stopped changing at.
+_TERMINAL_STATUSES: frozenset[str] = frozenset(
+    {"completed", "failed", "expired", "cancelled"}
+)
+
+#: How long a batch of the minimum size is given to reach one of them.
+_ROUND_TRIP_TIMEOUT: float = 3600.0
+
+#: Seconds between two status reads of a running batch.
+_POLL_INTERVAL: float = 20.0
+
+#: Model served through the endpoint that runs no batch, batched by its twin.
+_ELSEWHERE_SERVED_MODEL: str = "openai.gpt-oss-20b"
+
+#: Name the endpoint that does run batches knows that same model by.
+_ELSEWHERE_SERVED_MODEL_BATCHED: str = "openai.gpt-oss-20b-1:0"
+
+
+@pytest.mark.slow
+@pytest.mark.usefixtures("batches_api")
+class TestOpenAIBatchRoundTrip:
+    """Running real batches to completion, and reading the answers back.
+
+    A submission that is accepted says nothing about a batch: the requests
+    still have to run, and the results still have to read back as the
+    responses of the endpoint they were written for. Each test here submits
+    the smallest batch the backing jobs accept, waits for it to end, and reads
+    every line of the output file.
+
+    One test per endpoint the surface serves, on a different model family
+    each, so a translation bug belonging to one family cannot pass unseen.
+
+    Ref: https://developers.openai.com/api/docs/guides/batch.md
+         stdapi/batches.py:iter_openai_results
+    """
+
+    @staticmethod
+    def _wait(client: OpenAI, batch_id: str) -> Batch:
+        """Read *batch_id* until it stops changing, and return it.
+
+        Args:
+            client: SDK client bound to the target.
+            batch_id: Identifier of the batch to wait for.
+
+        Returns:
+            The batch, in whichever terminal status it reached.
+        """
+        deadline = monotonic() + _ROUND_TRIP_TIMEOUT
+        while (
+            batch := client.batches.retrieve(batch_id)
+        ).status not in _TERMINAL_STATUSES:
+            assert monotonic() < deadline, (
+                f"{batch_id} was still '{batch.status}' after "
+                f"{_ROUND_TRIP_TIMEOUT:.0f}s ({batch.request_counts})"
+            )
+            sleep(_POLL_INTERVAL)
+        return batch
+
+    def _round_trip(
+        self,
+        client: OpenAI,
+        endpoint: Literal["/v1/chat/completions", "/v1/embeddings"],
+        bodies: list[dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        """Run *bodies* through a batch and read the results back.
+
+        Args:
+            client: SDK client bound to the target.
+            endpoint: Endpoint every request of the batch targets.
+            bodies: One request body per line, in input order.
+
+        Returns:
+            The result lines, indexed by the ``custom_id`` that produced them.
+        """
+        payload = "\n".join(
+            dumps(
+                {
+                    "custom_id": f"req-{index}",
+                    "method": "POST",
+                    "url": endpoint,
+                    "body": body,
+                }
+            )
+            for index, body in enumerate(bodies)
+        ).encode()
+        input_file = client.files.create(
+            file=("requests.jsonl", payload), purpose="batch"
+        )
+        batch = None
+        try:
+            batch = client.batches.create(
+                input_file_id=input_file.id, endpoint=endpoint, completion_window="24h"
+            )
+            batch = self._wait(client, batch.id)
+            assert batch.status == "completed", batch.errors
+            assert batch.request_counts is not None
+            assert batch.request_counts.total == len(bodies)
+            assert batch.request_counts.completed == len(bodies)
+            assert batch.request_counts.failed == 0
+            assert batch.output_file_id is not None
+            lines = [
+                loads(line)
+                for line in client.files.content(batch.output_file_id).text.splitlines()
+                if line
+            ]
+            assert len(lines) == len(bodies)
+            results = {line["custom_id"]: line for line in lines}
+            assert set(results) == {f"req-{index}" for index in range(len(bodies))}
+            return results
+        finally:
+            if batch is not None and batch.status not in _TERMINAL_STATUSES:
+                with contextlib.suppress(Exception):
+                    client.batches.cancel(batch.id)
+            with contextlib.suppress(Exception):
+                client.files.delete(input_file.id)
+
+    @staticmethod
+    def _answer(line: dict[str, Any]) -> dict[str, Any]:
+        """Return the response body of one result line, asserting it succeeded."""
+        assert line["error"] is None, line
+        assert line["response"]["status_code"] == 200, line
+        assert line["response"]["request_id"]
+        body: dict[str, Any] = line["response"]["body"]
+        return body
+
+    def test_a_chat_batch_answers_every_request(
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
+    ) -> None:
+        """Every batched chat request comes back as its own completion.
+
+        The whole round trip is the assertion: a batch that is merely accepted
+        can still fail every one of its requests, so the answers are read from
+        the output file and each one checked to be a usable completion.
+
+        Ref: https://developers.openai.com/api/docs/api-reference/chat/object
+             stdapi/batches.py:_to_completion
+        """
+        count = 1 if use_official_api else batches.MIN_REQUESTS_PER_MODEL
+        results = self._round_trip(
+            openai_client,
+            "/v1/chat/completions",
+            [
+                {
+                    "model": chat_model,
+                    "messages": [{"role": "user", "content": f"Say hello, #{index}."}],
+                }
+                for index in range(count)
+            ],
+        )
+        for line in results.values():
+            body = self._answer(line)
+            assert body["object"] == "chat.completion"
+            assert body["choices"][0]["message"]["role"] == "assistant"
+            assert body["choices"][0]["message"]["content"]
+            assert body["choices"][0]["finish_reason"] == "stop"
+            assert body["usage"]["prompt_tokens"] > 0
+            assert body["usage"]["completion_tokens"] > 0
+
+    @pytest.mark.gateway("no vendor API serves a model of this deployment's own")
+    def test_a_model_served_elsewhere_batches_under_its_other_name(
+        self, openai_client: OpenAI
+    ) -> None:
+        """A model normally served by an endpoint that runs no batch still batches.
+
+        Its requests are submitted under the identifier the endpoint that does
+        run batches knows it by, which is also the model each answer reports.
+        Before that pairing existed the batch was refused outright, so this is
+        the whole of the path's coverage.
+
+        Ref: https://stdapi.ai/api_openai_batches/#models
+             stdapi/batches.py:_batch_model_id
+        """
+        results = self._round_trip(
+            openai_client,
+            "/v1/chat/completions",
+            [
+                {
+                    "model": _ELSEWHERE_SERVED_MODEL,
+                    "messages": [{"role": "user", "content": f"Say hello, #{index}."}],
+                }
+                for index in range(batches.MIN_REQUESTS_PER_MODEL)
+            ],
+        )
+        for line in results.values():
+            body = self._answer(line)
+            assert body["model"] == _ELSEWHERE_SERVED_MODEL_BATCHED
+            assert body["choices"][0]["message"]["content"]
+            assert body["usage"]["completion_tokens"] > 0

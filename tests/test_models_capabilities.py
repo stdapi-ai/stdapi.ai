@@ -25,7 +25,9 @@ from stdapi.models import MANTLE_SERVICE, ModelDetails, _compute_model_capabilit
 from stdapi.models.capabilities import ROUTE_CAPABILITIES, Capability
 from stdapi.models.chat._default import ChatModel as ConverseChatModel
 from stdapi.models.chat._mantle._default import ChatModel as MantleChatModel
+from stdapi.pricing import Dimension
 from tests._helpers import make_model_details
+from tests.conftest import set_test_price
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -44,6 +46,27 @@ _SPEECH_MODEL = "amazon.nova-2-sonic-v1:0"
 
 #: Operation ID of the realtime route, which has no MCP tool.
 _REALTIME_OPERATION = "openai_realtime"
+
+#: Text model AWS publishes a batch rate for.
+_BATCH_MODEL = "vendor.batchmodel"
+
+#: Price-catalog key ``_BATCH_MODEL`` normalizes to.
+_BATCH_MODEL_PRICE_KEY = "vendorbatchmodel"
+
+#: Text model with no published batch rate.
+_PLAIN_MODEL = "vendor.plainmodel"
+
+#: Mantle-served model, named as the runtime endpoint does not know it.
+_MANTLE_MODEL = "vendor.twinmodel"
+
+#: Price-catalog key ``_MANTLE_MODEL`` normalizes to.
+_MANTLE_MODEL_PRICE_KEY = "vendortwinmodel"
+
+#: The same model as ``_MANTLE_MODEL``, named as the runtime endpoint knows it.
+_TWIN_MODEL = "vendor.twinmodel-1:0"
+
+#: Price-catalog key ``_TWIN_MODEL`` normalizes to, distinct from the Mantle one.
+_TWIN_MODEL_PRICE_KEY = "vendortwinmodel10"
 
 
 def _text_model(service: str) -> ModelDetails:
@@ -322,3 +345,273 @@ class TestRealtimeRouteAdvertised:
         index = models._ALL_MODELS_BY_ROUTE_OR_TOOL  # noqa: SLF001
         assert _SPEECH_MODEL in index[_REALTIME_OPERATION]
         assert _SPEECH_MODEL in index[ROUTE_CAPABILITIES[_REALTIME_OPERATION].path]
+
+
+class TestBatchAdvertisement:
+    """A model is advertised for the Batch API when a batch rate is published for it.
+
+    The rate is the only signal available before a batch is submitted, and it
+    is a hint rather than a rule: the flag never decides whether a request is
+    accepted, which ``tests/test_openai_batches.py`` covers on the batch route.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference-supported.html
+         https://stdapi.ai/api_search_models/
+         stdapi/models/__init__.py:sync_batch_support
+         stdapi/pricing.py:batch_priced_models
+    """
+
+    @staticmethod
+    def _catalog() -> dict[str, ModelDetails]:
+        """Register two text models, one of them batch-priced, and rebuild the indexes.
+
+        Returns:
+            The two registered models, keyed by model ID.
+        """
+        from stdapi.models import EXTRA_MODELS  # noqa: PLC0415
+
+        registered = {
+            model_id: make_model_details(model_id)
+            for model_id in (_BATCH_MODEL, _PLAIN_MODEL)
+        }
+        EXTRA_MODELS.update(registered)
+        set_test_price(
+            _BATCH_MODEL_PRICE_KEY,
+            "us-east-1",
+            Dimension.INPUT_TOKENS,
+            "0.000001",
+            "USD",
+            tier="batch",
+        )
+        models.update_unified_models_collections()
+        return registered
+
+    def test_a_batch_priced_model_is_advertised(self, isolated_catalog: None) -> None:
+        """The model AWS publishes a batch rate for carries ``batch`` true."""
+        assert self._catalog()[_BATCH_MODEL].batch is True
+        assert _BATCH_MODEL in models._ALL_MODELS_BATCH  # noqa: SLF001
+
+    def test_a_model_without_a_batch_rate_is_not_advertised(
+        self, isolated_catalog: None
+    ) -> None:
+        """A model priced for no batch rate carries ``batch`` false, not true.
+
+        Advertising every model would make the flag useless for discovery.
+        """
+        assert self._catalog()[_PLAIN_MODEL].batch is False
+        assert _PLAIN_MODEL in models._ALL_MODELS_NON_BATCH  # noqa: SLF001
+        assert _PLAIN_MODEL not in models._ALL_MODELS_BATCH  # noqa: SLF001
+
+    def test_an_unloaded_price_catalog_advertises_nothing_either_way(
+        self, isolated_catalog: None
+    ) -> None:
+        """With no price published at all, ``batch`` stays unknown rather than false.
+
+        The catalog loads in the background and can be switched off entirely, so
+        deriving "false" from its absence would advertise every model as
+        unbatchable on a deployment that simply does not track cost.
+        """
+        from stdapi.models import EXTRA_MODELS  # noqa: PLC0415
+
+        EXTRA_MODELS[_BATCH_MODEL] = make_model_details(_BATCH_MODEL)
+        models.update_unified_models_collections()
+
+        assert EXTRA_MODELS[_BATCH_MODEL].batch is None
+        assert not models._ALL_MODELS_BATCH  # noqa: SLF001
+        assert not models._ALL_MODELS_NON_BATCH  # noqa: SLF001
+
+    def test_a_price_published_after_the_catalogue_was_built_is_picked_up(
+        self, isolated_catalog: None
+    ) -> None:
+        """A batch rate arriving after startup still reaches the advertisement.
+
+        The price catalog loads in a background task that finishes well after
+        the model catalogue is first built, so a flag derived once at build
+        time would stay unknown for the whole process lifetime.
+
+        Ref: stdapi/main.py:lifespan
+        """
+        from stdapi.models import EXTRA_MODELS  # noqa: PLC0415
+
+        EXTRA_MODELS[_BATCH_MODEL] = make_model_details(_BATCH_MODEL)
+        models.update_unified_models_collections()
+        assert EXTRA_MODELS[_BATCH_MODEL].batch is None
+
+        set_test_price(
+            _BATCH_MODEL_PRICE_KEY,
+            "us-east-1",
+            Dimension.INPUT_TOKENS,
+            "0.000001",
+            "USD",
+            tier="batch",
+        )
+        models.sync_batch_support()
+
+        assert EXTRA_MODELS[_BATCH_MODEL].batch is True
+
+    def test_a_rebuilt_catalogue_drops_the_flags_derived_before_it(
+        self, isolated_catalog: None
+    ) -> None:
+        """A catalogue rebuilt with no price catalog loaded advertises nothing.
+
+        An unloaded price catalog reads as unchanged, so a rebuild that only
+        consults the catalog would keep the flags and the search indexes it
+        derived for models the catalogue no longer holds.
+
+        Ref: stdapi/models/__init__.py:sync_batch_support
+        """
+        from stdapi.pricing import _state  # noqa: PLC0415
+
+        registered = self._catalog()
+        assert registered[_BATCH_MODEL].batch is True
+
+        _state.price_index = {}
+        models.update_unified_models_collections()
+
+        assert registered[_BATCH_MODEL].batch is None
+        assert not models._ALL_MODELS_BATCH  # noqa: SLF001
+        assert not models._ALL_MODELS_NON_BATCH  # noqa: SLF001
+
+    def test_a_mantle_served_model_alone_is_not_advertised(
+        self, isolated_catalog: None
+    ) -> None:
+        """A Mantle-served model with no runtime form is not advertised.
+
+        AWS publishes its own batch-tier rate rows under a Mantle usagetype for
+        models a batch is refused for outright, so that model's own rate says
+        nothing about whether it can be batched.
+
+        Ref: stdapi/batches.py:_batch_model_id
+        """
+        from stdapi.models import EXTRA_MODELS  # noqa: PLC0415
+
+        EXTRA_MODELS[_MANTLE_MODEL] = make_model_details(
+            _MANTLE_MODEL, service=MANTLE_SERVICE
+        )
+        set_test_price(
+            _MANTLE_MODEL_PRICE_KEY,
+            "us-east-1",
+            Dimension.INPUT_TOKENS,
+            "0.000001",
+            "USD",
+            tier="batch",
+        )
+        models.update_unified_models_collections()
+
+        assert EXTRA_MODELS[_MANTLE_MODEL].batch is False
+
+    def test_a_mantle_served_model_is_advertised_from_its_runtime_twin(
+        self, isolated_catalog: None
+    ) -> None:
+        """A Mantle-served model is advertised when its runtime form is batch-priced.
+
+        Batches run on the runtime endpoint only, so the rate that follows what
+        a batch accepts is the one published for the model under the identifier
+        that endpoint knows it by -- never its own.
+
+        Ref: stdapi/models/__init__.py:build_runtime_twins
+        """
+        from stdapi.models import EXTRA_MODELS  # noqa: PLC0415
+
+        EXTRA_MODELS[_MANTLE_MODEL] = make_model_details(
+            _MANTLE_MODEL, service=MANTLE_SERVICE
+        )
+        EXTRA_MODELS[_TWIN_MODEL] = make_model_details(_TWIN_MODEL)
+        set_test_price(
+            _TWIN_MODEL_PRICE_KEY,
+            "us-east-1",
+            Dimension.INPUT_TOKENS,
+            "0.000001",
+            "USD",
+            tier="batch",
+        )
+        models.update_unified_models_collections()
+
+        assert EXTRA_MODELS[_MANTLE_MODEL].batch is True
+        assert _MANTLE_MODEL in models._ALL_MODELS_BATCH  # noqa: SLF001
+
+
+class TestRuntimeTwins:
+    """A Mantle-served model is paired with the runtime model naming it.
+
+    Batch inference runs on the runtime endpoint only, so a Mantle-served model
+    is batchable exactly when the same model exists there under another
+    identifier. Every case below is one the pairing rule was derived from, and
+    each fails without one part of the normalisation.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference-supported.html
+         stdapi/models/__init__.py:build_runtime_twins
+    """
+
+    @staticmethod
+    def _pair(mantle_id: str, runtime_id: str, runtime_name: str) -> str | None:
+        """Register one Mantle model and one runtime model, and pair them.
+
+        Args:
+            mantle_id: Identifier of the Mantle-served model.
+            runtime_id: Identifier of the runtime model.
+            runtime_name: Display name AWS gives the runtime model.
+
+        Returns:
+            The runtime identifier the Mantle model resolves to, if any.
+        """
+        from stdapi.models import EXTRA_MODELS  # noqa: PLC0415
+
+        EXTRA_MODELS[mantle_id] = make_model_details(mantle_id, service=MANTLE_SERVICE)
+        EXTRA_MODELS[runtime_id] = make_model_details(runtime_id, name=runtime_name)
+        models.update_unified_models_collections()
+        return models.runtime_twin(mantle_id)
+
+    @pytest.mark.parametrize(
+        ("mantle_id", "runtime_id", "runtime_name"),
+        [
+            ("openai.gpt-oss-120b", "openai.gpt-oss-120b-1:0", "gpt-oss-120b"),
+            (
+                "anthropic.claude-haiku-4-5",
+                "anthropic.claude-haiku-4-5-20251001-v1:0",
+                "Claude Haiku 4.5",
+            ),
+            (
+                "qwen.qwen3-next-80b-a3b-instruct",
+                "qwen.qwen3-next-80b-a3b",
+                "Qwen3-Next-80B-A3B",
+            ),
+            ("qwen.qwen3-32b", "qwen.qwen3-32b-v1:0", "Qwen3 32B (dense)"),
+            (
+                "qwen.qwen3-coder-30b-a3b-instruct",
+                "qwen.qwen3-coder-30b-a3b-v1:0",
+                "Qwen3-Coder-30B-A3B-Instruct",
+            ),
+            ("deepseek.v3.1", "deepseek.v3-v1:0", "DeepSeek-V3.1"),
+            (
+                "moonshotai.kimi-k2-thinking",
+                "moonshot.kimi-k2-thinking",
+                "Kimi K2 Thinking",
+            ),
+        ],
+    )
+    def test_the_runtime_form_of_a_mantle_model_is_found(
+        self, isolated_catalog: None, mantle_id: str, runtime_id: str, runtime_name: str
+    ) -> None:
+        """Each observed pair is derived from the catalogue, not from a list."""
+        assert self._pair(mantle_id, runtime_id, runtime_name) == runtime_id
+
+    def test_a_mantle_model_with_no_runtime_form_pairs_with_nothing(
+        self, isolated_catalog: None
+    ) -> None:
+        """An unrelated runtime model is not mistaken for the same model.
+
+        A pairing rule that matched too widely would submit a batch naming a
+        model the caller never asked for.
+        """
+        assert (
+            self._pair("xai.grok-4.3", "amazon.nova-micro-v1:0", "Nova Micro") is None
+        )
+
+    def test_a_runtime_model_pairs_with_nothing(self, isolated_catalog: None) -> None:
+        """A model already served by the runtime endpoint needs no pairing."""
+        from stdapi.models import EXTRA_MODELS  # noqa: PLC0415
+
+        EXTRA_MODELS[_TWIN_MODEL] = make_model_details(_TWIN_MODEL)
+        models.update_unified_models_collections()
+
+        assert models.runtime_twin(_TWIN_MODEL) is None

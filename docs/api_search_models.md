@@ -1,12 +1,12 @@
 ---
 title: Search Models API - Discover Amazon Bedrock Models by Capability
-description: Search and filter available Amazon Bedrock models by modality, route, MCP tool, region, streaming support, and legacy status. Designed for AI agents that need to discover the right model before calling other endpoints.
-keywords: AWS Bedrock model search, model discovery API, filter models by modality, MCP model discovery, available models API, AI agent model selection
+description: Search and filter available Amazon Bedrock models by modality, route, MCP tool, region, streaming support, Batch API support, and legacy status. Designed for AI agents that need to discover the right model before calling other endpoints.
+keywords: AWS Bedrock model search, model discovery API, filter models by modality, MCP model discovery, available models API, AI agent model selection, batch capable models
 ---
 
 # Search Models API
 
-Discover available models by capability — filter by modality, route, region, streaming support, or legacy status. This endpoint is purpose-built for AI agents that need to identify the right model ID before invoking another endpoint.
+Discover available models by capability — filter by modality, route, region, streaming support, Batch API support, or legacy status. This endpoint is purpose-built for AI agents that need to identify the right model ID before invoking another endpoint.
 
 ## Quick Start
 
@@ -29,10 +29,14 @@ All query parameters are optional. Parameters combine with **AND** logic — onl
 | `route`             | `string`  | Filter to models supporting a route path (e.g. `/v1/chat/completions`) **or** an MCP tool name (e.g. `openai_chat_completion`) — both formats are accepted transparently |
 | `region`            | `string`  | Filter to models available in a specific AWS region (e.g. `us-east-1`)                                                                                                   |
 | `streaming`         | `boolean` | `true` = streaming-capable models only, `false` = non-streaming only                                                                                                     |
+| `batch`             | `boolean` | `true` = models advertised for the [Batch API](api_openai_batches.md) only, `false` = the rest. Best effort — see the note below.                                        |
 | `legacy`            | `boolean` | `true` = deprecated models only, `false` = active models only. Deprecated models are excluded when omitted.                                                             |
 
 !!! note "Modality values are case-insensitive"
     `TEXT`, `text`, and `Text` are all accepted.
+
+!!! warning "Batch support is advertised on a best-effort basis"
+    `batch` is a discovery hint, not a guarantee, and it is never used to reject a request: a batch naming a model that is not advertised is still submitted, and only the backend decides. So a model with `batch: false` — or with no `batch` field at all — may well run a batch successfully, and the authoritative answer is what you get back when you submit one. Treat it as a shortlist to start from, not as a list of the only models that work.
 
 !!! note "Legacy models are excluded by default"
     Deprecated models are left out of the results unless you pass `legacy=true`. Pass it if you specifically need to look up a deprecated model, for example to check its replacement — it returns deprecated models only, not the active ones plus the deprecated ones. Combine both calls (with and without `legacy=true`) if you need the full catalogue.
@@ -54,6 +58,7 @@ Each item in the returned list is a `ModelDetails` object:
 | `supported_mcp_tools` | MCP tool names this model supports |
 | `regions` | AWS regions where this model is available |
 | `response_streaming` | Whether streaming responses are supported |
+| `batch` | `true` = advertised for the [Batch API](api_openai_batches.md); `false` = not advertised; absent = unknown. Best effort — see the note above |
 | `legacy` | `true` = deprecated model; `false` or absent = active |
 | `start_of_life_time` | GA date, if known |
 | `end_of_life_time` | Deprecation date, if known |
@@ -105,6 +110,15 @@ curl -G "$BASE/search_models" \
 curl -G "$BASE/search_models" \
   --data-urlencode "region=us-east-1" \
   --data-urlencode "streaming=true" \
+  -H "Authorization: Bearer $API_KEY"
+```
+
+**Chat models advertised for the Batch API:**
+
+```bash
+curl -G "$BASE/search_models" \
+  --data-urlencode "route=openai_chat_completion" \
+  --data-urlencode "batch=true" \
   -H "Authorization: Bearer $API_KEY"
 ```
 

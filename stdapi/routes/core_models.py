@@ -106,7 +106,7 @@ class ModelPricing(BaseModel):
     description=(
         "Search the catalogue of currently available models and return extended metadata "
         "(modalities, supported API routes, MCP tool names, regions, streaming support, "
-        "legacy status). Supplements the standard `/v1/models` list.\n\n"
+        "Batch API support, legacy status). Supplements the standard `/v1/models` list.\n\n"
         "All filters are optional and combined with **AND** logic — only models matching every "
         "supplied filter are returned, sorted by ID.\n\n"
         "**Agent workflow:**\n"
@@ -127,7 +127,8 @@ class ModelPricing(BaseModel):
         "- Audio understanding: `route=openai_chat_completion&input_modalities=SPEECH`\n"
         "- Embeddings: `route=openai_embedding`\n"
         "- Image generation: `route=openai_image_generation`\n"
-        "- Live speech-to-speech: `route=openai_realtime`\n\n"
+        "- Live speech-to-speech: `route=openai_realtime`\n"
+        "- Batch-capable chat models: `route=openai_chat_completion&batch=true`\n\n"
         '**Note:** Audio *output* from `openai_chat_completion` (via `modalities=["text","audio"]`) '
         "is a model-specific capability not separately tracked — use a `route` search "
         "and verify audio output support in the model documentation. The built-in "
@@ -175,6 +176,14 @@ async def search_models(
             description="Filter by streaming support (true = streaming only, false = non-streaming only)."
         ),
     ] = None,
+    batch: Annotated[
+        bool | None,
+        Query(
+            description="Filter by advertised Batch API support (true = batch-capable "
+            "models only, false = the rest). Best effort: a model not advertised may "
+            "still be accepted, so submit the batch rather than ruling a model out."
+        ),
+    ] = None,
     legacy: Annotated[
         bool | None,
         Query(
@@ -194,6 +203,8 @@ async def search_models(
             tool name (e.g. openai_chat_completion). Both formats are accepted transparently.
         region: Filter to models available in a specific AWS region.
         streaming: Filter by streaming support.
+        batch: Filter by advertised Batch API support. Advisory only: it never
+            decides whether a batched request is accepted.
         legacy: Filter by legacy/deprecated status. Legacy models are excluded when
             omitted; pass True to list them.
 
@@ -211,6 +222,7 @@ async def search_models(
             "route": route,
             "region": region,
             "streaming": streaming,
+            "batch": batch,
             "legacy": legacy,
         }
     )
@@ -227,6 +239,8 @@ async def search_models(
         non_streaming_models,
         legacy_models,
         non_legacy_models,
+        batch_models,
+        non_batch_models,
     ) = await get_all_models_search_indexes()
     models_ids = set(models.keys())
     _filter_by_modality(input_modalities, models_ids, models_input_modalities, "input")
@@ -238,6 +252,10 @@ async def search_models(
         _filter_by_region(region, models_ids, models_by_region)
     if streaming is not None:
         models_ids &= streaming_models if streaming else non_streaming_models
+    # A discovery hint only: batch support is advertised best effort, and every
+    # batched request reaches the backend whatever this says.
+    if batch is not None:
+        models_ids &= batch_models if batch else non_batch_models
     # Legacy models are not guaranteed to stay invokable, so they are excluded by
     # default and only surfaced when explicitly requested with legacy=true.
     models_ids &= legacy_models if legacy else non_legacy_models

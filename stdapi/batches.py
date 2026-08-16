@@ -41,7 +41,7 @@ from stdapi.files import (
     put_file_content,
     resolve_file_bucket,
 )
-from stdapi.models import ModelRegionUnavailableError, validate_model
+from stdapi.models import ModelRegionUnavailableError, runtime_twin, validate_model
 from stdapi.models.chat import get_chat_model, serves_via_mantle
 from stdapi.models.chat._adapters import _anthropic_message as anthropic_adapter
 from stdapi.models.chat._adapters import _openai_chat_completion as openai_adapter
@@ -76,6 +76,12 @@ _CREATE_JOB_PERMISSIONS: str = (
     "bedrock:CreateModelInvocationJob, or iam:PassRole on the batch service "
     "role set in 'aws_bedrock_batch_role_arn' with the condition "
     "iam:PassedToService=bedrock.amazonaws.com"
+)
+
+#: How a refused submission reads when the model, not the deployment, is the cause.
+_MODEL_REFUSALS: tuple[str, ...] = (
+    "The provided model identifier is invalid",
+    "Batch inference is not supported",
 )
 
 #: What the operator reads when a job submission is refused as invalid.
@@ -541,6 +547,34 @@ def _to_model_input(request: ConverseRequestBaseTypeDef) -> dict[str, Any]:
     return model_input
 
 
+def _batch_model_id(model: str, model_id: str) -> str:
+    """Return the identifier a batched job runs *model_id* under.
+
+    Batched requests run on one backend only, so a model this server normally
+    reaches through another one runs under the identifier that backend knows
+    it by. A model that backend knows under no name at all cannot be batched.
+
+    Args:
+        model: Model name as written by the client.
+        model_id: Resolved model identifier.
+
+    Returns:
+        The identifier to batch, which may name the same model differently.
+
+    Raises:
+        ApiError: When no backend that runs batches serves the model.
+    """
+    if not serves_via_mantle(model_id):
+        return model_id
+    if twin := runtime_twin(model_id):
+        return twin
+    msg = (
+        f"The model `{model}` cannot run batched requests. Send its requests "
+        "without batching, or batch another model."
+    )
+    raise ApiError(msg)
+
+
 async def _resolve_model(model: str) -> ChatModel:
     """Resolve a model name to the model class a batch can run it with.
 
@@ -553,10 +587,11 @@ async def _resolve_model(model: str) -> ChatModel:
     Raises:
         ApiError: When the model cannot serve batched requests.
     """
-    model_id = (
-        await validate_model(model, input_modality="TEXT", output_modality="TEXT")
-    ).id
-    resolved = None if serves_via_mantle(model_id) else get_chat_model(model_id)
+    model_id = _batch_model_id(
+        model,
+        (await validate_model(model, input_modality="TEXT", output_modality="TEXT")).id,
+    )
+    resolved = get_chat_model(model_id)
     if not isinstance(resolved, ChatModel):
         msg = f"The model `{model}` is not available for batched requests."
         raise ApiError(msg)
@@ -793,11 +828,11 @@ def _refused_job(model: str, model_ids: tuple[str, ...], message: str) -> ApiErr
     """Return the error a submission the backend refused as invalid answers with.
 
     The backend reports every invalid submission as one flat validation
-    failure, whatever it was about, so the only reliable sign that the *model*
-    is what it refused is the model identifier the submission carried: a
-    message naming it is about that model, and anything else — a quota, the
-    service role, the storage paths — is a deployment problem the caller can
-    neither see nor fix.
+    failure, whatever it was about, so a refusal is read as being about the
+    *model* from two signs: it names one of the identifiers the submission
+    carried, or it is one of the wordings the backend reserves for a model it
+    will not batch. Anything else — a quota, the service role, the storage
+    paths — is a deployment problem the caller can neither see nor fix.
 
     Args:
         model: Model name as written by the client.
@@ -808,7 +843,9 @@ def _refused_job(model: str, model_ids: tuple[str, ...], message: str) -> ApiErr
         An unsupported-model error naming the model, or a feature this
         deployment cannot run, with the cause left in the server log.
     """
-    if any(model_id in message for model_id in model_ids):
+    if message.startswith(_MODEL_REFUSALS) or any(
+        model_id in message for model_id in model_ids
+    ):
         log_error_details(message, level="warning")
         msg = f"The model `{model}` is not available for batched requests."
         return ApiError(msg)

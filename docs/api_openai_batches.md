@@ -205,9 +205,12 @@ A batch below the minimum, or past any of these caps, is refused when it is crea
 
 ## Model Support
 
-Any chat model available for batch inference in your configured Amazon Bedrock regions can be used — the same identifiers as [Chat Completions](api_openai_chat_completions.md). A model published with a batch price in `model_pricing` is the closest pre-flight check; whether a model can actually serve batched requests is confirmed when the batch is created.
+Any chat model available for batch inference in your configured Amazon Bedrock regions can be used — the same identifiers as [Chat Completions](api_openai_chat_completions.md). To shortlist them, call [`search_models`](api_search_models.md) with `route=openai_chat_completion&batch=true`; each entry also carries a `batch` field.
 
-A model that cannot serve batched requests is refused when the batch is created, naming the model.
+!!! warning "The shortlist is a hint, not a rule"
+    `batch` is advertised on a best-effort basis and never used to reject a request. A model it does not advertise — or says nothing about — may still run a batch, so submit the batch rather than ruling the model out; the answer you get back is the authoritative one.
+
+A model that cannot serve batched requests is refused when the batch is created, naming the model. A model this deployment normally serves through another Amazon Bedrock endpoint is batched under the identifier the batch endpoint knows it by, so it needs nothing from you.
 
 ## Pricing
 

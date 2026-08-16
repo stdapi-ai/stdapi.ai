@@ -54,6 +54,7 @@ _TEXT_MODEL = make_model_details(
     name="Text Chat",
     response_streaming=True,
     legacy=False,
+    batch=True,
     supported_routes=["/v1/chat/completions"],
     supported_mcp_tools=["openai_chat"],
 )
@@ -64,6 +65,7 @@ _IMAGE_MODEL = make_model_details(
     output_modalities=["IMAGE"],
     response_streaming=False,
     legacy=None,
+    batch=False,
     regions=["us-west-2"],
     supported_routes=["/v1/images/generations"],
     supported_mcp_tools=["openai_image_gen"],
@@ -140,7 +142,14 @@ async def authenticated_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
 #: Shape of the search_models inverted indexes returned by the registry.
 type _SearchIndexes = tuple[
-    dict[str, set[str]], dict[str, set[str]], set[str], set[str], set[str], set[str]
+    dict[str, set[str]],
+    dict[str, set[str]],
+    set[str],
+    set[str],
+    set[str],
+    set[str],
+    set[str],
+    set[str],
 ]
 
 
@@ -155,6 +164,8 @@ def _derive_search_indexes(models: dict[str, ModelDetails]) -> _SearchIndexes:
     non_streaming: set[str] = set()
     legacy: set[str] = set()
     non_legacy: set[str] = set()
+    batch: set[str] = set()
+    non_batch: set[str] = set()
     for model_id, model in models.items():
         for route_or_tool in (
             *(model.supported_routes or ()),
@@ -171,7 +182,20 @@ def _derive_search_indexes(models: dict[str, ModelDetails]) -> _SearchIndexes:
             legacy.add(model_id)
         else:
             non_legacy.add(model_id)
-    return by_route_or_tool, by_region, streaming, non_streaming, legacy, non_legacy
+        if model.batch is True:
+            batch.add(model_id)
+        elif model.batch is False:
+            non_batch.add(model_id)
+    return (
+        by_route_or_tool,
+        by_region,
+        streaming,
+        non_streaming,
+        legacy,
+        non_legacy,
+        batch,
+        non_batch,
+    )
 
 
 @pytest.fixture
@@ -631,6 +655,54 @@ class TestFilterByStreaming:
         assert unset_model.id not in false_ids
         assert "vendor.text-chat-v1" in true_ids
         assert "vendor.image-gen-v1" in false_ids
+
+
+class TestFilterByBatch:
+    """``batch`` partitions the catalogue on the advertised Batch API support.
+
+    Like ``streaming`` and unlike ``legacy``, the partition is built from the
+    explicit flags only, so a model whose support is unknown is in neither
+    half. The flag is a discovery hint: it is advertised best effort and never
+    keeps a batched request from reaching the backend
+    (``tests/test_openai_batches.py``).
+
+    Ref: https://stdapi.ai/api_search_models/
+         stdapi/routes/core_models.py:search_models
+         stdapi/models/__init__.py:sync_batch_support
+    """
+
+    def test_batch_true_returns_advertised_models(
+        self, client: TestClient, fake_models: dict[str, str]
+    ) -> None:
+        """batch=true returns only the models advertised for the Batch API."""
+        ids = set(_get_ids(client, {"batch": "true"}, fake_models))
+        assert ids == {"vendor.text-chat-v1"}
+
+    def test_batch_false_returns_the_rest(
+        self, client: TestClient, fake_models: dict[str, str]
+    ) -> None:
+        """batch=false returns the models explicitly flagged as not advertised."""
+        ids = set(_get_ids(client, {"batch": "false"}, fake_models))
+        assert ids == {"vendor.image-gen-v1"}
+
+    def test_the_flag_is_reported_on_each_model(
+        self, client: TestClient, fake_models: dict[str, str]
+    ) -> None:
+        """``batch`` is part of the model entry, and omitted when unknown.
+
+        An agent reading the catalogue needs the flag on the model it is about
+        to use, not only as a filter it has to re-query with. Queried with and
+        without ``legacy=true`` (two calls) since the legacy speech model is
+        otherwise excluded from the default listing.
+        """
+        entries = {
+            str(model["id"]): model
+            for legacy in ("false", "true")
+            for model in _get(client, {"legacy": legacy}, fake_models)
+        }
+        assert entries["vendor.text-chat-v1"]["batch"] is True
+        assert entries["vendor.image-gen-v1"]["batch"] is False
+        assert "batch" not in entries["vendor.speech-v1"]
 
 
 class TestFilterByLegacy:

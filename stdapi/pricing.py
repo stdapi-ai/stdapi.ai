@@ -447,6 +447,9 @@ class _PriceCatalogState:
     rows_by_model: (
         tuple[dict[PriceKey, Price], dict[str, list[tuple[PriceKey, Price]]]] | None
     ) = None
+    # (indexed dict, model keys with a batch-tier row): same identity-check
+    # caching as rows_by_model, for the catalogue's batch advertisement.
+    batch_priced: tuple[dict[PriceKey, Price], frozenset[str]] | None = None
 
 
 #: Module state. Swapping price_index wholesale keeps concurrent readers safe.
@@ -1808,6 +1811,30 @@ def available_currencies() -> frozenset[str]:
         priced in euros).
     """
     return frozenset(price.currency for price in _state.price_index.values())
+
+
+def batch_priced_models() -> frozenset[str] | None:
+    """Return the price-catalog keys AWS publishes a batch-tier rate for.
+
+    AWS publishes a batch price dimension only for models that can run batch
+    inference, so this is the catalogue's best-effort signal of batch support.
+    Cached until the price index is swapped; the result's identity is stable
+    while the catalog is, which lets callers skip a re-derivation.
+
+    Returns:
+        Model keys (as resolved by :func:`resolve_model_key`) holding at least
+        one ``batch``-tier price row, or None while the catalog is unloaded --
+        which is "unknown", not "no model supports batch".
+    """
+    index = _state.price_index
+    if not index:
+        return None
+    if _state.batch_priced is None or _state.batch_priced[0] is not index:
+        _state.batch_priced = (
+            index,
+            frozenset(key.model for key in index if key.tier == "batch"),
+        )
+    return _state.batch_priced[1]
 
 
 def _rows_by_model() -> dict[str, list[tuple[PriceKey, Price]]]:
