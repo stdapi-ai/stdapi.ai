@@ -18,6 +18,7 @@ from aiobotocore.session import get_session
 from openai import APIError, BadRequestError, NotFoundError, OpenAI
 from pybase64 import b64encode
 from pydantic import ConfigDict, ValidationError
+from sse_starlette import EventSourceResponse
 
 from stdapi.api_errors import ApiError
 from stdapi.config import SETTINGS
@@ -1831,53 +1832,37 @@ class TestChatCompletions:
             "The rejection must come from the model, not from request validation"
         )
 
-    @pytest.mark.parametrize(
-        ("param", "value"),
-        [
-            pytest.param("verbosity", "high", id="verbosity"),
-            pytest.param(
-                "web_search_options",
-                {
+    @pytest.mark.gateway("Unsupported fields are project-specific here")
+    def test_unsupported_parameter_error(
+        self, openai_client: OpenAI, chat_model: str
+    ) -> None:
+        """A blocklisted upstream parameter is refused up front, naming the field.
+
+        ``web_search_options`` asks for an answer grounded in the web, which no
+        Converse-served model can produce, so the request is rejected instead of
+        being answered with something else than what it asked for.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+             stdapi/types/openai_chat_completions.py:CompletionCreateParams._UNSUPPORTED
+        """
+        with pytest.raises(BadRequestError) as exc_info:
+            openai_client.chat.completions.create(
+                model=chat_model,
+                messages=[{"role": "user", "content": "Hi"}],
+                web_search_options={
                     "search_context_size": "low",
                     "user_location": {
                         "type": "approximate",
                         "approximate": {"city": "x", "country": "US"},
                     },
                 },
-                id="web_search_options",
-            ),
-            pytest.param(
-                "prediction", {"type": "content", "content": "abc"}, id="prediction"
-            ),
-        ],
-    )
-    @pytest.mark.gateway("Unsupported fields are project-specific here")
-    def test_unsupported_parameter_error(
-        self, openai_client: OpenAI, chat_model: str, param: str, value: object
-    ) -> None:
-        """Blocklisted upstream parameters are refused up front, naming the field.
-
-        ``verbosity``, ``web_search_options`` and ``prediction`` are documented by
-        OpenAI but have no Bedrock counterpart, so the gateway rejects them rather
-        than ignoring them — dropping ``prediction`` in particular would still bill
-        the rejected prediction tokens.
-
-        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
-             https://developers.openai.com/api/docs/guides/predicted-outputs
-             stdapi/types/openai_chat_completions.py:CompletionCreateParams._UNSUPPORTED
-        """
-        with pytest.raises(BadRequestError) as exc_info:
-            openai_client.chat.completions.create(  # type: ignore[call-overload]
-                model=chat_model,
-                messages=[{"role": "user", "content": "Hi"}],
-                **{param: value},
             )
         assert exc_info.value.status_code == 400
         body = exc_info.value.body
         assert isinstance(body, dict)
         assert body["type"] == "invalid_request_error"
         assert body["code"] == "unsupported_parameter"
-        assert body["param"] == param
+        assert body["param"] == "web_search_options"
         assert "unsupported parameter" in body["message"].lower()
         assert body.keys() >= {"message", "type", "param", "code"}, (
             "The gateway envelope always carries all four keys"
@@ -4074,6 +4059,126 @@ class TestJsonObjectSystemInstruction:
         assert (
             await self._captured_system_blocks(monkeypatch, request, request_log)
             is None
+        )
+
+
+class TestOutputShapingHintsAreAcceptedAndIgnored:
+    """``prediction`` and ``verbosity`` are dropped rather than answered with a 400.
+
+    Both only shape or speed up an answer the caller still gets: a predicted
+    output makes a response faster or does not, and a verbosity level steers
+    prose length. Rejecting them breaks otherwise-valid requests — clients such
+    as SDK middleware set them on every call — while dropping them still returns
+    the completion that was asked for.
+
+    Neither has a Converse counterpart, so they must also reach no field of the
+    model call: a hint leaking into ``additionalModelRequestFields`` would come
+    back as a model ``ValidationException``, which is the same 400 one layer
+    down. ``/v1/responses`` already makes this choice for ``text.verbosity``
+    (``tests/test_openai_responses.py:TestTextVerbosityIsAcceptedAndIgnored``).
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+         https://developers.openai.com/api/docs/guides/predicted-outputs
+         stdapi/types/openai_chat_completions.py:CompletionCreateParams._UNSUPPORTED
+    """
+
+    pytestmark = pytest.mark.local
+
+    #: The two hints, valued so their forwarding is visible in a dumped payload.
+    _HINTS: ClassVar[dict[str, Any]] = {
+        "verbosity": "low",
+        "prediction": {"type": "content", "content": "PREDICTEDXYZ"},
+    }
+
+    @staticmethod
+    def _stub_converse(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+        """Replace ``ChatModel.converse`` with a stub capturing its request body.
+
+        Args:
+            monkeypatch: Fixture used to stub ``ChatModel.converse``.
+
+        Returns:
+            The dict the captured Converse request body is written into.
+        """
+        captured: dict[str, Any] = {}
+
+        async def fake_converse(
+            _self: ChatModel, bedrock_request: ConverseRequestBaseTypeDef
+        ) -> dict[str, Any]:
+            captured.update(bedrock_request)
+            return {
+                "output": {
+                    "message": {"role": "assistant", "content": [{"text": "ok"}]}
+                },
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            }
+
+        monkeypatch.setattr(ChatModel, "converse", fake_converse)
+        return captured
+
+    @pytest.mark.parametrize("hint", ["verbosity", "prediction"])
+    async def test_hint_is_answered_and_never_forwarded(
+        self, hint: str, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """The completion is produced and the hint appears nowhere in the model call.
+
+        Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:translate_request
+        """
+        del request_log
+        request = CompletionCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                hint: self._HINTS[hint],
+            }
+        )
+        captured = self._stub_converse(monkeypatch)
+
+        completion = await ChatModel("amazon.nova-2-lite-v1:0").create_completion(
+            request, "chatcmpl-1", 0
+        )
+
+        assert not isinstance(completion, EventSourceResponse), (
+            "the hint is not a stream"
+        )
+        assert completion.choices[0].message.content == "ok"
+        body = _json.dumps(captured, default=str)
+        assert hint not in body, f"`{hint}` has no Converse equivalent to travel in"
+        assert "PREDICTEDXYZ" not in body, (
+            "the predicted content must not be sent as part of the prompt either"
+        )
+
+    def test_the_route_answers_a_completion_rather_than_a_400(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Both hints together are accepted by the request schema and served.
+
+        Ref: stdapi/routes/openai_chat_completions.py:create_chat_completion
+        """
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> ModelDetails:
+            return make_model_details(model_id)
+
+        monkeypatch.setattr(openai_chat_completions, "validate_model", _validate_model)
+        captured = self._stub_converse(monkeypatch)
+
+        response = app_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "amazon.nova-micro-v1:0",
+                "messages": [{"role": "user", "content": "hi"}],
+                **self._HINTS,
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["choices"][0]["message"]["content"] == "ok"
+        assert captured, "the request must have reached the model call"
+        assert not {"verbosity", "prediction"} & set(captured), (
+            "neither hint is a Converse request field"
         )
 
 

@@ -1259,7 +1259,9 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
     prediction: ChatCompletionPredictionContentParam | None = Field(
         default=None,
-        description="Static predicted output content. UNSUPPORTED on this implementation.",
+        description="Static predicted output content. A latency hint that does not change "
+        "the answer: accepted and ignored, except on Bedrock Mantle passthrough models, "
+        "which forward it upstream.",
     )
     presence_penalty: float | None = Field(
         default=None,
@@ -1361,7 +1363,9 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
     verbosity: VerbosityLevel | None = Field(
         default=None,
-        description="Response verbosity: `low`, `medium`, or `high`. UNSUPPORTED on this implementation.",
+        description="Response verbosity. Accepted and ignored — steer the answer length "
+        "from the prompt instead — except on Bedrock Mantle passthrough models, which "
+        "forward it upstream.",
     )
     web_search_options: WebSearchOptions | None = Field(
         default=None,
@@ -1428,9 +1432,8 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     # Extra validations
     _UNSUPPORTED: ClassVar[frozenset[str]] = frozenset(
         {
+            # Ignored silently: "prediction", "verbosity"
             "logprobs",
-            "prediction",
-            "verbosity",
             "web_search_options",
             "translation_options",
         }

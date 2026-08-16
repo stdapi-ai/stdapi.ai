@@ -2939,10 +2939,10 @@ async def _converse_roundtrip(
 class TestTextVerbosityIsAcceptedAndIgnored:
     """``text.verbosity`` is accepted on /v1/responses and never reaches the model.
 
-    ``/v1/chat/completions`` rejects ``verbosity`` with a 400 while this surface
-    accepts it: Converse has no verbosity control, but the answer is still the
-    answer that was asked for, and rejecting it would break clients that send it
-    on every request. Only ``text.format`` is translated.
+    Converse has no verbosity control, but the answer is still the answer that
+    was asked for, and rejecting it would break clients that send it on every
+    request — ``/v1/chat/completions`` drops its own ``verbosity`` for the same
+    reason. Only ``text.format`` is translated.
 
     Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
          stdapi/types/openai_responses.py:ResponseTextConfig

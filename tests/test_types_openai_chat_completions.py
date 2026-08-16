@@ -163,7 +163,9 @@ class TestPromptCacheOptions:
 class TestUnsupportedParameters:
     """Unsupported parameters are rejected only when actually requested.
 
-    ``_UNSUPPORTED`` names upstream-documented parameters Bedrock cannot honor.
+    ``_UNSUPPORTED`` names the upstream-documented parameters Bedrock cannot
+    honor *and* whose silent removal would hand the caller something else than
+    it asked for; the ones that merely tune an answer are left out and dropped.
     A ``null``/``false`` value asks for the behavior the gateway already
     provides, so it is treated as omission instead of a 400.
 
@@ -182,9 +184,7 @@ class TestUnsupportedParameters:
         )
         assert request.logprobs is value
 
-    @pytest.mark.parametrize(
-        "key", ["prediction", "verbosity", "web_search_options", "translation_options"]
-    )
+    @pytest.mark.parametrize("key", ["web_search_options", "translation_options"])
     def test_explicit_null_unsupported_parameter_is_accepted(self, key: str) -> None:
         """An unsupported parameter explicitly set to `null` is accepted."""
         request = CompletionCreateParams.model_validate(_BASE_REQUEST | {key: None})
@@ -203,17 +203,53 @@ class TestUnsupportedParameters:
         assert excinfo.value.param == "logprobs"
         assert "'logprobs' is not supported" in str(excinfo.value)
 
-    def test_verbosity_value_is_rejected(self) -> None:
+    def test_translation_options_value_is_rejected(self) -> None:
         """A non-null unsupported parameter still raises UnsupportedParameterError.
 
         Ref: https://developers.openai.com/api/docs/guides/error-codes
         """
         with pytest.raises(UnsupportedParameterError) as excinfo:
-            CompletionCreateParams.model_validate(_BASE_REQUEST | {"verbosity": "low"})
+            CompletionCreateParams.model_validate(
+                _BASE_REQUEST
+                | {
+                    "translation_options": {
+                        "source_lang": "English",
+                        "target_lang": "French",
+                    }
+                }
+            )
         assert excinfo.value.status == 400
         assert excinfo.value.code == "unsupported_parameter"
-        assert excinfo.value.param == "verbosity"
-        assert "'verbosity' is not supported" in str(excinfo.value)
+        assert excinfo.value.param == "translation_options"
+        assert "'translation_options' is not supported" in str(excinfo.value)
+
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            pytest.param("verbosity", "low", id="verbosity"),
+            pytest.param(
+                "prediction",
+                {"type": "content", "content": "def f(): ..."},
+                id="prediction",
+            ),
+        ],
+    )
+    def test_output_shaping_hint_is_accepted(self, key: str, value: object) -> None:
+        """``verbosity`` and ``prediction`` validate instead of raising a 400.
+
+        Both only shape or speed up an answer the caller still gets, so they are
+        deliberately absent from ``_UNSUPPORTED``: listing either one back would
+        make this raise ``UnsupportedParameterError`` again.
+
+        Ref: https://developers.openai.com/api/docs/guides/predicted-outputs
+             stdapi/types/openai_chat_completions.py:CompletionCreateParams._UNSUPPORTED
+        """
+        assert key not in CompletionCreateParams._UNSUPPORTED  # noqa: SLF001
+        request = CompletionCreateParams.model_validate(_BASE_REQUEST | {key: value})
+        assert key in request.model_fields_set
+        assert getattr(request, key) is not None, (
+            "the hint must survive validation, not be dropped from the request model"
+        )
 
 
 class TestStrictValidationOfMessageFields:

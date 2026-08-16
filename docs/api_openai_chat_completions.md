@@ -39,6 +39,8 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 
 ## Feature Compatibility
 
+Two outcomes are possible for a parameter no model behind this API can honor, and the Notes column below says which one applies. A parameter that only tunes an answer you can still use — a quality or latency hint, a telemetry opt-in — is **accepted and ignored**, so a client setting it on every request keeps working. A parameter that *is* the request — an output format, a modality, or a safety restriction that would silently disappear — is **rejected with a `400`** naming it, because the alternative is returning something you did not ask for.
+
 <div class="feature-table" markdown>
 
 | Feature                                  |                  Status                  | Notes                                                           |
@@ -78,10 +80,10 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 | `include_reasoning` (OpenRouter API-compatible) |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `false` omits the reasoning text from the response, like `reasoning: {"exclude": true}`; the reasoning tokens are still generated and billed |
 | `n` (multiple choices)                   |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Generate multiple responses, not supported with streaming       |
 | `logprobs`                               | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Rejected with `400` when enabled (`false`/`null` accepted, as they request the default behavior); `top_logprobs` (above) remains usable |
-| `prediction`                             | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Static predicted output content. Rejected with `400` when set    |
+| `prediction`                             | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Static predicted output content. Accepted and ignored — a latency hint the Amazon Bedrock Converse API has no equivalent for, and the answer is unchanged without it; forwarded upstream on [Mantle](#bedrock-mantle) passthrough models |
 | `response_format: "json_object"`         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Accepted for all models; syntactically valid JSON is not guaranteed for every model |
 | `response_format: "json_schema"`         |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Structured JSON output validated against the supplied schema     |
-| `verbosity`                              | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Model verbosity. Rejected with `400` when set                    |
+| `verbosity`                              | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Model verbosity. Accepted and ignored — steer the answer length from the prompt; forwarded upstream on [Mantle](#bedrock-mantle) passthrough models |
 | `web_search_options`                     | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Web search tool. Rejected with `400` when set                    |
 | `translation_options` (Qwen API-compatible) | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Translation tuning options. Rejected with `400` when set          |
 | `prompt_cache_key`                       |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Cache prompts to reduce costs and latency                       |

@@ -495,9 +495,9 @@ class TestAcceptedButUnsupportedRequestFields:
     async def test_text_verbosity_is_echoed_and_ignored(self) -> None:
         """``text.verbosity`` round-trips on the response and reaches no Bedrock field.
 
-        The Chat Completions surface rejects ``verbosity`` with a 400; the
-        Responses surface deliberately accepts it, and only ``text.format`` is
-        translated into the Converse output configuration.
+        Both surfaces accept the hint and drop it; here it also round-trips on
+        the response, and only ``text.format`` is translated into the Converse
+        output configuration.
 
         Ref: stdapi/models/chat/_adapters/_openai_responses.py:_build_output_config
         """
