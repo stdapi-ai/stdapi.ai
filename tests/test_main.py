@@ -25,6 +25,7 @@ from httpx import ASGITransport, AsyncClient
 from starlette.datastructures import UploadFile
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
+from starlette.responses import StreamingResponse
 
 from stdapi import main as stdapi_main
 from stdapi import metering, monitoring
@@ -45,7 +46,7 @@ from tests._helpers import make_client_error, make_event_log, make_model_details
 from tests.conftest import REPO_ROOT
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, MutableMapping
 
     from fastapi.testclient import TestClient
     from starlette.responses import Response
@@ -319,10 +320,14 @@ class TestSharedPrefixRouterOptOut:
 
 
 class TestMiddlewareCleanupDrain:
-    """Scheduled cleanups still run when no response reaches the client.
+    """Scheduled cleanups run however the request ends.
+
+    Whether no response reaches the client at all, or one whose body is still
+    being produced when the endpoint returns.
 
     Ref: stdapi/main.py:_middleware
          stdapi/cleanup.py:run_cleanups_detached
+         stdapi/cleanup.py:run_scheduled_cleanups
     """
 
     async def test_unhandled_error_still_runs_scheduled_cleanups(self) -> None:
@@ -399,6 +404,48 @@ class TestMiddlewareCleanupDrain:
         )
         with pytest.raises(RuntimeError, match=r"^backend seam misconfigured$"):
             await stdapi_main._middleware(request, call_next)  # noqa: SLF001
+        await wait_for(ran.wait(), timeout=5)
+
+    async def test_a_cleanup_scheduled_while_streaming_still_runs(self) -> None:
+        """Work deferred by a streamed response must not be dropped.
+
+        A streamed endpoint returns before its body has produced anything, so
+        everything it defers is registered after the middleware has already
+        built the response.  Dropping those is silent and expensive: a vector
+        store queried only through streamed answers never has its activity
+        refreshed, and can expire while it is still in use.
+        """
+        ran = Event()
+
+        async def cleanup() -> None:
+            ran.set()
+
+        async def body() -> AsyncGenerator[bytes]:
+            yield b"first"
+            schedule_cleanup(cleanup())
+            yield b"last"
+
+        async def call_next(_request: Request) -> Response:
+            return StreamingResponse(body())
+
+        async def receive() -> dict[str, Any]:
+            return {"type": "http.request", "more_body": False}
+
+        sent: list[MutableMapping[str, Any]] = []
+
+        async def send(message: MutableMapping[str, Any]) -> None:
+            sent.append(message)
+
+        response = await stdapi_main._middleware(_request(), call_next)  # noqa: SLF001
+        # ASGI 2.4 sends the body without the concurrent disconnect watcher.
+        await response({"type": "http", "asgi": {"spec_version": "2.4"}}, receive, send)
+
+        streamed = b"".join(
+            message.get("body", b"")
+            for message in sent
+            if message["type"] == "http.response.body"
+        )
+        assert streamed == b"firstlast", "the client still receives the whole body"
         await wait_for(ran.wait(), timeout=5)
 
     async def test_cancellation_still_runs_scheduled_cleanups(self) -> None:

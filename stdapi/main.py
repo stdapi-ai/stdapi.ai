@@ -391,8 +391,10 @@ async def _middleware(
         set_response_headers(request, response, log["execution_time_ms"])
         set_retry_after_header(request, response)
         set_www_authenticate_header(response)
-        if CLEANUPS.get():
-            response.background = BackgroundTask(run_scheduled_cleanups, log["id"])
+        # Attached unconditionally: a streamed body has produced nothing yet,
+        # so what it defers is scheduled long after this point. The drain runs
+        # once the body is complete, and is a no-op when nothing was scheduled.
+        response.background = BackgroundTask(run_scheduled_cleanups, log["id"])
     response.headers["server"] = "stdapi.ai"
     return response
 

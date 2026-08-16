@@ -29,11 +29,20 @@ def schedule_cleanup(*tasks: Awaitable[None]) -> None:
 async def run_scheduled_cleanups(request_id: str) -> None:
     """Execute all registered cleanup coroutines.
 
+    The pending list is emptied before the first await, so a second run finds
+    nothing left to await rather than re-awaiting a consumed coroutine, and a
+    request that scheduled nothing costs no background event at all.
+
     Args:
         request_id: Request identifier to associate the cleanup log event with.
     """
+    pending = CLEANUPS.get()
+    if not pending:
+        return
+    tasks = tuple(pending)
+    pending.clear()
     with log_background_event("cleanup", request_id):
-        await gather(*CLEANUPS.get())
+        await gather(*tasks)
 
 
 def run_cleanups_detached(request_id: str) -> None:
