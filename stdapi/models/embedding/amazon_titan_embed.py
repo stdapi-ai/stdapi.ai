@@ -5,7 +5,7 @@
 - amazon.titan-embed-text-v2:0
 """
 
-from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from stdapi.input_file import InputFile, InputFileUrl
 from stdapi.models.embedding import EmbeddingModelBase, EmbeddingResponse
@@ -79,10 +79,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         Returns:
             Embedding response.
         """
-        request = _Request()
-        request.update(extra_params)  # type:ignore[typeddict-item]
-        if dimensions:
-            request["dimensions"] = dimensions
+        request = self._base_request(dimensions, extra_params)
 
         input_tokens = 0
         output_tokens = 0
@@ -114,6 +111,40 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             total_tokens=input_tokens + output_tokens,
         )
 
+    @staticmethod
+    def _base_request(dimensions: int | None, extra_params: JsonMapping) -> _Request:
+        """Return the request parameters shared by every input of one call.
+
+        Args:
+            dimensions: Number of dimensions.
+            extra_params: Extra model parameters.
+
+        Returns:
+            The request, without its input.
+        """
+        request = _Request()
+        request.update(extra_params)  # type:ignore[typeddict-item]
+        if dimensions:
+            request["dimensions"] = dimensions
+        return request
+
+    @staticmethod
+    async def _with_input(request: _Request, value: InputFileUrl | str) -> _Request:
+        """Return *request* carrying one input.
+
+        Args:
+            request: The request parameters shared by every input.
+            value: The input value to embed.
+
+        Returns:
+            The complete request body.
+        """
+        return (
+            _Request(inputImage=await value.to_base64(), **request)
+            if isinstance(value, InputFile)
+            else _Request(inputText=value, **request)
+        )
+
     async def _invoke(
         self, request: _Request, value: InputFileUrl | str
     ) -> InvokeResult[_Response]:
@@ -126,8 +157,42 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         Returns:
             InvokeResult containing the model response and token counts.
         """
-        return await self.invoke(
-            _Request(inputImage=await value.to_base64(), **request)
-            if isinstance(value, InputFile)
-            else _Request(inputText=value, **request)
+        return await self.invoke(await self._with_input(request, value))
+
+    async def build_batch_request(
+        self,
+        inputs: list[InputFileUrl | str],
+        dimensions: int | None,
+        extra_params: JsonMapping,
+    ) -> dict[str, Any]:
+        """Build the request body of one embedding, without sending it.
+
+        Args:
+            inputs: Texts to embed.
+            dimensions: Number of dimensions.
+            extra_params: Extra model parameters.
+
+        Returns:
+            The request body.
+        """
+        return await self._with_input(  # type: ignore[return-value]
+            self._base_request(dimensions, extra_params), self._one_input(inputs)
+        )
+
+    def read_batch_response(self, output: JsonMapping) -> EmbeddingResponse:
+        """Read an embedding answer out of a model's own response body.
+
+        Args:
+            output: The response body the model produced.
+
+        Returns:
+            Embedding response.
+        """
+        count = output.get("inputTextTokenCount")
+        tokens = int(count) if isinstance(count, (int, float)) else 0
+        embedding = output.get("embedding")
+        return EmbeddingResponse(
+            embeddings=[embedding] if isinstance(embedding, list) else [],  # type: ignore[list-item]
+            prompt_tokens=tokens,
+            total_tokens=tokens,
         )

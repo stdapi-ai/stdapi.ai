@@ -21,6 +21,7 @@ Ref: https://developers.openai.com/api/docs/guides/batch.md
 import contextlib
 from datetime import UTC, datetime
 from json import dumps, loads
+from math import sqrt
 from time import monotonic, sleep
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -384,7 +385,7 @@ class TestOpenAIBatchValidation:
             "/v1/batches",
             json={
                 "input_file_id": file_id,
-                "endpoint": "/v1/embeddings",
+                "endpoint": "/v1/responses",
                 "completion_window": "24h",
             },
         )
@@ -1611,6 +1612,250 @@ class TestBatchResultTranslation:
 
 
 @pytest.mark.local
+class TestOpenAIEmbeddingsBatch:
+    """A batch of ``/v1/embeddings`` requests, from submission to the vectors.
+
+    An embeddings batch runs each request as the model's own invocation rather
+    than as a conversation, and the two shapes are not interchangeable: a job
+    started for the wrong one is accepted, runs its whole 24-hour window and
+    fails every record. The request bodies and the answers read back are the
+    ones the embeddings route itself builds and parses.
+
+    Ref: https://developers.openai.com/api/docs/guides/batch.md
+         tests/probes/results/bedrock.batch-embeddings.json
+         stdapi/batches.py:_prepare_embedding_request
+    """
+
+    @staticmethod
+    def _create(
+        client: TestClient, file_id: str, endpoint: str = "/v1/embeddings"
+    ) -> dict[str, Any]:
+        """Submit a batch of *file_id* against *endpoint*."""
+        response = client.post(
+            "/v1/batches",
+            json={
+                "input_file_id": file_id,
+                "endpoint": endpoint,
+                "completion_window": "24h",
+            },
+        )
+        return {"http_status": response.status_code, **response.json()}
+
+    def test_the_job_runs_the_models_own_invocation(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An embeddings job is started for the invocation the model answers.
+
+        A conversation-typed job is accepted by the backend and then fails
+        every record, so this is the assertion that keeps a whole billed
+        window from producing nothing.
+
+        Ref: tests/probes/results/bedrock.batch-embeddings.json
+             stdapi/batches.py:_invocation_type
+        """
+        _, bedrock = _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(
+            monkeypatch, _batches.embedding_lines(100)
+        )
+        assert self._create(app_client, file_id)["http_status"] == 200
+        assert bedrock.created[0]["modelInvocationType"] == "InvokeModel"
+
+    def test_a_chat_batch_still_runs_a_conversation(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The chat endpoint keeps the invocation it has always been run with."""
+        _, bedrock = _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        assert (
+            self._create(app_client, file_id, "/v1/chat/completions")["http_status"]
+            == 200
+        )
+        assert bedrock.created[0]["modelInvocationType"] == "Converse"
+
+    def test_each_record_carries_the_models_own_request_body(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A record holds the body the model reads, keyed by its ``custom_id``.
+
+        Ref: tests/probes/results/bedrock.batch-embeddings.json
+        """
+        s3, bedrock = _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(
+            monkeypatch, _batches.embedding_lines(100)
+        )
+        assert self._create(app_client, file_id)["http_status"] == 200
+        uri = bedrock.created[0]["inputDataConfig"]["s3InputDataConfig"]["s3Uri"]
+        written = s3.objects[_batches.BUCKET, uri.split("/", 3)[3]].splitlines()
+        first = loads(written[0])
+        assert first == {"recordId": "req-0", "modelInput": {"inputText": "text 0"}}
+        assert len(written) == 100
+
+    def test_the_results_carry_the_vectors(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A finished batch's results are the embeddings response of each request.
+
+        Ref: https://developers.openai.com/api/docs/api-reference/embeddings/object
+             stdapi/batches.py:_to_embeddings
+        """
+        s3, bedrock = _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(
+            monkeypatch, _batches.embedding_lines(100)
+        )
+        created = self._create(app_client, file_id)
+        assert created["http_status"] == 200
+        bedrock.finish()
+        _batches.write_job_output(
+            s3,
+            bedrock,
+            [{"recordId": "req-0", "modelOutput": _batches.embedding_output(tokens=7)}],
+            {"inputTokenCount": 7, "outputTokenCount": 0},
+        )
+        batch = app_client.get(f"/v1/batches/{created['id']}").json()
+        assert batch["status"] == "completed"
+        (line,) = _batches.read_result_file(s3, batch["output_file_id"])
+        assert line["custom_id"] == "req-0"
+        body = line["response"]["body"]
+        assert body["object"] == "list"
+        assert body["model"] == "amazon.titan-embed-text-v2:0"
+        assert body["data"][0]["embedding"] == [0.1, 0.2, 0.3, 0.4]
+        assert body["data"][0]["index"] == 0
+        assert body["usage"]["prompt_tokens"] == 7
+
+    def test_more_than_one_input_per_request_is_refused(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A request embedding several inputs is refused, naming the way forward.
+
+        One record is one invocation of the model, and the models that batch
+        embed one input per invocation.
+
+        Ref: stdapi/models/embedding/__init__.py:EmbeddingModelBase
+        """
+        _batches.install(monkeypatch)
+        lines = _batches.embedding_lines(100)
+        lines[2] = _batches.embedding_lines(
+            1,
+            prefix="multi",
+            body='{"model": "amazon.titan-embed-text-v2:0", "input": ["a", "b"]}',
+        )[0]
+        file_id = _batches.install_input_file(monkeypatch, lines)
+        body = self._create(app_client, file_id)
+        assert body["http_status"] == 400
+        assert body["error"]["message"].startswith("Line 3: ")
+        assert "one input per batched request" in body["error"]["message"]
+
+    def test_base64_vectors_are_refused(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A request asking for base64 vectors is refused, naming its position.
+
+        The results are written without the request that produced them, so a
+        vector cannot be encoded the way one line asked for; refusing at submit
+        beats returning numbers to a client that cannot read them.
+
+        Ref: https://developers.openai.com/api/docs/api-reference/embeddings/create
+             stdapi/batches.py:_prepare_embedding_request
+        """
+        _batches.install(monkeypatch)
+        lines = _batches.embedding_lines(100)
+        lines[1] = _batches.embedding_lines(
+            1,
+            prefix="b64",
+            body=(
+                '{"model": "amazon.titan-embed-text-v2:0", "input": "a", '
+                '"encoding_format": "base64"}'
+            ),
+        )[0]
+        file_id = _batches.install_input_file(monkeypatch, lines)
+        body = self._create(app_client, file_id)
+        assert body["http_status"] == 400
+        assert "Line 2: 'encoding_format'" in body["error"]["message"]
+
+    def test_the_media_a_job_consumed_is_recorded(
+        self,
+        app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """Images and durations reported by a job are billed, not only tokens.
+
+        A multimodal embedding model is priced per image and per second of
+        media, so a batch of them recording tokens alone reports no cost at all.
+
+        Ref: tests/probes/results/bedrock.batch-embeddings.json
+             stdapi/batches.py:_record_media_usage
+        """
+        from tests.conftest import logged_usage_entries  # noqa: PLC0415
+
+        s3, bedrock = _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(
+            monkeypatch, _batches.embedding_lines(100)
+        )
+        created = self._create(app_client, file_id)
+        assert created["http_status"] == 200
+        bedrock.finish()
+        _batches.write_job_output(
+            s3,
+            bedrock,
+            [{"recordId": "req-0", "modelOutput": _batches.embedding_output()}],
+            {
+                "inputTokenCount": 12,
+                "outputTokenCount": 0,
+                "inputStandardImageCount": 3,
+                "inputAudioSecond": 5,
+            },
+        )
+        capfd.readouterr()
+        assert app_client.get(f"/v1/batches/{created['id']}").status_code == 200
+        entries = logged_usage_entries(
+            capfd.readouterr().out, service="bedrock-runtime"
+        )
+        assert all(entry["tier"] == "batch" for entry in entries)
+        assert sum(entry.get("input_images", 0) for entry in entries) == 3
+        assert sum(entry.get("input_seconds", 0) for entry in entries) == 5
+
+    def test_a_chat_job_bills_its_media_as_tokens_only(
+        self,
+        app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """The same counters on a conversation are not billed a second time.
+
+        A conversation's images are already inside its input tokens, so
+        recording them again would bill every batched image twice.
+
+        Ref: stdapi/batches.py:settle
+        """
+        from tests.conftest import logged_usage_entries  # noqa: PLC0415
+
+        s3, bedrock = _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        batch_id = _create(app_client, file_id)["id"]
+        bedrock.finish()
+        _batches.write_job_output(
+            s3,
+            bedrock,
+            [{"recordId": "req-0", "modelOutput": converse_output("answer")}],
+            {
+                "inputTokenCount": 12,
+                "outputTokenCount": 4,
+                "inputStandardImageCount": 3,
+                "inputAudioSecond": 5,
+            },
+        )
+        capfd.readouterr()
+        assert app_client.get(f"/v1/batches/{batch_id}").status_code == 200
+        entries = logged_usage_entries(
+            capfd.readouterr().out, service="bedrock-runtime"
+        )
+        assert sum(entry.get("input_images", 0) for entry in entries) == 0
+        assert sum(entry.get("input_seconds", 0) for entry in entries) == 0
+        assert sum(entry.get("input_tokens", 0) for entry in entries) == 12
+
+
+@pytest.mark.local
 class TestBatchModelRouting:
     """A batch names a model; the job runs the identifier that can batch it.
 
@@ -1791,6 +2036,12 @@ _ELSEWHERE_SERVED_MODEL: str = "openai.gpt-oss-20b"
 _ELSEWHERE_SERVED_MODEL_BATCHED: str = "openai.gpt-oss-20b-1:0"
 
 
+def _cosine(left: list[float], right: list[float]) -> float:
+    """Return the cosine similarity of two vectors of the same length."""
+    dot = sum(a * b for a, b in zip(left, right, strict=True))
+    return dot / (sqrt(sum(a * a for a in left)) * sqrt(sum(b * b for b in right)))
+
+
 @pytest.mark.slow
 @pytest.mark.usefixtures("batches_api")
 class TestOpenAIBatchRoundTrip:
@@ -1930,6 +2181,47 @@ class TestOpenAIBatchRoundTrip:
             assert body["choices"][0]["finish_reason"] == "stop"
             assert body["usage"]["prompt_tokens"] > 0
             assert body["usage"]["completion_tokens"] > 0
+
+    def test_an_embeddings_batch_answers_with_the_vectors(
+        self, openai_client: OpenAI, embedding_model: str, use_official_api: bool
+    ) -> None:
+        """Every batched embeddings request comes back as its own vector.
+
+        The vectors are the proof that the job ran as the model's own
+        invocation rather than as a conversation, which the backend accepts
+        either way and only one of which produces embeddings. Two of them are
+        compared against the same text embedded synchronously: results come
+        back in no particular order, so a vector reaching the wrong
+        ``custom_id`` is the failure this catches.
+
+        Ref: https://developers.openai.com/api/docs/api-reference/embeddings/object
+             stdapi/batches.py:_to_embeddings
+        """
+        count = 1 if use_official_api else batches.MIN_REQUESTS_PER_MODEL
+        inputs = [f"A passage to embed, number {index}." for index in range(count)]
+        results = self._round_trip(
+            openai_client,
+            "/v1/embeddings",
+            [{"model": embedding_model, "input": text} for text in inputs],
+        )
+        dimensions = set()
+        for line in results.values():
+            body = self._answer(line)
+            assert body["object"] == "list"
+            (item,) = body["data"]
+            assert item["object"] == "embedding"
+            assert item["index"] == 0
+            assert all(isinstance(value, float) for value in item["embedding"])
+            assert body["usage"]["prompt_tokens"] > 0
+            dimensions.add(len(item["embedding"]))
+        assert len(dimensions) == 1
+        assert dimensions.pop() > 1
+        for index in range(min(2, count)):
+            synchronous = openai_client.embeddings.create(
+                model=embedding_model, input=inputs[index]
+            )
+            batched = results[f"req-{index}"]["response"]["body"]["data"][0]
+            assert _cosine(batched["embedding"], synchronous.data[0].embedding) > 0.99
 
     @pytest.mark.gateway("no vendor API serves a model of this deployment's own")
     def test_a_model_served_elsewhere_batches_under_its_other_name(

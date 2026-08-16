@@ -68,6 +68,12 @@ _TWIN_MODEL = "vendor.twinmodel-1:0"
 #: Price-catalog key ``_TWIN_MODEL`` normalizes to, distinct from the Mantle one.
 _TWIN_MODEL_PRICE_KEY = "vendortwinmodel10"
 
+#: Embedding model AWS publishes a batch rate for.
+_EMBED_MODEL = "vendor.embedmodel"
+
+#: Price-catalog key ``_EMBED_MODEL`` normalizes to.
+_EMBED_MODEL_PRICE_KEY = "vendorembedmodel"
+
 
 def _text_model(service: str) -> ModelDetails:
     """Build a minimal TEXT/TEXT model detail for the given hosting service.
@@ -528,6 +534,31 @@ class TestBatchAdvertisement:
 
         assert EXTRA_MODELS[_MANTLE_MODEL].batch is True
         assert _MANTLE_MODEL in models._ALL_MODELS_BATCH  # noqa: SLF001
+
+    def test_an_embedding_model_is_advertised(self, isolated_catalog: None) -> None:
+        """A batch-priced embedding model is advertised, not only a text one.
+
+        Batches serve the embeddings endpoint as well, and an embedding model
+        produces ``EMBEDDING`` rather than ``TEXT``.
+
+        Ref: stdapi/batches.py:_EMBEDDINGS_ENDPOINT
+        """
+        from stdapi.models import EXTRA_MODELS  # noqa: PLC0415
+
+        EXTRA_MODELS[_EMBED_MODEL] = make_model_details(
+            _EMBED_MODEL, output_modalities=["EMBEDDING"]
+        )
+        set_test_price(
+            _EMBED_MODEL_PRICE_KEY,
+            "us-east-1",
+            Dimension.INPUT_TOKENS,
+            "0.000001",
+            "USD",
+            tier="batch",
+        )
+        models.update_unified_models_collections()
+
+        assert EXTRA_MODELS[_EMBED_MODEL].batch is True
 
 
 class TestRuntimeTwins:

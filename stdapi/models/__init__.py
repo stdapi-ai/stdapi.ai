@@ -1569,6 +1569,10 @@ def runtime_twin(model_id: str) -> str | None:
     return _MANTLE_RUNTIME_TWINS.get(model_id)
 
 
+#: Output modalities the Batch API serves: chat completions, and embeddings.
+_BATCH_OUTPUT_MODALITIES = frozenset({"TEXT", "EMBEDDING"})
+
+
 def _advertises_batch(model: ModelDetails, batch_priced: frozenset[str]) -> bool:
     """Whether the catalogue advertises a model for the Batch API.
 
@@ -1580,12 +1584,14 @@ def _advertises_batch(model: ModelDetails, batch_priced: frozenset[str]) -> bool
         batch_priced: Price-catalog keys holding a batch-tier rate.
 
     Returns:
-        True when the Batch API accepts the model's shape (a text-to-text
-        model) and a batch rate is published for it — for a Mantle-served
-        model, for the runtime model that batches on its behalf, whose own rows
-        are the only ones that follow what batching actually accepts.
+        True when the Batch API serves what the model produces and a batch rate
+        is published for it — for a Mantle-served model, for the runtime model
+        that batches on its behalf, whose own rows are the only ones that
+        follow what batching actually accepts.
     """
-    if "TEXT" not in model.input_modalities or "TEXT" not in model.output_modalities:
+    if "TEXT" not in model.input_modalities or _BATCH_OUTPUT_MODALITIES.isdisjoint(
+        model.output_modalities
+    ):
         return False
     if model.service == MANTLE_SERVICE:
         twin = _MANTLE_RUNTIME_TWINS.get(model.id)

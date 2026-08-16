@@ -23,6 +23,7 @@ from stdapi.utils import b64encode
 
 if TYPE_CHECKING:
     from stdapi.input_file import InputFileUrl
+    from stdapi.models.embedding import EmbeddingResponse
 
 register_route_capability(
     "openai_embedding",
@@ -34,6 +35,41 @@ register_route_capability(
 router = APIRouter(
     prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=["Embeddings", TAG_OPENAI]
 )
+
+
+async def build_embedding_response(
+    response: EmbeddingResponse, model: str, *, b64_embedding: bool
+) -> CreateEmbeddingResponse:
+    """Build the embeddings response from a model's answer.
+
+    Args:
+        response: The vectors and token counts the model returned.
+        model: Model name reported to the client.
+        b64_embedding: Return each vector base64-encoded rather than as floats.
+
+    Returns:
+        The embeddings response.
+    """
+    return CreateEmbeddingResponse(
+        object="list",
+        data=[
+            Embedding(
+                object="embedding",
+                index=index,
+                embedding=(
+                    await b64encode(array("f", vector).tobytes())
+                    if b64_embedding
+                    else vector
+                ),
+            )
+            for index, vector in enumerate(response.embeddings)
+        ],
+        model=model,
+        usage=Usage(
+            prompt_tokens=response.prompt_tokens,
+            total_tokens=response.total_tokens or response.prompt_tokens,
+        ),
+    )
 
 
 @router.post(
@@ -111,27 +147,9 @@ async def create_embeddings(
         dimensions=request.dimensions,
         extra_params=get_extra_model_parameters(model_id, request),
     )
-    b64_embedding = request.encoding_format == "base64"
     return log_response_params(
-        CreateEmbeddingResponse(
-            object="list",
-            data=[
-                Embedding(
-                    object="embedding",
-                    index=index,
-                    embedding=(
-                        await b64encode(array("f", vector).tobytes())
-                        if b64_embedding
-                        else vector
-                    ),
-                )
-                for index, vector in enumerate(response.embeddings)
-            ],
-            model=model_id,
-            usage=Usage(
-                prompt_tokens=response.prompt_tokens,
-                total_tokens=response.total_tokens or response.prompt_tokens,
-            ),
+        await build_embedding_response(
+            response, model_id, b64_embedding=request.encoding_format == "base64"
         ),
         exclude={"data"},
     )

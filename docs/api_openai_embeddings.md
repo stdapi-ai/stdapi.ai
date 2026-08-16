@@ -68,6 +68,14 @@ Generate vector embeddings for semantic search and RAG applications with Amazon 
 
 ## Advanced Features
 
+### Embedding a Corpus in Bulk
+
+A large corpus does not have to be embedded on the request path. Upload the
+requests as a file and run them through the [Batch API](api_openai_batches.md)
+against `/v1/embeddings`: they run without a connection held open, at the
+published batch rate, and the vectors are read back from the result file. One
+batched request embeds one `input`, and its vectors come back as numbers.
+
 ### Provider-Specific Parameters
 
 Access advanced embedding capabilities by passing provider-specific parameters directly in your requests. These parameters are forwarded to Amazon Bedrock and allow you to access features unique to each embedding model provider.

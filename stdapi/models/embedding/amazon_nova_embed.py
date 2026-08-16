@@ -5,7 +5,7 @@
 
 from asyncio import gather
 from math import ceil
-from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from pydantic_core import from_json
 
@@ -410,6 +410,39 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             InvokeResult wrapping the model response and token usage for this
             single embedding call.
         """
+        params = self._single_params(
+            value, media_type, file_format, base_params, extra_params
+        )
+        result = await self.invoke(
+            _Request(taskType="SINGLE_EMBEDDING", singleEmbeddingParams=params),
+            region=region,
+        )
+        self._record_media_usage(
+            media_type, params, region=result.region, routing=result.routing
+        )
+        return result
+
+    def _single_params(
+        self,
+        value: str | S3Object,
+        media_type: _MediaTypes,
+        file_format: str,
+        base_params: _EmbeddingParams,
+        extra_params: JsonMapping,
+    ) -> _SingleEmbeddingParams:
+        """Build the SINGLE_EMBEDDING parameters for one media value.
+
+        Args:
+            value: The media value or S3 URI.
+            media_type: The type of media being processed.
+            file_format: The format or MIME type of the media (e.g., MP4, PNG).
+            base_params: The base embedding parameters used across all types of media.
+            extra_params: Additional parameters specific to the media type.
+                These parameters are merged into the base settings.
+
+        Returns:
+            The embedding parameters.
+        """
         source = (
             _MediaSource(s3Location=_S3Location(uri=value.uri))
             if isinstance(value, S3Object)
@@ -451,15 +484,100 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
                     **base_params,
                 )
         self._add_extra_params(extra_params, media_type, params)
+        return params
 
-        result = await self.invoke(
-            _Request(taskType="SINGLE_EMBEDDING", singleEmbeddingParams=params),
-            region=region,
+    async def build_batch_request(
+        self,
+        inputs: list[InputFileUrl | str],
+        dimensions: int | None,
+        extra_params: JsonMapping,
+    ) -> dict[str, Any]:
+        """Build the request body of one embedding, without sending it.
+
+        The input travels inside the body: a batched request is run later,
+        without this server, so it cannot point at anything this server holds.
+
+        Args:
+            inputs: Texts to embed.
+            dimensions: Number of dimensions.
+            extra_params: Extra model parameters.
+
+        Returns:
+            The request body.
+
+        Raises:
+            ApiError: When the input is too large to travel inside the body.
+        """
+        params = dict(extra_params)
+        params.pop("force_s3_data", None)
+        base_params = _EmbeddingParams(
+            embeddingPurpose=params.pop("embeddingPurpose", "GENERIC_INDEX")  # type:ignore[typeddict-item]
         )
-        self._record_media_usage(
-            media_type, params, region=result.region, routing=result.routing
+        if dimensions is not None:
+            base_params["embeddingDimension"] = dimensions  # type:ignore[typeddict-item]
+        value = self._one_input(inputs)
+        if isinstance(value, str):
+            media_type: _MediaTypes = "text"
+            file_format = "plain"
+            self._check_inline_size(len(value), _TEXT_SIZE_LIMIT, "characters")
+            inline = value
+        else:
+            media_type, file_format = await value.get_content_type_tuple()  # type: ignore[assignment]
+            if media_type == "text":
+                self._check_inline_size(
+                    await value.get_size(), _TEXT_SIZE_LIMIT, "characters"
+                )
+            else:
+                self._check_inline_size(
+                    await value.get_base64_size(), BEDROCK_BODY_SIZE_LIMIT, "bytes"
+                )
+            inline = await value.to_base64()
+        return _Request(
+            taskType="SINGLE_EMBEDDING",
+            singleEmbeddingParams=self._single_params(
+                inline, media_type, file_format, base_params, params
+            ),
+        )  # type: ignore[return-value]
+
+    @staticmethod
+    def _check_inline_size(size: int, limit: int, unit: str) -> None:
+        """Reject an input too large to be carried by a batched request.
+
+        Args:
+            size: Size of the input.
+            limit: Largest size one request carries.
+            unit: How the size is counted, for the message.
+
+        Raises:
+            ApiError: When the input is over the limit.
+        """
+        if size > limit:
+            msg = (
+                f"A batched request embeds at most {limit} {unit} of input; "
+                f"this one carries {size}. Split the input, or embed it "
+                "without batching."
+            )
+            raise ApiError(msg)
+
+    def read_batch_response(self, output: JsonMapping) -> EmbeddingResponse:
+        """Read an embedding answer out of a model's own response body.
+
+        Args:
+            output: The response body the model produced.
+
+        Returns:
+            Embedding response.
+        """
+        embeddings = output.get("embeddings")
+        return EmbeddingResponse(
+            embeddings=[
+                item["embedding"]  # type: ignore[misc]
+                for item in embeddings
+                if isinstance(item, dict) and isinstance(item.get("embedding"), list)
+            ]
+            if isinstance(embeddings, list)
+            else []
         )
-        return result
 
     async def _embed_segmented(
         self,

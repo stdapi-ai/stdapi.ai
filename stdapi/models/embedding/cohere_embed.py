@@ -6,7 +6,7 @@
 """
 
 from asyncio import gather
-from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from stdapi.api_errors import ApiError
 from stdapi.input_file import InputFile, InputFileUrl
@@ -122,6 +122,52 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         Returns:
             Embedding response.
         """
+        request = await self._build_request(inputs, dimensions, extra_params)
+        result = await self.invoke(request)
+        resp = result.response["embeddings"]
+        if isinstance(resp, dict) and "float" not in resp:
+            # Cohere routes always request `float` alongside other types, so a
+            # missing key means an unsupported type reached the backend directly.
+            msg = "Only `float` embeddings are supported on this backend."
+            raise ApiError(msg)
+        input_tokens = result.input_tokens or 0
+        images = result.response.get("images")
+        # A fresh dict: `resp` is keyed by the narrower `_EmbeddingType` literal,
+        # but `embeddings_by_type` is invariantly typed as `dict[str, ...]`.
+        embeddings_by_type: dict[str, list[list[float | int]]] | None = (
+            dict(resp.items()) if isinstance(resp, dict) else None
+        )
+        return EmbeddingResponse(
+            embeddings=resp["float"] if isinstance(resp, dict) else resp,
+            embeddings_by_type=embeddings_by_type,
+            prompt_tokens=input_tokens,
+            total_tokens=input_tokens + (result.output_tokens or 0),
+            images=(
+                [EmbeddingImageDescription(**image) for image in images]
+                if images
+                else None
+            ),
+        )
+
+    async def _build_request(
+        self,
+        inputs: list[InputFileUrl | str],
+        dimensions: int | None,
+        extra_params: JsonMapping,
+    ) -> _Request:
+        """Build the request body embedding *inputs*.
+
+        Args:
+            inputs: Texts and images to embed.
+            dimensions: Number of dimensions.
+            extra_params: Extra model parameters.
+
+        Returns:
+            The request body.
+
+        Raises:
+            ApiError: When the model cannot embed texts and images together.
+        """
         request = _Request(input_type="search_document")
         request.update(extra_params)  # type:ignore[typeddict-item]
         if dimensions is not None:
@@ -153,31 +199,40 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         else:
             texts: list[str] = inputs  # type: ignore[assignment]
             request["texts"] = texts
+        return request
 
-        result = await self.invoke(request)
-        resp = result.response["embeddings"]
-        if isinstance(resp, dict) and "float" not in resp:
-            # Cohere routes always request `float` alongside other types, so a
-            # missing key means an unsupported type reached the backend directly.
-            msg = "Only `float` embeddings are supported on this backend."
-            raise ApiError(msg)
-        input_tokens = result.input_tokens or 0
-        images = result.response.get("images")
-        # A fresh dict: `resp` is keyed by the narrower `_EmbeddingType` literal,
-        # but `embeddings_by_type` is invariantly typed as `dict[str, ...]`.
-        embeddings_by_type: dict[str, list[list[float | int]]] | None = (
-            dict(resp.items()) if isinstance(resp, dict) else None
-        )
+    async def build_batch_request(
+        self,
+        inputs: list[InputFileUrl | str],
+        dimensions: int | None,
+        extra_params: JsonMapping,
+    ) -> dict[str, Any]:
+        """Build the request body of one embedding, without sending it.
+
+        Args:
+            inputs: Texts to embed.
+            dimensions: Number of dimensions.
+            extra_params: Extra model parameters.
+
+        Returns:
+            The request body.
+        """
+        return await self._build_request(inputs, dimensions, extra_params)  # type: ignore[return-value]
+
+    def read_batch_response(self, output: JsonMapping) -> EmbeddingResponse:
+        """Read an embedding answer out of a model's own response body.
+
+        Args:
+            output: The response body the model produced.
+
+        Returns:
+            Embedding response.
+        """
+        embeddings = output.get("embeddings")
+        if isinstance(embeddings, dict):
+            embeddings = embeddings.get("float")
         return EmbeddingResponse(
-            embeddings=resp["float"] if isinstance(resp, dict) else resp,
-            embeddings_by_type=embeddings_by_type,
-            prompt_tokens=input_tokens,
-            total_tokens=input_tokens + (result.output_tokens or 0),
-            images=(
-                [EmbeddingImageDescription(**image) for image in images]
-                if images
-                else None
-            ),
+            embeddings=embeddings if isinstance(embeddings, list) else []  # type: ignore[arg-type]
         )
 
     @staticmethod

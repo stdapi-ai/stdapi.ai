@@ -1,0 +1,164 @@
+{
+ "schema_version": 5,
+ "model_id": "bedrock.batch-embeddings",
+ "invoked_id": "amazon.titan-embed-text-v2:0, amazon.nova-2-multimodal-embeddings-v1:0, cohere.embed-english-v3, cohere.embed-v4:0",
+ "transport": "create-model-invocation-job",
+ "region": "us-east-1",
+ "probed_at": "2026-08-16",
+ "probes": [
+  {
+   "name": "titan-bare-model-id",
+   "feature": "Embedding model accepted by CreateModelInvocationJob, bare foundation-model id",
+   "outcome": "supported",
+   "detail": "Accepted and ran to Completed in ~11 min: 100/100 success. 'modelInvocationType' omitted defaults to 'InvokeModel' (GetModelInvocationJob echoes it back). The service normalises 'modelId' to 'arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0'.",
+   "request": {
+    "modelId": "amazon.titan-embed-text-v2:0",
+    "modelInvocationType": null,
+    "records": 100
+   }
+  },
+  {
+   "name": "titan-inference-profile-id",
+   "feature": "Inference profile id as modelId, as the chat path submits",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the CreateModelInvocationJob operation: The provided model identifier is invalid. -- no 'us.' profile exists for this model; every batch-capable embedding model is ON_DEMAND only, so the bare id is the only valid form. ModelDetails.get_id(inference_profile=True) already falls back to the bare id when the model has no profile, so the chat path's call is safe here by accident, not by design.",
+   "request": {
+    "modelId": "us.amazon.titan-embed-text-v2:0",
+    "records": 100
+   }
+  },
+  {
+   "name": "nova-multimodal-embeddings",
+   "feature": "Second family: Amazon Nova 2 Multimodal Embeddings, explicit InvokeModel",
+   "outcome": "supported",
+   "detail": "Accepted and ran to Completed in ~10 min: 98 success, 2 per-record errors (the two deliberately bad bodies). Same job shape as Titan.",
+   "request": {
+    "modelId": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "modelInvocationType": "InvokeModel",
+    "records": 100
+   }
+  },
+  {
+   "name": "cohere-embed-english-v3",
+   "feature": "Cohere Embed v3 in a batch job",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the CreateModelInvocationJob operation: Batch inference is not supported for model cohere.embed-english-v3 in region us-east-1.",
+   "request": {
+    "modelId": "cohere.embed-english-v3",
+    "records": 100
+   }
+  },
+  {
+   "name": "cohere-embed-v4",
+   "feature": "Cohere Embed v4 in a batch job",
+   "outcome": "rejected",
+   "detail": "An error occurred (ValidationException) when calling the CreateModelInvocationJob operation: Batch inference is not supported for the requested model -- note this wording does NOT name the model id, unlike the v3 refusal, so batches._refused_job() classifies it as a deployment failure (503 FeatureUnavailable) instead of an unsupported model (400).",
+   "request": {
+    "modelId": "cohere.embed-v4:0",
+    "records": 100
+   }
+  },
+  {
+   "name": "input-record-shape",
+   "feature": "What one embedding input record carries",
+   "outcome": "supported",
+   "detail": "Identical envelope to a chat record: {\"recordId\": <id>, \"modelInput\": <body>}, one JSON object per line, JSONL. 'modelInput' is the model's own InvokeModel body, not a Converse body: Titan {\"inputText\": \"probe 0\"}, Nova {\"taskType\": \"SINGLE_EMBEDDING\", \"singleEmbeddingParams\": {\"embeddingPurpose\": \"GENERIC_INDEX\", \"text\": {\"value\": \"probe 0\", \"truncationMode\": \"END\"}}} -- byte-for-byte the bodies stdapi/models/embedding/*.py already build.",
+   "request": {
+    "recordId": "rec00000",
+    "modelInput": {
+     "inputText": "probe 0"
+    }
+   }
+  },
+  {
+   "name": "record-id-shape",
+   "feature": "Accepted 'recordId' values",
+   "outcome": "supported",
+   "detail": "Same rule as the chat path: 1-character, 11-character and 64-character ids all passed validation and came back verbatim, including '-', '_' and '.'. No 11-character constraint applies. The gateway's 64-character _CUSTOM_ID_MAX_LEN is safe as is.",
+   "request": {
+    "ids": [
+     "a",
+     "ABC12345678",
+     "batch-req_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.0123456789"
+    ]
+   }
+  },
+  {
+   "name": "minimum-records-per-model",
+   "feature": "Per-model minimum record count",
+   "outcome": "rejected",
+   "detail": "The same 100-record minimum applies (Service Quotas: 'Minimum number of records per batch inference job for Titan Text Embeddings V2' = 100, not adjustable; same for Titan Multimodal Embeddings G1 and Nova 2 Multimodal Embeddings V1). It is NOT enforced by CreateModelInvocationJob: a 99-record job was accepted, then reached status Failed ~5 min later with message 'Batch job <arn> contains less records (99) than the required minimum of: 100'. A short job writes no output file and no manifest at all -- only the empty out/ folder marker.",
+   "request": {
+    "modelId": "amazon.titan-embed-text-v2:0",
+    "records": 99
+   }
+  },
+  {
+   "name": "converse-invocation-type",
+   "feature": "modelInvocationType='Converse' on an embedding model",
+   "outcome": "accepted",
+   "detail": "Accepted at submit, passed validation, was scheduled, ran, and reached status Completed -- with 100/100 error records and nothing usable. The per-record error is 'Failed to parse ConverseRequest for recordId: rec00004. Error: Unrecognized field \"inputText\" (class com.amazon.bedrock.ConverseRequest) ...'. Nothing on the submit path catches the mismatch, so an embedding job submitted with the chat path's hard-coded modelInvocationType='Converse' would look healthy and bill a whole batch window for zero results.",
+   "request": {
+    "modelId": "amazon.titan-embed-text-v2:0",
+    "modelInvocationType": "Converse",
+    "records": 100
+   }
+  },
+  {
+   "name": "output-file-layout",
+   "feature": "Where the results land",
+   "outcome": "supported",
+   "detail": "Unchanged from the chat path: s3://<bucket>/<prefix>/out/<jobId>/input.jsonl.out for the records and s3://<bucket>/<prefix>/out/<jobId>/manifest.json.out for the counters. One output line per input record, but NOT in input order (first ids back were rec00037, rec00020, rec00038), so results must be matched by recordId.",
+   "request": {}
+  },
+  {
+   "name": "output-record-shape",
+   "feature": "Where the vector is in a successful result line",
+   "outcome": "supported",
+   "detail": "{\"recordId\": <id>, \"modelInput\": <the request body, echoed back verbatim>, \"modelOutput\": <the model's own InvokeModel response>}. Titan modelOutput: {\"embedding\": [1024 floats], \"embeddingsByType\": {\"float\": [1024 floats]}, \"inputTextTokenCount\": 4} -- 'embeddingsByType' is present even though the request carried no 'embeddingTypes', which the synchronous path never sees. Nova modelOutput: {\"embeddings\": [{\"embeddingType\": \"TEXT\", \"embedding\": [3072 floats]}]}. The echoed 'modelInput' roughly doubles the output file, and for Nova media inputs it would echo the whole base64 payload.",
+   "request": {}
+  },
+  {
+   "name": "error-record-shape",
+   "feature": "How a failed record appears",
+   "outcome": "supported",
+   "detail": "Same shape batches._record_error() already reads: {\"recordId\": <id>, \"modelInput\": <echoed>, \"error\": {\"errorCode\": 400, \"errorMessage\": \"Malformed input request: #/singleEmbeddingParams/text/value: expected minLength: 1, actual: 0, reformat your input and try again.\", \"expired\": false, \"retryable\": false}}. 'errorCode' is an int, and the message quotes the model's own JSON-schema path -- never forwardable to a client. A failure raised before inference (the Converse-type job) carries only errorCode and errorMessage, with no 'expired'/'retryable' keys.",
+   "request": {}
+  },
+  {
+   "name": "manifest-shape",
+   "feature": "What the manifest reports for an embedding job",
+   "outcome": "supported",
+   "detail": "Same keys the chat path reads, plus media dimensions: {\"totalRecordCount\": 100, \"processedRecordCount\": 100, \"successRecordCount\": 100, \"errorRecordCount\": 0, \"inputTokenCount\": 397, \"outputTokenCount\": 0, \"cacheReadInputTokenCount\": 0, \"cacheWriteInputTokenCount\": 0, \"cacheWrite1hInputTokenCount\": 0, \"inputAudioSecond\": 0, \"inputVideoSecond\": 0, \"inputStandardImageCount\": 0, \"inputDocumentImageCount\": 0, \"inputTextTokenCount\": 0, \"inputImageTokenCount\": 0, \"inputAudioTokenCount\": 0, \"inputVideoTokenCount\": 0, \"outputTextTokenCount\": 0, \"outputImageTokenCount\": 0}. Embeddings bill on inputTokenCount only, outputTokenCount is 0. 'inputStandardImageCount' / 'inputAudioSecond' / 'inputVideoSecond' are the dimensions Nova multimodal embeddings are priced on (input_images, input_seconds) and no code reads them today. A job where every record failed writes a truncated manifest with the four counts and no token keys at all.",
+   "request": {}
+  },
+  {
+   "name": "mixing-models-or-record-kinds",
+   "feature": "One job carrying more than one model, or both embedding and chat records",
+   "outcome": "rejected",
+   "detail": "Structurally impossible: 'modelId' and 'modelInvocationType' are job-level parameters, so one job runs exactly one model through exactly one endpoint. A Converse-shaped record smuggled into an InvokeModel embedding job is not caught at submit or validation -- it fails alone, as a per-record {\"errorCode\": 400, \"errorMessage\": \"Malformed input request, reformat your input and try again.\"}, while the other 99 records succeed and the job still reports Completed. The gateway's existing one-job-per-model fan-out is therefore the right shape; only modelInvocationType has to be decided per job.",
+   "request": {
+    "recordId": "badconverse1",
+    "modelInput": {
+     "messages": [
+      {
+       "role": "user",
+       "content": [
+        {
+         "text": "hello"
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "batch-price-signal",
+   "feature": "Whether the price catalog's batch-tier signal matches runtime acceptance",
+   "outcome": "supported",
+   "detail": "It matches exactly, for embeddings as for chat. A batch-tier input_tokens price is published for amazon.titan-embed-text-v2:0 (0.00000001/token, half of standard), amazon.titan-embed-image-v1 and amazon.nova-2-multimodal-embeddings-v1:0 -- the three families that also carry batch Service Quotas and that the runtime accepts. No batch price and no batch quota exist for cohere.embed-english-v3, cohere.embed-multilingual-v3, cohere.embed-v4:0 or twelvelabs.marengo-embed-*, and the runtime refuses them. The catalogue still advertises batch=False for every embedding model, because _advertises_batch() requires 'TEXT' in output_modalities and an embedding model outputs 'EMBEDDING'.",
+   "request": {}
+  }
+ ]
+}

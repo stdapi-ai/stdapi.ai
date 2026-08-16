@@ -128,7 +128,8 @@ class ModelPricing(BaseModel):
         "- Embeddings: `route=openai_embedding`\n"
         "- Image generation: `route=openai_image_generation`\n"
         "- Live speech-to-speech: `route=openai_realtime`\n"
-        "- Batch-capable chat models: `route=openai_chat_completion&batch=true`\n\n"
+        "- Batch-capable chat models: `route=openai_chat_completion&batch=true`\n"
+        "- Batch-capable embedding models: `route=openai_embedding&batch=true`\n\n"
         '**Note:** Audio *output* from `openai_chat_completion` (via `modalities=["text","audio"]`) '
         "is a model-specific capability not separately tracked — use a `route` search "
         "and verify audio output support in the model documentation. The built-in "

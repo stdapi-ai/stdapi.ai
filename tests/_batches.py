@@ -16,6 +16,7 @@ from botocore.exceptions import ClientError
 
 from stdapi import aws_s3, batches
 from stdapi.models.chat._default import ChatModel
+from stdapi.models.embedding.amazon_titan_embed import EmbeddingModel
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -292,6 +293,27 @@ class TranslatingChatModel(_OfflineChatModel):
     PROMPT_CACHING_TOOL_SUPPORTED: ClassVar[bool] = True
 
 
+class StubEmbeddingModel(EmbeddingModel):
+    """Titan embedding model, with the region and the catalog entry stubbed out.
+
+    The request bodies and the answers it reads back are the real ones: only
+    the two calls that would reach AWS are replaced.
+    """
+
+    __slots__ = ()
+
+    async def select_region(self, *, s3_required: bool = False) -> Any:  # noqa: ANN401
+        """Return the single fake region."""
+        return REGION
+
+    @property
+    def model(self) -> Any:  # noqa: ANN401
+        """Return canned details, so no live catalog is needed."""
+        from tests._helpers import make_model_details  # noqa: PLC0415
+
+        return make_model_details(self._model_id, output_modalities=["EMBEDDING"])
+
+
 def _stub_request(request: Any) -> ConverseRequestBaseTypeDef:  # noqa: ANN401
     """Build the Converse request a stubbed translation produces."""
     built: dict[str, Any] = {
@@ -353,6 +375,7 @@ def install(
     monkeypatch.setattr(
         batches, "get_chat_model", TranslatingChatModel if translate else StubChatModel
     )
+    monkeypatch.setattr(batches, "get_embedding_model", StubEmbeddingModel)
     monkeypatch.setattr(batches, "serves_via_mantle", lambda _model_id: False)
     # The real uploader writes to the double, so its captured options are real.
     monkeypatch.setattr(aws_s3, "get_client", lambda _service, _region=None: s3)
@@ -507,6 +530,50 @@ def chat_lines(
         f'"url": "/v1/chat/completions", "body": {body}}}'
         for index in range(count)
     ]
+
+
+def embedding_lines(
+    count: int,
+    *,
+    model: str = "amazon.titan-embed-text-v2:0",
+    prefix: str = "req",
+    body: str = "",
+) -> list[str]:
+    """Return *count* well-formed embeddings request lines.
+
+    Args:
+        count: Number of lines.
+        model: Model every line names.
+        prefix: Prefix of each line's ``custom_id``.
+        body: Replacement request body, for a line that must be refused.
+
+    Returns:
+        The JSONL lines.
+    """
+    return [
+        f'{{"custom_id": "{prefix}-{index}", "method": "POST", '
+        f'"url": "/v1/embeddings", "body": '
+        f"{body or f'''{{"model": "{model}", "input": "text {index}"}}'''}}}"
+        for index in range(count)
+    ]
+
+
+def embedding_output(dimensions: int = 4, *, tokens: int = 3) -> dict[str, Any]:
+    """Return a result line's ``modelOutput`` for a Titan embedding job.
+
+    Args:
+        dimensions: Width of the returned vector.
+        tokens: Input tokens the model reports for the record.
+
+    Returns:
+        The model's own InvokeModel response body.
+    """
+    vector = [round(0.1 * (index + 1), 3) for index in range(dimensions)]
+    return {
+        "embedding": vector,
+        "embeddingsByType": {"float": vector},
+        "inputTextTokenCount": tokens,
+    }
 
 
 def read_result_file(s3: FakeS3, file_id: str) -> list[dict[str, Any]]:

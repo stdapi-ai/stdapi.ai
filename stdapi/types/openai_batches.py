@@ -35,7 +35,7 @@ BatchStatus = Literal[
 ]
 
 #: API endpoints a batch may target.
-BatchEndpoint = Literal["/v1/chat/completions"]
+BatchEndpoint = Literal["/v1/chat/completions", "/v1/embeddings"]
 
 
 class BatchOutputExpiresAfter(BaseModelRequest):
@@ -64,7 +64,8 @@ class BatchCreateParams(BaseModelRequest):
     )
     endpoint: BatchEndpoint = Field(
         description="The API endpoint every request in the file targets. "
-        "`/v1/chat/completions` is the endpoint available for batches."
+        "`/v1/chat/completions` and `/v1/embeddings` are the endpoints "
+        "available for batches."
     )
     completion_window: Literal["24h"] = Field(
         description="The time frame within which the batch is processed. "

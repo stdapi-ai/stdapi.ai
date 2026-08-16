@@ -1,12 +1,12 @@
 ---
 title: Batch API - Asynchronous Bulk Inference (OpenAI Compatible)
-description: Run thousands of chat completion requests asynchronously at a discounted price with an OpenAI-compatible Batch API backed by Amazon Bedrock batch inference.
-keywords: OpenAI batch API, bulk inference AWS, batch processing LLM, discounted inference, JSONL batch requests, Amazon Bedrock batch inference, asynchronous completions
+description: Run thousands of chat completion or embedding requests asynchronously at a discounted price with an OpenAI-compatible Batch API backed by Amazon Bedrock batch inference.
+keywords: OpenAI batch API, bulk inference AWS, batch processing LLM, batch embeddings, discounted inference, JSONL batch requests, Amazon Bedrock batch inference, asynchronous completions
 ---
 
 # Batch API
 
-Run a large set of chat completion requests asynchronously, at a lower price than the synchronous API, through the OpenAI Batch API shape.
+Run a large set of chat completion or embedding requests asynchronously, at a lower price than the synchronous API, through the OpenAI Batch API shape.
 
 A batch is created from a file of requests, runs without a connection held open, and is read back from the result files it produces — exactly the OpenAI workflow, so the official OpenAI SDKs work by changing the base URL.
 
@@ -43,14 +43,21 @@ While the role is unset, every batch endpoint answers `503`.
 
 ### 1. Upload the requests
 
-One JSON object per line, uploaded with `purpose="batch"`. Every line names the same model, carries a unique `custom_id`, and holds the request itself in `body`.
+One JSON object per line, uploaded with `purpose="batch"`. Every line names the same model, targets the same endpoint, carries a unique `custom_id`, and holds the request itself in `body`.
 
 ```json
 {"custom_id": "req-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "amazon.nova-micro-v1:0", "messages": [{"role": "user", "content": "Summarize: ..."}]}}
 {"custom_id": "req-2", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "amazon.nova-micro-v1:0", "messages": [{"role": "user", "content": "Summarize: ..."}]}}
 ```
 
-The sample above is abridged: a real file needs at least 100 requests, the minimum a batch carries for each model it names.
+Embedding requests are written the same way, against `/v1/embeddings`:
+
+```json
+{"custom_id": "doc-1", "method": "POST", "url": "/v1/embeddings", "body": {"model": "amazon.titan-embed-text-v2:0", "input": "First passage of the corpus"}}
+{"custom_id": "doc-2", "method": "POST", "url": "/v1/embeddings", "body": {"model": "amazon.titan-embed-text-v2:0", "input": "Second passage of the corpus"}}
+```
+
+Both samples above are abridged: a real file needs at least 100 requests, the minimum a batch carries for each model it names.
 
 ```python
 from openai import OpenAI
@@ -163,7 +170,7 @@ A batch below the minimum, or past any of these caps, is refused when it is crea
 |----------------------------------|:----------------------------------------:|-----------------------------------------------------------------------------|
 | **Creation**                     |                                          |                                                                             |
 | `input_file_id`                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Must be uploaded with `purpose="batch"`                                     |
-| `endpoint`                       |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | `/v1/chat/completions` only                                                 |
+| `endpoint`                       |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | `/v1/chat/completions` and `/v1/embeddings`                                 |
 | `completion_window`              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `24h`, as upstream                                                          |
 | `metadata`                       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Up to 16 key-value pairs, returned on every read                            |
 | `output_expires_after`           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `anchor: "created_at"` and 1 hour to 30 days, counted from the moment the result files are written; omit it to keep them until deleted |
@@ -205,7 +212,7 @@ A batch below the minimum, or past any of these caps, is refused when it is crea
 
 ## Model Support
 
-Any chat model available for batch inference in your configured Amazon Bedrock regions can be used — the same identifiers as [Chat Completions](api_openai_chat_completions.md). To shortlist them, call [`search_models`](api_search_models.md) with `route=openai_chat_completion&batch=true`; each entry also carries a `batch` field.
+Any chat or embedding model available for batch inference in your configured Amazon Bedrock regions can be used — the same identifiers as [Chat Completions](api_openai_chat_completions.md) and [Embeddings](api_openai_embeddings.md). To shortlist them, call [`search_models`](api_search_models.md) with `route=openai_chat_completion&batch=true`, or `route=openai_embedding&batch=true` for embeddings; each entry also carries a `batch` field.
 
 !!! warning "The shortlist is a hint, not a rule"
     `batch` is advertised on a best-effort basis and never used to reject a request. A model it does not advertise — or says nothing about — may still run a batch, so submit the batch rather than ruling the model out; the answer you get back is the authoritative one.
@@ -220,5 +227,6 @@ Batched requests are billed at the published batch rate for the model, roughly h
 
 - [Files API](api_openai_files.md) — upload the requests, download the results
 - [Chat Completions API](api_openai_chat_completions.md) — the per-request body
+- [Embeddings API](api_openai_embeddings.md) — the per-request body of an embeddings batch
 - [Message Batches API](api_anthropic_batches.md) — the Anthropic-shaped equivalent
 - [Configuration](operations_configuration.md#aws-bedrock-batch-role-arn) — enabling batches

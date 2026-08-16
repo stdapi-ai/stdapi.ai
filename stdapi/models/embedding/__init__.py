@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydantic import BaseModel
 
+from stdapi.api_errors import ApiError
 from stdapi.models import ModelBase, get_model, load_model_plugins
 
 if TYPE_CHECKING:
@@ -91,6 +92,75 @@ class EmbeddingModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             Embedding response.
         """
 
+    async def build_batch_request(
+        self,
+        inputs: list[InputFileUrl | str],  # noqa: ARG002
+        dimensions: int | None,  # noqa: ARG002
+        extra_params: JsonMapping,  # noqa: ARG002
+    ) -> dict[str, Any]:
+        """Build the request body of one embedding, without sending it.
+
+        The body must be self-contained and region-independent: it is written
+        to a file and run later, so it can carry neither a connection nor a
+        resource this server placed in one region.
+
+        Args:
+            inputs: Texts to embed.
+            dimensions: Number of dimensions.
+            extra_params: Extra model parameters.
+
+        Returns:
+            The request body.
+
+        Raises:
+            ApiError: When the model answers only through a live connection.
+        """
+        raise self._not_batchable()
+
+    def read_batch_response(
+        self,
+        output: JsonMapping,  # noqa: ARG002
+    ) -> EmbeddingResponse:
+        """Read an embedding answer out of a model's own response body.
+
+        Args:
+            output: The response body the model produced.
+
+        Returns:
+            Embedding response.
+
+        Raises:
+            ApiError: When the model answers only through a live connection.
+        """
+        raise self._not_batchable()
+
+    def _not_batchable(self) -> ApiError:
+        """Return the error a model with no runnable request body answers with."""
+        return ApiError(
+            f"The model `{self._model_id}` is not available for batched requests."
+        )
+
+    @staticmethod
+    def _one_input(inputs: list[InputFileUrl | str]) -> InputFileUrl | str:
+        """Return the only input of a request, for a model that embeds one at a time.
+
+        Args:
+            inputs: The request's inputs.
+
+        Returns:
+            The single input.
+
+        Raises:
+            ApiError: When the request carries more than one input.
+        """
+        if len(inputs) != 1:
+            msg = (
+                "This model embeds one input per batched request; this one "
+                f"carries {len(inputs)}. Send one request per input."
+            )
+            raise ApiError(msg)
+        return inputs[0]
+
     @staticmethod
     async def _gather_bounded[T](invocations: Iterable[Awaitable[T]]) -> list[T]:
         """Await one invocation per input under the per-request concurrency bound.
@@ -118,6 +188,7 @@ class EmbeddingModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
                 return await invocation
 
         return await gather(*(_bounded(invocation) for invocation in invocations))
+
 
 _MODEL_REGISTRY: list[
     tuple[str | Pattern[str], type[EmbeddingModelBase[Any, Any]]]

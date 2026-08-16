@@ -29,6 +29,7 @@ from stdapi.api_errors import (
     feature_unavailable_guard,
 )
 from stdapi.aws import get_client
+from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, get_extra_model_parameters
 from stdapi.aws_s3 import BUCKET_TO_REGION, put_s3_object, require_s3_bucket_for_region
 from stdapi.cleanup import schedule_cleanup
 from stdapi.config import SETTINGS
@@ -41,13 +42,21 @@ from stdapi.files import (
     put_file_content,
     resolve_file_bucket,
 )
-from stdapi.models import ModelRegionUnavailableError, runtime_twin, validate_model
+from stdapi.models import (
+    ModelBase,
+    ModelRegionUnavailableError,
+    runtime_twin,
+    validate_model,
+)
 from stdapi.models.chat import get_chat_model, serves_via_mantle
 from stdapi.models.chat._adapters import _anthropic_message as anthropic_adapter
 from stdapi.models.chat._adapters import _openai_chat_completion as openai_adapter
 from stdapi.models.chat._default import ChatModel
+from stdapi.models.embedding import EmbeddingModelBase, get_embedding_model
 from stdapi.monitoring import log_error_details
+from stdapi.routes.openai_embeddings import build_embedding_response
 from stdapi.types.openai_chat_completions import CompletionCreateParams
+from stdapi.types.openai_embeddings import EmbeddingCreateParams
 from stdapi.usage import record_bedrock_usage
 from stdapi.utils import now_utc_timestamp, to_json_bytes, validation_error_handler
 
@@ -55,13 +64,14 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 
     from types_aiobotocore_bedrock.client import BedrockClient
-    from types_aiobotocore_bedrock.literals import RegionName
+    from types_aiobotocore_bedrock.literals import ModelInvocationTypeType, RegionName
     from types_aiobotocore_bedrock.type_defs import GetModelInvocationJobResponseTypeDef
     from types_aiobotocore_bedrock_runtime.type_defs import ConverseResponseTypeDef
     from types_aiobotocore_s3.client import S3Client
     from types_aiobotocore_s3.type_defs import ObjectIdentifierTypeDef
 
     from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
+    from stdapi.input_file import InputFileUrl
     from stdapi.types import JsonMapping
     from stdapi.types.anthropic_batches import MessageBatchRequest
 
@@ -90,6 +100,9 @@ _REFUSED_JOB_DETAIL: str = (
     "for this model, the model's own batch availability, and the batch service "
     "role set in 'aws_bedrock_batch_role_arn'."
 )
+
+#: Endpoint whose requests a batch runs as embeddings rather than as completions.
+_EMBEDDINGS_ENDPOINT: str = "/v1/embeddings"
 
 #: Default minimum requests one model must carry, set by an adjustable backend quota.
 MIN_REQUESTS_PER_MODEL: int = 100
@@ -132,6 +145,18 @@ _ALREADY_STOPPED_ERRORS = frozenset({"ValidationException", "ConflictException"}
 
 #: Storage errors meaning the object was never written.
 _NO_SUCH_OBJECT_ERRORS = frozenset({"404", "NoSuchKey"})
+
+#: Image counters a job reports, as (counter, price bucket).
+_IMAGE_COUNTERS: tuple[tuple[str, str], ...] = (
+    ("inputStandardImageCount", ""),
+    ("inputDocumentImageCount", "document"),
+)
+
+#: Media-duration counters a job reports, as (counter, price bucket).
+_SECOND_COUNTERS: tuple[tuple[str, str], ...] = (
+    ("inputAudioSecond", "audio"),
+    ("inputVideoSecond", "video"),
+)
 
 #: Name of the object each job writes its aggregate counters to.
 _MANIFEST_SUFFIX = "manifest.json.out"
@@ -598,6 +623,22 @@ async def _resolve_model(model: str) -> ChatModel:
     return resolved
 
 
+async def _resolve_embedding_model(model: str) -> EmbeddingModelBase[Any, Any]:
+    """Resolve a model name to the embedding model class a batch can run it with.
+
+    Args:
+        model: Model name as written by the client.
+
+    Returns:
+        The resolved embedding model.
+
+    Raises:
+        ApiError: When the model cannot serve batched requests.
+    """
+    model_id = _batch_model_id(model, (await validate_model(model, "EMBEDDING")).id)
+    return get_embedding_model(model_id)
+
+
 @dataclass(slots=True)
 class PreparedRequest:
     """One translated request, ready to be written to a job's input.
@@ -643,6 +684,50 @@ async def _prepare_openai_request(
         raise ApiError(msg)
     _check_batchable(request, index, "Line")
     return PreparedRequest(custom_id, body.model, _to_model_input(request))
+
+
+async def _prepare_embedding_request(
+    custom_id: str, body: EmbeddingCreateParams, index: int
+) -> PreparedRequest:
+    """Translate one embeddings request into its batched form.
+
+    Args:
+        custom_id: Client-chosen identifier of the request.
+        body: The embedding parameters.
+        index: Zero-based position of the request in the batch.
+
+    Returns:
+        The translated request.
+
+    Raises:
+        ApiError: When the request asks for something batches cannot serve.
+    """
+    if body.encoding_format == "base64":
+        msg = (
+            f"Line {index + 1}: 'encoding_format' must be 'float' for batched "
+            "requests; ask for the vectors as numbers, or send the request "
+            "without batching."
+        )
+        raise ApiError(msg)
+    if GUARDRAIL_CONFIG_VAR.get(None) is not None:
+        msg = (
+            f"Line {index + 1}: content guardrails are not available for batched "
+            "requests. Send this request without batching to keep it guarded."
+        )
+        raise ApiError(msg)
+    model = await _resolve_embedding_model(body.model)
+    raw_inputs = body.input if isinstance(body.input, list) else [body.input]
+    # `EmbeddingCreateParams._unsupported` rejects any non-str/InputFileUrl item.
+    inputs: list[InputFileUrl | str] = raw_inputs  # type: ignore[assignment]
+    try:
+        model_input = await model.build_batch_request(
+            inputs, body.dimensions, get_extra_model_parameters(model.model.id, body)
+        )
+    except ApiError as exc:
+        # The model knows nothing of the file it came from; the position does.
+        msg = f"Line {index + 1}: {exc}"
+        raise ApiError(msg, status=exc.status) from exc
+    return PreparedRequest(custom_id, body.model, model_input)
 
 
 async def _prepare_anthropic_request(
@@ -743,10 +828,45 @@ def _job_name(payload: str, index: int) -> str:
     return f"stdapi-{payload}-{index}"
 
 
+async def _resolve_job_model(endpoint: str, model: str) -> ModelBase[Any, Any]:
+    """Resolve the model class the job serving *endpoint* runs its requests with.
+
+    Args:
+        endpoint: API endpoint every request of the job targets.
+        model: Model name as written by the client.
+
+    Returns:
+        The resolved model.
+
+    Raises:
+        ApiError: When the model cannot serve batched requests.
+    """
+    if endpoint == _EMBEDDINGS_ENDPOINT:
+        return await _resolve_embedding_model(model)
+    return await _resolve_model(model)
+
+
+def _invocation_type(endpoint: str) -> ModelInvocationTypeType:
+    """Return the invocation a job's requests are written for.
+
+    The requests of each endpoint are written in the shape of one invocation,
+    and the two shapes are not interchangeable: a job started for the wrong one
+    is accepted, runs its whole window, and fails every single request.
+
+    Args:
+        endpoint: API endpoint every request of the job targets.
+
+    Returns:
+        The invocation the backend runs each request through.
+    """
+    return "InvokeModel" if endpoint == _EMBEDDINGS_ENDPOINT else "Converse"
+
+
 async def _submit_job(
     *,
     payload: str,
     index: int,
+    endpoint: str,
     model: str,
     items: Sequence[PreparedRequest],
     role_arn: str,
@@ -756,6 +876,7 @@ async def _submit_job(
     Args:
         payload: Bare 32-char batch payload.
         index: Zero-based position of the job within the batch.
+        endpoint: API endpoint every request of the batch targets.
         model: Model name as written by the client.
         items: The model's translated requests, in input order.
         role_arn: Service role the backend assumes to read and write storage.
@@ -766,11 +887,13 @@ async def _submit_job(
     Raises:
         ApiError: When the model cannot run batched requests.
     """
-    chat_model = await _resolve_model(model)
-    region = await chat_model.select_region(s3_required=True)
+    job_model = await _resolve_job_model(endpoint, model)
+    region = await job_model.select_region(s3_required=True)
     bucket = require_s3_bucket_for_region(region, feature=_FEATURE)
     try:
-        model_id = chat_model.model.get_id(region, inference_profile=True)
+        # A model with no inference profile answers its own identifier, which
+        # is the only form the backend accepts for it.
+        model_id = job_model.model.get_id(region, inference_profile=True)
     except ModelRegionUnavailableError as exc:
         msg = f"The model `{model}` is not available for batched requests."
         raise ApiError(msg) from exc
@@ -790,7 +913,7 @@ async def _submit_job(
                 jobName=_job_name(payload, index),
                 roleArn=role_arn,
                 modelId=model_id,
-                modelInvocationType="Converse",
+                modelInvocationType=_invocation_type(endpoint),
                 inputDataConfig={
                     "s3InputDataConfig": {
                         "s3Uri": f"s3://{bucket}/{input_key}",
@@ -808,7 +931,7 @@ async def _submit_job(
             error = exc.response["Error"]
             if error["Code"] == "ValidationException":
                 raise _refused_job(
-                    model, (model_id, chat_model.model.id), error["Message"]
+                    model, (model_id, job_model.model.id), error["Message"]
                 ) from exc
             raise
     job_arn = response["jobArn"]
@@ -818,7 +941,7 @@ async def _submit_job(
         bucket=bucket,
         job_arn=job_arn,
         job_id=job_arn.rsplit("/", 1)[-1],
-        model_id=chat_model.model.id,
+        model_id=job_model.model.id,
         requests=len(items),
         prefix=prefix,
     )
@@ -957,6 +1080,7 @@ async def create_batch(
             _submit_job(
                 payload=payload,
                 index=index,
+                endpoint=endpoint,
                 model=model,
                 items=items,
                 role_arn=role_arn,
@@ -1393,6 +1517,45 @@ async def _claim_billing(record: BatchRecord) -> bool:
     return True
 
 
+def _record_media_usage(ref: BatchJobRef, manifest: JsonMapping) -> None:
+    """Record the media one embedding job consumed, beyond its tokens.
+
+    A multimodal embedding model is billed per image and per second of media,
+    exactly as the synchronous embeddings path records them; a batch of them
+    recording tokens alone would report no cost at all. Only embedding jobs
+    report media this way — a conversation's images are billed as tokens, and
+    counting them again would bill them twice.
+
+    Args:
+        ref: The job the counters belong to.
+        manifest: The job's aggregate counters.
+    """
+    for key, spec in _IMAGE_COUNTERS:
+        if count := _counter(manifest, key):
+            record_bedrock_usage(
+                ref.model_id,
+                tier="batch",
+                region=ref.region,
+                input_images=count,
+                media_spec=spec,
+            )
+    for key, spec in _SECOND_COUNTERS:
+        if count := _counter(manifest, key):
+            record_bedrock_usage(
+                ref.model_id,
+                tier="batch",
+                region=ref.region,
+                input_seconds=count,
+                media_spec=spec,
+            )
+
+
+def _counter(manifest: JsonMapping, key: str) -> int:
+    """Return one counter of a job's manifest, or zero when it reports none."""
+    value = manifest.get(key)
+    return int(value) if isinstance(value, (int, float)) else 0
+
+
 async def settle(state: BatchState) -> BatchState:
     """Total a finished batch's usage, record it, and store the totals.
 
@@ -1412,6 +1575,7 @@ async def settle(state: BatchState) -> BatchState:
     manifests = await gather(*(_read_manifest(ref) for ref in record.jobs))
     totals = BatchUsageTotals()
     billed = await _claim_billing(record)
+    embeddings = record.endpoint == _EMBEDDINGS_ENDPOINT
     for ref, manifest in zip(record.jobs, manifests, strict=True):
         counts = {
             key: int(value)
@@ -1436,6 +1600,8 @@ async def settle(state: BatchState) -> BatchState:
                 cached_tokens=counts.get("cacheReadInputTokenCount", 0),
                 cache_write_tokens=counts.get("cacheWriteInputTokenCount", 0),
             )
+            if embeddings:
+                _record_media_usage(ref, manifest)
     record.usage = totals
     await _write_record(record)
     return state
@@ -1544,6 +1710,24 @@ async def _to_completion(
     return completion.model_dump(exclude_none=True)
 
 
+async def _to_embeddings(line: JsonMapping, model_id: str) -> JsonMapping:
+    """Translate one successful result line into an embeddings body.
+
+    Args:
+        line: One decoded result line.
+        model_id: Model that produced the vectors.
+
+    Returns:
+        The embeddings response, as a JSON mapping.
+    """
+    output = line.get("modelOutput")
+    response = get_embedding_model(model_id).read_batch_response(
+        output if isinstance(output, dict) else {}
+    )
+    embeddings = await build_embedding_response(response, model_id, b64_embedding=False)
+    return embeddings.model_dump(exclude_none=True)
+
+
 async def _to_message(line: JsonMapping, model: str, custom_id: str) -> JsonMapping:
     """Translate one successful result line into a message body.
 
@@ -1580,6 +1764,7 @@ async def iter_openai_results(
     Yields:
         One JSONL line at a time.
     """
+    embeddings = record.endpoint == _EMBEDDINGS_ENDPOINT
     for ref in record.jobs:
         async for line in _iter_job_output(ref):
             custom_id = str(line.get("recordId", ""))
@@ -1588,8 +1773,12 @@ async def iter_openai_results(
                 continue
             line_id = _result_line_id(record.batch_id, custom_id)
             if error is None:
-                body = await _to_completion(
-                    line, ref.model_id, custom_id, record.created_at
+                body = (
+                    await _to_embeddings(line, ref.model_id)
+                    if embeddings
+                    else await _to_completion(
+                        line, ref.model_id, custom_id, record.created_at
+                    )
                 )
                 payload: JsonMapping = {
                     "id": line_id,
@@ -1791,7 +1980,9 @@ async def prepare_openai_requests(
             f"one carries {len(lines)}."
         )
         raise ApiError(msg)
-    bodies: list[CompletionCreateParams] = []
+    embeddings = endpoint == _EMBEDDINGS_ENDPOINT
+    params = EmbeddingCreateParams if embeddings else CompletionCreateParams
+    bodies: list[CompletionCreateParams | EmbeddingCreateParams] = []
     custom_ids: list[str] = []
     for index, line in enumerate(lines):
         url = line.get("url")
@@ -1809,7 +2000,7 @@ async def prepare_openai_requests(
             msg = f"Line {index + 1}: 'body' must be a JSON object."
             raise ApiError(msg)
         with validation_error_handler():
-            bodies.append(CompletionCreateParams.model_validate(body))
+            bodies.append(params.model_validate(body))
         custom_ids.append(str(line.get("custom_id", "")))
     _validate_custom_ids(custom_ids, "Line")
     if len({body.model for body in bodies}) > 1:
@@ -1820,7 +2011,9 @@ async def prepare_openai_requests(
         raise ApiError(msg)
     return await _prepare_all(
         list(zip(custom_ids, bodies, strict=True)),
-        lambda item, index: _prepare_openai_request(item[0], item[1], index),
+        (lambda item, index: _prepare_embedding_request(item[0], item[1], index))  # type: ignore[arg-type]
+        if embeddings
+        else (lambda item, index: _prepare_openai_request(item[0], item[1], index)),  # type: ignore[arg-type]
     )
 
 

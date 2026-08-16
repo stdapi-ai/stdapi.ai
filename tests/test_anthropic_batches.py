@@ -17,6 +17,7 @@ Ref: https://platform.claude.com/docs/en/build-with-claude/batch-processing
 """
 
 import contextlib
+from time import monotonic, sleep
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -989,6 +990,96 @@ class TestMessageBatchLive:
             assert cancelled.id == batch.id
             assert cancelled.cancel_initiated_at is not None
             assert cancelled.processing_status in {"canceling", "ended"}
+        finally:
+            with contextlib.suppress(Exception):
+                anthropic_client.messages.batches.cancel(batch.id)
+
+
+#: How long a batch of the minimum size is given to end.
+_ROUND_TRIP_TIMEOUT: float = 3600.0
+
+#: Seconds between two status reads of a running batch.
+_POLL_INTERVAL: float = 20.0
+
+
+@pytest.mark.slow
+@pytest.mark.usefixtures("anthropic_batches_api")
+class TestMessageBatchRoundTrip:
+    """Running a real Message Batch to completion, and reading the messages back.
+
+    A submission that is accepted says nothing about a batch: the requests
+    still have to run, and each result still has to read back as the message
+    that request would have produced on its own. The batch is the smallest the
+    backing jobs accept, and every one of its results is read.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/batch-processing
+         stdapi/batches.py:iter_anthropic_results
+    """
+
+    def test_every_request_comes_back_as_its_own_message(
+        self,
+        anthropic_client: Anthropic,
+        anthropic_chat_model: str,
+        use_official_api: bool,
+    ) -> None:
+        """A Message Batch ends with one succeeded result per request.
+
+        Results come back in no particular order, so they are indexed by
+        ``custom_id`` — which is also what makes an answer attributable to the
+        request that asked for it.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/batch-processing
+             stdapi/batches.py:_to_message
+        """
+        count = 1 if use_official_api else batches.MIN_REQUESTS_PER_MODEL
+        batch = anthropic_client.messages.batches.create(
+            requests=[
+                {
+                    "custom_id": f"req-{index}",
+                    "params": {
+                        "model": anthropic_chat_model,
+                        "max_tokens": 32,
+                        "messages": [
+                            {"role": "user", "content": f"Say hello, #{index}."}
+                        ],
+                    },
+                }
+                for index in range(count)
+            ]
+        )
+        try:
+            deadline = monotonic() + _ROUND_TRIP_TIMEOUT
+            while (
+                current := anthropic_client.messages.batches.retrieve(batch.id)
+            ).processing_status != "ended":
+                assert monotonic() < deadline, (
+                    f"{batch.id} was still '{current.processing_status}' after "
+                    f"{_ROUND_TRIP_TIMEOUT:.0f}s ({current.request_counts})"
+                )
+                sleep(_POLL_INTERVAL)
+            assert current.ended_at is not None
+            assert current.request_counts.succeeded == count
+            assert current.request_counts.errored == 0
+            assert current.request_counts.canceled == 0
+            assert current.request_counts.expired == 0
+            assert current.results_url is not None
+
+            results = {
+                entry.custom_id: entry
+                for entry in anthropic_client.messages.batches.results(batch.id)
+            }
+            assert set(results) == {f"req-{index}" for index in range(count)}
+            for entry in results.values():
+                result = entry.result
+                assert result.type == "succeeded", entry
+                message = result.message
+                assert message.type == "message"
+                assert message.role == "assistant"
+                block = message.content[0]
+                assert block.type == "text"
+                assert block.text
+                assert message.usage.input_tokens > 0
+                assert message.usage.output_tokens > 0
         finally:
             with contextlib.suppress(Exception):
                 anthropic_client.messages.batches.cancel(batch.id)
