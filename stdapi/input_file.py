@@ -599,6 +599,8 @@ class _HttpSource(_FileSource):
         Returns:
             A configured aiohttp client session.
         """
+        # No ``trust_env``: a proxy would become the connect target, so the
+        # connector never dials the address it validated.
         return ClientSession(
             headers={**HTTP_CLIENT_HEADERS, **extra_headers}
             if extra_headers

@@ -355,7 +355,10 @@ async def measure_region_latencies() -> (
         for _ in range(probes_count)
     ]
     async with ClientSession(
-        headers=HTTP_CLIENT_HEADERS, timeout=ClientTimeout(total=5)
+        headers=HTTP_CLIENT_HEADERS,
+        timeout=ClientTimeout(total=5),
+        # Probe the path the invocations take: same proxy environment as the SDK.
+        trust_env=True,
     ) as session:
         raw = list(await gather(*(_single_probe(session, url) for url in probe_urls)))
 

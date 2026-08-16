@@ -97,7 +97,10 @@ async def _fetch_key_set(url: str) -> Any:  # noqa: ANN401
     """
     async with (
         ClientSession(
-            headers=HTTP_CLIENT_HEADERS, timeout=ClientTimeout(total=_KEY_SET_TIMEOUT)
+            headers=HTTP_CLIENT_HEADERS,
+            timeout=ClientTimeout(total=_KEY_SET_TIMEOUT),
+            # Internet-bound: same proxy environment the AWS SDK honours.
+            trust_env=True,
         ) as session,
         session.get(url) as response,
     ):

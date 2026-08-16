@@ -4770,3 +4770,23 @@ class TestMantleHttpSessionOwnership:
             assert not owner.closed
         assert aws_bedrock_mantle._SESSION is None  # noqa: SLF001
         assert owner.closed
+
+    @pytest.mark.local
+    async def test_session_honours_the_proxy_environment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The Mantle session reads ``HTTPS_PROXY``/``HTTP_PROXY``/``NO_PROXY``.
+
+        aiohttp reads those variables only when ``trust_env`` is set, while the
+        AWS SDK honours them unconditionally. Without it, a deployment whose
+        only egress is a proxy reaches every classic Bedrock region and no
+        Mantle endpoint at all, which surfaces as the Mantle models simply
+        being absent from the catalog.
+
+        Ref: https://docs.aiohttp.org/en/stable/client_advanced.html#proxy-support
+             https://docs.aiohttp.org/en/stable/client_reference.html
+             stdapi/aws_bedrock_mantle.py:mantle_http_session
+        """
+        monkeypatch.setattr(aws_bedrock_mantle, "_SESSION", None)
+        async with aws_bedrock_mantle.mantle_http_session() as session:
+            assert session.trust_env is True

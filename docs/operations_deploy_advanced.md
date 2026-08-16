@@ -1,7 +1,7 @@
 ---
 title: Advanced Deployment - Terraform Examples, ECS, and Cost Optimization
 description: Advanced deployment configurations for stdapi.ai including VPC integration, multi-region production, cost-optimized setups, manual ECS deployment, and Terraform module outputs.
-keywords: stdapi.ai deployment, Terraform advanced, AWS ECS deployment, multi-region AI gateway, cost-optimized AI, VPC integration, production deployment, AWS Bedrock multi-region
+keywords: stdapi.ai deployment, Terraform advanced, AWS ECS deployment, multi-region AI gateway, cost-optimized AI, VPC integration, production deployment, AWS Bedrock multi-region, outbound egress requirements, HTTPS_PROXY HTTP_PROXY NO_PROXY, bedrock-mantle api.aws endpoint, com.amazonaws bedrock-mantle VPC endpoint, netrc credentials container image
 ---
 
 # :material-server-network: Advanced Deployment
@@ -282,6 +282,45 @@ After deployment, add a target group pointing to port 8000, with a health check 
 
     !!! warning "Important"
         When using `api_key_secretsmanager_secret` or `api_key_ssm_parameter`, you must create and attach an IAM policy granting the ECS task access to the secret/parameter. The module does not automatically create these permissions.
+
+---
+
+## :material-transit-connection-variant: Outbound Network Requirements
+
+Beyond the inbound API traffic, the server reaches out to the AWS endpoints behind the features you enable. Allow these destinations from the task's security group — a blocked one usually makes a capability go missing rather than fail loudly.
+
+| Destination | Needed for |
+|---|---|
+| `bedrock-runtime.<region>.amazonaws.com`, `bedrock.<region>.amazonaws.com` | Model invocation and the model catalog, in every configured region |
+| `bedrock-mantle.<region>.api.aws` | The models served through Amazon Bedrock Mantle |
+| The other AWS service endpoints you enable | Amazon Polly, Amazon Transcribe, Amazon Translate, Amazon Comprehend, Amazon S3, AWS STS, AWS Price List |
+| `cognito-idp.<region>.amazonaws.com` | The user pool key set, when Amazon Cognito authentication is enabled |
+
+Bedrock Mantle is a separate endpoint from classic Bedrock, on a different domain (`api.aws`, not `amazonaws.com`). A network policy that allows the one and not the other is the usual reason a deployment lists every classic model and no Mantle model at all.
+
+### Private deployments
+
+Each of those endpoints has an interface VPC endpoint service, so a deployment with no internet egress reaches them privately. Bedrock Mantle's is:
+
+```text
+com.amazonaws.<region>.bedrock-mantle
+```
+
+Enable private DNS on it, so `bedrock-mantle.<region>.api.aws` resolves to the endpoint. When the Terraform module builds the VPC it provisions the interface endpoints itself; deploying into your own VPC (`subnet_ids`) makes every endpoint yours to create.
+
+### Proxied deployments
+
+Where egress is only possible through an HTTP proxy, set `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` in the task environment. Every connection the server makes to an AWS endpoint honours them, so one set of variables covers the whole deployment.
+
+Two connections deliberately do not, and neither needs an entry in `NO_PROXY`:
+
+- **The container task metadata endpoint**, which the ECS agent serves on the task's own host and no proxy can reach.
+- **Fetches of a URL a client supplied** — an image or audio URL in a request. Those are validated against the deployment's SSRF policy and connected to the exact address that was validated; routing them through a proxy would hand that decision to the proxy instead.
+
+!!! warning "A `~/.netrc` file in the image becomes credentials on the wire"
+    Honouring the proxy variables also enables `.netrc` lookups, which is how the standard tooling behaves. If a `.netrc` exists in the container's home directory, its entries are matched against outbound hosts and sent as HTTP authentication.
+
+    The images stdapi.ai publishes contain no `.netrc`. Only a custom image, or a volume mounted over the home directory, can introduce one — do not add one, and check for it if you build your own image.
 
 ---
 

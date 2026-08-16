@@ -1354,6 +1354,39 @@ class TestMeasureRegionLatencies:
         # mean/pstdev of three identical 50 ms samples.
         assert result[ROUTING_SECONDARY] == {"latency_ms": 50.0, "stddev_ms": 0.0}
 
+    async def test_probe_session_honours_the_proxy_environment(self) -> None:
+        """The probe session reads ``HTTPS_PROXY``/``HTTP_PROXY``/``NO_PROXY``.
+
+        aiohttp reads those variables only when ``trust_env`` is set, while the
+        AWS SDK honours them unconditionally. Without it the probes bypass the
+        proxy the invocations themselves must use, so the measured ranking is
+        not the ranking the requests will experience — and on a proxy-only
+        network every probe fails and no region is ranked at all.
+
+        Ref: https://docs.aiohttp.org/en/stable/client_advanced.html#proxy-support
+             https://docs.aiohttp.org/en/stable/client_reference.html
+             stdapi/region_routing.py:measure_region_latencies
+        """
+        import stdapi.region_routing as _rr_mod  # noqa: PLC0415
+        from stdapi.config import SETTINGS  # noqa: PLC0415
+
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.head = MagicMock(return_value=AsyncMock())
+        client_session = MagicMock(return_value=mock_session)
+
+        with (
+            patch.object(_rr_mod, "REGION_ROUTER", _rr_mod.RegionRouter()),
+            patch.object(SETTINGS, "aws_bedrock_region_routing", "lowest_latency"),
+            patch.object(SETTINGS, "aws_bedrock_regions", _ROUTING_REGIONS),
+            patch.object(_rr_mod, "ORDERED_BEDROCK_REGIONS", list(_ROUTING_REGIONS)),
+            patch.object(_rr_mod, "_REGION_LATENCIES", {}),
+            patch.object(_rr_mod, "ClientSession", client_session),
+        ):
+            await _rr_mod.measure_region_latencies()
+
+        assert client_session.call_args.kwargs["trust_env"] is True
+
 
 # ---------------------------------------------------------------------------
 # Group 10 — route_and_execute unit tests (pure logic, no real AWS)

@@ -990,6 +990,8 @@ async def _set_account_info_from_ecs(metadata_path: str) -> None:
     Args:
         metadata_path: ECS task metadata endpoint URI.
     """
+    # No ``trust_env``: the endpoint is a link-local address on the task's own
+    # host, so a configured proxy could never reach it.
     async with ClientSession(
         headers=server.HTTP_CLIENT_HEADERS,
         timeout=ClientTimeout(

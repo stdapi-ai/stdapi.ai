@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
-from aiohttp import web
+from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestServer
 
 from stdapi import aws, server
@@ -103,6 +103,39 @@ async def test_account_info_from_ecs_metadata(
 
     assert aws.AWS_ENVIRONMENT["account_id"] == "123456789012"
     assert f"abcdef0123456789-main-{server.SERVER_ID}" == server.SERVER_NAME
+
+
+async def test_ecs_metadata_ignores_the_proxy_environment(
+    monkeypatch: pytest.MonkeyPatch, metadata_server: TestServer
+) -> None:
+    """The task metadata session never routes through a configured HTTP proxy.
+
+    The endpoint is a link-local address served by the container agent on the
+    task's own host, so it is unreachable through any proxy. Reading
+    ``HTTP_PROXY`` here would send every metadata request to the proxy unless
+    the operator also excluded the link-local address in ``NO_PROXY``, which
+    would break proxied deployments that work today.
+
+    Ref: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-metadata-endpoint-v4.html
+         https://docs.aiohttp.org/en/stable/client_reference.html
+         stdapi/aws.py:_set_account_info_from_ecs
+    """
+    sessions: list[ClientSession] = []
+
+    def record(**kwargs: object) -> ClientSession:
+        session = ClientSession(**kwargs)  # type: ignore[arg-type]
+        sessions.append(session)
+        return session
+
+    monkeypatch.setattr(aws, "ClientSession", record)
+    monkeypatch.setenv(
+        "ECS_CONTAINER_METADATA_URI_V4", str(metadata_server.make_url("/v4/id"))
+    )
+
+    assert await aws.initialize_aws_account_info() is None
+
+    assert sessions, "the metadata endpoint must be read over its own session"
+    assert all(not session.trust_env for session in sessions)
 
 
 async def test_unreachable_ecs_metadata_falls_back_to_sts(

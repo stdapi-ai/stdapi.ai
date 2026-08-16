@@ -1,4 +1,4 @@
-"""SSRF validation in :mod:`stdapi.security`.
+"""SSRF validation in :mod:`stdapi.security`, and the egress policy around it.
 
 Two layers are covered: :func:`stdapi.security.validate_host_ssrf`, which
 classifies a host, and the aiohttp connector returned by
@@ -10,8 +10,16 @@ the address that was validated.
 ``ssrf_blocked_status`` reports to the client, so every rejection test asserts the
 status *and* the message rather than just the exception class.
 
+The last group covers which outbound sessions may read the deployment's proxy
+environment: a session fetching a caller-supplied URL may not, because a proxy
+becomes the connect target and the validated address is never dialled, while a
+session the server itself originates must, or it disagrees with the AWS SDK
+about the deployment's own network policy.
+
 Ref: stdapi/security.py:validate_host_ssrf
      stdapi/security.py:ssrf_safe_connector
+     stdapi/input_file.py:_HttpSource._client_session
+     stdapi/auth_cognito.py:_fetch_key_set
 """
 
 from __future__ import annotations
@@ -22,7 +30,7 @@ import pytest
 from aiohttp import ClientConnectorError, ClientSession, TCPConnector, web
 from aiohttp.test_utils import TestServer
 
-from stdapi import security
+from stdapi import auth_cognito, input_file, security
 from stdapi.api_errors import ApiError
 
 if TYPE_CHECKING:
@@ -340,3 +348,85 @@ class TestSsrfSafeConnectorIntegration:
         ):
             assert resp.status == 200
             assert await resp.text() == "pinned"
+
+
+#: Every environment variable aiohttp reads for proxy configuration
+_PROXY_ENVIRONMENT = (
+    "ALL_PROXY",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY",
+    "WS_PROXY",
+    "WSS_PROXY",
+)
+
+
+class TestOutboundProxyEnvironment:
+    """Which outbound sessions may read the deployment's proxy environment.
+
+    aiohttp reads ``HTTPS_PROXY``/``HTTP_PROXY``/``NO_PROXY`` only when
+    ``trust_env`` is set, whereas the AWS SDK honours them unconditionally, so a
+    server-originated session that leaves it unset disagrees with the SDK about
+    the deployment's own network policy — and fails outright where the proxy is
+    the only egress. A session fetching a caller-supplied URL is the exception.
+
+    Ref: https://docs.aiohttp.org/en/stable/client_advanced.html#proxy-support
+         https://docs.aiohttp.org/en/stable/client_reference.html
+    """
+
+    async def test_caller_url_session_ignores_the_proxy_environment(self) -> None:
+        """A session fetching a caller-supplied URL never honours a proxy.
+
+        The session exists to enforce ``ssrf_safe_connector``, which validates
+        every hop's address and pins the connection to it. A proxy becomes the
+        connect target instead, so the validated address is never dialled and
+        the proxy resolves the caller's host itself — the SSRF check would still
+        pass while the request reaches whatever it was meant to block.
+
+        Ref: stdapi/input_file.py:_HttpSource._client_session
+             stdapi/security.py:ssrf_safe_connector
+        """
+        source = input_file._HttpSource("https://example.test/file.png")  # noqa: SLF001
+        async with source._client_session() as session:  # noqa: SLF001
+            assert session.trust_env is False
+
+    async def test_key_set_session_honours_the_proxy_environment(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        start_test_server: Callable[[web.Application], Awaitable[TestServer]],
+    ) -> None:
+        """The user pool key set fetch honours a configured proxy.
+
+        The key set is published on the public internet, so on a deployment
+        whose only egress is a proxy this fetch is unreachable without it — and
+        every token then fails to verify.
+
+        Ref: stdapi/auth_cognito.py:_fetch_key_set
+        """
+        for variable in _PROXY_ENVIRONMENT:
+            monkeypatch.delenv(variable, raising=False)
+            monkeypatch.delenv(variable.lower(), raising=False)
+
+        async def key_set(_: web.Request) -> web.Response:
+            return web.json_response({"keys": []})
+
+        app = web.Application()
+        app.router.add_get("/jwks.json", key_set)
+        server = await start_test_server(app)
+
+        sessions: list[ClientSession] = []
+
+        def record(**kwargs: object) -> ClientSession:
+            session = ClientSession(**kwargs)  # type: ignore[arg-type]
+            sessions.append(session)
+            return session
+
+        monkeypatch.setattr(auth_cognito, "ClientSession", record)
+
+        document = await auth_cognito._fetch_key_set(  # noqa: SLF001
+            str(server.make_url("/jwks.json"))
+        )
+
+        assert document == {"keys": []}
+        assert sessions, "the key set must be read over its own session"
+        assert sessions[0].trust_env is True

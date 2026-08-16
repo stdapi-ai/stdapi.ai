@@ -285,6 +285,8 @@ async def mantle_http_session() -> AsyncGenerator[ClientSession]:
         ),
         # Large SSE lines: a single event can carry the whole response JSON.
         read_bufsize=2**22,
+        # Same proxy environment the AWS SDK already honours unconditionally.
+        trust_env=True,
     )
     _SESSION = session
     try:
