@@ -13,7 +13,7 @@ Ref: https://platform.claude.com/docs/en/api/messages
 import base64
 import json as _json
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from unittest.mock import AsyncMock
 
 import httpx
@@ -30,14 +30,18 @@ from anthropic import (
 import stdapi.models as _models_mod
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, PERFORMANCE_CONFIG_VAR
-from stdapi.aws_bedrock_mantle import mantle_request_headers
+from stdapi.aws_bedrock_mantle import mantle_request_headers, validate_pruning_extras
 from stdapi.config import SETTINGS
 from stdapi.models import ModelDetails
 from stdapi.models.chat._adapters._anthropic_message import translate_request
+from stdapi.models.chat._default import ChatModel
 from stdapi.routes import anthropic_messages
 from stdapi.types.anthropic_messages import (
+    Message,
     MessageCountTokensParams,
     MessageCreateParams,
+    MessageDelta,
+    MessageDeltaUsage,
     MessageParam,
 )
 
@@ -4095,3 +4099,280 @@ class TestMessagesBedrockHeaders:
         )
         assert response.status_code == 200, response.text
         assert captured["guardrail"] is None
+
+
+def _mantle_refusal_payload() -> dict[str, Any]:
+    """Return the ``Message`` payload a Bedrock Mantle refusal answers with.
+
+    A fresh dict per call: the passthrough validator prunes in place.
+    """
+    return {
+        "id": "msg_01",
+        "type": "message",
+        "role": "assistant",
+        "content": [],
+        "model": "claude-x",
+        "stop_reason": "refusal",
+        "stop_details": {
+            "type": "refusal",
+            "category": "cyber",
+            "explanation": "The request could enable cyber harm.",
+        },
+        "usage": {
+            "input_tokens": 12,
+            "output_tokens": 340,
+            "output_tokens_details": {"thinking_tokens": 128},
+            "service_tier": "standard",
+        },
+    }
+
+
+class TestMessagesRefusalStopDetails:
+    """Offline unit tests for ``stop_details`` on the Messages response types.
+
+    ``stop_reason: "refusal"`` alone does not say which policy stopped the
+    generation; the category and its explanation live in ``stop_details``. A
+    passthrough response carrying one must keep it rather than have it pruned as
+    an unknown extra.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         anthropic.types.refusal_stop_details.RefusalStopDetails
+         stdapi/types/anthropic_messages.py:Message
+         stdapi/models/chat/_mantle/_default.py:create_message
+    """
+
+    pytestmark = pytest.mark.local
+
+    def test_passthrough_message_keeps_the_refusal_category(self) -> None:
+        """A passthrough refusal keeps ``stop_details`` instead of losing it to pruning.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/aws_bedrock_mantle.py:validate_pruning_extras
+        """
+        message = validate_pruning_extras(Message, _mantle_refusal_payload())
+
+        assert message.stop_reason == "refusal"
+        assert message.stop_details is not None
+        assert message.stop_details.type == "refusal"
+        assert message.stop_details.category == "cyber"
+        assert (
+            message.stop_details.explanation == "The request could enable cyber harm."
+        )
+
+    def test_message_delta_carries_the_refusal_details(self) -> None:
+        """The streaming ``message_delta`` declares the same ``stop_details`` object.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             anthropic.types.raw_message_delta_event.RawMessageDeltaEvent.Delta
+             stdapi/types/anthropic_messages.py:MessageDelta
+        """
+        delta = MessageDelta.model_validate(
+            {
+                "stop_reason": "refusal",
+                "stop_details": {"type": "refusal", "category": "bio"},
+            }
+        )
+
+        assert delta.stop_details is not None
+        assert delta.stop_details.category == "bio"
+        assert delta.stop_details.explanation is None
+
+    def test_an_unknown_refusal_category_is_refused(self) -> None:
+        """The category is the documented enumeration, not an open string.
+
+        Ref: anthropic.types.refusal_stop_details.RefusalStopDetails
+             stdapi/types/anthropic_messages.py:RefusalStopDetails
+        """
+        payload = _mantle_refusal_payload()
+        payload["stop_details"]["category"] = "not-a-category"
+
+        with pytest.raises(ApiError) as excinfo:
+            validate_pruning_extras(Message, payload)
+        assert excinfo.value.status == 502
+
+
+class TestMessagesOutputTokensDetails:
+    """Offline unit tests for ``usage.output_tokens_details``.
+
+    ``output_tokens`` stays the authoritative billed total; the breakdown says
+    how many of those tokens were spent on internal reasoning. Bedrock's
+    ``TokenUsage`` has no reasoning split, so the Converse path leaves it unset
+    rather than inventing one.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html
+         anthropic.types.output_tokens_details.OutputTokensDetails
+         stdapi/types/anthropic_messages.py:Usage
+    """
+
+    pytestmark = pytest.mark.local
+
+    def test_passthrough_usage_keeps_the_thinking_token_count(self) -> None:
+        """A passthrough response keeps the reasoning-token breakdown.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/aws_bedrock_mantle.py:validate_pruning_extras
+        """
+        message = validate_pruning_extras(Message, _mantle_refusal_payload())
+
+        assert message.usage.output_tokens_details is not None
+        assert message.usage.output_tokens_details.thinking_tokens == 128
+
+    def test_message_delta_usage_carries_the_breakdown(self) -> None:
+        """The trailing ``message_delta`` usage declares the same breakdown.
+
+        Ref: anthropic.types.message_delta_usage.MessageDeltaUsage
+             stdapi/types/anthropic_messages.py:MessageDeltaUsage
+        """
+        usage = MessageDeltaUsage.model_validate(
+            {"output_tokens": 340, "output_tokens_details": {"thinking_tokens": 128}}
+        )
+
+        assert usage.output_tokens_details is not None
+        assert usage.output_tokens_details.thinking_tokens == 128
+
+
+def _converse_response(**extra: object) -> dict[str, Any]:
+    """Return a minimal Bedrock ``Converse`` response, extended with *extra*."""
+    return {
+        "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 5, "outputTokens": 3, "totalTokens": 8},
+        **extra,
+    }
+
+
+class TestMessagesConverseUsageAttribution:
+    """Offline unit tests for the usage fields the Converse path attributes itself.
+
+    Upstream always reports which tier served a request and, when a prompt was
+    cached, how the cache-creation tokens split across TTLs. Bedrock reports both
+    — the tier on the ``Converse`` response, the split in ``TokenUsage.cacheDetails``
+    — so a response served this way carries them too instead of a null.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ServiceTier.html
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CacheDetail.html
+         stdapi/models/chat/_adapters/_anthropic_message.py:format_response
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    async def _serve(
+        monkeypatch: pytest.MonkeyPatch,
+        response: dict[str, Any],
+        *,
+        requested_tier: str | None = None,
+    ) -> Message:
+        """Serve one non-streaming message from a canned Converse *response*."""
+        bedrock_request: dict[str, Any] = {"modelId": ""}
+        if requested_tier is not None:
+            bedrock_request["serviceTier"] = {"type": requested_tier}
+        monkeypatch.setattr(
+            ChatModel,
+            "build_message_request",
+            AsyncMock(return_value=(bedrock_request, None)),
+        )
+        monkeypatch.setattr(ChatModel, "converse", AsyncMock(return_value=response))
+        request = MessageCreateParams.model_validate(
+            {
+                "model": "test.usage-model",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        )
+        message = await ChatModel("test.usage-model").create_message(request, "msg_1")
+        assert isinstance(message, Message)
+        return message
+
+    async def test_service_tier_reports_the_tier_bedrock_served(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, object]
+    ) -> None:
+        """The tier the backend reports serving wins over the one that was requested.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ServiceTier.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:map_response_service_tier
+        """
+        message = await self._serve(
+            monkeypatch,
+            _converse_response(serviceTier={"type": "priority"}),
+            requested_tier="default",
+        )
+
+        assert message.usage.service_tier == "priority"
+
+    async def test_service_tier_falls_back_to_the_requested_tier(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, object]
+    ) -> None:
+        """A response that reports no tier is attributed to the tier that was asked for.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+             stdapi/models/chat/_default.py:create_message
+        """
+        message = await self._serve(
+            monkeypatch, _converse_response(), requested_tier="default"
+        )
+
+        assert message.usage.service_tier == "standard"
+
+    async def test_a_tier_anthropic_cannot_name_stays_unset(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, object]
+    ) -> None:
+        """``flex`` has no Anthropic equivalent, so no tier is claimed at all.
+
+        Ref: anthropic.types.usage.Usage
+             stdapi/models/chat/_adapters/_anthropic_message.py:map_response_service_tier
+        """
+        message = await self._serve(
+            monkeypatch,
+            _converse_response(serviceTier={"type": "flex"}),
+            requested_tier="flex",
+        )
+
+        assert message.usage.service_tier is None
+
+    async def test_cache_creation_is_split_by_ttl(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, object]
+    ) -> None:
+        """``cacheDetails`` becomes the per-TTL ``cache_creation`` breakdown.
+
+        AWS prices a 5-minute and a 1-hour cache write differently, and reports
+        each bucket separately; the flat total stays the authoritative figure.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CacheDetail.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:format_response
+        """
+        message = await self._serve(
+            monkeypatch,
+            _converse_response(
+                usage={
+                    "inputTokens": 5,
+                    "outputTokens": 3,
+                    "totalTokens": 8,
+                    "cacheWriteInputTokens": 1500,
+                    "cacheDetails": [
+                        {"ttl": "1h", "inputTokens": 1000},
+                        {"ttl": "5m", "inputTokens": 500},
+                    ],
+                }
+            ),
+        )
+
+        assert message.usage.cache_creation_input_tokens == 1500
+        assert message.usage.cache_creation is not None
+        assert message.usage.cache_creation.ephemeral_1h_input_tokens == 1000
+        assert message.usage.cache_creation.ephemeral_5m_input_tokens == 500
+
+    async def test_no_cache_write_leaves_the_breakdown_unset(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, object]
+    ) -> None:
+        """Without a reported per-TTL split, no breakdown is invented.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:format_response
+        """
+        message = await self._serve(monkeypatch, _converse_response())
+
+        assert message.usage.cache_creation is None
+        assert message.usage.output_tokens_details is None

@@ -1743,11 +1743,12 @@ async def _to_message(line: JsonMapping, model: str, custom_id: str) -> JsonMapp
     message = await anthropic_adapter.format_response(
         output.get("output", {}).get("message", {}).get("content", []),
         output.get("stopReason"),
-        output.get("usage", {}),  # type: ignore[arg-type]
+        output.get("usage", {}),
         f"msg_{custom_id}",
         model,
         None,
         lambda *_: None,
+        service_tier="batch",
     )
     return message.model_dump(exclude_none=True)
 

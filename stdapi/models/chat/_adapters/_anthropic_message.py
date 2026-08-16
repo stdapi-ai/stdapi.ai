@@ -29,6 +29,7 @@ from stdapi.types.anthropic_messages import (
     Base64ImageSource,
     Base64PDFSource,
     CacheControlEphemeralParam,
+    CacheCreation,
     CitationCharLocation,
     CitationContentBlockLocation,
     CitationPageLocation,
@@ -59,6 +60,7 @@ from stdapi.types.anthropic_messages import (
     RawMessageStopEvent,
     RedactedThinkingBlock,
     RedactedThinkingBlockParam,
+    ResponseServiceTiers,
     SearchResultBlockParam,
     ServerToolUseBlockParam,
     ServiceTiers,
@@ -123,6 +125,7 @@ if TYPE_CHECKING:
         MessageTypeDef,
         ReasoningTextBlockTypeDef,
         SystemContentBlockTypeDef,
+        TokenUsageTypeDef,
         ToolChoiceTypeDef,
         ToolConfigurationTypeDef,
         ToolResultBlockTypeDef,
@@ -175,6 +178,16 @@ _SERVICES_TIERS: dict[ServiceTiers | None, ServiceTierTypeType] = {
     "flex": "flex",
     "reserved": "reserved",
 }
+
+#: Bedrock service tiers to the tier an Anthropic response reports; the Bedrock-only
+#: "flex" and "reserved" have no Anthropic equivalent and are deliberately absent.
+_RESPONSE_SERVICES_TIERS: dict[str, ResponseServiceTiers] = {
+    "default": "standard",
+    "priority": "priority",
+}
+
+#: Cache TTLs Anthropic's ``cache_creation`` breakdown has a field for.
+_CACHE_CREATION_TTLS: frozenset[CacheTTLType] = frozenset({"5m", "1h"})
 
 #: Regex to sanitize document names for Bedrock (only [a-zA-Z0-9_-] allowed)
 _RE_DOC_NAME = re.compile(r"[^a-zA-Z0-9_-]")
@@ -234,6 +247,43 @@ def _map_stop_reason(stop_reason: StopReasonType | str | None) -> StopReason:
         Corresponding Anthropic stop reason string.
     """
     return _STOP_REASONS.get(stop_reason, "end_turn")
+
+
+def map_response_service_tier(
+    tier: ServiceTierTypeType | str | None,
+) -> ResponseServiceTiers | None:
+    """Map the tier that served a Bedrock call to the tier a response reports.
+
+    Args:
+        tier: Bedrock service tier literal, or ``None``.
+
+    Returns:
+        The Anthropic service tier, or ``None`` when the call was served on a
+        tier the Anthropic response vocabulary has no word for.
+    """
+    return _RESPONSE_SERVICES_TIERS.get(tier or "")
+
+
+def _map_cache_creation(usage: TokenUsageTypeDef) -> CacheCreation | None:
+    """Build the per-TTL cache-creation breakdown from a Bedrock usage block.
+
+    Args:
+        usage: Bedrock token usage block.
+
+    Returns:
+        The breakdown, or ``None`` when no per-TTL cache write was reported.
+    """
+    buckets = {
+        detail["ttl"]: detail["inputTokens"]
+        for detail in usage.get("cacheDetails") or ()
+        if detail.get("ttl") in _CACHE_CREATION_TTLS and "inputTokens" in detail
+    }
+    if not buckets:
+        return None
+    return CacheCreation(
+        ephemeral_5m_input_tokens=buckets.get("5m", 0),
+        ephemeral_1h_input_tokens=buckets.get("1h", 0),
+    )
 
 
 def _map_system_blocks(
@@ -1212,7 +1262,7 @@ def _merge_into_previous_web_search_result(
 async def format_response(
     contents: list[ContentBlockOutputTypeDef],
     stop_reason: StopReasonType | None,
-    usage: dict[str, int],
+    usage: TokenUsageTypeDef,
     message_id: str,
     model_id: str,
     forced_tool: str | None,
@@ -1221,6 +1271,8 @@ async def format_response(
     ],
     resp_map_tool_use: Callable[[str, str, JsonMapping], ContentBlock | None]
     | None = None,
+    *,
+    service_tier: ResponseServiceTiers | None = None,
 ) -> Message:
     """Format a Bedrock Converse response as an Anthropic ``Message``.
 
@@ -1239,6 +1291,8 @@ async def format_response(
             an Anthropic content block.  Receives the raw ``toolUseId``, the Bedrock
             tool name, and the tool input dict.  Return ``None`` to fall back to the
             default ``_map_content_block_from_bedrock`` mapping.
+        service_tier: Tier the call was served on, echoed in ``usage``.  Left
+            ``None`` when it was served on a tier Anthropic has no word for.
 
     Returns:
         Anthropic Message object.
@@ -1295,6 +1349,8 @@ async def format_response(
         output_tokens=usage.get("outputTokens", 0),
         cache_read_input_tokens=usage.get("cacheReadInputTokens"),
         cache_creation_input_tokens=usage.get("cacheWriteInputTokens"),
+        cache_creation=_map_cache_creation(usage),
+        service_tier=service_tier,
     )
 
     return Message(

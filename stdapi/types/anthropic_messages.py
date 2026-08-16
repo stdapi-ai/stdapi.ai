@@ -44,6 +44,14 @@ ServiceTiers = Literal[
     "reserved",
 ]
 
+#: Service tier a response reports having been served on
+ResponseServiceTiers = Literal["standard", "priority", "batch"]
+
+#: Policy categories a refusal can name
+RefusalCategories = Literal[
+    "cyber", "bio", "frontier_llm", "reasoning_extraction", "general_harms"
+]
+
 # Server tools
 ServerTools = Literal[
     "web_search",
@@ -1789,6 +1797,17 @@ class CacheCreation(BaseModelResponse):
     )
 
 
+# Ref: anthropic.types.output_tokens_details.OutputTokensDetails
+class OutputTokensDetails(BaseModelResponse):
+    """Output token usage breakdown."""
+
+    thinking_tokens: int = Field(
+        description="Output tokens the model generated as internal reasoning, "
+        "including the thinking-block delimiters. Always at most `output_tokens`, "
+        "which stays the authoritative billed total."
+    )
+
+
 # Ref: anthropic.types.server_tool_usage.ServerToolUsage
 class ServerToolUsage(BaseModelResponse):
     """Server tool usage."""
@@ -1812,13 +1831,16 @@ class Usage(BaseModelResponse):
     cache_creation: CacheCreation | None = Field(
         default=None, description="Cache creation details."
     )
+    output_tokens_details: OutputTokensDetails | None = Field(
+        default=None, description="Output token breakdown by category."
+    )
     inference_geo: str | None = Field(
         default=None, description="Inference geographic region."
     )
     server_tool_use: ServerToolUsage | None = Field(
         default=None, description="Server tool usage."
     )
-    service_tier: Literal["standard", "priority", "batch"] | None = Field(
+    service_tier: ResponseServiceTiers | None = Field(
         default=None, description="The service tier used for the request."
     )
 
@@ -1829,6 +1851,26 @@ class Container(BaseModelResponse):
 
     id: str = Field(description="Identifier for the container used in this request.")
     expires_at: str = Field(description="The time at which the container will expire.")
+
+
+# Ref: anthropic.types.refusal_stop_details.RefusalStopDetails
+class RefusalStopDetails(BaseModelResponse):
+    """Structured information about a refusal."""
+
+    type: Literal["refusal"] = Field(description="Stop details type. Always `refusal`.")
+    category: RefusalCategories | None = Field(
+        default=None,
+        description="Policy category that triggered the refusal: `cyber` "
+        "(could enable cyber harm), `bio` (could enable biological harm), "
+        "`frontier_llm` (could assist competing model development), "
+        "`reasoning_extraction` (asks the model to reproduce its internal "
+        "reasoning) or `general_harms`. Benign work can also trigger a category.",
+    )
+    explanation: str | None = Field(
+        default=None,
+        description="Human-readable explanation of the refusal, or null when "
+        "none is available. The wording is not guaranteed to be stable.",
+    )
 
 
 # Ref: anthropic.types.message.Message
@@ -1856,6 +1898,11 @@ class Message(BaseModelResponse):
         "turn paused — resend as-is to continue), or `refusal` (streaming "
         "classifier intervened). Always non-null except in the streaming "
         "`message_start` event.",
+    )
+    stop_details: RefusalStopDetails | None = Field(
+        default=None,
+        description="Structured information about a refusal, present when "
+        "`stop_reason` is `refusal`.",
     )
     stop_sequence: str | None = Field(
         default=None, description="The matched custom stop sequence, if any."
@@ -1946,6 +1993,9 @@ class MessageDeltaUsage(BaseModelResponse):
         default=None,
         description="The cumulative number of input tokens which were used.",
     )
+    output_tokens_details: OutputTokensDetails | None = Field(
+        default=None, description="Output token breakdown by category."
+    )
     server_tool_use: ServerToolUsage | None = Field(
         default=None, description="The number of server tool requests."
     )
@@ -1960,6 +2010,11 @@ class MessageDelta(BaseModelResponse):
         description="Information about the container used in this request.",
     )
     stop_reason: StopReason | None = Field(default=None, description="Stop reason.")
+    stop_details: RefusalStopDetails | None = Field(
+        default=None,
+        description="Structured information about a refusal, present when "
+        "`stop_reason` is `refusal`.",
+    )
     stop_sequence: str | None = Field(default=None, description="Stop sequence.")
 
 

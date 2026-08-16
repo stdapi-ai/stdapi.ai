@@ -383,6 +383,44 @@ class TestMessageBatchLifecycle:
         assert errored["result"]["error"]["type"] == "error"
         assert "toolConfig" not in errored["result"]["error"]["error"]["message"]
 
+    def test_results_report_the_batch_service_tier(
+        self, anthropic_app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every Message a batch publishes reports `usage.service_tier` as `batch`.
+
+        Upstream always says which tier served a request, and a batched one is
+        served on -- and billed at -- the batch tier. The result lines are built
+        by the same formatter the synchronous route uses, so the tier has to be
+        stated by the batch path rather than inherited from it.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/batch-processing
+             anthropic.types.usage.Usage
+             stdapi/batches.py:_to_message
+        """
+        from pydantic_core import from_json  # noqa: PLC0415
+
+        s3, bedrock = _batches.install(monkeypatch)
+        batch_id = _create(anthropic_app_client, _requests(100))["id"]
+        bedrock.finish(succeeded=100)
+        _batches.write_job_output(
+            s3,
+            bedrock,
+            [
+                {"recordId": f"req-{index}", "modelOutput": converse_output("answer")}
+                for index in range(100)
+            ],
+            {"inputTokenCount": 500, "outputTokenCount": 300},
+        )
+
+        results = anthropic_app_client.get(f"{_PATH}/{batch_id}/results")
+        assert results.status_code == 200
+        usages = [
+            from_json(raw)["result"]["message"]["usage"]
+            for raw in results.content.splitlines()
+        ]
+        assert len(usages) == 100
+        assert {usage["service_tier"] for usage in usages} == {"batch"}
+
     def test_results_are_not_available_before_the_end(
         self, anthropic_app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:

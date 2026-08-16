@@ -30,9 +30,15 @@ from stdapi.types.anthropic_messages import (
 )
 
 if TYPE_CHECKING:
-    from types_aiobotocore_bedrock_runtime.type_defs import ContentBlockOutputTypeDef
+    from types_aiobotocore_bedrock_runtime.type_defs import (
+        ContentBlockOutputTypeDef,
+        TokenUsageTypeDef,
+    )
 
 pytestmark = pytest.mark.local
+
+#: Complete Bedrock ``TokenUsage`` for the tests that assert on content, not usage.
+_NO_USAGE: TokenUsageTypeDef = {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0}
 
 
 def test_map_stop_reason_preserves_context_window_exceeded() -> None:
@@ -130,7 +136,7 @@ async def test_search_result_block_wrapped_in_web_search_tool_result() -> None:
     message = await format_response(
         contents=contents,
         stop_reason="end_turn",
-        usage={},
+        usage=_NO_USAGE,
         message_id="msg_1",
         model_id="model-x",
         forced_tool=None,
@@ -182,7 +188,7 @@ async def test_forced_tool_drops_tool_uses_naming_another_tool() -> None:
     message = await format_response(
         contents=contents,
         stop_reason="tool_use",
-        usage={},
+        usage=_NO_USAGE,
         message_id="msg_1",
         model_id="model-x",
         forced_tool="get_time",
@@ -226,7 +232,7 @@ async def test_search_result_correlates_to_preceding_tool_use_id() -> None:
     message = await format_response(
         contents=_search_result_contents(),
         stop_reason="end_turn",
-        usage={},
+        usage=_NO_USAGE,
         message_id="msg_1",
         model_id="model-x",
         forced_tool=None,
@@ -257,7 +263,7 @@ async def test_search_result_correlates_to_mapped_server_tool_use_id() -> None:
     message = await format_response(
         contents=_search_result_contents(),
         stop_reason="end_turn",
-        usage={},
+        usage=_NO_USAGE,
         message_id="msg_1",
         model_id="model-x",
         forced_tool=None,
@@ -305,7 +311,7 @@ async def test_consecutive_search_results_aggregate_into_one_wrapper() -> None:
     message = await format_response(
         contents=contents,
         stop_reason="end_turn",
-        usage={},
+        usage=_NO_USAGE,
         message_id="msg_1",
         model_id="model-x",
         forced_tool=None,
@@ -342,6 +348,7 @@ async def test_usage_cache_tokens_read_from_bedrock_keys() -> None:
         usage={
             "inputTokens": 10,
             "outputTokens": 5,
+            "totalTokens": 15,
             "cacheReadInputTokens": 3,
             "cacheWriteInputTokens": 7,
         },
@@ -379,7 +386,7 @@ async def _citation_block(location: dict[str, Any]) -> TextBlock:
     message = await format_response(
         contents=contents,
         stop_reason="end_turn",
-        usage={},
+        usage=_NO_USAGE,
         message_id="msg_1",
         model_id="model-x",
         forced_tool=None,
@@ -524,7 +531,7 @@ async def test_citations_content_without_citations_has_none() -> None:
     message = await format_response(
         contents=contents,
         stop_reason="end_turn",
-        usage={},
+        usage=_NO_USAGE,
         message_id="msg_1",
         model_id="model-x",
         forced_tool=None,

@@ -477,12 +477,18 @@ class ChatModel(ChatModelBase[Any, Any]):
             await anthropic_adapter.format_response(
                 response["output"]["message"]["content"],
                 response["stopReason"],
-                response["usage"],  # type: ignore[arg-type]
+                response["usage"],
                 message_id,
                 request.model,
                 forced_tool,
                 self._resp_map_tool_result,
                 self._resp_map_tool_use,
+                # AWS reports the tier that served the call; it takes precedence
+                # over the requested one, as it does for recorded usage.
+                service_tier=anthropic_adapter.map_response_service_tier(
+                    (response.get("serviceTier") or {}).get("type")
+                    or bedrock_request.get("serviceTier", {}).get("type")
+                ),
             )
         )
 

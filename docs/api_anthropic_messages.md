@@ -82,7 +82,11 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 | Output tokens                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Billing unit                                                                                 |
 | Cache creation tokens                 |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Prompt caching metrics (streaming and non-streaming)                                         |
 | Cache read tokens                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Prompt caching metrics                                                                       |
+| Cache creation by TTL (`cache_creation`) |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Splits the cache creation tokens into `ephemeral_5m_input_tokens` and `ephemeral_1h_input_tokens`, when a per-TTL split is reported |
+| Reasoning tokens (`output_tokens_details`) |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Reported only by models that return a reasoning-token count; `output_tokens` remains the billed total |
+| Service tier (`usage.service_tier`)   |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | `standard`, `priority` or `batch`. Omitted when the request ran on a tier the Anthropic API has no name for (`flex`, `reserved`) |
 | **Other**                             |                                          |                                                                                              |
+| Refusal details (`stop_details`)      |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Policy category and explanation behind `stop_reason: "refusal"`, when the model reports them |
 | Metadata                              |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Converse path: logged only. Mantle path: `metadata.user_id` is forwarded upstream            |
 | Bedrock Guardrails                    | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Content safety policies                                                                      |
 | Service tiers                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Mapped to Bedrock service tiers and latency options                                          |
@@ -227,11 +231,17 @@ Cached token usage is reported in the response:
   "usage": {
     "input_tokens": 300,
     "cache_creation_input_tokens": 1200,
+    "cache_creation": {
+      "ephemeral_5m_input_tokens": 1200,
+      "ephemeral_1h_input_tokens": 0
+    },
     "cache_read_input_tokens": 0,
     "output_tokens": 100
   }
 }
 ```
+
+`cache_creation` splits the same total across the cache entry lifetimes, which are billed at different rates. It is present when a per-TTL split is reported.
 
 In subsequent requests with cache hits:
 
