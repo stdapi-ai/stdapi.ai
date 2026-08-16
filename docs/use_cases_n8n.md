@@ -6,7 +6,7 @@ keywords: n8n AI integration, workflow automation AI, no-code AI automation, AWS
 
 # :material-sitemap: n8n Integration
 
-Connect n8n automation workflows to Amazon Bedrock models through stdapi.ai's OpenAI-compatible or Anthropic-compatible interfaces. Existing OpenAI and Anthropic templates from the n8n marketplace work out of the box—simply point them to your stdapi.ai instance and access Amazon Bedrock models.
+Connect n8n automation workflows to Amazon Bedrock models through stdapi.ai's OpenAI-compatible or Anthropic-compatible interfaces. Existing OpenAI and Anthropic templates from the n8n marketplace take two client-side changes—point the credential at your stdapi.ai instance, then set the node's model to one your deployment serves, chosen from every provider in the catalogue rather than one vendor's list.
 
 ## :material-information-outline: About n8n
 

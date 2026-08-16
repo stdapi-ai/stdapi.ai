@@ -40,6 +40,9 @@ if TYPE_CHECKING:
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
 
+#: What a model-not-found body may not exceed: one sentence plus its pointer.
+_MODEL_NOT_FOUND_MAX_CHARS = 300
+
 
 def _bearer_headers(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
@@ -270,7 +273,8 @@ class TestOpenaiErrorPayloads:
 
         404 has no entry in the OpenAI status table, so it falls back to
         ``invalid_request_error``; the machine-readable discriminator is
-        ``code``, carried from ``UnsupportedModelError.code``.
+        ``code``, carried from ``UnsupportedModelError.code``. The message
+        sends the caller to the catalogue rather than enumerating it.
 
         Ref: stdapi/api_errors.py:UnsupportedModelError
         """
@@ -288,6 +292,8 @@ class TestOpenaiErrorPayloads:
         assert err["code"] == "model_not_found"
         assert "nonexistent-model-xyz" in err["message"]
         assert "does not exist" in err["message"]
+        assert "models endpoint" in err["message"]
+        assert len(err["message"]) <= _MODEL_NOT_FOUND_MAX_CHARS
 
     def test_validation_error_returns_openai_envelope(
         self, test_client: TestClient, api_key: str
@@ -499,7 +505,8 @@ class TestCrossRouteConsistency:
         Both surfaces report 404 for the same ``UnsupportedModelError``, but
         neither envelope may leak the other's fields: the OpenAI body has no
         top-level ``type``, and the Anthropic inner error has no
-        ``param``/``code``.
+        ``param``/``code``. The message itself is the same on both, and stays
+        one sentence and its pointer whatever the catalogue holds.
 
         Ref: stdapi/api_errors.py:UnsupportedModelError
         """
@@ -537,6 +544,9 @@ class TestCrossRouteConsistency:
         assert "param" not in anthropic_body["error"]
         assert "code" not in anthropic_body["error"]
         assert anthropic_err["type"] == "not_found_error"
+
+        assert openai_err["message"] == anthropic_err["message"]
+        assert len(openai_err["message"]) <= _MODEL_NOT_FOUND_MAX_CHARS
 
         # Same underlying error: both messages name the model that was rejected.
         assert "nonexistent-model-xyz" in openai_err["message"]

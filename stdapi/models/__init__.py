@@ -3253,25 +3253,14 @@ async def _open_invoke_stream(
 
 
 def _raise_model_not_found(
-    models: dict[str, ModelDetails],
-    original_id: str,
-    model_id: str,
-    input_modality: str | None,
-    output_modality: str | None,
-    error_status: int | None,
-    *,
-    bedrock_only: bool,
+    original_id: str, model_id: str, error_status: int | None
 ) -> Never:
     """Raise :exc:`UnsupportedModelError` with an appropriate message.
 
     Args:
-        models: Active models dict, used to build the set of available model IDs.
         original_id: The model ID originally requested by the caller.
         model_id: The effective model ID after deprecation chain resolution.
-        input_modality: Required input modality to filter available model IDs.
-        output_modality: Required output modality to filter available model IDs.
         error_status: HTTP status code override for :exc:`UnsupportedModelError`.
-        bedrock_only: Whether to restrict modality index lookups to Bedrock models.
 
     Raises:
         UnsupportedModelError: Always.
@@ -3282,17 +3271,8 @@ def _raise_model_not_found(
             detail = f"Model '{original_id}' is deprecated; replacement model '{model_id}' is also not found."
         else:
             detail = f"This model is deprecated or pending deprecation, please use '{model_id}' instead."
-    model_ids = set(models)
-    if input_modality:
-        model_ids &= (
-            _MODELS_INPUT_MODALITY if bedrock_only else _ALL_MODELS_INPUT_MODALITY
-        ).get(input_modality, set())
-    if output_modality:
-        model_ids &= (
-            _MODELS_OUTPUT_MODALITY if bedrock_only else _ALL_MODELS_OUTPUT_MODALITY
-        ).get(output_modality, set())
     raise UnsupportedModelError(
-        original_id, available_models=model_ids, detail=detail, status=error_status
+        original_id, detail=detail, status=error_status
     ) from None
 
 
@@ -3348,15 +3328,7 @@ async def validate_model(
                 if SETTINGS.aws_bedrock_deprecated_model_fallback:
                     model = fallback_model
         if model is None:
-            _raise_model_not_found(
-                models,
-                original_id,
-                model_id,
-                input_modality,
-                output_modality,
-                error_status,
-                bedrock_only=bedrock_only,
-            )
+            _raise_model_not_found(original_id, model_id, error_status)
 
     if output_modality and output_modality not in model.output_modalities:
         msg = f"Model '{model_id}' does not support {output_modality.lower()} output modality."

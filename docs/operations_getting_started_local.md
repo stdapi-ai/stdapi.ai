@@ -94,7 +94,7 @@ curl http://localhost:8000/v1/chat/completions \
 
 **Interactive API docs:** Open [http://localhost:8000/docs](http://localhost:8000/docs) for Swagger UI with all available endpoints.
 
-**Point an application at it:** set the `base_url` (Python) / `baseURL` (Node.js) option to `http://localhost:8000/v1` (OpenAI SDK) or `http://localhost:8000/anthropic` (Anthropic SDK), and set the `model` field to a model from the catalog above. No API key is required by default — pass any non-empty string if your client insists on one. The [API Overview](api_overview.md) has SDK snippets for Python, Node.js, and more.
+**Point an application at it — two client-side changes:** set the `base_url` (Python) / `baseURL` (Node.js) option to `http://localhost:8000/v1` (OpenAI SDK) or `http://localhost:8000/anthropic` (Anthropic SDK), then set the `model` field to a model from the catalog above. The second change is the one that opens the catalog up: a model name your application hard-codes for another provider — `gpt-4o`, `dall-e-3` — returns `404` here, while every model your regions serve is one name away. No API key is required by default — pass any non-empty string if your client insists on one. The [API Overview](api_overview.md) has SDK snippets for Python, Node.js, and more.
 
 !!! tip "Try other models"
     `amazon.nova-micro-v1:0` is a fast, low-cost model — great for confirming the pipeline works. Once you see a response, switch the `model` field to `anthropic.claude-fable-5`, `anthropic.claude-sonnet-5`, or any other Bedrock model available in your configured regions.

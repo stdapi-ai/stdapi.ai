@@ -6,7 +6,7 @@ keywords: stdapi.ai getting started, try stdapi.ai, OpenAI gateway AWS, Anthropi
 
 # :material-rocket-launch: Get Started
 
-Pick the path that fits where you are right now. Both use the same OpenAI, Anthropic, and Cohere-compatible API — graduating from one to the other is a client-side change: the base URL, and usually the model name.
+Pick the path that fits where you are right now. Both use the same OpenAI, Anthropic, and Cohere-compatible API, and both are adopted the same way — two client-side changes: point your client at the base URL, then name a model the deployment serves. The second one is the point of the first: the catalogue spans every provider your regions offer, not one vendor's list. [`GET /search_models`](api_search_models.md) lists it.
 
 Looking for reference documentation rather than a quickstart? See [Features](features.md) for what the gateway does, and the [API Overview](api_overview.md) for endpoints, parameters, and SDK usage.
 
@@ -75,7 +75,7 @@ The Docker path additionally needs [Docker](https://docs.docker.com/get-started/
 | Already running a production workload elsewhere | **AWS (Terraform)** | Jump straight to the stack you'll operate long-term. |
 | Contributing to an open-source project | **Docker (local)** | AGPL-3.0 community image is free to use and redistribute. |
 
-You can start local and migrate to AWS later — same API, same SDKs. You point the base URL at your AWS endpoint, and usually update the model name.
+You can start local and migrate to AWS later — same API, same SDKs, same two client-side changes. Point the base URL at your AWS endpoint, and check the model name against what that deployment's regions serve.
 
 ---
 

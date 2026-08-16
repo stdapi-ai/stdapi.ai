@@ -8,7 +8,7 @@ hide:
 
 # :material-check-all: Features — AI Gateway for Amazon Bedrock
 
-stdapi.ai is an **AI gateway purpose-built for AWS**. It brings full OpenAI, Anthropic, and Cohere API compatibility to Amazon Bedrock and AWS AI services — so any tool, SDK, or application your team already uses connects instantly, without code changes.
+stdapi.ai is an **AI gateway purpose-built for AWS**. It brings full OpenAI, Anthropic, and Cohere API compatibility to Amazon Bedrock and AWS AI services — so the tools, SDKs, and applications your team already uses connect on two client-side changes: the base URL, and the model name.
 
 <div class="grid cards" markdown>
 
@@ -23,7 +23,7 @@ stdapi.ai is an **AI gateway purpose-built for AWS**. It brings full OpenAI, Ant
 
 ## :material-sitemap: How It Works
 
-stdapi.ai sits between your applications and AWS services, translating OpenAI, Anthropic, and Cohere API calls into native AWS requests. Any tool or SDK that speaks one of the three protocols connects instantly — no plugins, no custom integrations.
+stdapi.ai sits between your applications and AWS services, translating OpenAI, Anthropic, and Cohere API calls into native AWS requests. A tool or SDK that speaks one of the three protocols connects on the base URL alone — no plugins, no custom integrations.
 
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true}} }%%
@@ -275,7 +275,7 @@ Access every model available on Amazon Bedrock through a single, consistent API 
 - Ephemeral, browser-safe client secrets — signed and stateless, so any instance behind a load balancer verifies one minted by any other
 - 24 kHz PCM by default, or G.711 (`audio/pcmu`, `audio/pcma`) at 8 kHz for telephony interoperability
 - Server-side voice activity detection by default, or manual turn control
-- WebSocket is the only transport served — upstream's `POST /v1/realtime/calls` (WebRTC, SIP) is not available. Browsers connect to the same WebSocket with an ephemeral secret; for WebRTC or telephony, LiveKit Agents and Pipecat terminate the media themselves and reach this API on a base-URL change — see [Transports](api_openai_realtime.md#transports)
+- WebSocket is the only transport served — upstream's `POST /v1/realtime/calls` (WebRTC, SIP) is not available. Browsers connect to the same WebSocket with an ephemeral secret; for WebRTC or telephony, LiveKit Agents and Pipecat terminate the media themselves and reach this API on the base URL and model name — see [Transports](api_openai_realtime.md#transports)
 
 ### :material-file-document: Documents & Files
 
@@ -458,7 +458,7 @@ AWS service calls are restricted to the regions you configure. The AWS services 
 
 ## :material-puzzle: Works with Your Existing Tools
 
-stdapi.ai is a drop-in replacement in hundreds of applications and tools. Change the API endpoint — nothing else.
+stdapi.ai speaks the APIs hundreds of applications and tools already speak. Adopting it is two client-side changes: the API endpoint, and the model name — which you now pick from every provider in the catalogue rather than one vendor's list. A name the catalogue does not hold returns `404` instead of a lookalike, and [`MODEL_ALIASES`](operations_configuration.md#model-aliases) publishes a served model under whichever name your application already sends.
 
 <div class="grid cards" markdown>
 
@@ -643,7 +643,7 @@ Typical requests are dominated by the fixed sub-millisecond serving floor; the o
   <br>The same tests run against the real OpenAI, Anthropic and Cohere APIs.
 
 - :material-robot-happy: __Driven by real client software__
-  <br>Twelve third-party clients — Claude Code, n8n, Open WebUI and more — driven end to end against a live gateway.
+  <br>Seventeen third-party clients — Claude Code, n8n, Open WebUI and more — driven end to end against a live gateway.
 
 </div>
 

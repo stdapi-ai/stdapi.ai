@@ -6,11 +6,11 @@ keywords: AWS Bedrock integration, Open WebUI AWS, ChatGPT alternative, Claude a
 
 # :material-puzzle: Use Cases
 
-Discover how to integrate stdapi.ai with popular AI applications and tools. stdapi.ai's OpenAI, Anthropic, and Cohere-compatible APIs make it a drop-in replacement in hundreds of applications and tools, giving you access to Amazon Bedrock models with zero code changes.
+Discover how to integrate stdapi.ai with popular AI applications and tools. stdapi.ai's OpenAI, Anthropic, and Cohere-compatible APIs are already spoken by hundreds of applications and tools, and adopting it takes **two client-side changes**: the API endpoint, and the model name — which you now pick from every provider in the catalogue rather than one vendor's list.
 
 **Why use stdapi.ai for integrations?**
 
-- **No code changes required** - Just update the API endpoint in your application settings
+- **Two client-side changes** - Update the API endpoint in your application settings, then name a model this deployment serves
 - **Access 100+ models** - Claude, OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen, GLM, Nova, Llama, Stability AI, and more
 - **Enterprise data control** - The gateway runs in your own AWS account — no third party sits between your users and your models
 - **Pay-per-use pricing** - Pay Amazon Bedrock rates for actual usage, with no markup and no per-seat fees
@@ -22,17 +22,18 @@ Discover how to integrate stdapi.ai with popular AI applications and tools. stda
 
 ## :material-lightning-bolt: How Integration Works
 
-Every integration on this page follows the same three steps, and that's the whole process:
+Every integration on this page follows the same four steps, and that's the whole process:
 
 1. **Deploy** stdapi.ai — [on AWS](operations_getting_started.md) or [locally with Docker](operations_getting_started_local.md)
 2. **Copy** your endpoint URL and API key
 3. **Paste** them into your tool's AI-provider settings (or your SDK's `base_url`)
+4. **Name** a model this deployment serves — [`GET /search_models`](api_search_models.md) lists them, and a name the catalogue does not hold returns `404` rather than a lookalike
 
 ```python
 from openai import OpenAI
 
 client = OpenAI(base_url="https://your-endpoint/v1", api_key="YOUR_KEY")
-# Everything else in your application stays exactly the same
+# Then name a model from the catalogue — the rest of your application is unchanged
 ```
 
 ## :material-view-grid: Choose Your Integration
@@ -96,7 +97,7 @@ Build self-directed AI agents that can plan, execute, and refine complex tasks a
 - **Task automation** - Self-improving workflows that adapt to results
 - **Code agents** - Autonomous development and testing systems
 
-**Compatible frameworks:** **OpenClaw**, **Hermes**, **LangChain**, **Pydantic AI**, LangGraph, LlamaIndex, CrewAI, OpenAI Agents SDK, Strands Agents
+**Compatible frameworks:** **OpenClaw**, **Hermes**, **LangChain**, **Pydantic AI**, **OpenAI Agents SDK**, **LiteLLM**, LangGraph, LlamaIndex, CrewAI, Strands Agents
 
 All agent frameworks that support OpenAI or Anthropic SDKs work immediately — point the SDK's base URL to stdapi.ai. See the [API overview](api_overview.md) for connection details.
 
@@ -167,7 +168,7 @@ Build voice-first applications on the same OpenAI-compatible endpoint: text-to-s
 - **Subtitles & dubbing** - Transcribe and translate audio with SRT/VTT subtitle output
 - **Voice interfaces** - Add speech input/output to chat interfaces and internal tools
 
-**Popular frameworks:** Pipecat, LiveKit Agents, TEN Framework — all accept a custom OpenAI-compatible base URL for LLM, speech-to-text, and text-to-speech services
+**Popular frameworks:** **Pipecat**, **LiveKit Agents**, TEN Framework — all accept a custom OpenAI-compatible base URL for LLM, speech-to-text, and text-to-speech services
 
 **Popular tools:** Home Assistant Assist (via the **wyoming-openai** proxy)
 
@@ -192,7 +193,7 @@ Build retrieval-augmented generation and semantic search pipelines with Bedrock 
 - **Semantic search** - Search by meaning across documents, tickets, and knowledge bases
 - **Multimodal search** - Embed text and images with models like Cohere Embed v4
 
-**Popular tools:** Docling for document parsing, **Haystack**, RAGFlow, LlamaIndex, LightRAG for retrieval — works with any vector database (pgvector, Qdrant, and others store the vectors; stdapi.ai serves the embeddings)
+**Popular tools:** **Docling Serve** for document parsing, **Haystack**, RAGFlow, LlamaIndex, LightRAG for retrieval — works with any vector database (pgvector, Qdrant, and others store the vectors; stdapi.ai serves the embeddings)
 
 **[RAG Pipelines Guide](use_cases_rag.md)** — Configuring document parsing, embeddings, Cohere-compatible reranking, and generation together
 
@@ -264,7 +265,7 @@ Deploy intelligent AI assistants to your team's communication platforms powered 
 
 - **Where does my data go?** The gateway runs in your own AWS account, so no third party sits between your users and your models: inference runs on the AWS services and regions you enable, and Amazon Bedrock does not share prompts with model providers or use them for training. [Data sovereignty & compliance →](operations_compliance.md)
 - **What does it cost?** $0.10/container-hour for the gateway — the Terraform module runs one container per Availability Zone by default — plus Amazon Bedrock rates, with no markup and no per-seat fees. [Licensing & pricing →](operations_licensing.md) · [Cost management →](operations_cost_management.md)
-- **Am I locked in?** No — stdapi.ai speaks the standard OpenAI, Anthropic, and Cohere APIs. Leaving is the same one-line base-URL change that got you in.
+- **Am I locked in?** No — stdapi.ai speaks the standard OpenAI, Anthropic, and Cohere APIs. Leaving is the same client-side change that got you in.
 
 ## :material-arrow-right: Ready to Get Started?
 

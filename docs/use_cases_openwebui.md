@@ -27,8 +27,8 @@ Open WebUI is the leading open-source ChatGPT alternative. It provides a feature
 
 <div class="grid cards" markdown>
 
-- :material-swap-horizontal: __Zero Configuration Changes__
-  <br>stdapi.ai provides OpenAI-compatible API. Just update the endpoint URL—Open WebUI works immediately with Amazon Bedrock models.
+- :material-swap-horizontal: __Two Client-Side Changes__
+  <br>stdapi.ai provides an OpenAI-compatible API. Update the endpoint URL, then pick a model—Open WebUI's model list is whatever your deployment serves, across every provider in the catalogue.
 
 - :material-aws: __Access Amazon Bedrock Models__
   <br>Claude with reasoning, Nova, Llama, DeepSeek, Stable Diffusion, and 100+ models through Open WebUI's familiar chat interface.

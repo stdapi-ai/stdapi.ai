@@ -133,7 +133,7 @@ Prefer a hands-off setup? A [managed deployment service](https://aws.amazon.com/
 
 ## 🎯 Why stdapi.ai?
 
-- **🔌 Drop-in replacement** — Change only the base URL. Standard OpenAI, Anthropic and Cohere SDKs connect on the base URL alone, and hundreds of applications and tools build on them. Twelve clients are driven end to end against a live gateway by the [automated test suite](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests): **Claude Code**, **Codex**, **pi**, **OpenClaw**, **Hermes**, **Qwen Code**, **n8n**, **Haystack**, **Open WebUI**, **wyoming-openai**, **LangChain**, **Pydantic AI**.
+- **🔌 Same API, wider catalogue** — Two client-side changes: the base URL, and the model name. Standard OpenAI, Anthropic and Cohere SDKs connect on the base URL alone, and hundreds of applications and tools build on them; the model you then name is drawn from every provider in the catalogue below, not one vendor's list. Seventeen clients are driven end to end against a live gateway by the [automated test suite](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests): **Claude Code**, **Codex**, **pi**, **OpenClaw**, **Hermes**, **Qwen Code**, **n8n**, **Haystack**, **Open WebUI**, **wyoming-openai**, **LangChain**, **Pydantic AI**, **LiteLLM**, **Docling Serve**, **OpenAI Agents SDK**, **LiveKit Agents**, **Pipecat**.
 - **🔒 Runs in your AWS account** — No third party sits between your users and your models. Amazon Bedrock does not share your prompts with model providers or use them for training. Configure region allow-lists to match your own requirements — AWS compliance certifications apply to the AWS services and regions you choose, and are not inherited by stdapi.ai or by your application. **[Compliance guide →](https://stdapi.ai/operations_compliance/)**
 - **🌍 Add a region, add its quota** — Every AWS region has its own Bedrock quota, and every region you enable adds its own. Eligible throttling and availability failures retry in another enabled region, with no client changes. Streaming retries only before the stream opens, and asynchronous jobs stay in the region that accepted them. **[Resilience guide →](https://stdapi.ai/operations_resilience/)**
 - **💰 Pay only what you use** — Amazon Bedrock rates with 0% markup: model usage is billed to you directly by AWS, with no minimum commitment. The gateway license itself is metered per container-hour.
@@ -144,7 +144,7 @@ Prefer a hands-off setup? A [managed deployment service](https://aws.amazon.com/
 - **🤖 Integrated MCP server** — Every API endpoint exposed as a Model Context Protocol tool. AI agents connect directly—no HTTP client code required. Streamable HTTP and SSE transports with configurable tool selection.
 - **🔄 Automatic deprecated model fallback** — When AWS retires a model, requests are transparently redirected to its replacement. Applications survive model deprecations without code changes.
 
-**Measured, not asserted:** `<1 ms` gateway overhead (0.8 ms of gateway CPU on a 2.5 KB chat request) · **5,000+ automated test cases** run against real AWS services · **12 third-party clients** driven end to end against a live gateway · **50+ API operations** exposed as MCP tools.
+**Measured, not asserted:** `<1 ms` gateway overhead (0.8 ms of gateway CPU on a 2.5 KB chat request) · **5,000+ automated test cases** run against real AWS services · **17 third-party clients** driven end to end against a live gateway · **50+ API operations** exposed as MCP tools.
 
 **[See all features →](https://stdapi.ai/features/)** · **[Browse the test suite →](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests)**
 
@@ -158,8 +158,8 @@ Prefer a hands-off setup? A [managed deployment service](https://aws.amazon.com/
 | **💻 Coding Assistants** | AI pair programming, code completion, codebase chat | **Claude Code**, **Codex**, **Qwen Code**, **pi**, Cline, OpenCode, Zed | [Guide →](https://stdapi.ai/use_cases_coding_assistants/) |
 | **🔄 Workflow Automation** | AI-powered ticket routing, content creation, data processing | **n8n**, Langflow, Dify, Flowise | [Guide →](https://stdapi.ai/use_cases_n8n/) |
 | **🤖 Chatbots** | Slack/Discord/Teams bots, documentation assistants | Dify, Chatwoot, Typebot | |
-| **🧠 Autonomous Agents** | Personal AI assistants, research agents, multi-agent systems, code agents | **OpenClaw**, **Hermes**, **Pydantic AI**, LangGraph, CrewAI | [Guide →](https://stdapi.ai/use_cases_autonomous_agents/) |
-| **🔍 RAG & Voice** | Semantic search, document pipelines, speech assistants | **LangChain**, **Haystack**, **wyoming-openai**, RAGFlow, Docling | [Guide →](https://stdapi.ai/use_cases_rag/) |
+| **🧠 Autonomous Agents** | Personal AI assistants, research agents, multi-agent systems, code agents | **OpenClaw**, **Hermes**, **Pydantic AI**, **OpenAI Agents SDK**, **LiteLLM**, LangGraph, CrewAI | [Guide →](https://stdapi.ai/use_cases_autonomous_agents/) |
+| **🔍 RAG & Voice** | Semantic search, document pipelines, speech assistants | **LangChain**, **Haystack**, **wyoming-openai**, **Docling Serve**, **LiveKit Agents**, **Pipecat**, RAGFlow | [Guide →](https://stdapi.ai/use_cases_rag/) |
 
 **Bold** = driven end to end against a live gateway by the [automated test suite](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests). The others have a documented setup and use the same standard SDKs.
 

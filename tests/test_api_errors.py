@@ -1,13 +1,17 @@
-"""The shared answer to a feature this deployment cannot run.
+"""The shared answers a route gives when the request cannot be served.
 
 A missing IAM permission, an unconfigured bucket or an unreachable endpoint are
 none of the caller's doing: they read one generic 503, identical whatever is
 absent, while the operator reads what is missing by name in the server log. One
 helper owns both halves so the two messages cannot drift apart per feature.
 
+A model this server does not serve is the caller's to act on instead, so its
+404 has to say where the models it does serve are listed.
+
 Ref: https://developers.openai.com/api/docs/guides/error-codes.md
      stdapi/api_errors.py:FeatureUnavailableError
      stdapi/api_errors.py:feature_unavailable_guard
+     stdapi/api_errors.py:UnsupportedModelError
 """
 
 from typing import Any
@@ -20,9 +24,11 @@ from botocore.exceptions import (
     EndpointResolutionError,
 )
 
+from stdapi import models as models_module
 from stdapi.api_errors import (
     ApiError,
     FeatureUnavailableError,
+    UnsupportedModelError,
     denied_feature_unavailable,
     feature_unavailable_guard,
 )
@@ -41,6 +47,13 @@ _CLIENT_MESSAGE = (
     "The Batch API is not available on the current server. "
     "Please contact the administrator to enable it."
 )
+
+
+#: What a model-not-found answer may not exceed: one sentence plus its pointer.
+_MODEL_NOT_FOUND_MAX_CHARS = 300
+
+#: A catalogue large enough that enumerating it would blow that budget apart.
+_CATALOGUE = tuple(f"vendor.model-{index}-v1:0" for index in range(90))
 
 
 def _denied(code: str = "AccessDeniedException") -> ClientError:
@@ -217,3 +230,71 @@ class TestFeatureUnavailableGuard:
     def test_the_error_is_the_api_error_every_route_renders(self) -> None:
         """It is an ``ApiError``, so the envelope is the calling API's own."""
         assert issubclass(FeatureUnavailableError, ApiError)
+
+
+class TestUnsupportedModelError:
+    """The 404 for a name this server does not serve, and what it teaches.
+
+    Adopting the gateway is two actions — the base URL, then the model — so the
+    answer to an unknown name has to point at the second one instead of
+    enumerating every model behind it.
+
+    Ref: https://developers.openai.com/api/docs/guides/error-codes.md
+         stdapi/api_errors.py:UnsupportedModelError
+    """
+
+    def test_the_answer_names_the_model_and_where_the_served_ones_are_listed(
+        self,
+    ) -> None:
+        """The requested name is quoted back, and the caller is sent to the catalogue."""
+        error = UnsupportedModelError("gpt-4o")
+
+        message = str(error)
+        assert error.status == 404
+        assert error.code == "model_not_found"
+        assert "`gpt-4o`" in message
+        assert "does not exist or you do not have access to it" in message
+        assert "models endpoint" in message
+
+    def test_the_answer_is_short_enough_to_read(self) -> None:
+        """One sentence and its pointer, not a payload to scroll through."""
+        assert len(str(UnsupportedModelError("gpt-4o"))) <= _MODEL_NOT_FOUND_MAX_CHARS
+
+    def test_a_deprecated_model_still_says_what_replaced_it(self) -> None:
+        """The extra context a deprecation carries is kept, and stays bounded."""
+        error = UnsupportedModelError(
+            "old-model", detail="Please use 'new-model' instead."
+        )
+
+        message = str(error)
+        assert "Please use 'new-model' instead." in message
+        assert len(message) <= _MODEL_NOT_FOUND_MAX_CHARS
+
+    def test_the_status_override_still_applies(self) -> None:
+        """Routes whose upstream answers 400 for an unknown model keep doing so."""
+        assert UnsupportedModelError("gpt-4o", status=400).status == 400
+
+    async def test_a_loaded_catalogue_never_reaches_the_caller(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A miss against a full catalogue answers with that same short body.
+
+        The message used to join every served model ID into itself, so a client
+        exception carried the whole catalogue rather than the way to search it.
+
+        Ref: stdapi/models/__init__.py:validate_model
+        """
+
+        async def _already_loaded() -> None:
+            """Stand in for the refresh a cache miss triggers."""
+
+        catalogue = dict.fromkeys(_CATALOGUE)
+        monkeypatch.setattr(models_module, "_MODELS", catalogue)
+        monkeypatch.setattr(models_module, "initialize_bedrock_models", _already_loaded)
+
+        with pytest.raises(UnsupportedModelError) as raised:
+            await models_module.validate_model("gpt-4o")
+
+        message = str(raised.value)
+        assert len(message) <= _MODEL_NOT_FOUND_MAX_CHARS
+        assert not any(model_id in message for model_id in _CATALOGUE)

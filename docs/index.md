@@ -7,13 +7,13 @@ hide:
   - navigation
 ---
 
-<!-- ACT 1 — Hero: the drop-in promise -->
+<!-- ACT 1 — Hero: the two-step promise -->
 <div class="hero2" markdown>
 <div class="hero2__copy" markdown>
 
 # Your OpenAI &amp; Anthropic apps on AWS. Not just chat.
 
-An AI gateway you run in your own AWS account. Point Claude Code, Open WebUI, n8n, OpenClaw — or your own code — at it, and they reach 100+ models including Claude, OpenAI GPT, DeepSeek and Nova, at AWS Bedrock rates with zero markup. One line changes: the base URL.
+An AI gateway you run in your own AWS account. Point Claude Code, Open WebUI, n8n, OpenClaw — or your own code — at it, and they reach 100+ models including Claude, OpenAI GPT, DeepSeek and Nova, at AWS Bedrock rates with zero markup. Two client-side changes: the base URL, and the model name — now picked from all of them, not one vendor's list.
 
 <div class="buttons" markdown>
 [Start 14-day free trial](operations_getting_started.md){ .md-button .md-button--primary }
@@ -31,12 +31,14 @@ An AI gateway you run in your own AWS account. Point Claude Code, Open WebUI, n8
 </div>
 <div class="hero2__code">
 <div class="code-card">
-<div class="code-card__title">app.py — the client-side change</div>
+<div class="code-card__title">app.py — the two client-side changes</div>
 <pre><code><span class="del">- client = OpenAI()</span>
 <span class="add">+ client = OpenAI(base_url=<span class="str">"https://ai.yourco.com/v1"</span>)</span>
 
 response = client.chat.completions.create(
-    model=<span class="str">"claude-fable-5"</span>, messages=messages
+<span class="del">-     model=<span class="str">"gpt-4o"</span>,</span>
+<span class="add">+     model=<span class="str">"claude-fable-5"</span>,  <span class="cmt"># or any model in the catalogue</span></span>
+    messages=messages
 )
 <span class="cmt"># same for the Anthropic SDK — point it at /anthropic</span></code></pre>
 </div>
@@ -487,7 +489,7 @@ MCP is not a like-for-like row: stdapi.ai exposes its own AI and media endpoints
 <!-- What teams run on it -->
 ## Verified against the tools teams already use
 
-Every integration is the same three steps: deploy, copy your endpoint URL, paste it into the tool's settings. There is no step four. The tools in **bold** are driven end to end by an automated suite against a real deployment — not just documented.
+Every integration is the same four steps: deploy, copy your endpoint URL, paste it into the tool's settings, then name a model the deployment serves — picked from the whole catalogue, not one vendor's list. There is no step five. The tools in **bold** are driven end to end by an automated suite against a real deployment — not just documented.
 
 <div class="usecases" markdown>
 
@@ -527,7 +529,7 @@ Every integration is the same three steps: deploy, copy your endpoint URL, paste
 <div class="usecase__tag">VOICE &amp; AUDIO</div>
 <div class="usecase__title">Speech in, speech out</div>
 <div class="usecase__body">Voice agents, transcription with speaker diarization, and subtitles — on Amazon Polly and Transcribe, without a second AI vendor.</div>
-<div class="usecase__tools"><strong>wyoming-openai</strong> · Home Assistant · Pipecat · LiveKit Agents</div>
+<div class="usecase__tools"><strong>wyoming-openai</strong> · <strong>Pipecat</strong> · <strong>LiveKit Agents</strong> · Home Assistant</div>
 [Home Assistant voice guide](use_cases_home_assistant.md)
 </div>
 
@@ -535,7 +537,7 @@ Every integration is the same three steps: deploy, copy your endpoint URL, paste
 <div class="usecase__tag">RAG &amp; SEARCH</div>
 <div class="usecase__title">Answers grounded in your data</div>
 <div class="usecase__body">Two-stage retrieval through one deployment — Bedrock embeddings, then Cohere-compatible reranking, with any vector database.</div>
-<div class="usecase__tools"><strong>Haystack</strong> · LlamaIndex · RAGFlow · Docling · LightRAG</div>
+<div class="usecase__tools"><strong>Haystack</strong> · <strong>Docling Serve</strong> · LlamaIndex · RAGFlow · LightRAG</div>
 [RAG pipelines guide](use_cases_rag.md)
 </div>
 
@@ -579,7 +581,7 @@ Offline CI runs on every push and pull request with an enforced coverage floor. 
 <!-- Pricing — the closing conversion moment -->
 ## Transparent pricing
 
-Start local, graduate to AWS — same API, same SDKs. And zero lock-in: leaving is the same one-line base-URL change that got you in.
+Start local, graduate to AWS — same API, same SDKs. And zero lock-in: leaving is the same client-side change that got you in.
 
 <div class="pricing">
 <div class="pricing__col">

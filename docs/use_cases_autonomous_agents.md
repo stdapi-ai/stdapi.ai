@@ -6,7 +6,7 @@ keywords: autonomous agent AWS Bedrock, Hermes agent AWS, hermes-agent AWS Bedro
 
 # :material-robot-excited: Autonomous Agent CLIs
 
-Run autonomous agent CLIs against Amazon Bedrock models with stdapi.ai, using the same provider configuration you would point at OpenAI or Anthropic directly—only the base URL changes.
+Run autonomous agent CLIs against Amazon Bedrock models with stdapi.ai, using the same provider configuration you would point at OpenAI or Anthropic directly—two client-side changes: the base URL, and the model name, which you now pick from every provider in the catalogue rather than one vendor's list.
 
 ## :material-information-outline: About Autonomous Agent CLIs
 

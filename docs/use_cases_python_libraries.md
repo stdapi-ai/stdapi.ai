@@ -6,7 +6,7 @@ keywords: LangChain AWS Bedrock, ChatOpenAI custom base URL, pydantic-ai AWS Bed
 
 # :material-language-python: Python Client Libraries Integration
 
-Build Python applications and agents directly on Amazon Bedrock models with stdapi.ai, using the same LangChain and pydantic-ai client classes you would use against OpenAI or Anthropic directly—only the base URL changes.
+Build Python applications and agents directly on Amazon Bedrock models with stdapi.ai, using the same LangChain and pydantic-ai client classes you would use against OpenAI or Anthropic directly—two client-side changes: the base URL, and the model name, which you now pick from every provider in the catalogue rather than one vendor's list.
 
 ## :material-information-outline: About LangChain and pydantic-ai
 

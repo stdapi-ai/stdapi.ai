@@ -11,7 +11,7 @@ from botocore.exceptions import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Iterable
+    from collections.abc import Generator
 
 #: AWS error codes meaning the identity a call was signed with was denied it.
 ACCESS_DENIED_CODES: Final = frozenset({"AccessDeniedException", "AccessDenied"})
@@ -54,32 +54,21 @@ class UnsupportedModelError(ApiError):
     code = "model_not_found"
 
     def __init__(
-        self,
-        model: str,
-        available_models: Iterable[str] | None = None,
-        *,
-        detail: str | None = None,
-        status: int | None = None,
+        self, model: str, *, detail: str | None = None, status: int | None = None
     ) -> None:
-        """Create an unsupported model error with optional alternatives.
+        """Refuse a model this server does not serve, and say where to find one it does.
 
         Args:
             model: The requested model identifier that is unsupported or not accessible.
-            available_models: Optional iterable of available model identifiers to include
-                in the error message to guide clients toward valid choices.
             detail: Optional extra context (e.g. deprecation info) appended after the
                 standard "does not exist" sentence.
             status: Optional HTTP status code override.  When ``None`` the
                 class-level default (404) is used.
         """
-        models = (
-            f" Available models: {', '.join(available_models)}"
-            if available_models
-            else ""
-        )
         extra = f" {detail}" if detail else ""
         super().__init__(
-            f"The model `{model}` does not exist or you do not have access to it.{extra}{models}",
+            f"The model `{model}` does not exist or you do not have access to it."
+            f"{extra} Call the models endpoint to list the models this server provides.",
             status=status,
         )
 

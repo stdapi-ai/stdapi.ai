@@ -217,7 +217,9 @@ When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, s
 
 ## :material-connection: Using stdapi.ai
 
-stdapi.ai is a **drop-in replacement** for the OpenAI, Anthropic, and Cohere APIs. Any application that works with one of these providers—chatbots, coding assistants, automation tools, custom scripts—works with stdapi.ai by simply changing the API base URL.
+stdapi.ai speaks the OpenAI, Anthropic, and Cohere APIs unchanged. Any application built on one of them—chatbots, coding assistants, automation tools, custom scripts—runs against stdapi.ai after **two client-side changes**: point it at your deployment's base URL, then name a model this deployment serves.
+
+The second change is what the first one buys. A model name is resolved against the catalogue your deployment actually serves — Amazon Bedrock, Bedrock Mantle, Polly, Transcribe and Comprehend, across every region you enable — so the choice spans providers instead of one vendor's list. A name the catalogue does not contain is answered with `404`: it is never mapped onto another vendor's model of roughly similar class, because that would serve you a different model than the one you asked for. Use [`GET /search_models`](api_search_models.md) to find one, and [`MODEL_ALIASES`](operations_configuration.md#model-aliases) to publish a served model under a name your application already sends.
 
 ### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Using the OpenAI-Compatible API
 
@@ -225,9 +227,9 @@ stdapi.ai is a **drop-in replacement** for the OpenAI, Anthropic, and Cohere API
 
 1. **Replace the OpenAI API URL** with your stdapi.ai deployment URL
 2. **Use the same authentication mechanism** (Bearer token in the `Authorization` header)
-3. **Use Bedrock model IDs** (e.g., `amazon.nova-micro-v1:0`) or any configured model alias
+3. **Name a model this deployment serves** — a Bedrock model ID (e.g., `amazon.nova-micro-v1:0`) or any configured model alias. A name Bedrock does not serve, such as `gpt-4o` or `dall-e-3`, returns `404` until you [alias](operations_configuration.md#model-aliases) it onto one it does
 
-That's it. Your application continues to work without any code changes—just point it to stdapi.ai instead of OpenAI.
+That's it: the base URL and the model name are the only client-side changes — the rest of the OpenAI SDK call is unchanged.
 
 ### ![Anthropic](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Using the Anthropic-Compatible API
 
@@ -235,9 +237,9 @@ That's it. Your application continues to work without any code changes—just po
 
 1. **Replace the Anthropic API URL** (`https://api.anthropic.com`) with your stdapi.ai deployment URL + `/anthropic` (e.g., `https://your-endpoint.com/anthropic`)
 2. **Use the same authentication mechanism** (`x-api-key` header and `anthropic-version` header)
-3. **Use your preferred model name** — official Anthropic names (e.g., `claude-opus-5`) are automatically resolved to Bedrock IDs, or use Bedrock model IDs directly
+3. **Name a model this deployment serves** — official Anthropic names (e.g., `claude-opus-5`) resolve to their Bedrock IDs automatically, or use Bedrock model IDs directly
 
-Your Anthropic SDK applications continue to work without any code changes—just point them to stdapi.ai instead of Anthropic.
+Anthropic names resolving on their own makes the base URL the only change for most applications. A Claude version Bedrock no longer serves returns `404` rather than a substitute, so name a current one.
 
 ### ![Cohere](styles/logo_cohere.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Using the Cohere-Compatible API
 
@@ -245,9 +247,9 @@ Your Anthropic SDK applications continue to work without any code changes—just
 
 1. **Replace the Cohere API URL** (`https://api.cohere.com`) with your stdapi.ai deployment URL + `/cohere` (e.g., `https://your-endpoint.com/cohere`)
 2. **Use the same authentication mechanism** (Bearer token in the `Authorization` header)
-3. **Use Bedrock model IDs** (e.g., `cohere.rerank-v3-5:0`, `cohere.embed-v4:0`)
+3. **Name a model this deployment serves** — a Bedrock model ID (e.g., `cohere.rerank-v3-5:0`, `cohere.embed-v4:0`) or any configured model alias
 
-Your Cohere rerank and embed integrations continue to work without any code changes—just point them to stdapi.ai instead of Cohere.
+That's it: the base URL and the model name are the only client-side changes to your Cohere rerank and embed integrations.
 
 ## :material-arrow-right: Next Steps
 
