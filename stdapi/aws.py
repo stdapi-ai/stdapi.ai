@@ -9,6 +9,7 @@ from json import dumps as _std_dumps
 from logging import getLogger
 from os import environ
 from sys import modules
+from time import monotonic
 from typing import TYPE_CHECKING, Any, Final, NotRequired, Self, TypedDict
 
 from aiobotocore.config import AioConfig
@@ -57,6 +58,9 @@ _ECS_METADATA_TIMEOUT: Final = 10
 
 #: Connection timeout of a single ECS container metadata request, in seconds
 _ECS_METADATA_CONNECT_TIMEOUT: Final = 5
+
+#: Duration above which a successful ECS container metadata read is reported, in seconds
+_ECS_METADATA_SLOW_SECONDS: Final = 1.0
 
 #: Region of the pooled AWS STS client opening the end user role sessions
 _STS_REGION: RegionName = AWS_REGION  # type: ignore[assignment]
@@ -1019,8 +1023,8 @@ async def initialize_aws_account_info() -> str | None:
     startup sequence competes for the task CPU, hence the retries.
 
     Returns:
-        A warning message when the metadata endpoint could not be reached,
-        ``None`` otherwise.
+        A warning message when the metadata endpoint could not be reached, or
+        when reading it delayed startup; ``None`` otherwise.
     """
     try:
         metadata_path = environ["ECS_CONTAINER_METADATA_URI_V4"]
@@ -1028,6 +1032,7 @@ async def initialize_aws_account_info() -> str | None:
         await _set_account_id_from_sts()
         return None
     warning = None
+    started = monotonic()
     for attempt in range(_ECS_METADATA_ATTEMPTS):
         if attempt:
             await sleep(_ECS_METADATA_RETRY_DELAY)
@@ -1036,10 +1041,21 @@ async def initialize_aws_account_info() -> str | None:
         except (HttpClientError, TimeoutError) as exception:
             warning = (
                 "ECS container metadata endpoint unreachable after "
-                f"{_ECS_METADATA_ATTEMPTS} attempts ({type(exception).__name__}): "
+                f"{_ECS_METADATA_ATTEMPTS} attempts in "
+                f"{monotonic() - started:.1f} s ({type(exception).__name__}): "
                 "the server name does not identify the ECS task"
             )
         else:
+            # A slow success is invisible otherwise: this runs alone before the
+            # startup fan-out, so its whole duration is added to startup time.
+            elapsed = monotonic() - started
+            if attempt or elapsed >= _ECS_METADATA_SLOW_SECONDS:
+                attempts = attempt + 1
+                return (
+                    f"ECS container metadata endpoint answered after {attempts} "
+                    f"attempt{'s' if attempts > 1 else ''} in {elapsed:.1f} s: "
+                    "server startup was delayed by that much"
+                )
             return None
     await _set_account_id_from_sts()
     return warning

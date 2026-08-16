@@ -1,6 +1,7 @@
 """Models."""
 
 from asyncio import CancelledError, Lock, create_task, gather, sleep
+from asyncio import timeout as async_timeout
 from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass
@@ -43,7 +44,10 @@ from stdapi.aws_bedrock import (
     usage_from_amazon_bedrock_invocation_metrics,
     validate_bedrock_region,
 )
-from stdapi.aws_bedrock_mantle import MantleError
+from stdapi.aws_bedrock_mantle import MantleError, format_exception_chain
+from stdapi.aws_bedrock_mantle import catalog_timeout as mantle_catalog_timeout
+from stdapi.aws_bedrock_mantle import endpoint_unresolved as mantle_endpoint_unresolved
+from stdapi.aws_bedrock_mantle import endpoint_url as mantle_endpoint_url
 from stdapi.aws_bedrock_mantle import request_json as mantle_request_json
 from stdapi.aws_s3 import (
     get_s3_bucket_for_region,
@@ -1960,8 +1964,17 @@ async def _get_mantle_models_from_region(region: RegionName) -> list[ModelDetail
 
     Returns:
         List of available Mantle model details for the given region.
+
+    Raises:
+        TimeoutError: When the region did not answer within its catalog budget.
     """
-    catalog = await mantle_request_json(region, "GET", "/v1/models")
+    budget = mantle_catalog_timeout()
+    try:
+        async with async_timeout(budget):
+            catalog = await mantle_request_json(region, "GET", "/v1/models")
+    except TimeoutError as error:
+        msg = f"the Bedrock Mantle model catalog was not returned within {budget:g} s"
+        raise TimeoutError(msg) from error
     models: list[ModelDetails] = []
     for entry in catalog.get("data") or ():
         if not isinstance(entry, Mapping) or not (model_id := entry.get("id")):
@@ -1987,16 +2000,41 @@ async def _get_mantle_models_from_region(region: RegionName) -> list[ModelDetail
     return models
 
 
+def _no_mantle_endpoint_detail(region: RegionName) -> str:
+    """Return what an operator has to change for a region with no Mantle endpoint.
+
+    Args:
+        region: Region whose Bedrock Mantle endpoint does not resolve.
+
+    Returns:
+        Operator-facing detail naming the endpoint and the setting at fault.
+    """
+    setting = (
+        "AWS_BEDROCK_MANTLE_ENDPOINT_URL"
+        if SETTINGS.aws_bedrock_mantle_endpoint_url
+        else "AWS_BEDROCK_MANTLE_REGIONS"
+    )
+    return (
+        f"{mantle_endpoint_url(region)} does not resolve: Amazon Bedrock Mantle is "
+        f"not served in this region. List only regions that serve it in {setting}, "
+        "or set AWS_BEDROCK_MANTLE_ENABLED=false"
+    )
+
+
 async def _collect_mantle_models(
-    failed_regions: dict[str, str],
+    failed_regions: dict[str, str], regions_without_endpoint: dict[str, str]
 ) -> dict[str, ModelDetails]:
     """Fetch the Mantle model catalog from every configured region, in parallel.
 
     A region whose fetch fails is skipped (recorded in *failed_regions*) and
     retried on the next cache refresh, mirroring the bedrock-runtime behavior.
+    A region whose endpoint does not resolve at all is recorded separately: no
+    retry can fix it, only a settings change.
 
     Args:
         failed_regions: Accumulator mapping unreachable regions to the error.
+        regions_without_endpoint: Accumulator mapping regions that do not serve
+            Bedrock Mantle to what the operator has to change.
 
     Returns:
         Mantle models keyed by model ID, with per-region data merged in
@@ -2012,9 +2050,17 @@ async def _collect_mantle_models(
         if isinstance(result, BaseException):
             if not isinstance(result, Exception):
                 raise result
+            if mantle_endpoint_unresolved(result, region):
+                regions_without_endpoint[region] = _no_mantle_endpoint_detail(region)
+                continue
             # Any per-region failure (including credential-chain errors)
             # degrades gracefully: Mantle models are skipped with a warning.
-            failed_regions[f"{region} (Mantle)"] = f"{type(result).__name__}: {result}"
+            # The mapped message is deliberately generic, so the operator log
+            # carries the endpoint and the causes that produced it.
+            failed_regions[f"{region} (Mantle)"] = (
+                f"{mantle_endpoint_url(region)}/v1/models: "
+                f"{format_exception_chain(result)}"
+            )
             continue
         for model in result:
             if existing := models.get(model.id):
@@ -2156,7 +2202,9 @@ async def _check_candidates(
 
 
 async def _collect_all_models(
-    failed_regions: dict[str, str], unavailable_models: dict[str, dict[str, list[str]]]
+    failed_regions: dict[str, str],
+    mantle_regions_without_endpoint: dict[str, str],
+    unavailable_models: dict[str, dict[str, list[str]]],
 ) -> tuple[dict[str, ModelDetails], dict[str, str]]:
     """Collect bedrock-runtime and Mantle models concurrently and merge them.
 
@@ -2168,6 +2216,8 @@ async def _collect_all_models(
 
     Args:
         failed_regions: Accumulator mapping unreachable regions to the error.
+        mantle_regions_without_endpoint: Accumulator mapping regions that do not
+            serve Bedrock Mantle to what the operator has to change.
         unavailable_models: Accumulator for failed availability checks.
 
     Returns:
@@ -2179,7 +2229,9 @@ async def _collect_all_models(
         ClientError: When every configured region fails (first error).
     """
     mantle_task = (
-        create_task(_collect_mantle_models(failed_regions))
+        create_task(
+            _collect_mantle_models(failed_regions, mantle_regions_without_endpoint)
+        )
         if SETTINGS.aws_bedrock_mantle_enabled
         else None
     )
@@ -2222,12 +2274,13 @@ async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool
     updated = False
     unavailable_models: dict[str, dict[str, list[str]]] = {}
     failed_regions: dict[str, str] = {}
+    mantle_regions_without_endpoint: dict[str, str] = {}
     new_model_ids: set[str] = set()
 
     async with _CACHE["update_lock"]:
         if _CACHE["update_next"] is None or _CACHE["update_next"] <= SETTINGS.now():
             all_models, invalid_arn_mappings = await _collect_all_models(
-                failed_regions, unavailable_models
+                failed_regions, mantle_regions_without_endpoint, unavailable_models
             )
 
             mantle_guardrail_aliases = _mantle_guardrail_aliases(all_models)
@@ -2281,6 +2334,7 @@ async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool
     _warn_bedrock_refresh_issues(
         start_event,
         failed_regions,
+        mantle_regions_without_endpoint,
         unavailable_models,
         invalid_arn_mappings,
         unmatched_restrict_keys,
@@ -2374,6 +2428,7 @@ def _reject_mantle_guardrail_aliases(
 def _warn_bedrock_refresh_issues(
     start_event: EventLog | None,
     failed_regions: dict[str, str],
+    mantle_regions_without_endpoint: dict[str, str],
     unavailable_models: dict[str, dict[str, list[str]]],
     invalid_arn_mappings: dict[str, str],
     unmatched_restrict_keys: set[str],
@@ -2387,6 +2442,8 @@ def _warn_bedrock_refresh_issues(
     Args:
         start_event: Startup event log to record warnings on, if any.
         failed_regions: Regions whose fetch failed, mapped to the error.
+        mantle_regions_without_endpoint: Regions that do not serve Bedrock
+            Mantle, mapped to what the operator has to change.
         unavailable_models: Model IDs mapped to per-region availability issues.
         invalid_arn_mappings: Model IDs mapped to ARN-mapping error messages.
         unmatched_restrict_keys: ``aws_bedrock_model_region_restrict`` keys that
@@ -2405,6 +2462,18 @@ def _warn_bedrock_refresh_issues(
         add_server_warning(
             start_event,
             {"unreachable_bedrock_regions": failed_regions},  # type: ignore[dict-item]
+        )
+    if mantle_regions_without_endpoint:
+        no_endpoint = {
+            "bedrock_mantle_regions_without_endpoint": mantle_regions_without_endpoint
+        }
+        add_server_warning(start_event, no_endpoint)  # type: ignore[arg-type]
+    if SETTINGS.aws_bedrock_mantle_enabled and not SETTINGS.aws_bedrock_mantle_regions:
+        add_server_warning(
+            start_event,
+            "No configured AWS region serves Amazon Bedrock Mantle: no Mantle model "
+            "is available. Set AWS_BEDROCK_MANTLE_REGIONS to a region that serves "
+            "it, or set AWS_BEDROCK_MANTLE_ENABLED=false",
         )
     if unavailable_models:
         add_server_warning(

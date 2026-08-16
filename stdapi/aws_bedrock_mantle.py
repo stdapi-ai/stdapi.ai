@@ -22,11 +22,17 @@ from contextvars import ContextVar
 from random import uniform
 from re import compile as compile_regex
 from time import monotonic
-from typing import TYPE_CHECKING, Any, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
+from urllib.parse import urlsplit
 from weakref import finalize
 
+from aiohttp import (
+    ClientConnectorDNSError,
+    ClientSession,
+    ClientTimeout,
+    SocketTimeoutError,
+)
 from aiohttp import ClientError as AiohttpClientError
-from aiohttp import ClientSession, ClientTimeout, SocketTimeoutError
 from aiohttp.http_exceptions import HttpProcessingError
 from botocore.auth import SigV4QueryAuth
 from botocore.awsrequest import AWSRequest
@@ -40,7 +46,7 @@ from stdapi.config import AWS_SESSION, SETTINGS
 from stdapi.utils import to_json_bytes, to_json_str
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Sequence
+    from collections.abc import AsyncGenerator, Iterator, Sequence
 
     from aiohttp import ClientResponse
     from starlette.datastructures import Headers
@@ -169,6 +175,9 @@ _UNSUPPORTED_SURFACE_MARKER_401 = "is not enabled"
 #: Safe charset for a decoded native Mantle response ID (interpolated into request URLs).
 _NATIVE_RESPONSE_ID_RE = compile_regex(r"[A-Za-z0-9._-]+")
 
+#: Multiple of the connect timeout allowed for one region's model catalog fetch.
+_CATALOG_TIMEOUT_FACTOR: Final = 2
+
 
 class MantleError(ApiError):
     """Mantle upstream error mapped to an API error.
@@ -214,6 +223,85 @@ def endpoint_url(region: RegionName) -> str:
     if template := SETTINGS.aws_bedrock_mantle_endpoint_url:
         return template.format(region=region).rstrip("/")
     return f"https://bedrock-mantle.{region}.api.aws"
+
+
+def _exception_causes(error: BaseException) -> Iterator[BaseException]:
+    """Yield *error* then every exception it was raised from, outermost first.
+
+    Follows ``__cause__`` and, in its absence, the implicit ``__context__``,
+    exactly as a printed traceback would; a cycle stops the walk.
+
+    Args:
+        error: Exception to walk.
+
+    Yields:
+        The exception and each of its causes.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or (
+            None if current.__suppress_context__ else current.__context__
+        )
+
+
+def format_exception_chain(error: BaseException) -> str:
+    """Render an exception and its cause chain as one operator-facing log line.
+
+    The message an upstream failure is mapped to is deliberately generic, so on
+    its own it cannot tell a missing endpoint from a blocked route, a refused
+    connection, a TLS failure or a read timeout: the causes carry that.
+
+    Args:
+        error: Exception to render.
+
+    Returns:
+        Single-line ``"outermost <- ... <- root cause"`` rendering.
+    """
+    return " <- ".join(
+        f"{type(cause).__name__}: {cause}" if str(cause) else type(cause).__name__
+        for cause in _exception_causes(error)
+    )
+
+
+def endpoint_unresolved(error: BaseException, region: RegionName) -> bool:
+    """Whether *error* was caused by the Mantle endpoint hostname not resolving.
+
+    A region that does not serve Amazon Bedrock Mantle has no
+    ``bedrock-mantle`` DNS record at all, which is a permanent configuration
+    fact rather than the transient failure every other connection error is.
+    The failing hostname must be the endpoint's own: through a proxy, the name
+    that did not resolve is the proxy's, and blaming the region for it would
+    send the operator to drop a perfectly good one.
+
+    Args:
+        error: Exception raised by a Mantle request.
+        region: Region the request was sent to.
+
+    Returns:
+        ``True`` when the endpoint hostname does not resolve.
+    """
+    host = urlsplit(endpoint_url(region)).hostname
+    return any(
+        isinstance(cause, ClientConnectorDNSError) and cause.host == host
+        for cause in _exception_causes(error)
+    )
+
+
+def catalog_timeout() -> float:
+    """Return the time budget for fetching one region's Mantle model catalog.
+
+    The shared session grants a response up to ``ai_response_timeout`` to be
+    read, which a region that accepts connections and never answers would spend
+    of the server's startup. Listing a catalog is a short call, so its budget
+    follows the connect timeout instead.
+
+    Returns:
+        Budget in seconds.
+    """
+    return SETTINGS.aws_connect_timeout * _CATALOG_TIMEOUT_FACTOR
 
 
 async def bearer_token(region: RegionName) -> str:

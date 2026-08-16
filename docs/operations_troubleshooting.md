@@ -145,6 +145,24 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
 
     See [Outbound Network Requirements](operations_deploy_advanced.md#outbound-network-requirements) for the full destination list.
 
+    The startup warning names the region, the endpoint address and the exception chain behind the failure, so a blocked route (`ConnectionTimeoutError`), a refused connection (`ConnectionRefusedError`), an intercepting proxy's certificate (`SSLCertVerificationError`) and an unresolvable address (`ClientConnectorDNSError`) are told apart without further instrumentation.
+
+??? failure "Bedrock Mantle models are missing in one region only — `bedrock_mantle_regions_without_endpoint`"
+    The startup log lists the region under `bedrock_mantle_regions_without_endpoint` instead of `unreachable_bedrock_regions`. Bedrock Mantle is offered in fewer regions than classic Bedrock, and where it is not offered `bedrock-mantle.<region>.api.aws` has no DNS record at all — nothing to retry, and no network policy to change. See [model availability by endpoint](https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html).
+
+    - Remove the region from [`AWS_BEDROCK_MANTLE_REGIONS`](operations_configuration.md#bedrock-mantle-regions), or unset it to fall back to the regions of `AWS_BEDROCK_REGIONS` that offer Mantle. Classic Bedrock in that region is unaffected either way.
+    - If no configured region offers Mantle, the log says so as well and no Mantle model is served — set [`AWS_BEDROCK_MANTLE_ENABLED`](operations_configuration.md#bedrock-mantle-enabled) to `false` to stop the warning.
+    - If AWS has since added the region, list it explicitly in `AWS_BEDROCK_MANTLE_REGIONS`: an explicit list is used as given.
+    - If the address should resolve because a VPC endpoint provides it, this is instead the private-DNS case covered by *Every Bedrock Mantle model is missing* above.
+
+??? failure "Startup takes tens of seconds — `server_start_time_ms` far above the usual few seconds"
+    The `start` log event reports `server_start_time_ms` in the tens of thousands where a healthy deployment reports a few thousand. Startup reads the model catalogs of every configured region, and the ECS task metadata endpoint before them; a destination that never answers is only given up on after a timeout.
+
+    - Read the `server_warnings` of the same event first. `ECS container metadata endpoint answered after N attempts in X s` accounts for that many seconds on its own: the endpoint is served by the ECS agent over the task ENI and answers slowly when the task is CPU-starved at boot. Raise the task CPU, or the `cpu` of the Fargate task definition, so the agent is scheduled promptly.
+    - `unreachable_bedrock_regions` and `bedrock_mantle_regions_without_endpoint` each name a region that spent its full timeout budget. Removing the region from `AWS_BEDROCK_REGIONS` or `AWS_BEDROCK_MANTLE_REGIONS` removes the delay.
+    - [`AWS_CONNECT_TIMEOUT`](operations_configuration.md#aws-connect-timeout) bounds each connection attempt and the model-catalog fetch that follows it, so lowering it lowers what an unreachable region can cost. It also bounds failover between healthy regions, so keep it above your real inter-region latency.
+    - Model discovery is per region and runs in parallel, so the count of regions costs far less than one unreachable region does.
+
 ??? failure "`429 Too Many Requests` — Bedrock throttling / quota"
     AWS returned `ThrottlingException`, `TooManyRequestsException`, or `ServiceQuotaExceededException` — mapped to HTTP `429` with error type `rate_limit_error`. You've hit the per-region Bedrock quota.
 

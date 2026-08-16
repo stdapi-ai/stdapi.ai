@@ -73,21 +73,15 @@ async def metadata_server(request: pytest.FixtureRequest) -> AsyncGenerator[Test
     await test_server.close()
 
 
-@pytest.mark.parametrize(
-    "metadata_server",
-    [pytest.param(0, id="first-attempt"), pytest.param(2, id="after-two-failures")],
-    indirect=True,
-)
 async def test_account_info_from_ecs_metadata(
     monkeypatch: pytest.MonkeyPatch, metadata_server: TestServer
 ) -> None:
     """The account ID and task-qualified server name come from the ECS task metadata.
 
     The account ID is field 4 of the task ARN and the task ID is the last segment
-    of field 5; the container name comes from the container endpoint itself. The
-    endpoint is answered by the ECS agent and can be slow or briefly unavailable
-    during startup, so the two-failure case covers the retry path (up to
-    ``_ECS_METADATA_ATTEMPTS`` attempts) still yielding no warning.
+    of field 5; the container name comes from the container endpoint itself. An
+    endpoint answering on the first attempt costs nothing worth reporting, so no
+    startup warning is produced.
 
     Ref: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-metadata-endpoint-v4-fargate-response.html
          stdapi/aws.py:_set_account_info_from_ecs
@@ -103,6 +97,56 @@ async def test_account_info_from_ecs_metadata(
 
     assert aws.AWS_ENVIRONMENT["account_id"] == "123456789012"
     assert f"abcdef0123456789-main-{server.SERVER_ID}" == server.SERVER_NAME
+
+
+@pytest.mark.parametrize("metadata_server", [2], indirect=True)
+async def test_slow_metadata_fetch_reports_what_it_cost(
+    monkeypatch: pytest.MonkeyPatch, metadata_server: TestServer
+) -> None:
+    """A metadata endpoint that only answers on a retry says so, and how long it took.
+
+    This runs alone before the rest of the startup fan-out, with a 10 s timeout
+    per attempt, so two timed-out attempts followed by a success add ~22 s to
+    startup. Reporting only the all-attempts-failed case leaves that time
+    unexplained: the account ID and the server name are correct, and the
+    operator sees nothing but a slow start.
+
+    Ref: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-metadata-endpoint-v4.html
+         stdapi/aws.py:initialize_aws_account_info
+    """
+    monkeypatch.setattr(aws, "_ECS_METADATA_RETRY_DELAY", 0)
+    monkeypatch.setenv(
+        "ECS_CONTAINER_METADATA_URI_V4", str(metadata_server.make_url("/v4/id"))
+    )
+
+    warning = await aws.initialize_aws_account_info()
+
+    assert warning is not None, "a retried metadata fetch must not be silent"
+    assert "3 attempts" in warning
+    assert " s" in warning, "the delay it added to startup must be reported"
+    assert aws.AWS_ENVIRONMENT["account_id"] == "123456789012", (
+        "reporting the cost must not lose the account ID the retry obtained"
+    )
+    assert f"abcdef0123456789-main-{server.SERVER_ID}" == server.SERVER_NAME
+
+
+async def test_slow_first_attempt_reports_its_duration(
+    monkeypatch: pytest.MonkeyPatch, metadata_server: TestServer
+) -> None:
+    """A single but slow attempt is reported too, not only a retried one.
+
+    The endpoint is served by the ECS agent over the task ENI and can answer
+    slowly without ever failing, which costs startup just as much as a retry.
+    """
+    monkeypatch.setattr(aws, "_ECS_METADATA_SLOW_SECONDS", 0)
+    monkeypatch.setenv(
+        "ECS_CONTAINER_METADATA_URI_V4", str(metadata_server.make_url("/v4/id"))
+    )
+
+    warning = await aws.initialize_aws_account_info()
+
+    assert warning is not None
+    assert "1 attempt" in warning
 
 
 async def test_ecs_metadata_ignores_the_proxy_environment(
@@ -168,6 +212,7 @@ async def test_unreachable_ecs_metadata_falls_back_to_sts(
     assert warning is not None
     assert "metadata endpoint unreachable" in warning
     assert f"after {aws._ECS_METADATA_ATTEMPTS} attempts" in warning  # noqa: SLF001
+    assert " s (" in warning, "the time the attempts cost startup must be reported"
     assert "the server name does not identify the ECS task" in warning
     assert called, "STS is the mandatory fallback for the account ID"
     assert aws.AWS_ENVIRONMENT["account_id"] == "210987654321"

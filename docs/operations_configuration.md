@@ -203,7 +203,7 @@ This section provides a quick reference of all available configuration options. 
 | Variable                                                                    | Default               | Description                                                                                          |
 |-----------------------------------------------------------------------------|-----------------------|------------------------------------------------------------------------------------------------------|
 | [`AWS_BEDROCK_MANTLE_ENABLED`](#bedrock-mantle-enabled)                     | `true`                | Expose models served by the Amazon Bedrock Mantle endpoint alongside classic Bedrock Converse models |
-| [`AWS_BEDROCK_MANTLE_REGIONS`](#bedrock-mantle-regions)                     | `AWS_BEDROCK_REGIONS` | AWS regions used for Bedrock Mantle, in failover priority order                                      |
+| [`AWS_BEDROCK_MANTLE_REGIONS`](#bedrock-mantle-regions)                     | Mantle-capable subset of `AWS_BEDROCK_REGIONS` | AWS regions used for Bedrock Mantle, in failover priority order                     |
 | [`AWS_BEDROCK_MANTLE_ENDPOINT_URL`](#bedrock-mantle-endpoint-url)           | None                  | Override the Bedrock Mantle endpoint URL template (`{region}` placeholder)                           |
 | [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](#bedrock-mantle-preferred-models)   | `[]`                  | Model IDs served via Mantle even when also available on the classic bedrock-runtime endpoint         |
 | [`AWS_BEDROCK_MANTLE_SERVICE_HEADER`](#bedrock-mantle-service-header)       | `false`               | Honor the `x-stdapi-service: bedrock-mantle` request header to route dual-homed models through Mantle per request |
@@ -1301,7 +1301,7 @@ export AWS_BEDROCK_MANTLE_ENABLED=false
 :   Comma-separated string of AWS region identifiers
 
 :octicons-gear-24: **Default**
-:   [`AWS_BEDROCK_REGIONS`](#aws-bedrock-regions) when unset
+:   The regions of [`AWS_BEDROCK_REGIONS`](#aws-bedrock-regions) that offer Bedrock Mantle
 
 :octicons-workflow-24: **Behavior**
 :   Model availability differs per region; the served model catalog is the union of all listed regions. Region failover, quota backoff, and health tracking work exactly like classic Bedrock [region routing](operations_resilience.md).
@@ -1309,6 +1309,11 @@ export AWS_BEDROCK_MANTLE_ENABLED=false
 ```bash
 export AWS_BEDROCK_MANTLE_REGIONS=us-east-1,eu-west-1
 ```
+
+!!! note "Regions Without a Mantle Endpoint"
+    Bedrock Mantle is offered in fewer regions than classic Bedrock — see [model availability by endpoint](https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html). Left unset, this setting keeps only the regions of `AWS_BEDROCK_REGIONS` known to offer it, so a deployment spanning other regions is not held up at startup by an address that does not exist.
+
+    An explicit value is used exactly as given, which is how a region AWS adds later is used without waiting for a release. A region that turns out to have no Mantle endpoint is named in a startup warning rather than retried forever. If none of your regions offers it, set `AWS_BEDROCK_MANTLE_ENABLED=false`.
 
 #### `AWS_BEDROCK_MANTLE_ENDPOINT_URL` { #bedrock-mantle-endpoint-url }
 

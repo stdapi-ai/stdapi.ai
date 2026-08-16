@@ -28,7 +28,7 @@ from urllib.parse import unquote
 
 import pytest
 from aiohttp import ClientError as AiohttpClientError
-from aiohttp import ConnectionTimeoutError, SocketTimeoutError
+from aiohttp import ClientSession, ConnectionTimeoutError, SocketTimeoutError
 from aiohttp.http_exceptions import LineTooLong
 from pydantic import BaseModel, ConfigDict, ValidationError
 from sse_starlette import EventSourceResponse, ServerSentEvent
@@ -973,18 +973,40 @@ class TestMantleSettings:
         settings = _Settings(aws_bedrock_mantle_service_header=True)
         assert settings.aws_bedrock_mantle_service_header is True
 
-    def test_mantle_regions_default_to_bedrock_regions(
+    def test_mantle_regions_default_drops_regions_without_an_endpoint(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Unset Mantle regions inherit the Bedrock region list."""
+        """Unset Mantle regions inherit only the Bedrock regions that serve Mantle.
+
+        Bedrock Mantle is offered in fewer regions than classic Bedrock, and
+        where it is not offered ``bedrock-mantle.<region>.api.aws`` has no DNS
+        record at all. Inheriting every Bedrock region therefore makes a
+        deployment probe an address that cannot exist, spending its connection
+        budget and warning at every refresh about a permanent configuration
+        fact.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+             stdapi/config.py:_Settings._validate
+        """
         monkeypatch.delenv("aws_bedrock_mantle_regions", raising=False)
         monkeypatch.delenv("AWS_BEDROCK_MANTLE_REGIONS", raising=False)
-        settings = _Settings()
-        assert settings.aws_bedrock_mantle_regions == settings.aws_bedrock_regions
+
+        settings = _Settings(
+            aws_bedrock_regions=["us-east-1", "eu-west-3", "eu-west-1"]
+        )
+
+        assert settings.aws_bedrock_mantle_regions == ["us-east-1", "eu-west-1"], (
+            "eu-west-3 offers no bedrock-mantle endpoint"
+        )
 
     def test_mantle_regions_explicit_value_preserved(self) -> None:
-        """An explicit Mantle region list is kept as-is."""
-        regions: list[RegionName] = ["eu-west-1"]
+        """An explicit Mantle region list is kept as-is, filtering included.
+
+        A region AWS starts serving after this release is unknown to the
+        default filter, so an explicit list must pass through untouched or that
+        region could not be used at all until the next release.
+        """
+        regions: list[RegionName] = ["eu-west-3"]
         settings = _Settings(aws_bedrock_mantle_regions=regions)
         assert settings.aws_bedrock_mantle_regions == regions
 
@@ -1060,9 +1082,9 @@ class TestMantleCatalogRobustness:
 
         monkeypatch.setattr(stdapi_models, "_get_mantle_models_from_region", fake_get)
         failed_regions: dict[str, str] = {}
-        models = await stdapi_models._collect_mantle_models(failed_regions)  # noqa: SLF001
+        models = await stdapi_models._collect_mantle_models(failed_regions, {})  # noqa: SLF001
         assert "us-east-1 (Mantle)" in failed_regions
-        assert failed_regions["us-east-1 (Mantle)"].startswith("KeyError")
+        assert "KeyError" in failed_regions["us-east-1 (Mantle)"]
         assert set(models) == {"prov.ok-model"}
 
 
@@ -2740,6 +2762,7 @@ class TestMantleDisabled:
 
         async def fail_if_called(
             failed_regions: dict[str, str],  # noqa: ARG001
+            regions_without_endpoint: dict[str, str],  # noqa: ARG001
         ) -> dict[str, ModelDetails]:
             msg = "must not be called when Mantle is disabled"
             raise AssertionError(msg)
@@ -2758,7 +2781,7 @@ class TestMantleDisabled:
         monkeypatch.setattr(stdapi_models, "_collect_mantle_models", fail_if_called)
         monkeypatch.setattr(stdapi_models, "_collect_region_candidates", no_candidates)
         monkeypatch.setattr(stdapi_models, "_check_candidates", no_models)
-        all_models, _ = await stdapi_models._collect_all_models({}, {})  # noqa: SLF001
+        all_models, _ = await stdapi_models._collect_all_models({}, {}, {})  # noqa: SLF001
         assert all_models == {}
 
     def test_serves_via_mantle_false_when_disabled_and_catalog_empty(
@@ -2798,6 +2821,7 @@ class TestCollectAllModelsCancellation:
 
         async def blocking_mantle(
             failed_regions: dict[str, str],  # noqa: ARG001
+            regions_without_endpoint: dict[str, str],  # noqa: ARG001
         ) -> dict[str, ModelDetails]:
             fetch_started.set()
             try:
@@ -2822,7 +2846,7 @@ class TestCollectAllModelsCancellation:
         monkeypatch.setattr(stdapi_models, "_collect_region_candidates", no_candidates)
         monkeypatch.setattr(stdapi_models, "_check_candidates", no_models)
 
-        collection = create_task(stdapi_models._collect_all_models({}, {}))  # noqa: SLF001
+        collection = create_task(stdapi_models._collect_all_models({}, {}, {}))  # noqa: SLF001
         await wait_for(fetch_started.wait(), timeout=5)
         collection.cancel()
         with pytest.raises(CancelledError):
@@ -4539,10 +4563,236 @@ class TestCatalog403Degradation:
 
         monkeypatch.setattr(stdapi_models, "_get_mantle_models_from_region", fake_get)
         failed_regions: dict[str, str] = {}
-        models = await stdapi_models._collect_mantle_models(failed_regions)  # noqa: SLF001
+        models = await stdapi_models._collect_mantle_models(failed_regions, {})  # noqa: SLF001
         assert "us-east-1 (Mantle)" in failed_regions
-        assert failed_regions["us-east-1 (Mantle)"].startswith("MantleError")
+        assert "MantleError" in failed_regions["us-east-1 (Mantle)"]
         assert models == {}
+
+
+async def _connection_failure(url: str) -> MantleError:
+    """Build the ``MantleError`` a real failed connection to *url* produces.
+
+    The transport maps every connection failure onto the same sanitised
+    client-facing message, chaining the real ``aiohttp`` exception as the
+    cause; the exception is produced by an actual connection attempt so the
+    chain is the one the runtime builds rather than a hand-made stand-in.
+
+    Args:
+        url: URL to attempt a connection to.
+
+    Returns:
+        The mapped error, with its real cause chain attached.
+    """
+    async with ClientSession() as session:
+        try:
+            await session.get(url)
+        except AiohttpClientError as error:
+            msg = "The service is temporarily unavailable. Retry the request."
+            mapped = MantleError(msg, status=503, failover=True)
+            mapped.__cause__ = error
+            return mapped
+    msg = f"{url} unexpectedly answered"
+    raise AssertionError(msg)
+
+
+class TestMantleStartupDiagnostic:
+    """An unreachable Mantle region names its real cause, endpoint and setting.
+
+    At startup the sanitised client-facing message is the operator's only
+    signal, and it renders six unrelated conditions identically. The server log
+    is operator-facing, so the warning carries the exception chain, the endpoint
+    it failed against, and -- when the region simply has no Mantle endpoint --
+    the setting to change instead of a transient-sounding outage.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+         https://docs.aiohttp.org/en/stable/client_reference.html
+         stdapi/models/__init__.py:_collect_mantle_models
+         stdapi/aws_bedrock_mantle.py:format_exception_chain
+    """
+
+    @staticmethod
+    def _fail_first_region(
+        monkeypatch: pytest.MonkeyPatch, error: BaseException
+    ) -> None:
+        """Make the first of two configured Mantle regions fail with *error*."""
+        regions: list[RegionName] = ["us-east-1", "us-west-2"]
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_regions", regions)
+
+        async def fake_get(region: RegionName) -> list[ModelDetails]:
+            if region == "us-east-1":
+                raise error
+            return []
+
+        monkeypatch.setattr(stdapi_models, "_get_mantle_models_from_region", fake_get)
+
+    async def test_refused_connection_reports_the_real_cause(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A refused connection is reported with its cause chain and endpoint.
+
+        ``MantleError: The service is temporarily unavailable`` alone cannot be
+        told apart from a DNS failure, a TLS error or a read timeout, so the
+        warning appends every exception the error was raised from.
+        """
+        # Port 1 on loopback is reserved and never bound, so the connection is
+        # refused without racing another process for an ephemeral port.
+        self._fail_first_region(
+            monkeypatch, await _connection_failure("http://127.0.0.1:1/v1/models")
+        )
+        failed_regions: dict[str, str] = {}
+        regions_without_endpoint: dict[str, str] = {}
+
+        await stdapi_models._collect_mantle_models(  # noqa: SLF001
+            failed_regions, regions_without_endpoint
+        )
+
+        detail = failed_regions["us-east-1 (Mantle)"]
+        assert regions_without_endpoint == {}, "a refused connection is not a NXDOMAIN"
+        assert "https://bedrock-mantle.us-east-1.api.aws/v1/models" in detail, (
+            "the operator needs the endpoint the failure happened against"
+        )
+        assert "MantleError" in detail
+        assert "ConnectionRefusedError" in detail, (
+            "the sanitised message must not replace the real cause"
+        )
+        assert "Errno 111" in detail
+
+    async def test_region_without_endpoint_reported_apart_from_outages(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A region with no Mantle endpoint is a misconfiguration, not an outage.
+
+        ``bedrock-mantle.<region>.api.aws`` does not resolve where Bedrock
+        Mantle is not served, which no retry can fix: it is reported apart from
+        the transient failures, naming the setting to change.
+        """
+        monkeypatch.setattr(
+            SETTINGS,
+            "aws_bedrock_mantle_endpoint_url",
+            "https://bedrock-mantle.{region}.invalid",
+        )
+        self._fail_first_region(
+            monkeypatch,
+            await _connection_failure(
+                "https://bedrock-mantle.us-east-1.invalid/v1/models"
+            ),
+        )
+        failed_regions: dict[str, str] = {}
+        regions_without_endpoint: dict[str, str] = {}
+
+        await stdapi_models._collect_mantle_models(  # noqa: SLF001
+            failed_regions, regions_without_endpoint
+        )
+
+        assert failed_regions == {}, (
+            "a permanent misconfiguration must not read as a transient failure"
+        )
+        detail = regions_without_endpoint["us-east-1"]
+        assert "https://bedrock-mantle.us-east-1.invalid" in detail
+        assert "AWS_BEDROCK_MANTLE_ENDPOINT_URL" in detail, (
+            "an overridden endpoint URL is the setting at fault when it is set"
+        )
+
+    def test_no_endpoint_detail_names_the_region_setting(self) -> None:
+        """Without an endpoint override, the region list is the setting at fault."""
+        detail = stdapi_models._no_mantle_endpoint_detail("eu-west-3")  # noqa: SLF001
+
+        assert "https://bedrock-mantle.eu-west-3.api.aws" in detail
+        assert "AWS_BEDROCK_MANTLE_REGIONS" in detail, (
+            "the operator needs the name of the setting to change"
+        )
+
+    async def test_unresolvable_proxy_is_not_blamed_on_the_region(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A DNS failure on another hostname is not a missing Mantle endpoint.
+
+        These sessions follow the deployment's proxy environment, so an
+        unresolvable proxy name fails with the same exception type, against the
+        proxy's hostname. Reading that as "this region has no endpoint" would
+        send the operator to drop a region that is not at fault.
+        """
+        self._fail_first_region(
+            monkeypatch,
+            await _connection_failure("https://no-such-proxy.invalid/v1/models"),
+        )
+        failed_regions: dict[str, str] = {}
+        regions_without_endpoint: dict[str, str] = {}
+
+        await stdapi_models._collect_mantle_models(  # noqa: SLF001
+            failed_regions, regions_without_endpoint
+        )
+
+        assert regions_without_endpoint == {}
+        assert "no-such-proxy.invalid" in failed_regions["us-east-1 (Mantle)"]
+
+    async def test_catalog_fetch_is_bounded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One silent region cannot spend the whole response timeout of startup.
+
+        The shared session allows a full ``AI_RESPONSE_TIMEOUT`` to read a
+        response, so a region that accepts connections and never answers would
+        hold startup for minutes; the catalog fetch gets its own budget.
+        """
+        monkeypatch.setattr(SETTINGS, "aws_connect_timeout", 1)
+        monkeypatch.setattr(SETTINGS, "ai_response_timeout", 600)
+        started = Event()
+
+        async def never_answers(
+            region: RegionName,  # noqa: ARG001
+            method: str,  # noqa: ARG001
+            path: str,  # noqa: ARG001
+        ) -> dict[str, Any]:
+            started.set()
+            await Event().wait()
+            return {}
+
+        monkeypatch.setattr(stdapi_models, "mantle_request_json", never_answers)
+
+        with pytest.raises(TimeoutError) as failure:
+            await wait_for(
+                stdapi_models._get_mantle_models_from_region("us-east-1"),  # noqa: SLF001
+                timeout=30,
+            )
+
+        assert started.is_set()
+        assert "catalog" in str(failure.value), (
+            "the timeout must say what it gave up on and after how long"
+        )
+
+    def test_regions_without_endpoint_warned_separately_at_startup(self) -> None:
+        """The no-endpoint regions get their own startup warning key."""
+        start_event = make_event_log(type="start")
+
+        stdapi_models._warn_bedrock_refresh_issues(  # noqa: SLF001
+            start_event, {}, {"eu-west-3": "no endpoint"}, {}, {}, set()
+        )
+
+        warnings = start_event.get("server_warnings", [])
+        assert warnings == [
+            {"bedrock_mantle_regions_without_endpoint": {"eu-west-3": "no endpoint"}}
+        ]
+        assert start_event["level"] == "warning"
+
+    def test_no_configured_mantle_region_warns_at_startup(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Mantle enabled with no region serving it is reported, not silent.
+
+        The default region list is filtered to the regions that serve Mantle, so
+        a deployment confined to regions without it would otherwise lose every
+        Mantle model with nothing said about it.
+        """
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_enabled", True)
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_regions", [])
+        start_event = make_event_log(type="start")
+
+        stdapi_models._warn_bedrock_refresh_issues(start_event, {}, {}, {}, {}, set())  # noqa: SLF001
+
+        warnings = [str(warning) for warning in start_event.get("server_warnings", [])]
+        assert any("AWS_BEDROCK_MANTLE_REGIONS" in warning for warning in warnings)
+        assert start_event["level"] == "warning"
 
 
 class TestClaudePreFourLatestAlias:
@@ -4587,7 +4837,7 @@ class TestGuardrailMantleStartupWarning:
         """A non-zero Mantle-served model count under guardrails warns at startup."""
         start_event = self._start_event()
         stdapi_models._warn_bedrock_refresh_issues(  # noqa: SLF001
-            start_event, {}, {}, {}, set(), mantle_guardrail_models=3
+            start_event, {}, {}, {}, {}, set(), mantle_guardrail_models=3
         )
         warnings = start_event.get("server_warnings", [])
         assert any(
@@ -4599,7 +4849,7 @@ class TestGuardrailMantleStartupWarning:
         """A zero count adds no guardrail-related warning."""
         start_event = self._start_event()
         stdapi_models._warn_bedrock_refresh_issues(  # noqa: SLF001
-            start_event, {}, {}, {}, set(), mantle_guardrail_models=0
+            start_event, {}, {}, {}, {}, set(), mantle_guardrail_models=0
         )
         assert "server_warnings" not in start_event
 

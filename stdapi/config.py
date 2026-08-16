@@ -116,6 +116,30 @@ _ANTHROPIC_BETA_BEDROCK_FLAGS: frozenset[str] = frozenset(
     }
 )
 
+#: AWS regions serving the Amazon Bedrock Mantle endpoint.
+AWS_BEDROCK_MANTLE_REGIONS: frozenset[str] = frozenset(
+    {
+        "ap-northeast-1",
+        "ap-south-1",
+        "ap-southeast-1",
+        "ap-southeast-2",
+        "ap-southeast-3",
+        "ap-southeast-4",
+        "eu-central-1",
+        "eu-central-2",
+        "eu-north-1",
+        "eu-south-1",
+        "eu-west-1",
+        "eu-west-2",
+        "sa-east-1",
+        "us-east-1",
+        "us-east-2",
+        "us-gov-east-1",
+        "us-gov-west-1",
+        "us-west-2",
+    }
+)
+
 #: Guardrail trace levels accepted wherever a guardrail is configured.
 GuardrailTrace = Literal["disabled", "enabled", "enabled_full"]
 
@@ -519,7 +543,8 @@ class _Settings(BaseSettings):
         default=[],
         description=(
             "List of AWS regions used for Amazon Bedrock Mantle, in failover "
-            "priority order. Defaults to aws_bedrock_regions when unset. "
+            "priority order. Defaults to the regions of aws_bedrock_regions "
+            "that serve Bedrock Mantle; an explicit list is used as given. "
             "Model availability differs per region; the served model catalog is "
             "the union of all listed regions.\n\n"
             "Environment variable format: Comma-separated string"
@@ -2787,7 +2812,14 @@ class _Settings(BaseSettings):
             )
             raise ValueError(msg)
         if not self.aws_bedrock_mantle_regions:
-            self.aws_bedrock_mantle_regions = self.aws_bedrock_regions
+            # Regions with no bedrock-mantle endpoint have no DNS record at all,
+            # so probing them warns forever about a permanent fact. An explicit
+            # list is never filtered: a newly served region needs no release.
+            self.aws_bedrock_mantle_regions = [
+                region
+                for region in self.aws_bedrock_regions
+                if region in AWS_BEDROCK_MANTLE_REGIONS
+            ]
 
         if (
             self.aws_bedrock_user_role_require_identity
