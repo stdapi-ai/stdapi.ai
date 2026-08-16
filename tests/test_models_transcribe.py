@@ -9,9 +9,18 @@ Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_StartTranscr
      stdapi/models/audio/amazon_transcribe.py:AudioModel
 """
 
+from asyncio import Event
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from aws_sdk_transcribe_streaming.models import (
+    Alternative,
+    Result,
+    Transcript,
+    TranscriptEvent,
+    TranscriptResultStreamTranscriptEvent,
+)
 from botocore.exceptions import ClientError, ParamValidationError
 from pydantic import ValidationError
 
@@ -26,14 +35,18 @@ from stdapi.config import SETTINGS
 from stdapi.models import EXTRA_MODELS
 from stdapi.models.audio import amazon_transcribe
 from stdapi.models.audio.amazon_transcribe import (
+    _STREAM_FRAME_BYTES,
+    _STREAM_SAMPLE_RATE,
     AWS_TRANSCRIBE_MODEL_ID,
     AudioModel,
     _build_transcription_job_params,
     _build_transcription_segment,
+    _can_stream_live,
     _dominant_language_code,
     _get_audio_duration,
     _speaker_label,
     _start_transcription_with_failover,
+    _stream_language_params,
     _text_compression_ratio,
     _TranscribeContentRedaction,
     _TranscribeExtraParams,
@@ -44,6 +57,8 @@ from stdapi.models.audio.amazon_transcribe import (
 )
 from stdapi.monitoring import REQUEST_ID, REQUEST_LOG
 from stdapi.types.openai_audio import (
+    TranscriptionTextDeltaEvent,
+    TranscriptionTextDoneEvent,
     TranscriptionVerbose,
     TranslationVerbose,
     UsageDuration,
@@ -58,6 +73,10 @@ if TYPE_CHECKING:
 
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
+
+
+async def _noop() -> None:
+    """Stand in for a startup coroutine a unit test must not let reach AWS."""
 
 
 class TestGetAudioDuration:
@@ -501,6 +520,100 @@ class _FakeAudioContent:
 
     async def to_s3(self, region: str, *, bucket: str, key: str) -> None:
         """Accept the upload without doing anything."""
+
+
+#: Frames the fake audio source yields, and their duration once decoded.
+_FAKE_AUDIO_FRAMES = 3
+_FAKE_AUDIO_SECONDS = _FAKE_AUDIO_FRAMES * _STREAM_FRAME_BYTES / 2 / _STREAM_SAMPLE_RATE
+
+
+def _transcript_events(
+    *results: list[tuple[str, bool, str]],
+) -> list[TranscriptResultStreamTranscriptEvent]:
+    """Build the SDK events a session would deliver.
+
+    Args:
+        *results: One event per argument, each a list of
+            (result id, is_partial, transcript) triples.
+
+    Returns:
+        The events, in order.
+    """
+    return [
+        TranscriptResultStreamTranscriptEvent(
+            TranscriptEvent(
+                transcript=Transcript(
+                    results=[
+                        Result(
+                            result_id=result_id,
+                            is_partial=is_partial,
+                            alternatives=[Alternative(transcript=text)],
+                        )
+                        for result_id, is_partial, text in event
+                    ]
+                )
+            )
+        )
+        for event in results
+    ]
+
+
+def _fake_live_session(
+    monkeypatch: pytest.MonkeyPatch,
+    events: list[TranscriptResultStreamTranscriptEvent],
+    region: str = "us-east-1",
+) -> dict[str, Any]:
+    """Replace the live session and its audio source with in-memory doubles.
+
+    Args:
+        monkeypatch: Patcher applying the replacements.
+        events: Events the session delivers.
+        region: Region the session reports being served by.
+
+    Returns:
+        A record of what the session was asked to do.
+    """
+    record: dict[str, Any] = {"opened": False, "sent": 0, "closed": Event()}
+
+    class _Session:
+        """The subset of ``BidiSession`` the streaming path uses.
+
+        Answers only once the audio has been sent, as a real session does for a
+        recording short enough to be delivered before the first result lands.
+        """
+
+        def __init__(self) -> None:
+            self.region = region
+
+        async def send(self, _event: object) -> None:
+            record["sent"] += 1
+
+        async def close_input(self) -> None:
+            record["closed"].set()
+
+        async def __aiter__(self) -> Any:  # noqa: ANN401
+            await record["closed"].wait()
+            for event in events:
+                yield event
+
+    @asynccontextmanager
+    async def _open(*_args: object, **_kwargs: object) -> Any:  # noqa: ANN401
+        record["opened"] = True
+        yield _Session()
+
+    async def _frames(*_args: object, **_kwargs: object) -> Any:  # noqa: ANN401
+        for _ in range(_FAKE_AUDIO_FRAMES):
+            yield bytes(_STREAM_FRAME_BYTES)
+
+    monkeypatch.setattr(amazon_transcribe, "open_bidi_stream", _open)
+    monkeypatch.setattr(amazon_transcribe, "_stream_audio_frames", _frames)
+    monkeypatch.setattr(
+        amazon_transcribe, "transcribe_stream_regions", lambda: [region]
+    )
+    monkeypatch.setattr(
+        amazon_transcribe, "record_transcribe_usage", lambda *_a, **_k: 15
+    )
+    return record
 
 
 class TestSttDurationComputedOnce:
@@ -981,12 +1094,27 @@ class TestNoCandidateRegions:
 class TestInitializeTranscribeModels:
     """initialize_transcribe_models: regions metadata mirrors the candidates.
 
+    The startup hook reads two process-global sources a test cannot be given
+    through settings — the live bidirectional client pool, and the AWS Translate
+    catalog it loads on the way past — so each test declares both instead of
+    inheriting whatever a sibling's app lifespan left behind in this process.
+
     Ref: stdapi/models/audio/amazon_transcribe.py:initialize_transcribe_models
     """
 
     @pytest.fixture(autouse=True)
-    def _restore_extra_models(self) -> Generator[None]:
-        """Restore the shared model registry entry after each test."""
+    def _isolate_process_state(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> Generator[None]:
+        """Restore the model registry, and cut the two process-global inputs.
+
+        ``transcribe_stream_regions`` reports the bidirectional clients the
+        lifespan opened, which any test in the same worker may have started;
+        ``load_supported_languages`` reaches AWS Translate, which a unit test
+        must not do.
+        """
+        monkeypatch.setattr(amazon_transcribe, "transcribe_stream_regions", list)
+        monkeypatch.setattr(amazon_transcribe, "load_supported_languages", _noop)
         saved = EXTRA_MODELS.get(AWS_TRANSCRIBE_MODEL_ID)
         yield
         if saved is None:
@@ -1011,12 +1139,34 @@ class TestInitializeTranscribeModels:
     async def test_registers_empty_regions_without_any_bucket(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Without any usable bucket the model stays registered, regions empty."""
+        """Without any usable bucket, and no live session either, regions are empty."""
         monkeypatch.setattr(SETTINGS, "aws_transcribe_region", "us-west-2")
         monkeypatch.setattr(SETTINGS, "aws_transcribe_s3_bucket", None)
         monkeypatch.setattr(SETTINGS, "aws_s3_regional_buckets", {})
         await initialize_transcribe_models()
         assert EXTRA_MODELS[AWS_TRANSCRIBE_MODEL_ID].regions == []
+
+    async def test_appends_the_live_session_regions_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A region serving only live sessions is advertised too, and never twice.
+
+        A live session stages nothing in S3, so it widens the advertised set
+        beyond the bucket-equipped candidates — which is why a region already
+        listed as a candidate must not be repeated.
+        """
+        monkeypatch.setattr(SETTINGS, "aws_transcribe_region", "us-west-2")
+        monkeypatch.setattr(SETTINGS, "aws_transcribe_s3_bucket", "transcribe-bucket")
+        monkeypatch.setattr(
+            amazon_transcribe,
+            "transcribe_stream_regions",
+            lambda: ["us-west-2", "eu-central-1"],
+        )
+        await initialize_transcribe_models()
+        assert EXTRA_MODELS[AWS_TRANSCRIBE_MODEL_ID].regions == [
+            "us-west-2",
+            "eu-central-1",
+        ]
 
 
 class TestBucketToRegionMapping:
@@ -1525,3 +1675,325 @@ class TestBuildTranscriptionJobParamsExtra:
         params = _build_transcription_job_params("job1", "bucket", "en", "json")
         assert "Settings" not in params
         assert "ContentRedaction" not in params
+
+
+class TestStreamLanguageParams:
+    """_stream_language_params: which requests a live session can be opened for.
+
+    A live session must be told its language up front: Amazon Transcribe refuses
+    ``IdentifyLanguage`` unless two or more ``LanguageOptions`` come with it
+    (verified against the service, not only its reference). A request whose
+    language cannot be resolved therefore has no live session available.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_streaming_StartStreamTranscription.html
+         stdapi/models/audio/amazon_transcribe.py:_stream_language_params
+    """
+
+    def test_an_explicit_language_becomes_the_session_language_code(self) -> None:
+        """``language`` maps to the session's ``language_code``, candidates aside."""
+        assert _stream_language_params("en", None, None) == {"language_code": "en-US"}
+
+    def test_a_single_expected_language_behaves_like_an_explicit_one(self) -> None:
+        """A one-entry ``languages`` names the language, as on the batch path."""
+        assert _stream_language_params(None, ["fr"], None) == {"language_code": "fr-FR"}
+
+    def test_several_expected_languages_become_comma_separated_options(self) -> None:
+        """``languages`` enables multi-language identification over those options.
+
+        The streaming API takes ``LanguageOptions`` as one comma-separated string,
+        where the batch job takes a list.
+        """
+        assert _stream_language_params(None, ["en", "fr"], None) == {
+            "identify_multiple_languages": True,
+            "language_options": "en-US,fr-FR",
+        }
+
+    def test_configured_candidates_serve_a_request_naming_no_language(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The deployment's candidates enable identification when the caller gives none."""
+        monkeypatch.setattr(
+            SETTINGS, "aws_transcribe_stream_languages", ["en-US", "fr-FR"]
+        )
+        assert _stream_language_params(None, None, None) == {
+            "identify_language": True,
+            "language_options": "en-US,fr-FR",
+        }
+
+    def test_no_language_and_no_candidates_has_no_live_session(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nothing to send as a language means no live session is available.
+
+        Amazon Transcribe rejects the request outright rather than detecting the
+        language on its own, so the caller is served by the other path instead.
+        """
+        monkeypatch.setattr(SETTINGS, "aws_transcribe_stream_languages", [])
+        assert _stream_language_params(None, None, None) is None
+
+    def test_a_single_configured_candidate_is_not_enough(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One candidate cannot enable identification, which needs two or more."""
+        monkeypatch.setattr(SETTINGS, "aws_transcribe_stream_languages", ["en-US"])
+        assert _stream_language_params(None, None, None) is None
+
+
+class TestCanStreamLive:
+    """_can_stream_live: a live session only serves what it can honour exactly.
+
+    The streaming API takes the custom vocabularies and nothing else of what the
+    batch job's ``Settings`` carry, so a request asking for one of the others is
+    served by the job rather than silently losing it.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_streaming_StartStreamTranscription.html
+         stdapi/models/audio/amazon_transcribe.py:_can_stream_live
+    """
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            None,
+            _TranscribeExtraParams(VocabularyName="my-vocabulary"),
+            _TranscribeExtraParams(
+                VocabularyFilterName="my-filter", VocabularyFilterMethod="mask"
+            ),
+            _TranscribeExtraParams(LanguageOptions=["en-US", "fr-FR"]),
+        ],
+        ids=["none", "vocabulary", "vocabulary_filter", "language_options"],
+    )
+    def test_parameters_a_session_honours_keep_it(
+        self, extra: _TranscribeExtraParams | None
+    ) -> None:
+        """The vocabulary and language parameters have streaming equivalents."""
+        assert _can_stream_live(extra) is True
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            _TranscribeExtraParams(ShowSpeakerLabels=True),
+            _TranscribeExtraParams(ChannelIdentification=True),
+            _TranscribeExtraParams(MaxAlternatives=2),
+            _TranscribeExtraParams(
+                ToxicityDetection=[
+                    _TranscribeToxicityDetectionSetting(ToxicityCategories=["ALL"])
+                ]
+            ),
+        ],
+        ids=["speaker_labels", "channels", "alternatives", "toxicity"],
+    )
+    def test_job_only_parameters_give_it_up(
+        self, extra: _TranscribeExtraParams
+    ) -> None:
+        """Anything the streamed events cannot carry sends the request to the job."""
+        assert _can_stream_live(extra) is False
+
+
+def _split_stream(
+    collected: list[TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent],
+) -> tuple[list[TranscriptionTextDeltaEvent], TranscriptionTextDoneEvent]:
+    """Split a transcript stream into its delta events and its terminal done event."""
+    done = collected[-1]
+    assert isinstance(done, TranscriptionTextDoneEvent), "the stream must end on done"
+    deltas = [
+        event
+        for event in collected[:-1]
+        if isinstance(event, TranscriptionTextDeltaEvent)
+    ]
+    assert len(deltas) == len(collected) - 1, "only deltas may precede the done event"
+    return deltas, done
+
+
+class TestLiveTranscriptionStream:
+    """stt_stream: the transcript streams from a live session, not a finished job.
+
+    Each result Amazon Transcribe finalizes becomes one ``transcript.text.delta``;
+    the terminal ``transcript.text.done`` carries their concatenation, so the two
+    agree by construction. A result the session never finalizes is still emitted,
+    from its last partial, so no recognized text is dropped.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_streaming_StartStreamTranscription.html
+         stdapi/models/audio/amazon_transcribe.py:AudioModel.stt_stream
+    """
+
+    async def test_finalized_results_are_streamed_as_deltas_then_a_done_event(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """Two finalized results yield two deltas and a done event carrying both."""
+        events = _transcript_events(
+            [("r1", False, "Hello there")], [("r2", False, "second part")]
+        )
+        session = _fake_live_session(monkeypatch, events)
+
+        collected = [
+            event
+            async for event in AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt_stream(
+                _FakeAudioContent(),  # type: ignore[arg-type]
+                "json",
+                language="en",
+                logprobs=False,
+            )
+        ]
+
+        deltas, done = _split_stream(collected)
+        assert [event.delta for event in deltas] == ["Hello there", "second part"]
+        # The deltas rebuild the final transcript, so the two cannot disagree.
+        assert " ".join(event.delta for event in deltas) == done.text
+        assert done.text == "Hello there second part"
+        assert done.usage is None, "Transcribe bills duration, not tokens"
+        assert session["opened"], "no live session was opened"
+        assert session["sent"] == _FAKE_AUDIO_FRAMES
+        assert request_log
+
+    async def test_partial_results_are_not_emitted_twice(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A result refined by partials is emitted once, when it is finalized.
+
+        Partial results restate the same segment rather than extending it, so
+        emitting them would make the deltas contradict the final transcript.
+        """
+        events = _transcript_events(
+            [("r1", True, "Hello")],
+            [("r1", True, "Hello there")],
+            [("r1", False, "Hello there.")],
+        )
+        _fake_live_session(monkeypatch, events)
+
+        collected = [
+            event
+            async for event in AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt_stream(
+                _FakeAudioContent(),  # type: ignore[arg-type]
+                "text",
+                language="en",
+                logprobs=False,
+            )
+        ]
+
+        deltas, done = _split_stream(collected)
+        assert [event.delta for event in deltas] == ["Hello there."]
+        assert done.text == "Hello there."
+
+    async def test_a_result_left_partial_is_still_emitted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Text the session never finalizes reaches the client anyway.
+
+        Language identification has been observed ending a session on a partial
+        result; dropping it would lose the whole transcript of a short recording.
+        """
+        events = _transcript_events([("r1", True, "unfinished words")])
+        _fake_live_session(monkeypatch, events)
+
+        collected = [
+            event
+            async for event in AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt_stream(
+                _FakeAudioContent(),  # type: ignore[arg-type]
+                "text",
+                language="en",
+                logprobs=False,
+            )
+        ]
+
+        deltas, done = _split_stream(collected)
+        assert [event.delta for event in deltas] == ["unfinished words"]
+        assert done.text == "unfinished words"
+
+    async def test_usage_is_recorded_for_the_audio_that_was_streamed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The seconds of audio sent to the session are what gets billed."""
+        recorded: list[tuple[float, str]] = []
+        _fake_live_session(
+            monkeypatch, _transcript_events([("r1", False, "hi")]), region="us-east-1"
+        )
+
+        def _record(duration: float, *, region: str = "") -> int:
+            recorded.append((duration, region))
+            return 15
+
+        monkeypatch.setattr(amazon_transcribe, "record_transcribe_usage", _record)
+
+        async for _ in AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt_stream(
+            _FakeAudioContent(),  # type: ignore[arg-type]
+            "text",
+            language="en",
+            logprobs=False,
+        ):
+            pass
+
+        assert len(recorded) == 1
+        duration, region = recorded[0]
+        assert duration == pytest.approx(_FAKE_AUDIO_SECONDS, abs=0.01)
+        assert region == "us-east-1"
+
+    async def test_no_transcription_job_is_started(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The live path never stages the audio in S3 nor starts a batch job."""
+
+        async def _unexpected(
+            _self: AudioModel, *_args: object, **_kwargs: object
+        ) -> dict[str, Any]:
+            pytest.fail("the live path must not start a transcription job")
+
+        monkeypatch.setattr(AudioModel, "_transcribe", _unexpected)
+        _fake_live_session(monkeypatch, _transcript_events([("r1", False, "hi")]))
+
+        async for _ in AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt_stream(
+            _FakeAudioContent(),  # type: ignore[arg-type]
+            "text",
+            language="en",
+            logprobs=False,
+        ):
+            pass
+
+    async def test_a_request_without_a_language_falls_back_to_the_job(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no resolvable language the transcript still streams, from the job.
+
+        A live session cannot be opened at all, so the caller keeps the behaviour
+        the route had before rather than getting an error.
+        """
+        monkeypatch.setattr(SETTINGS, "aws_transcribe_stream_languages", [])
+
+        async def _fake_transcribe(
+            _self: AudioModel, *_args: object, **_kwargs: object
+        ) -> dict[str, Any]:
+            return {
+                "transcripts": [{"transcript": "from the job"}],
+                "audio_segments": [],
+                "items": [],
+                "language_code": "en-US",
+            }
+
+        monkeypatch.setattr(AudioModel, "_transcribe", _fake_transcribe)
+        monkeypatch.setattr(
+            amazon_transcribe, "record_transcribe_usage", lambda *_a, **_k: 15
+        )
+
+        collected = [
+            event
+            async for event in AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt_stream(
+                _FakeAudioContent(),  # type: ignore[arg-type]
+                "text",
+                logprobs=False,
+            )
+        ]
+
+        _, done = _split_stream(collected)
+        assert done.text == "from the job"
+
+
+class TestLiveTranscriptionAliases:
+    """The realtime-oriented OpenAI transcription name is served too.
+
+    Ref: https://developers.openai.com/api/docs/guides/speech-to-text
+         stdapi/models/audio/amazon_transcribe.py:AudioModel.get_aliases
+    """
+
+    def test_gpt_live_transcribe_resolves_to_transcribe(self) -> None:
+        """``gpt-live-transcribe`` is an alias now that the route streams live."""
+        aliases = AudioModel.get_aliases({})
+        assert aliases["gpt-live-transcribe"] == AWS_TRANSCRIBE_MODEL_ID

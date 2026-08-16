@@ -938,6 +938,21 @@ class _Settings(BaseSettings):
         ),
     )
 
+    aws_transcribe_stream_languages: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Languages a streamed transcription (stream=true) picks between when "
+            "the request names none, as two or more language codes.\n\n"
+            "A streamed transcription starts before the recording has been fully "
+            "read, which requires knowing which languages to expect: a request "
+            "naming its language (or two or more expected languages) always gets "
+            "one, and this setting extends that to requests that name neither.\n\n"
+            'Example: \'["en-US", "es-US", "fr-FR"]\'\n\n'
+            "Unset (default): a request naming no language is transcribed once "
+            "the whole recording has been read, and its language detected."
+        ),
+    )
+
     aws_transcribe_output_encryption_key_arn: str | None = Field(
         default=None,
         description=(

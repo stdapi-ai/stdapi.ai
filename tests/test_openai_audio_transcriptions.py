@@ -23,6 +23,7 @@ from stdapi.models.audio.amazon_transcribe import (
     AudioModel,
     _build_transcription_job_params,
     _TranscribeExtraParams,
+    _TranscribeLanguageIdSetting,
 )
 from stdapi.routes import openai_audio_transcriptions
 from stdapi.types.openai_audio import (
@@ -99,10 +100,10 @@ def _matches_sample_audio(transcript: str) -> bool:
 class TestAudioTranscriptions:
     """Transcription behavior shared by every transcription-capable model.
 
-    On this gateway the route is served by Amazon Transcribe *batch* jobs
-    (S3-staged ``StartTranscriptionJob``): ``srt``/``vtt`` come from Transcribe's
-    Subtitles feature and ``stream=true`` is synthesized from a completed job
-    instead of being genuinely incremental.
+    On this gateway the route is served by Amazon Transcribe: ``srt``/``vtt``
+    come from an S3-staged ``StartTranscriptionJob``'s Subtitles feature, while
+    ``stream=true`` runs a live ``StartStreamTranscription`` session whenever the
+    request names a language it can be opened with.
 
     Ref: https://stdapi.ai/api_openai_audio_transcriptions/
          https://docs.aws.amazon.com/transcribe/latest/APIReference/API_StartTranscriptionJob.html
@@ -238,17 +239,21 @@ class TestAudioTranscriptions:
     ) -> None:
         """``stream=true`` emits ``transcript.text.delta`` events carrying the transcript.
 
-        With Amazon Transcribe the stream is synthesized from a finished batch job —
-        one delta per transcript then ``transcript.text.done`` — so only the presence
-        and content of delta events is asserted, never incremental partial results.
+        How many deltas a transcript is cut into is the recognizer's decision, on
+        either target, so the sequence is asserted rather than the split: delta
+        events carrying text, and the ``transcript.text.done`` event closing them.
 
-        Ref: https://developers.openai.com/api/docs/guides/speech-to-text#prompting
+        ``language`` is sent because it is what lets Amazon Transcribe stream the
+        recording live instead of once it has been read whole.
+
+        Ref: https://developers.openai.com/api/docs/guides/speech-to-text
              https://docs.aws.amazon.com/transcribe/latest/APIReference/API_streaming_StartStreamTranscription.html
              stdapi/models/audio/amazon_transcribe.py:AudioModel.stt_stream
         """
         response = openai_client.audio.transcriptions.create(
             file=("test.wav", io.BytesIO(sample_audio_file)),
             model=transcription_stream_model,
+            language="en",
             stream=True,
         )
 
@@ -1500,9 +1505,10 @@ class TestTranscribeUnsupportedParameters:
 class TestTranscribeStreamTermination:
     """AudioModel.stt_stream ends with a done event carrying the whole transcript.
 
-    The batch job is finished before the first event is emitted, so the stream
-    is one delta per transcript followed by the terminating done event whose
-    ``text`` is those deltas joined by a space.
+    Exercised on the path a request naming no language takes, where no live
+    session can be opened: one delta per transcript of the finished job,
+    followed by the terminating done event whose ``text`` is those deltas
+    joined by a space.
 
     Ref: https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create
          stdapi/models/audio/amazon_transcribe.py:AudioModel.stt_stream
@@ -1883,13 +1889,15 @@ class TestTranscribeLanguageIdSettings:
 
         Ref: stdapi/models/audio/amazon_transcribe.py:_TranscribeExtraParams
         """
-        extra = _TranscribeExtraParams(
-            IdentifyMultipleLanguages=True,
-            LanguageOptions=["en-US", "es-US"],
-            LanguageIdSettings={
-                "en-US": {"VocabularyName": "Medical", "VocabularyFilterName": "F"},
-                "es-US": {"VocabularyName": "Medico"},
-            },  # type: ignore[arg-type]
+        extra = _TranscribeExtraParams.model_validate(
+            {
+                "IdentifyMultipleLanguages": True,
+                "LanguageOptions": ["en-US", "es-US"],
+                "LanguageIdSettings": {
+                    "en-US": {"VocabularyName": "Medical", "VocabularyFilterName": "F"},
+                    "es-US": {"VocabularyName": "Medico"},
+                },
+            }
         )
 
         assert extra.LanguageIdSettings is not None
@@ -1903,8 +1911,8 @@ class TestTranscribeLanguageIdSettings:
         Ref: stdapi/models/audio/amazon_transcribe.py:_TranscribeLanguageIdSetting
         """
         with pytest.raises(ValidationError):
-            _TranscribeExtraParams(
-                LanguageIdSettings={"en-US": {"NotARealField": "x"}}  # type: ignore[dict-item]
+            _TranscribeExtraParams.model_validate(
+                {"LanguageIdSettings": {"en-US": {"NotARealField": "x"}}}
             )
 
     def test_language_id_settings_reach_a_multi_language_job(self) -> None:
@@ -1923,8 +1931,8 @@ class TestTranscribeLanguageIdSettings:
             extra=_TranscribeExtraParams(
                 IdentifyMultipleLanguages=True,
                 LanguageOptions=["en-US", "es-US"],
-                LanguageIdSettings={  # type: ignore[dict-item]
-                    "en-US": {"VocabularyName": "Medical"}
+                LanguageIdSettings={
+                    "en-US": _TranscribeLanguageIdSetting(VocabularyName="Medical")
                 },
             ),
         )
@@ -1945,8 +1953,8 @@ class TestTranscribeLanguageIdSettings:
             None,
             "json",
             extra=_TranscribeExtraParams(
-                LanguageIdSettings={  # type: ignore[dict-item]
-                    "en-US": {"LanguageModelName": "MyModel"}
+                LanguageIdSettings={
+                    "en-US": _TranscribeLanguageIdSetting(LanguageModelName="MyModel")
                 }
             ),
         )
@@ -1971,8 +1979,8 @@ class TestTranscribeLanguageIdSettings:
                 "en",
                 "json",
                 extra=_TranscribeExtraParams(
-                    LanguageIdSettings={  # type: ignore[dict-item]
-                        "en-US": {"VocabularyName": "Medical"}
+                    LanguageIdSettings={
+                        "en-US": _TranscribeLanguageIdSetting(VocabularyName="Medical")
                     }
                 ),
             )

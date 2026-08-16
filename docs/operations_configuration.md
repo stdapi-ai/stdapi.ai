@@ -176,6 +176,7 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](#aws-bedrock-knowledge-base-ids) | `[]`    | Allowlist of Amazon Bedrock knowledge bases addressed as `vs_kb_...` vector stores; empty disables it |
 | [`AWS_TRANSCRIBE_S3_BUCKET`](#aws-transcribe-s3-bucket) | `AWS_S3_BUCKET` | S3 bucket for temporary audio transcription files; must be in same region as `AWS_TRANSCRIBE_REGION` |
 | [`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN`](#aws-transcribe-output-encryption-key-arn) | None | AWS KMS key encrypting the transcription output objects; unset keeps the bucket's own encryption |
+| [`AWS_TRANSCRIBE_STREAM_LANGUAGES`](#aws-transcribe-stream-languages) | `[]`  | Languages a streamed transcription picks between when the request names none |
 
 ### :material-robot: AWS AI Services { #summary-aws-ai-services }
 
@@ -810,6 +811,23 @@ export AWS_TRANSCRIBE_S3_BUCKET=my-transcribe-temp-us-east-1
 
 # If AWS_TRANSCRIBE_REGION is eu-west-1
 export AWS_TRANSCRIBE_S3_BUCKET=my-transcribe-temp-eu-west-1
+```
+
+#### `AWS_TRANSCRIBE_STREAM_LANGUAGES` { #aws-transcribe-stream-languages }
+
+:octicons-package-24: **Purpose**
+:   Languages a streamed transcription ([`stream=true`](api_openai_audio_transcriptions.md#streaming)) picks between when the request names none
+
+:octicons-gear-24: **Default**
+:   Empty — a request naming no language is transcribed once the whole recording has been read, and its language detected
+
+:octicons-code-24: **Format**
+:   JSON array of two or more language codes; a single entry has no effect
+
+A streamed transcription returns text before the recording has been fully read, which requires knowing which languages to expect. A request that names its `language` — or two or more expected `languages` — always gets one. Set this to extend the same behavior to requests that name neither, listing the languages your callers actually send. Listing more than five is not recommended, and two variants of the same language (`en-US` and `en-GB`) cannot both appear.
+
+```bash
+export AWS_TRANSCRIBE_STREAM_LANGUAGES='["en-US", "es-US", "fr-FR"]'
 ```
 
 #### `AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN` { #aws-transcribe-output-encryption-key-arn }

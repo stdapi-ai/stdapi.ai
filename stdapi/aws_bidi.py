@@ -21,6 +21,8 @@ from aws_sdk_bedrock_runtime.client import AsyncBedrockRuntimeClient
 from aws_sdk_bedrock_runtime.config import Config as BedrockRuntimeConfig
 from aws_sdk_polly.client import AsyncPollyClient
 from aws_sdk_polly.config import Config as PollyConfig
+from aws_sdk_transcribe_streaming.client import AsyncTranscribeStreamingClient
+from aws_sdk_transcribe_streaming.config import Config as TranscribeStreamingConfig
 from smithy_aws_core.identity import AWSCredentialsIdentity
 from smithy_core.deserializers import DeserializeableShape
 from smithy_core.serializers import SerializeableShape
@@ -49,7 +51,14 @@ if TYPE_CHECKING:
 _BIDI_SERVICES: Final = {
     "polly": (AsyncPollyClient, PollyConfig),
     "bedrock-runtime": (AsyncBedrockRuntimeClient, BedrockRuntimeConfig),
+    "transcribe": (AsyncTranscribeStreamingClient, TranscribeStreamingConfig),
 }
+
+#: Endpoint prefix of a bidirectional operation served apart from its own service.
+_BIDI_ENDPOINT_PREFIX: Final[dict[str, str]] = {"transcribe": "transcribestreaming"}
+
+#: Endpoint resolver, for an operation botocore hosts no client for.
+_ENDPOINT_RESOLVER = AWS_SESSION.get_component("endpoint_resolver")
 
 #: Bidirectional clients, keyed by service then region (populated at startup).
 _BIDI_CLIENTS: dict[str, dict[RegionName, Any]] = {}
@@ -96,6 +105,7 @@ _BIDI_UNAVAILABLE: Final[dict[str, tuple[str, str]]] = {
         "bedrock:InvokeModelWithBidirectionalStream",
     ),
     "polly": ("Streaming speech synthesis", "polly:StartSpeechSynthesisStream"),
+    "transcribe": ("Live transcription", "transcribe:StartStreamTranscription"),
 }
 
 
@@ -201,7 +211,8 @@ def initialize_bidi_clients() -> None:
     Called once at startup, from the lifespan, after the botocore pool is
     populated: constructing a client costs milliseconds and its transport a
     native thread, and each client targets the endpoint botocore already
-    resolved for the same service and region.
+    resolved for the same service and region. A region the bidirectional
+    endpoint does not serve gets no client, so it is never a candidate.
 
     Raises:
         ServerError: A client config would carry no credentials resolver.
@@ -209,8 +220,22 @@ def initialize_bidi_clients() -> None:
     for service in _BIDI_SERVICES:
         clients = _BIDI_CLIENTS.setdefault(service, {})
         for region, pooled in pooled_clients(service).items():
-            if region not in clients:
-                clients[region] = _create_client(service, region, pooled)
+            if region in clients:
+                continue
+            if (endpoint := _bidi_endpoint(service, region, pooled)) is not None:
+                clients[region] = _create_client(service, region, endpoint)
+
+
+def bidi_regions(service: str) -> list[RegionName]:
+    """Return the regions whose bidirectional client exists, in priority order.
+
+    Args:
+        service: AWS service name (bidirectional client pool key).
+
+    Returns:
+        The regions, empty when the service has no bidirectional client at all.
+    """
+    return list(_BIDI_CLIENTS.get(service, {}))
 
 
 def close_bidi_clients() -> None:
@@ -243,13 +268,41 @@ def get_bidi_client(service: str, region_name: RegionName | None = None) -> Any:
         raise
 
 
-def _create_client(service: str, region: RegionName, pooled: Any) -> Any:  # noqa: ANN401
+def _bidi_endpoint(service: str, region: RegionName, pooled: Any) -> str | None:  # noqa: ANN401
+    """Resolve the endpoint one bidirectional client targets.
+
+    The SDK's own resolver hardcodes "amazonaws.com", absent in other
+    partitions, so the endpoint comes from botocore instead: the pooled client's
+    own for a service whose bidirectional operation it hosts, and botocore's
+    endpoint data for one served on a separate hostname.
+
+    Args:
+        service: AWS service name.
+        region: Region the client would serve.
+        pooled: The botocore client of the same service and region.
+
+    Returns:
+        The endpoint URI, or None when the region does not serve the operation.
+    """
+    if (prefix := _BIDI_ENDPOINT_PREFIX.get(service)) is None:
+        return pooled.meta.endpoint_url  # type: ignore[no-any-return]
+    available = _ENDPOINT_RESOLVER.get_available_endpoints(
+        prefix, partition_name=pooled.meta.partition
+    )
+    if region not in available:
+        return None
+    return (
+        f"https://{_ENDPOINT_RESOLVER.construct_endpoint(prefix, region)['hostname']}"
+    )
+
+
+def _create_client(service: str, region: RegionName, endpoint: str) -> Any:  # noqa: ANN401
     """Build one bidirectional client.
 
     Args:
         service: AWS service name.
         region: Region the client serves.
-        pooled: The botocore client of the same service and region.
+        endpoint: Endpoint URI the client targets.
 
     Returns:
         The generated client.
@@ -265,8 +318,7 @@ def _create_client(service: str, region: RegionName, pooled: Any) -> Any:  # noq
     config = config_class(
         region=region,
         aws_credentials_identity_resolver=_CREDENTIALS_RESOLVER,
-        # The SDK resolver hardcodes "amazonaws.com", absent in other partitions.
-        endpoint_uri=pooled.meta.endpoint_url,
+        endpoint_uri=endpoint,
         transport=_TRANSPORT,
         user_agent_extra=server.USER_AGENT,
     )

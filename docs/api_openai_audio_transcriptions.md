@@ -134,7 +134,7 @@ Any Amazon Bedrock model that accepts the `SPEECH` input modality through the Co
 **Model & Features:**
 
 - Use `amazon.transcribe` with the same interface as OpenAI's Whisper API
-- **Or use OpenAI model names directly**: `whisper-1`, `gpt-transcribe`, `gpt-4o-transcribe`, and `gpt-4o-mini-transcribe` work out of the box (they map to `amazon.transcribe`)
+- **Or use OpenAI model names directly**: `whisper-1`, `gpt-transcribe`, `gpt-live-transcribe`, `gpt-4o-transcribe`, and `gpt-4o-mini-transcribe` work out of the box (they map to `amazon.transcribe`)
 - Auto-detect language or specify it for faster processing, or list the expected languages with `languages` for multi-language audio
 - Word-level or segment-level timestamps with `verbose_json`
 - **Speaker Diarization** :material-account-multiple:{ .highlight }: Automatically identify and label different speakers with `diarized_json`
@@ -145,10 +145,11 @@ Any Amazon Bedrock model that accepts the `SPEECH` input modality through the Co
 
     - `whisper-1` → `amazon.transcribe`
     - `gpt-transcribe` → `amazon.transcribe`
+    - `gpt-live-transcribe` → `amazon.transcribe`
     - `gpt-4o-transcribe` → `amazon.transcribe`
     - `gpt-4o-mini-transcribe` → `amazon.transcribe`
 
-    These aliases enable seamless compatibility with OpenAI-based tools and applications without any configuration changes (the realtime-oriented `gpt-live-transcribe` is not aliased: it belongs to a streaming API this route does not emulate). You can also [customize or override these aliases](operations_configuration.md#model-aliases) to suit your needs.
+    These aliases enable seamless compatibility with OpenAI-based tools and applications without any configuration changes. You can also [customize or override these aliases](operations_configuration.md#model-aliases) to suit your needs.
 
 **Note:** With `amazon.transcribe`, the `prompt`, `temperature`, `keywords`, and `include` parameters are rejected with an error to ensure consistent transcription accuracy (for `keywords`, the error points at the pre-created custom vocabulary alternative via the `VocabularyName` extra parameter). The `known_speaker_names` and `known_speaker_references` parameters are accepted but ignored for every model: Amazon Transcribe's automatic speaker diarization runs without known speaker references, falling back to generic speaker labels.
 
@@ -298,6 +299,16 @@ The following parameters from Amazon Transcribe's [StartTranscriptionJob API](ht
 
 `VocabularyName`, `VocabularyFilterName`, and custom language models must already exist in your AWS account (created via the AWS Transcribe console, CLI, or SDK) before being referenced here.
 
+### :material-lightning-bolt: Streaming Transcriptions { #streaming }
+
+`stream=true` returns the transcript as server-sent events — `transcript.text.delta` events followed by a final `transcript.text.done` — instead of one response body. A [ready-to-run example](#try-it-now) is below.
+
+Each phrase is sent as it is recognized, rather than after the whole recording, whenever the request names the language to expect: send `language`, or two or more expected `languages`. That path needs no S3 bucket, so a deployment with no storage configured serves streamed transcriptions.
+
+A request naming neither is still streamed, but its events arrive together once the recording has been read and its language detected. Operators can set [`AWS_TRANSCRIBE_STREAM_LANGUAGES`](operations_configuration.md#aws-transcribe-stream-languages) to the languages their callers actually send, which gives those requests the faster path too. The same applies to a request using any provider-specific parameter above other than `VocabularyName`, `VocabularyFilterName` and `VocabularyFilterMethod`, which are the only ones a phrase-by-phrase transcript can carry.
+
+Streamed events carry text only, which is why `srt`, `vtt` and `diarized_json` are rejected with `stream=true` rather than answered without their cues or speaker labels.
+
 ## Try It Now
 
 **Transcribe audio to JSON:**
@@ -380,8 +391,12 @@ curl -N -X POST "$BASE/v1/audio/transcriptions" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -F file=@meeting-recording.mp3 \
   -F model=amazon.transcribe \
+  -F language=en \
   -F stream=true
 ```
+
+!!! tip "Naming the language starts the transcript sooner"
+    `language` is what lets each phrase be sent as it is recognized rather than after the whole recording — see [Streaming Transcriptions](#streaming).
 
 !!! info "`verbose_json` streams as plain text"
     `stream=true` combined with `response_format=verbose_json` is accepted rather than rejected, but the streamed events carry `transcript.text.delta` / `.done` only — segment timings, word timings and language details are not included. Request `verbose_json` without `stream` to get them.

@@ -1,11 +1,17 @@
 """Amazon Transcribe model implementation."""
 
-from asyncio import gather, sleep
-from contextlib import contextmanager
+from asyncio import CancelledError, create_task, gather, get_running_loop, sleep
+from asyncio import timeout as async_timeout
+from contextlib import aclosing, contextmanager, suppress
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Literal, NotRequired
+from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired
 from zlib import compress
 
+from aws_sdk_transcribe_streaming.models import (
+    AudioEvent,
+    AudioStreamAudioEvent,
+    StartStreamTranscriptionInput,
+)
 from botocore.exceptions import ClientError, ParamValidationError
 from fastapi import Response
 from pydantic_core import from_json
@@ -19,6 +25,7 @@ from stdapi.api_errors import (
 )
 from stdapi.aws import call_with_region_failover, get_client
 from stdapi.aws_bedrock import apply_guardrail_to_text
+from stdapi.aws_bidi import bidi_regions, open_bidi_stream
 from stdapi.aws_s3 import (
     copy_s3_object,
     get_text_from_s3,
@@ -28,6 +35,7 @@ from stdapi.aws_s3 import (
 from stdapi.aws_translate import load_supported_languages, translate, translate_subtitle
 from stdapi.cleanup import schedule_cleanup
 from stdapi.config import SETTINGS
+from stdapi.media import encode_audio_stream
 from stdapi.models import (
     EXTRA_MODELS,
     EXTRA_MODELS_INPUT_MODALITY,
@@ -243,9 +251,11 @@ def transcribe_job_candidates() -> list[tuple[RegionName, str]]:
 async def initialize_transcribe_models() -> None:
     """Initialize extra models, and cache the AWS Translate language catalog.
 
-    The advertised regions are the bucket-equipped serving candidates; the
-    model stays registered with an empty list when there is none (requests
-    then get the 404 guard's operator-actionable error message).
+    The advertised regions are the ones that can serve a request either way:
+    the bucket-equipped candidates a transcription job needs, plus the ones a
+    streamed transcription can run in, which needs no bucket at all. The model
+    stays registered with an empty list when there is none (requests then get
+    the 404 guard's operator-actionable error message).
 
     AWS Translate is only reachable through this model's translation route,
     so its language catalog is loaded here rather than getting a startup step
@@ -254,11 +264,15 @@ async def initialize_transcribe_models() -> None:
     await load_supported_languages()
     EXTRA_MODELS_INPUT_MODALITY.setdefault("SPEECH", set()).add(AWS_TRANSCRIBE_MODEL_ID)
     EXTRA_MODELS_OUTPUT_MODALITY.setdefault("TEXT", set()).add(AWS_TRANSCRIBE_MODEL_ID)
+    regions = [region for region, _ in transcribe_job_candidates()]
+    regions += [
+        region for region in transcribe_stream_regions() if region not in regions
+    ]
     EXTRA_MODELS[AWS_TRANSCRIBE_MODEL_ID] = ModelDetails(
         id=AWS_TRANSCRIBE_MODEL_ID,
         name="Transcribe",
         provider="Amazon",
-        regions=[region for region, _ in transcribe_job_candidates()],
+        regions=regions,
         service="AWS Transcribe",
         input_modalities=["SPEECH"],
         output_modalities=["TEXT"],
@@ -972,6 +986,234 @@ def _pop_translate_extra_params(
     return (remaining or None, settings, terminology_names)  # type: ignore[return-value]
 
 
+#: Sample rate a live transcription session is fed, in hertz.
+_STREAM_SAMPLE_RATE: Final = 16000
+
+#: Bytes of 16-bit mono audio in one sent event: 100 ms, the size AWS recommends.
+_STREAM_FRAME_BYTES: Final = _STREAM_SAMPLE_RATE * 2 // 10
+
+#: Seconds a live session may go without an event before it is abandoned.
+_STREAM_EVENT_TIMEOUT: Final = 60.0
+
+#: Extra parameters a live session honours, mapped to its own field names.
+_STREAM_EXTRA_FIELDS: Final[dict[str, str]] = {
+    "VocabularyName": "vocabulary_name",
+    "VocabularyFilterName": "vocabulary_filter_name",
+    "VocabularyFilterMethod": "vocabulary_filter_method",
+}
+
+#: Language options a live session needs to identify a language at all.
+_MIN_STREAM_LANGUAGE_OPTIONS: Final = 2
+
+
+def transcribe_stream_regions() -> list[RegionName]:
+    """Return the candidate regions for a live transcription session.
+
+    Unlike a transcription job, a live session stages nothing in S3, so a region
+    qualifies on serving the operation alone.
+
+    Returns:
+        The regions in priority order, empty when none serves live transcription.
+    """
+    return bidi_regions("transcribe")
+
+
+def _stream_language_params(
+    language: str | None,
+    languages: list[str] | None,
+    extra: _TranscribeExtraParams | None,
+) -> dict[str, Any] | None:
+    """Build the language fields a live session is opened with.
+
+    A live session is told its language up front: Amazon Transcribe refuses
+    language identification unless two or more candidates come with it, so a
+    request naming no language, in a deployment configuring none either, has no
+    live session available.
+
+    Args:
+        language: Optional explicit language code.
+        languages: Optional expected input language codes.
+        extra: Optional extra parameters, whose ``LanguageOptions`` stands in for
+            ``languages`` under the provider-specific name.
+
+    Returns:
+        The session's language fields, or None when no language can be resolved.
+    """
+    if languages and len(languages) == 1:
+        language, languages = languages[0], None
+    if language:
+        return {"language_code": format_language_code(language)}
+    options = [format_language_code(code) for code in languages or ()] or list(
+        (extra.LanguageOptions if extra else None)
+        or SETTINGS.aws_transcribe_stream_languages
+    )
+    if len(options) < _MIN_STREAM_LANGUAGE_OPTIONS:
+        return None
+    key = "identify_multiple_languages" if languages else "identify_language"
+    return {key: True, "language_options": ",".join(options)}
+
+
+def _stream_input(
+    language_params: dict[str, Any], extra: _TranscribeExtraParams | None
+) -> StartStreamTranscriptionInput:
+    """Build the request one live session is opened with.
+
+    Args:
+        language_params: The session's already-resolved language fields.
+        extra: Optional extra parameters, filtered to what a session honours.
+
+    Returns:
+        The session request.
+    """
+    vocabularies = (
+        extra.model_dump(include=set(_STREAM_EXTRA_FIELDS), exclude_none=True)
+        if extra is not None
+        else {}
+    )
+    return StartStreamTranscriptionInput(
+        media_encoding="pcm",
+        media_sample_rate_hertz=_STREAM_SAMPLE_RATE,
+        **language_params,
+        **{_STREAM_EXTRA_FIELDS[name]: value for name, value in vocabularies.items()},
+    )
+
+
+def _can_stream_live(extra: _TranscribeExtraParams | None) -> bool:
+    """Whether a live session can serve the request exactly as it was made.
+
+    Args:
+        extra: Optional extra parameters.
+
+    Returns:
+        True when nothing was asked for that only a transcription job provides.
+    """
+    if extra is None:
+        return True
+    requested = set(extra.model_dump(exclude_none=True, exclude_defaults=True))
+    return not (requested - set(_STREAM_EXTRA_FIELDS) - {"LanguageOptions"})
+
+
+async def _stream_audio_frames(audio_content: InputFile) -> AsyncGenerator[bytes]:
+    """Decode an upload into the mono 16 kHz frames a live session accepts.
+
+    Args:
+        audio_content: The uploaded file.
+
+    Yields:
+        Little-endian 16-bit mono frames of a fixed size.
+
+    Raises:
+        ApiError: The upload holds no audio, or could not be decoded.
+    """
+    media_type, file_format = await audio_content.get_content_type_tuple()
+    if media_type not in {"audio", "video"}:
+        msg = (
+            f"Unsupported audio format '{file_format}'. Upload an audio or video file."
+        )
+        raise ApiError(msg)
+    frame = bytearray()
+    async with aclosing(
+        encode_audio_stream(
+            _one_chunk(await audio_content.to_bytes()),
+            "pcm",
+            output_sample_rate=_STREAM_SAMPLE_RATE,
+            output_channels=1,
+        )
+    ) as encoded:
+        async for chunk in encoded:
+            frame.extend(chunk)
+            while len(frame) >= _STREAM_FRAME_BYTES:
+                yield bytes(frame[:_STREAM_FRAME_BYTES])
+                del frame[:_STREAM_FRAME_BYTES]
+    if frame:
+        yield bytes(frame)
+
+
+async def _one_chunk(data: bytes) -> AsyncGenerator[bytes]:
+    """Yield *data* as the single chunk the encoding pipeline reads.
+
+    Args:
+        data: Complete upload content.
+
+    Yields:
+        The upload as one chunk.
+    """
+    yield data
+
+
+async def _send_stream_audio(
+    session: Any,  # noqa: ANN401
+    audio_content: InputFile,
+    transcript: _StreamedTranscript,
+) -> None:
+    """Feed one live session its audio, then tell it there is no more.
+
+    A session waiting for the next frame has no other way to learn the recording
+    is over, and would sit until its idle timer fired.
+
+    Args:
+        session: The open session.
+        audio_content: Audio file to send.
+        transcript: Accumulator counting the seconds actually sent.
+
+    Raises:
+        ApiError: The audio could not be decoded, or the session refused a frame.
+    """
+    async with aclosing(_stream_audio_frames(audio_content)) as frames:
+        async for frame in frames:
+            await session.send(AudioStreamAudioEvent(AudioEvent(audio_chunk=frame)))
+            transcript.seconds += len(frame) / 2 / _STREAM_SAMPLE_RATE
+    await session.close_input()
+
+
+class _StreamedTranscript:
+    """The text a live session has recognized, in the order it recognized it.
+
+    Amazon Transcribe restates a result while it refines it and marks it final
+    once it will not change, so a result becomes one delta when it is finalized
+    -- or, for one the session ends without finalizing, from its last restatement.
+    """
+
+    __slots__ = ("_finalized", "_partial", "seconds")
+
+    def __init__(self) -> None:
+        """Start with nothing recognized and no audio sent."""
+        self._finalized: set[str] = set()
+        self._partial: dict[str, str] = {}
+        self.seconds = 0.0
+
+    def read(self, event: Any) -> Generator[str]:  # noqa: ANN401
+        """Take one session event, yielding the text it completes.
+
+        Args:
+            event: The event the session delivered.
+
+        Yields:
+            The transcript of each result the event finalized.
+        """
+        transcript = getattr(getattr(event, "value", event), "transcript", None)
+        for result in getattr(transcript, "results", None) or ():
+            alternatives = result.alternatives or ()
+            text = (alternatives[0].transcript if alternatives else None) or ""
+            if result.is_partial:
+                self._partial[result.result_id] = text
+            elif result.result_id not in self._finalized:
+                self._finalized.add(result.result_id)
+                self._partial.pop(result.result_id, None)
+                if text:
+                    yield text
+
+    def remainder(self) -> Generator[str]:
+        """Yield the text of every result the session never finalized.
+
+        Yields:
+            Each unfinalized result's last known transcript.
+        """
+        for text in self._partial.values():
+            if text:
+                yield text
+
+
 class _KeywordsUnsupportedError(ApiError):
     """``keywords`` rejection pointing at the custom-vocabulary alternative."""
 
@@ -1026,12 +1268,10 @@ class AudioModel(AudioModelBase[None, None]):
         Returns:
             A dict mapping alias to model ID.
         """
-        # Batch transcription model names only: the realtime-oriented
-        # "gpt-live-transcribe" belongs to a streaming API this route
-        # does not emulate.
         return {
             "whisper-1": AWS_TRANSCRIBE_MODEL_ID,
             "gpt-transcribe": AWS_TRANSCRIBE_MODEL_ID,
+            "gpt-live-transcribe": AWS_TRANSCRIBE_MODEL_ID,
             "gpt-4o-transcribe": AWS_TRANSCRIBE_MODEL_ID,
             "gpt-4o-mini-transcribe": AWS_TRANSCRIBE_MODEL_ID,
         }
@@ -1339,6 +1579,129 @@ class AudioModel(AudioModelBase[None, None]):
         """
         self._validate_no_logprobs(logprobs)
         _validate_no_keywords(keywords)
+        extra: _TranscribeExtraParams | None = None
+        if extra_params:
+            with validation_error_handler():
+                extra = _TranscribeExtraParams(**extra_params)  # type: ignore[arg-type]
+
+        language_params = _stream_language_params(language, languages, extra)
+        regions = transcribe_stream_regions()
+        if language_params is not None and regions and _can_stream_live(extra):
+            events = self._live_transcript(
+                audio_content, _stream_input(language_params, extra), regions
+            )
+        else:
+            events = self._job_transcript(
+                audio_content,
+                response_format,
+                language,
+                prompt,
+                temperature,
+                extra_params,
+                languages,
+            )
+        full_text_parts: list[str] = []
+        async with aclosing(events):
+            async for text in events:
+                full_text_parts.append(text)
+                yield TranscriptionTextDeltaEvent(
+                    delta=text, type="transcript.text.delta"
+                )
+
+        # OpenAI's done event reports token usage only, which no duration-billed
+        # transcription has.
+        yield TranscriptionTextDoneEvent(
+            text=" ".join(full_text_parts), type="transcript.text.done"
+        )
+
+    async def _live_transcript(
+        self,
+        audio_content: InputFile,
+        request: StartStreamTranscriptionInput,
+        regions: list[RegionName],
+    ) -> AsyncGenerator[str]:
+        """Transcribe an upload over a live session, yielding text as it lands.
+
+        The audio is sent by a task of its own so the session's answers are read
+        while it is still being fed, which is the whole point of the session; the
+        seconds actually sent are billed even when the caller walks away first.
+
+        Args:
+            audio_content: Audio file to transcribe.
+            request: The session request, already carrying its language fields.
+            regions: Candidate regions, in priority order.
+
+        Yields:
+            The transcript of each result the session completes, in order.
+
+        Raises:
+            ApiError: The session could not be opened or completed.
+        """
+        transcript = _StreamedTranscript()
+        try:
+            async with open_bidi_stream(
+                "transcribe",
+                regions,
+                lambda client, _region: client.start_stream_transcription(request),
+            ) as session:
+                _SERVED_REGION.set(session.region)
+                sender = create_task(
+                    _send_stream_audio(session, audio_content, transcript)
+                )
+                try:
+                    # Every failure of these clients is a hang rather than an
+                    # error, so no single answer is ever waited on unbounded.
+                    async with async_timeout(_STREAM_EVENT_TIMEOUT) as limit:
+                        async for event in session:
+                            limit.reschedule(
+                                get_running_loop().time() + _STREAM_EVENT_TIMEOUT
+                            )
+                            for text in transcript.read(event):
+                                yield text
+                except TimeoutError as exception:
+                    msg = (
+                        "The audio could not be transcribed in time. Retry the request."
+                    )
+                    raise ApiError(msg, status=504) from exception
+                finally:
+                    sender.cancel()
+                    with suppress(CancelledError, Exception):
+                        await sender
+            for text in transcript.remainder():
+                yield text
+        finally:
+            record_transcribe_usage(transcript.seconds, region=_SERVED_REGION.get())
+
+    async def _job_transcript(
+        self,
+        audio_content: InputFile,
+        response_format: AudioResponseFormat,
+        language: str | None,
+        prompt: str | None,
+        temperature: float | None,
+        extra_params: JsonMapping | None,
+        languages: list[str] | None,
+    ) -> AsyncGenerator[str]:
+        """Transcribe an upload as a job, yielding its transcript once complete.
+
+        Serves the requests a live session cannot: those naming no language it
+        could be opened with, and those asking for a job-only setting.
+
+        Args:
+            audio_content: Audio file to transcribe.
+            response_format: Format for output.
+            language: Optional language code.
+            prompt: Optional prompt for transcription.
+            temperature: Optional temperature for transcription.
+            extra_params: Optional extra StartTranscriptionJob parameters.
+            languages: Optional expected input language codes.
+
+        Yields:
+            Each transcript of the finished job.
+
+        Raises:
+            ApiError: When transcription fails.
+        """
         transcript_data = await self._transcribe(
             audio_content,
             response_format,
@@ -1351,16 +1714,8 @@ class AudioModel(AudioModelBase[None, None]):
         record_transcribe_usage(
             _get_audio_duration(transcript_data), region=_SERVED_REGION.get()
         )
-        full_text_parts: list[str] = []
         for transcript in transcript_data["transcripts"]:
-            text = transcript["transcript"]
-            full_text_parts.append(text)
-            yield TranscriptionTextDeltaEvent(delta=text, type="transcript.text.delta")
-
-        # UsageDuration not supported in streaming mode
-        yield TranscriptionTextDoneEvent(
-            text=" ".join(full_text_parts), type="transcript.text.done"
-        )
+            yield transcript["transcript"]
 
     async def stt_translate(
         self,

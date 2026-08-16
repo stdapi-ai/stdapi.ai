@@ -307,6 +307,20 @@ wheels = [
 ]
 
 [[package]]
+name = "aws-sdk-transcribe-streaming"
+version = "0.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "smithy-aws-core", extra = ["eventstream", "json"] },
+    { name = "smithy-core" },
+    { name = "smithy-http", extra = ["awscrt"] },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/df/fb/83ffd6c91a96905a1ea6fe57891748fc1165cfdbbc0626f2ea8e2e76a7b0/aws_sdk_transcribe_streaming-0.8.0.tar.gz", hash = "sha256:b946b2f8f2ab9a84914cdb69732cf94b87e222756d6d5506ac8bef173503fa45", size = 461492, upload-time = "2026-07-31T22:25:29.366Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8a/25/85a388c04107e3918132c75a9fe562734bfa3bf3f341bfc1d2bacce7f73f/aws_sdk_transcribe_streaming-0.8.0-py3-none-any.whl", hash = "sha256:29b6f7e4d32e1abcdb52d910476972b4080673d001277084041ca003bbcea0ae", size = 63804, upload-time = "2026-07-31T22:25:28.211Z" },
+]
+
+[[package]]
 name = "awscrt"
 version = "0.32.2"
 source = { registry = "https://pypi.org/simple" }
@@ -2676,6 +2690,7 @@ dependencies = [
     { name = "aiohttp" },
     { name = "aws-sdk-bedrock-runtime" },
     { name = "aws-sdk-polly" },
+    { name = "aws-sdk-transcribe-streaming" },
     { name = "botocore" },
     { name = "fastapi" },
     { name = "langcodes" },
@@ -2762,6 +2777,7 @@ requires-dist = [
     { name = "aiohttp" },
     { name = "aws-sdk-bedrock-runtime", specifier = ">=0.8,<0.9" },
     { name = "aws-sdk-polly", specifier = ">=0.8,<0.9" },
+    { name = "aws-sdk-transcribe-streaming", specifier = ">=0.8,<0.9" },
     { name = "botocore", specifier = ">=1.43.30" },
     { name = "fastapi" },
     { name = "fastapi-mcp", marker = "extra == 'mcp'" },

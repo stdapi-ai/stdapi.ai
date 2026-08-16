@@ -603,7 +603,8 @@ Required for transcribing audio files using Amazon Transcribe. Each transcriptio
       "Action": [
         "transcribe:StartTranscriptionJob",
         "transcribe:GetTranscriptionJob",
-        "transcribe:DeleteTranscriptionJob"
+        "transcribe:DeleteTranscriptionJob",
+        "transcribe:StartStreamTranscription"
       ],
       "Resource": "*"
     },
@@ -637,6 +638,9 @@ Required for transcribing audio files using Amazon Transcribe. Each transcriptio
         With the default multi-region behavior ([`AWS_TRANSCRIBE_REGION`](operations_configuration.md#aws-transcribe-region) unset), Transcribe fails over across the [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) that have a co-located bucket: the primary region uses the bucket above, the others their [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets) entry. Repeat the `TranscribeS3Storage` statement for each of those buckets.
 
         On failover the audio is server-side copied from the previous candidate's bucket to the next one, which is why the copy and multipart actions are required. Set `AWS_TRANSCRIBE_REGION` to pin a single region and keep a single bucket.
+
+    !!! info "`StartStreamTranscription` needs no bucket"
+        `transcribe:StartStreamTranscription` serves [`stream=true`](api_openai_audio_transcriptions.md#streaming) requests, which send their audio to Transcribe directly instead of staging it. A deployment with no bucket at all still serves those, and only those — the `TranscribeS3Storage` statement above is what the other requests need.
 
     **If your transcribe S3 buckets use KMS encryption**, also add the KMS permissions for each bucket's key, with that region's `kms:ViaService` value.
 
@@ -1103,7 +1107,7 @@ Required if you configure API authentication. See the [Authentication](operation
 | **Knowledge Base Vector Stores**                | `bedrock:GetKnowledgeBase`<br>`bedrock:Retrieve`<br>`bedrock:ListDataSources`<br>`bedrock:IngestKnowledgeBaseDocuments`<br>`bedrock:ListKnowledgeBaseDocuments`<br>`bedrock:GetKnowledgeBaseDocuments`<br>`bedrock:DeleteKnowledgeBaseDocuments` (on each allowlisted knowledge base ARN; no `bedrock:ListKnowledgeBases`) | `AWS_BEDROCK_KNOWLEDGE_BASE_IDS`                                             |
 | **KMS Encrypted S3 Buckets**                    | `kms:Decrypt`<br>`kms:GenerateDataKey`<br>with `kms:ViaService` condition                                                                                  | If S3 buckets use KMS encryption                                             |
 | **Text-to-Speech**                              | `polly:SynthesizeSpeech`<br>`polly:DescribeVoices`<br>`polly:StartSpeechSynthesisStream` for generative voices above 3,000 characters<br>`polly:StartSpeechSynthesisTask`, `polly:GetSpeechSynthesisTask` and S3 `PutObject`/`GetObject`/`DeleteObject` on each bucket serving a Polly region, for the other voices above 3,000 characters | `AWS_POLLY_REGION`<br>`AWS_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`           |
-| **Speech-to-Text**                              | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`transcribe:TagResource` (on `arn:aws:transcribe:*:*:transcription-job/*`)<br>File Storage S3 permissions on every bucket serving a candidate region<br>`kms:GenerateDataKey`, `kms:Decrypt` on the output encryption key, when one is configured | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`<br>`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN` |
+| **Speech-to-Text**                              | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`transcribe:StartStreamTranscription`<br>`transcribe:TagResource` (on `arn:aws:transcribe:*:*:transcription-job/*`)<br>File Storage S3 permissions on every bucket serving a candidate region<br>`kms:GenerateDataKey`, `kms:Decrypt` on the output encryption key, when one is configured | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`<br>`AWS_TRANSCRIBE_STREAM_LANGUAGES`<br>`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN` |
 | **Language Detection**                          | `comprehend:DetectDominantLanguage`                                                                                                                        | `AWS_COMPREHEND_REGION`                                                      |
 | **Comprehend Moderations**                      | `comprehend:DetectToxicContent`                                                                                                                            | Moderations API without a configured guardrail                              |
 | **Translation**                                 | `translate:TranslateText`<br>`translate:ListLanguages` (optional; validates the language pair before transcribing)                                          | `AWS_TRANSLATE_REGION`                                                       |
