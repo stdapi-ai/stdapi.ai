@@ -1,8 +1,9 @@
 # Agentic test lane
 
 Real third-party clients — Claude Code, Codex, pi, OpenClaw, Hermes, Qwen Code,
-n8n, Haystack, Open WebUI, wyoming-openai, Docling Serve, LangChain, pydantic-ai
-and litellm — driven end to end against a live stdapi.ai server. They are the only tests that
+n8n, Haystack, Open WebUI, wyoming-openai, Docling Serve, LangChain, pydantic-ai,
+litellm, the OpenAI Agents SDK, LiveKit Agents and Pipecat — driven end to end
+against a live stdapi.ai server. They are the only tests that
 exercise a client's own wire behaviour: its system prompt, tool definitions,
 multi-turn tool-call replays, SSE streaming and multipart uploads, all translated
 by the gateway for a model that is usually not the vendor's own.
@@ -23,6 +24,9 @@ by the gateway for a model that is usually not the vendor's own.
 | pydantic-ai | `/v1/chat/completions` | Proves a real multi-turn tool loop survives Claude's silent `reasoning_content` replay drop |
 | litellm | `/v1` chat + embeddings | The only client that puts *its own* control parameters in the request body — the client half of `EXTRA_MODEL_PARAMS_DENYLIST` |
 | Docling Serve | `/v1/chat/completions` | The only client sending an `image_url` content part — a real app's multimodal request |
+| OpenAI Agents SDK | `/v1/realtime`, `/v1/responses`, `/v1/conversations`, `/v1/vector_stores` | The vendor's own agent framework: a `RealtimeRunner` voice session, plus the surfaces added with it |
+| LiveKit Agents | `/v1/realtime` | One of the two media frameworks `docs/api_openai_realtime.md` puts in front of this gateway; the one deriving the WebSocket from an HTTP base URL |
+| Pipecat | `/v1/realtime` | The other one, dialling the WebSocket path whole — and the strictest reader of the realtime events on the lane |
 
 pi is parametrized over its three providers, so one failure isolates to one
 adapter: the binary, prompt, model and assertions are identical across the three,
@@ -132,6 +136,26 @@ shaped after Docling's pydantic models rather than after its own documentation,
 which shows fields no current model has. The floating tag is what reports that the
 sample's wiring went stale, here rather than in a customer's ingestion stage.
 
+LiveKit Agents and Pipecat are the lane's only clients that exist to validate a
+*documentation page*. `docs/api_openai_realtime.md` tells a customer who needs
+WebRTC or a phone line to put one of them in front of this deployment and change
+the base URL, and gives runnable configuration for each; both modules construct
+exactly that configuration and hold one spoken turn through it. Neither runs a
+media path — both frameworks terminate WebRTC on their own side and speak this
+WebSocket to the model, which is the half we serve and the half the recipe
+depends on. The two differ in the one way the page warns about: LiveKit takes an
+HTTP base URL and appends `/realtime` itself, Pipecat takes the WebSocket URL
+whole.
+
+Pipecat also earns its place on strictness. It parses every server event with
+its own pydantic models, its reader task stops on the first event it refuses,
+and the refusal is *logged rather than raised* — so a single field the gateway
+omits shows up as a session that connects, accepts audio and answers nothing.
+Its turn test captures the client's error log and asserts it stayed empty, so
+the event is named instead of the timeout. The `openai` package's own types make
+most of those fields optional, which is why `test_openai_agents.py` cannot see
+what this module sees.
+
 ```bash
 uv run pytest tests/agentic --agentic -s          # whole lane, with metric lines
 uv run pytest tests/agentic --agentic --agentic-rebuild   # refresh the CLIs first
@@ -149,9 +173,11 @@ uv run pytest tests/agentic/test_langchain.py --agentic      # both langchain ro
 uv run pytest tests/agentic/test_pydantic_ai.py --agentic    # the reasoning-replay proof
 uv run pytest tests/agentic/test_litellm.py --agentic        # the control-parameter denylist
 uv run pytest tests/agentic/test_openai_agents.py --agentic   # the realtime voice session
+uv run pytest tests/agentic/test_livekit.py --agentic         # the documented LiveKit recipe
+uv run pytest tests/agentic/test_pipecat.py --agentic         # the documented Pipecat recipe
 ```
 
-The last five need the client overlay described under
+The last seven need the client overlay described under
 [In-process clients](#in-process-clients); without it they are dropped from
 collection and the run says so.
 
@@ -168,7 +194,7 @@ CC-METRICS | amazon.nova-2-lite-v1:0 | test_trace_request_pipeline | steps=  7 |
   user namespace a rootless container needs, so `--remote` is used automatically
   against the host's podman socket
 - Bedrock credentials, as for the rest of the suite
-- the client overlay, for the five modules listed below
+- the client overlay, for the seven modules listed below
 
 The CLIs are **never executed on the host**. If podman is unavailable the lane
 skips rather than falling back to a host binary, so a run always reports the tool
@@ -176,9 +202,10 @@ version it actually tested.
 
 ## In-process clients
 
-Five clients are Python libraries rather than binaries, so they run in the test
+Seven clients are Python libraries rather than binaries, so they run in the test
 process: `test_langchain.py`, `test_pydantic_ai.py`, `test_wyoming_audio.py`,
-`test_litellm.py` and `test_openai_agents.py`. Their packages are listed in
+`test_litellm.py`, `test_openai_agents.py`, `test_livekit.py` and
+`test_pipecat.py`. Their packages are listed in
 `requirements.txt` and layered over the project environment at run time:
 
 ```bash
@@ -199,7 +226,7 @@ gateway surfaces here. The versions a session actually resolved are printed in i
 header:
 
 ```
-agentic clients: langchain-anthropic==1.5.3, langchain-openai==1.4.1, litellm==1.95.0, openai-agents==0.20.0, pydantic-ai-slim==2.23.0, wyoming==1.10.0
+agentic clients: langchain-anthropic==1.5.3, langchain-openai==1.4.1, litellm==1.95.0, livekit-plugins-openai==1.6.10, openai-agents==0.20.0, pipecat-ai==1.7.0, pydantic-ai-slim==2.23.0, wyoming==1.10.0
 ```
 
 `openai-agents` caps `openai` below 3, so the overlay resolves that dependency one
@@ -473,8 +500,9 @@ program and makes both synthesis paths reachable from one boot. Four things bite
 
 ## The pure-Python HTTP clients
 
-`test_langchain.py`, `test_pydantic_ai.py`, `test_litellm.py` and
-`test_openai_agents.py` drive their libraries in-process against
+`test_langchain.py`, `test_pydantic_ai.py`, `test_litellm.py`,
+`test_openai_agents.py`, `test_livekit.py` and `test_pipecat.py` drive their
+libraries in-process against
 `agentic_server`, with no container at all: unlike
 every other module here, they are plain HTTP client libraries, not third-party
 binaries, so there is nothing for podman to sandbox. Each still declares a real
@@ -483,7 +511,7 @@ purely so the autouse model-identity check runs for free; its
 `build`/`parse`/`prepare_workdir` are never called, since none of them ever
 requests `agentic_image` or calls `run_agent`. Their packages come from the
 overlay, not from `uv.lock` — see [In-process clients](#in-process-clients).
-Four things bite:
+Six things bite:
 
 - **the shared podman skip still applies.** `_model_identity_check` checks for
   podman before resolving `agentic_server`, for every module in this directory —
@@ -510,7 +538,34 @@ Four things bite:
   rather than a structural rule. Its `drop_params` flag is unrelated to what
   reaches us: it removes parameters litellm knows a provider rejects, and forwards
   unknown keyword arguments either way.
-- **openai-agents is the lane's only Realtime client.** `RealtimeRunner` is handed
+- **three clients now open a Realtime session, and none of them the same way.**
+  openai-agents is handed the WebSocket URL whole through `model_config["url"]`,
+  LiveKit derives it from an HTTP `base_url`, and Pipecat takes the WebSocket
+  path and appends only `?model=`. All three exist because all three are
+  configurations a customer is told to write.
+- **neither media framework runs a media path here.** LiveKit's `AgentSession`
+  and Pipecat's transports terminate WebRTC on their own side and need a room or
+  a peer that no test provides, so each module drives the layer underneath:
+  `RealtimeModel.session()` for LiveKit, and a real `Pipeline` fed
+  `InputAudioRawFrame`s for Pipecat. That layer *is* the WebSocket this API
+  serves. Both need the turn ended by the caller, so server-side turn detection
+  is off in both — `turn_detection_disabled=True` for LiveKit, an
+  `AudioInput(turn_detection=False)` session property plus a
+  `UserStoppedSpeakingFrame` for Pipecat, which is what makes it send the commit.
+- **Pipecat refuses a server event by logging it, not by raising.** Its reader
+  task stops on the first event its pydantic models reject, and nothing reaches
+  the pipeline afterwards, so the visible symptom is a turn that times out with
+  no audio. `test_pipecat.py` attaches a loguru sink for the duration of the turn
+  and asserts it stayed empty; without it the failure names no cause. Its
+  `Response` model declares `status_details: Any` with no default, which pydantic
+  reads as **required** — a field the `openai` package marks optional, which is
+  why `test_openai_agents.py` passes on payloads Pipecat rejects. Both are
+  defensible readings of a schema that calls the field optional; what settles it
+  is the wire, and a `response.create` against `wss://api.openai.com/v1/realtime`
+  (`gpt-realtime-mini`, 2026-08-16) carries `"status_details": null` on
+  **both** `response.created` and `response.done`. A field upstream always sends
+  is a field a client is entitled to require.
+- **openai-agents is the lane's first Realtime client.** `RealtimeRunner` is handed
   the WebSocket URL through `model_config["url"]`, because it otherwise dials
   `api.openai.com`, and its tracing is disabled at import so no run is exported to
   OpenAI's backend. Turn detection is switched off in `initial_model_settings`, so

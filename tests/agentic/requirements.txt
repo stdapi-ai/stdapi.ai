@@ -23,3 +23,12 @@ litellm
 # is the lane's only client for /v1/realtime. It caps `openai` below 3, so the
 # overlay resolves the SDK one major behind the project environment's.
 openai-agents[realtime]
+
+# tests/agentic/test_livekit.py -- the media framework docs/api_openai_realtime.md
+# names first for putting WebRTC or SIP in front of this gateway. The plugin pulls
+# livekit-agents and the livekit native runtime in with it.
+livekit-plugins-openai
+
+# tests/agentic/test_pipecat.py -- the second framework that page names. The
+# `openai` extra is what ships its Realtime service.
+pipecat-ai[openai]

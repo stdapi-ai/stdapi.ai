@@ -44,7 +44,9 @@ _HOST_CLIENTS: Mapping[str, Mapping[str, str]] = {
         "langchain_anthropic": "langchain-anthropic",
     },
     "test_litellm.py": {"litellm": "litellm"},
+    "test_livekit.py": {"livekit": "livekit-plugins-openai"},
     "test_openai_agents.py": {"agents": "openai-agents"},
+    "test_pipecat.py": {"pipecat": "pipecat-ai"},
     "test_pydantic_ai.py": {"pydantic_ai": "pydantic-ai-slim"},
     "test_wyoming_audio.py": {"wyoming": "wyoming"},
 }
