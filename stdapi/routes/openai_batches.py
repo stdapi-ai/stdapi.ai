@@ -64,6 +64,10 @@ _BatchId = Annotated[
 def _status(state: BatchState) -> BatchStatus:
     """Map the state of a batch's jobs to the OpenAI batch status.
 
+    A batch is `completed` only once its results are readable: between the
+    moment the requests stop running and the moment the result files are
+    published, it is `finalizing`.
+
     Args:
         state: The batch state.
 
@@ -77,7 +81,7 @@ def _status(state: BatchState) -> BatchStatus:
     if state.expired:
         return "expired"
     if state.ended:
-        return "completed"
+        return "completed" if state.record.output_file_id is not None else "finalizing"
     return "validating" if state.pending else "in_progress"
 
 
@@ -106,6 +110,7 @@ def _to_batch(state: BatchState) -> Batch:
         created_at=record.created_at,
         in_progress_at=None if state.pending else started,
         expires_at=record.expires_at,
+        finalizing_at=ended_at if status in ("finalizing", "completed") else None,
         completed_at=ended_at if status == "completed" else None,
         failed_at=ended_at if status == "failed" else None,
         expired_at=ended_at if status == "expired" else None,
@@ -329,4 +334,8 @@ async def cancel(
         ApiError: With 404 if the batch does not exist.
     """
     log_request_params({"batch_id": batch_id})
-    return log_response_params(_to_batch(await cancel_batch(batch_id[6:], "openai")))
+    # A cancel that arrives after the batch ended settles it, as a read does:
+    # otherwise the same batch is `finalizing` here and `completed` on a poll.
+    return log_response_params(
+        _to_batch(await _finish(await cancel_batch(batch_id[6:], "openai")))
+    )

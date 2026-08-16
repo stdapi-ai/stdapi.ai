@@ -1358,10 +1358,60 @@ class TestOpenAIBatchLifecycle:
         assert response.status_code == 200
         (listed,) = response.json()["data"]
         assert listed["id"] == batch_id
-        assert listed["status"] == "completed"
+        # Nothing was published, so the batch has not completed: it is finalizing.
+        assert listed["status"] == "finalizing"
         assert "output_file_id" not in listed
         assert "usage" not in listed
         assert "could not be settled" in capfd.readouterr().out
+
+    def test_an_ended_batch_is_finalizing_until_its_results_are_published(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A batch whose requests are done but whose results are not is `finalizing`.
+
+        Upstream reports `finalizing` while the results of a batch whose work
+        has finished are being assembled, and `completed` only once they are
+        readable. The same window exists here — the result files are written
+        after the last job ends — and reporting `completed` through it tells a
+        client to download an `output_file_id` the batch does not have yet.
+
+        Ref: https://developers.openai.com/api/docs/guides/batch
+             stdapi/routes/openai_batches.py:_status
+        """
+        from stdapi.config import SETTINGS  # noqa: PLC0415
+
+        s3, _, batch_id = self._ended_batch(app_client, monkeypatch)
+        put_object = s3.put_object
+        ended_at = int(datetime(2026, 8, 12, 1, tzinfo=UTC).timestamp())
+
+        async def _write(*, Key: str, **kwargs: Any) -> dict[str, Any]:  # noqa: N803, ANN401
+            if Key.startswith(SETTINGS.aws_s3_files_prefix):
+                raise ClientError(
+                    {"Error": {"Code": "InternalError", "Message": "storage failed"}},
+                    "PutObject",
+                )
+            return await put_object(Key=Key, **kwargs)
+
+        monkeypatch.setattr(s3, "put_object", _write)
+
+        (listed,) = app_client.get("/v1/batches?limit=10").json()["data"]
+
+        assert listed["id"] == batch_id
+        assert listed["status"] == "finalizing"
+        assert listed["finalizing_at"] == ended_at
+        assert "completed_at" not in listed
+        assert "output_file_id" not in listed
+        # Settled, and still not readable: finalizing is about the results.
+        assert listed["usage"]["output_tokens"] == 300
+
+        monkeypatch.setattr(s3, "put_object", put_object)
+
+        published = app_client.get(f"/v1/batches/{batch_id}").json()
+
+        assert published["status"] == "completed"
+        assert published["finalizing_at"] == ended_at
+        assert published["completed_at"] == ended_at
+        assert len(_batches.read_result_file(s3, published["output_file_id"])) == 100
 
     def test_a_batch_that_cannot_be_stored_stops_its_jobs(
         self,

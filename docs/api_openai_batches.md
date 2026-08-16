@@ -178,12 +178,12 @@ A batch below the minimum, or past any of these caps, is refused when it is crea
 | `input`, `dimensions`            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Same parameters as [Embeddings](api_openai_embeddings.md), one `input` per request |
 | `encoding_format` `base64`       | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Refused when the batch is created — batched vectors come back as numbers  |
 | **Lifecycle**                    |                                          |                                                                             |
-| Retrieve / poll                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `validating` → `in_progress` → `completed`                                  |
+| Retrieve / poll                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `validating` → `in_progress` → `finalizing` → `completed`                    |
 | Cancel                           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `cancelling` then `cancelled`; requests already answered stay in `output_file_id`, and a batch that has ended is unchanged |
 | List batches                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Newest first, with an `after` cursor                                        |
 | `output_file_id` / `error_file_id` |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Readable through the [Files API](api_openai_files.md)                     |
 | `usage`                          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Token totals, reported once the batch ends                                  |
-| `finalizing` status              | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | A batch goes straight from `in_progress` to `completed`                     |
+| `finalizing` status              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Reported with `finalizing_at` while the results of a batch whose requests have run are being assembled; `completed` follows once they are readable |
 
 </div>
 
