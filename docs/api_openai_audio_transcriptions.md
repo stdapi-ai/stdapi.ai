@@ -233,6 +233,25 @@ Detect and transcribe multiple languages spoken in the same audio, optionally re
 }
 ```
 
+**Per-Language Custom Resources:**
+
+A custom vocabulary, vocabulary filter or custom language model can only be attached per candidate language when the language is identified rather than given. Pair `LanguageIdSettings` with `LanguageOptions` so the dialect your resources were created for is the one identified:
+
+```json
+{
+  "model": "amazon.transcribe",
+  "file": "data:audio/mp3;base64,<base64-encoded-audio>",
+  "LanguageOptions": ["en-US", "es-US"],
+  "LanguageIdSettings": {
+    "en-US": {"VocabularyName": "MedicalTermsEnUs"},
+    "es-US": {"VocabularyName": "MedicalTermsEsUs"}
+  }
+}
+```
+
+!!! warning "Identification required"
+    `LanguageIdSettings` applies to identified languages only. Combined with a fixed `language` (or a single-entry `languages`), the request returns HTTP 400 rather than silently dropping the custom resources — use the flat `VocabularyName`, `VocabularyFilterName` and `ModelSettings` parameters in that case. `LanguageModelName` is not available with `IdentifyMultipleLanguages`.
+
 !!! tip "Standard `languages` parameter"
     The standard OpenAI `languages` parameter drives the same multi-language identification with plain ISO-639-1 codes (e.g. `["en", "es", "fr"]`), works on the multipart path too, and the detected language(s) come back in the `json` response's `languages` array. A single-entry list behaves like `language`. Do not combine it with `language` or with the provider-specific parameters above.
 
@@ -274,6 +293,7 @@ The following parameters from Amazon Transcribe's [StartTranscriptionJob API](ht
 - `ShowSpeakerLabels` (bool): Always on with `response_format=diarized_json`; setting it directly with another format runs AWS speaker labeling without exposing speaker data in the response
 - `ToxicityDetection` (list): Toxic-content flagging — `[{"ToxicityCategories": ["ALL"]}]`
 - `IdentifyMultipleLanguages` / `LanguageOptions` (bool / list): Multi-language identification, optionally restricted to a candidate list (supersedes `language`; cannot be combined with the standard `languages` parameter)
+- `LanguageIdSettings` (object): Per-language `VocabularyName`, `VocabularyFilterName` and `LanguageModelName`, keyed by language code (up to five) — the only way to attach them when the language is identified rather than given
 - `ModelSettings` (object): `LanguageModelName` — custom language model selection
 
 `VocabularyName`, `VocabularyFilterName`, and custom language models must already exist in your AWS account (created via the AWS Transcribe console, CLI, or SDK) before being referenced here.

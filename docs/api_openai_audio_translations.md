@@ -140,11 +140,14 @@ Any Amazon Bedrock model that accepts the `SPEECH` input modality through the Co
 
 **Note:** With `amazon.transcribe`, the `prompt` and `temperature` parameters are rejected with an error to ensure consistent translation accuracy. Bedrock audio models accept both.
 
+!!! warning "Source languages Amazon Translate does not cover"
+    Amazon Transcribe recognises more languages than Amazon Translate can translate into English. When the detected source language is not one of [Amazon Translate's supported languages](https://docs.aws.amazon.com/translate/latest/dg/what-is-languages.html), the request returns HTTP 400 listing the supported language codes instead of a partial result. Transcribe the audio with [`/v1/audio/transcriptions`](api_openai_audio_transcriptions.md) to keep it in its original language.
+
 ### Provider-Specific Parameters
 
 `amazon.transcribe` first transcribes the audio, then translates it, and each step has its own provider-specific parameters — both reachable via the same `application/json` request body.
 
-**Transcription step (Amazon Transcribe):** the same [extra parameters documented for `/v1/audio/transcriptions`](api_openai_audio_transcriptions.md#provider-specific-parameters) (`ContentRedaction`, `VocabularyName`, `VocabularyFilterName`/`VocabularyFilterMethod`, `ShowAlternatives`/`MaxAlternatives`, `ChannelIdentification`, `ToxicityDetection`, `IdentifyMultipleLanguages`/`LanguageOptions`, `ModelSettings`) apply here too.
+**Transcription step (Amazon Transcribe):** the same [extra parameters documented for `/v1/audio/transcriptions`](api_openai_audio_transcriptions.md#provider-specific-parameters) (`ContentRedaction`, `VocabularyName`, `VocabularyFilterName`/`VocabularyFilterMethod`, `ShowAlternatives`/`MaxAlternatives`, `ChannelIdentification`, `ToxicityDetection`, `IdentifyMultipleLanguages`/`LanguageOptions`, `LanguageIdSettings`, `ModelSettings`) apply here too.
 
 **Translation step (Amazon Translate):** `Settings` and `TerminologyNames` control the English output register and glossary:
 

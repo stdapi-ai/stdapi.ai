@@ -17,6 +17,7 @@ from starlette.responses import Response
 
 from stdapi import usage
 from stdapi.api_errors import ApiError, UnsupportedModelError, UnsupportedParameterError
+from stdapi.config import SETTINGS, _Settings
 from stdapi.input_file import InputFile
 from stdapi.models.audio.amazon_transcribe import (
     AudioModel,
@@ -1858,3 +1859,186 @@ class TestTranscriptionDetectedLanguages:
 
         assert response.status_code == 200
         assert response.json()["languages"] == [{"code": "en"}, {"code": "fr"}]
+
+
+@pytest.mark.local
+@pytest.mark.usefixtures("_request_id", "request_log")
+class TestTranscribeLanguageIdSettings:
+    """``LanguageIdSettings`` attaches custom resources to identified languages.
+
+    AWS requires this parameter (rather than the flat ``VocabularyName`` /
+    ``VocabularyFilterName`` / ``ModelSettings`` ones) whenever the language is
+    auto-identified, which is exactly the combination a multilingual caller
+    asks for.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_StartTranscriptionJob.html
+         stdapi/models/audio/amazon_transcribe.py:_apply_language_params
+    """
+
+    def test_extra_params_accept_language_id_settings(self) -> None:
+        """The extra-params model parses the AWS-shaped per-language map.
+
+        The strict model is what the route validates the JSON body against, so
+        an absent field is a 400 for a documented Transcribe feature.
+
+        Ref: stdapi/models/audio/amazon_transcribe.py:_TranscribeExtraParams
+        """
+        extra = _TranscribeExtraParams(
+            IdentifyMultipleLanguages=True,
+            LanguageOptions=["en-US", "es-US"],
+            LanguageIdSettings={
+                "en-US": {"VocabularyName": "Medical", "VocabularyFilterName": "F"},
+                "es-US": {"VocabularyName": "Medico"},
+            },  # type: ignore[arg-type]
+        )
+
+        assert extra.LanguageIdSettings is not None
+        assert extra.LanguageIdSettings["en-US"].VocabularyName == "Medical"
+        assert extra.LanguageIdSettings["en-US"].VocabularyFilterName == "F"
+        assert extra.LanguageIdSettings["es-US"].VocabularyName == "Medico"
+
+    def test_unknown_sub_field_is_still_rejected(self) -> None:
+        """A per-language entry only accepts the three AWS sub-parameters.
+
+        Ref: stdapi/models/audio/amazon_transcribe.py:_TranscribeLanguageIdSetting
+        """
+        with pytest.raises(ValidationError):
+            _TranscribeExtraParams(
+                LanguageIdSettings={"en-US": {"NotARealField": "x"}}  # type: ignore[dict-item]
+            )
+
+    def test_language_id_settings_reach_a_multi_language_job(self) -> None:
+        """With multi-language identification the map is sent, omitting unset keys.
+
+        ``None`` sub-fields must not reach AWS: botocore rejects a null where a
+        string is expected, which would surface as a 400 for a valid request.
+
+        Ref: stdapi/models/audio/amazon_transcribe.py:_apply_language_params
+        """
+        job_params = _build_transcription_job_params(
+            "job",
+            "bucket",
+            None,
+            "json",
+            extra=_TranscribeExtraParams(
+                IdentifyMultipleLanguages=True,
+                LanguageOptions=["en-US", "es-US"],
+                LanguageIdSettings={  # type: ignore[dict-item]
+                    "en-US": {"VocabularyName": "Medical"}
+                },
+            ),
+        )
+
+        assert job_params["IdentifyMultipleLanguages"] is True
+        assert job_params["LanguageIdSettings"] == {
+            "en-US": {"VocabularyName": "Medical"}
+        }
+
+    def test_language_id_settings_reach_a_single_language_job(self) -> None:
+        """Plain automatic identification carries the map too.
+
+        Ref: stdapi/models/audio/amazon_transcribe.py:_apply_language_params
+        """
+        job_params = _build_transcription_job_params(
+            "job",
+            "bucket",
+            None,
+            "json",
+            extra=_TranscribeExtraParams(
+                LanguageIdSettings={  # type: ignore[dict-item]
+                    "en-US": {"LanguageModelName": "MyModel"}
+                }
+            ),
+        )
+
+        assert job_params["IdentifyLanguage"] is True
+        assert job_params["LanguageIdSettings"] == {
+            "en-US": {"LanguageModelName": "MyModel"}
+        }
+
+    def test_language_id_settings_with_a_fixed_language_is_rejected(self) -> None:
+        """A fixed ``language`` turns identification off, so the map cannot apply.
+
+        AWS would ignore it silently; the request is refused instead, naming
+        the parameter that has no effect.
+
+        Ref: stdapi/models/audio/amazon_transcribe.py:_apply_language_params
+        """
+        with pytest.raises(UnsupportedParameterError) as exc_info:
+            _build_transcription_job_params(
+                "job",
+                "bucket",
+                "en",
+                "json",
+                extra=_TranscribeExtraParams(
+                    LanguageIdSettings={  # type: ignore[dict-item]
+                        "en-US": {"VocabularyName": "Medical"}
+                    }
+                ),
+            )
+
+        assert exc_info.value.status == 400
+        assert exc_info.value.param == "LanguageIdSettings"
+
+
+@pytest.mark.local
+@pytest.mark.usefixtures("_request_id", "request_log")
+class TestTranscribeOutputEncryption:
+    """The transcription output is encrypted with the configured KMS key.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/dg/encryption.html
+         stdapi/models/audio/amazon_transcribe.py:_build_transcription_job_params
+    """
+
+    def test_output_is_unencrypted_by_default(self) -> None:
+        """Without the setting the job carries no encryption fields.
+
+        Ref: stdapi/config.py:aws_transcribe_output_encryption_key_arn
+        """
+        job_params = _build_transcription_job_params("job", "bucket", "en", "json")
+
+        assert "OutputEncryptionKMSKeyId" not in job_params
+        assert "KMSEncryptionContext" not in job_params
+
+    def test_configured_key_encrypts_the_output(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The configured key ARN and the request's encryption context are sent.
+
+        The context pairs are the same non-secret request identifiers the job
+        is tagged with, so a key policy can be conditioned on them.
+
+        Ref: stdapi/config.py:aws_transcribe_output_encryption_key_arn
+        """
+        key_arn = (
+            "arn:aws:kms:us-east-1:123456789012:key/"
+            "1234abcd-12ab-34cd-56ef-1234567890ab"
+        )
+        monkeypatch.setattr(
+            SETTINGS, "aws_transcribe_output_encryption_key_arn", key_arn
+        )
+
+        job_params = _build_transcription_job_params("job", "bucket", "en", "json")
+
+        assert job_params["OutputEncryptionKMSKeyId"] == key_arn
+        context = job_params["KMSEncryptionContext"]
+        assert context["stdapi-ai.request_id"] == "test-request-id"
+        assert all(key and value for key, value in context.items())
+
+    @pytest.mark.parametrize(
+        "value", ["not-an-arn", "arn:aws:kms:us-east-1:123456789012:alias/my-key"]
+    )
+    def test_invalid_key_arn_is_refused_at_startup(self, value: str) -> None:
+        """A value that is not a KMS key ARN fails settings validation.
+
+        It would otherwise only surface once a job is started, after the audio
+        has already been uploaded.
+
+        Ref: stdapi/config.py:_validate_transcribe_output_key_arn
+        """
+        with pytest.raises(ValidationError) as exc_info:
+            _Settings(aws_transcribe_output_encryption_key_arn=value)
+
+        (error,) = exc_info.value.errors()
+        assert error["loc"] == ("aws_transcribe_output_encryption_key_arn",)
+        assert "must be a KMS key ARN" in error["msg"]

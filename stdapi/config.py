@@ -910,6 +910,21 @@ class _Settings(BaseSettings):
         ),
     )
 
+    aws_transcribe_output_encryption_key_arn: str | None = Field(
+        default=None,
+        description=(
+            "KMS key ARN encrypting the transcription job output written to "
+            "aws_transcribe_s3_bucket. The key must be usable from every region "
+            "a transcription job can be served from, and the server's role needs "
+            "kms:GenerateDataKey and kms:Decrypt on it.\n\n"
+            "Example: "
+            "'arn:aws:kms:us-east-1:123456789012:key/"
+            "12345678-1234-1234-1234-123456789012'\n\n"
+            "Unset (default): output objects are encrypted with the bucket's "
+            "own default encryption (SSE-S3)."
+        ),
+    )
+
     aws_s3_tmp_prefix: str = Field(
         default="tmp/",
         description=(
@@ -2284,6 +2299,31 @@ class _Settings(BaseSettings):
         if value is not None and not _KMS_KEY_ARN_PATTERN.fullmatch(value):
             msg = (
                 f'Invalid aws_bedrock_session_encryption_key_arn "{value}": must be '
+                'a KMS key ARN "arn:<partition>:kms:<region>:<account-id>:key/<key-id>".'
+            )
+            raise ValueError(msg)
+        return value
+
+    @field_validator("aws_transcribe_output_encryption_key_arn")
+    @classmethod
+    def _validate_transcribe_output_key_arn(cls, value: str | None) -> str | None:
+        """Validate the KMS key ARN encrypting the transcription job output.
+
+        A typo'd ARN would otherwise only surface once a transcription job is
+        started, after the audio has already been uploaded.
+
+        Args:
+            value: KMS key ARN, or None to keep the bucket's own encryption.
+
+        Returns:
+            The validated ARN.
+
+        Raises:
+            ValueError: If the value is set and is not a valid KMS key ARN.
+        """
+        if value is not None and not _KMS_KEY_ARN_PATTERN.fullmatch(value):
+            msg = (
+                f'Invalid aws_transcribe_output_encryption_key_arn "{value}": must be '
                 'a KMS key ARN "arn:<partition>:kms:<region>:<account-id>:key/<key-id>".'
             )
             raise ValueError(msg)

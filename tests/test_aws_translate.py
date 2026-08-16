@@ -17,7 +17,7 @@ import pytest
 from botocore.exceptions import ParamValidationError
 
 import stdapi.aws
-from stdapi import usage
+from stdapi import aws_translate, usage
 from stdapi.api_errors import ApiError
 from stdapi.aws_translate import translate, translate_subtitle
 from stdapi.config import SETTINGS
@@ -53,6 +53,17 @@ def _two_candidate_regions(monkeypatch: pytest.MonkeyPatch) -> None:
     """Default to two candidate regions with no explicit Translate region."""
     monkeypatch.setattr(SETTINGS, "aws_translate_region", None)
     monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1", "eu-west-1"])
+
+
+@pytest.fixture(autouse=True)
+def _unread_language_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run with the supported-language catalog unread.
+
+    The catalog is a process-global cache a live-lane startup fills, and these
+    tests use invented language codes that a filled one would refuse before
+    the stub client is ever reached.
+    """
+    monkeypatch.setattr(aws_translate, "_SUPPORTED_LANGUAGE_CODES", set())
 
 
 def _patch_clients(

@@ -25,7 +25,7 @@ from stdapi.aws_s3 import (
     s3_key_from_uri,
     track_temporary_s3_objects,
 )
-from stdapi.aws_translate import translate, translate_subtitle
+from stdapi.aws_translate import load_supported_languages, translate, translate_subtitle
 from stdapi.cleanup import schedule_cleanup
 from stdapi.config import SETTINGS
 from stdapi.models import (
@@ -113,6 +113,16 @@ class _TranscribeModelSettings(BaseModelResponse):
     LanguageModelName: str
 
 
+class _TranscribeLanguageIdSetting(BaseModelResponse):
+    """Custom resources applied to one candidate language of an identified job."""
+
+    # Names are forwarded as-is: AWS Transcribe rejects an unknown custom
+    # vocabulary, vocabulary filter or language model with its own 400 error.
+    LanguageModelName: str | None = None
+    VocabularyFilterName: str | None = None
+    VocabularyName: str | None = None
+
+
 class _TranscribeExtraParams(BaseModelResponse):
     """Supported extra parameters for AWS Transcribe's StartTranscriptionJob.
 
@@ -127,6 +137,7 @@ class _TranscribeExtraParams(BaseModelResponse):
     ChannelIdentification: bool | None = None
     ContentRedaction: _TranscribeContentRedaction | None = None
     IdentifyMultipleLanguages: bool | None = None
+    LanguageIdSettings: dict[str, _TranscribeLanguageIdSetting] | None = None
     LanguageOptions: list[str] | None = None
     MaxAlternatives: int | None = None
     MaxSpeakerLabels: int | None = None
@@ -230,12 +241,17 @@ def transcribe_job_candidates() -> list[tuple[RegionName, str]]:
 
 
 async def initialize_transcribe_models() -> None:
-    """Initialize extra models.
+    """Initialize extra models, and cache the AWS Translate language catalog.
 
     The advertised regions are the bucket-equipped serving candidates; the
     model stays registered with an empty list when there is none (requests
     then get the 404 guard's operator-actionable error message).
+
+    AWS Translate is only reachable through this model's translation route,
+    so its language catalog is loaded here rather than getting a startup step
+    of its own.
     """
+    await load_supported_languages()
     EXTRA_MODELS_INPUT_MODALITY.setdefault("SPEECH", set()).add(AWS_TRANSCRIBE_MODEL_ID)
     EXTRA_MODELS_OUTPUT_MODALITY.setdefault("TEXT", set()).add(AWS_TRANSCRIBE_MODEL_ID)
     EXTRA_MODELS[AWS_TRANSCRIBE_MODEL_ID] = ModelDetails(
@@ -435,6 +451,9 @@ _LANGUAGE_PARAM = "language"
 #: Parameter name reported when `languages` conflicts with the AWS language extras
 _LANGUAGES_PARAM = "languages"
 
+#: Parameter name reported when LanguageIdSettings is combined with a fixed language
+_LANGUAGE_ID_SETTINGS_PARAM = "LanguageIdSettings"
+
 
 def _apply_language_params(
     job_params: StartTranscriptionJobRequestTypeDef,
@@ -455,10 +474,12 @@ def _apply_language_params(
     Raises:
         UnsupportedParameterError: If ``language`` is combined with
             ``extra.IdentifyMultipleLanguages`` (AWS treats them as mutually
-            exclusive; picking one would silently ignore the other), or if
+            exclusive; picking one would silently ignore the other), if
             ``languages`` is combined with ``extra.IdentifyMultipleLanguages``
             or ``extra.LanguageOptions`` (both express the same intent under
-            the provider-specific names).
+            the provider-specific names), or if ``extra.LanguageIdSettings`` is
+            combined with a fixed language (AWS applies it to identified
+            languages only, so it would be silently ignored).
     """
     if (
         languages
@@ -484,6 +505,35 @@ def _apply_language_params(
         job_params["IdentifyLanguage"] = True
         if extra is not None and extra.LanguageOptions:
             job_params["LanguageOptions"] = extra.LanguageOptions  # type: ignore[typeddict-item]
+
+    _apply_language_id_settings(job_params, extra)
+
+
+def _apply_language_id_settings(
+    job_params: StartTranscriptionJobRequestTypeDef,
+    extra: _TranscribeExtraParams | None,
+) -> None:
+    """Attach the per-language custom vocabularies, filters and models.
+
+    Args:
+        job_params: Job parameters to update in place, with their language
+            fields already set.
+        extra: Optional extra StartTranscriptionJob parameters.
+
+    Raises:
+        UnsupportedParameterError: If the job runs on a fixed language code:
+            AWS applies these settings to identified languages only, so they
+            would be silently ignored.
+    """
+    if extra is None or not extra.LanguageIdSettings:
+        return
+    if "LanguageCode" in job_params:
+        raise UnsupportedParameterError(_LANGUAGE_ID_SETTINGS_PARAM)
+    language_id_settings = {
+        code: setting.model_dump(exclude_none=True)
+        for code, setting in extra.LanguageIdSettings.items()
+    }
+    job_params["LanguageIdSettings"] = language_id_settings  # type: ignore[typeddict-item]
 
 
 #: Parameter name reported when ChannelIdentification conflicts with diarized_json
@@ -559,7 +609,8 @@ def _build_transcription_job_params(
 
     Raises:
         UnsupportedParameterError: If ``language`` or ``languages`` is combined
-            with ``extra.IdentifyMultipleLanguages``; if ``extra.ChannelIdentification``
+            with ``extra.IdentifyMultipleLanguages``; if ``extra.LanguageIdSettings``
+            is combined with a fixed language; if ``extra.ChannelIdentification``
             is combined with ``diarized_json`` output (AWS rejects that
             combination; Transcribe already forces ``ShowSpeakerLabels`` for
             diarization); or if ``extra.ShowSpeakerLabels`` is explicitly
@@ -573,6 +624,12 @@ def _build_transcription_job_params(
         "OutputKey": f"{s3_prefix}{job_id}/output.json",
         "Tags": [{"Key": k, "Value": v} for k, v in build_metadata(apn=True).items()],
     }
+
+    if key_arn := SETTINGS.aws_transcribe_output_encryption_key_arn:
+        job_params["OutputEncryptionKMSKeyId"] = key_arn
+        # Non-secret pairs S3 stores with the object and replays on read, so a
+        # key policy can be conditioned on them without breaking the read back.
+        job_params["KMSEncryptionContext"] = build_metadata()
 
     _apply_language_params(job_params, language, languages, extra)
 

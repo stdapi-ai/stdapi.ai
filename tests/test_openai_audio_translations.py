@@ -18,9 +18,13 @@ import pytest
 from openai import BadRequestError, NotFoundError, OpenAI
 from starlette.responses import Response
 
-from stdapi.api_errors import UnsupportedParameterError
+import stdapi.aws
+from stdapi import aws_translate
+from stdapi.api_errors import ApiError, UnsupportedParameterError
+from stdapi.config import SETTINGS
 from stdapi.input_file import InputFile
 from stdapi.models.audio.amazon_transcribe import AudioModel
+from tests._helpers import make_client_error
 from tests.conftest import _sample_cache_file, logged_usage_entries
 from tests.test_openai_audio_transcriptions import _stub_transcribe
 
@@ -574,3 +578,164 @@ class TestTranslateUnsupportedParameters:
 
         assert not isinstance(response, str | Response)
         assert response.text == "hello world"
+
+
+class _StubLanguagesClient:
+    """Translate client stub answering ``ListLanguages`` from fixed pages."""
+
+    def __init__(self, *pages: list[str], error: Exception | None = None) -> None:
+        self._pages = pages
+        self._error = error
+        self.translate_calls = 0
+
+    async def list_languages(self, **kwargs: object) -> dict[str, object]:
+        """Return the page addressed by ``NextToken``, or raise the fixed error.
+
+        Args:
+            **kwargs: ``ListLanguages`` request fields.
+
+        Returns:
+            One page of supported languages, with a ``NextToken`` while more
+            pages remain.
+
+        Raises:
+            Exception: The error this stub was built with, when there is one.
+        """
+        if self._error is not None:
+            raise self._error
+        index = int(str(kwargs.get("NextToken", 0)))
+        page: dict[str, object] = {
+            "Languages": [
+                {"LanguageCode": code, "LanguageName": code}
+                for code in self._pages[index]
+            ]
+        }
+        if index + 1 < len(self._pages):
+            page["NextToken"] = str(index + 1)
+        return page
+
+    async def translate_text(self, **_kwargs: object) -> dict[str, str]:
+        """Record a translation call and return a fixed payload.
+
+        Returns:
+            A fixed ``TranslateText`` response.
+        """
+        self.translate_calls += 1
+        return {"TranslatedText": "translated"}
+
+
+@pytest.mark.local
+class TestTranslateLanguagePairValidation:
+    """An unsupported language pair is refused before AWS Translate is called.
+
+    The translations route always targets English, so only the transcript's
+    source language can be unsupported — and it is only known after the audio
+    has been transcribed and billed. The supported set is read once at startup
+    and held, never per request.
+
+    Ref: https://docs.aws.amazon.com/translate/latest/APIReference/API_ListLanguages.html
+         stdapi/aws_translate.py:load_supported_languages
+         stdapi/aws_translate.py:translate
+    """
+
+    @pytest.fixture(autouse=True)
+    def _translate_regions(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Serve Translate from a single known region."""
+        monkeypatch.setattr(SETTINGS, "aws_translate_region", "us-east-1")
+
+    @staticmethod
+    def _patch_client(
+        monkeypatch: pytest.MonkeyPatch, client: _StubLanguagesClient
+    ) -> None:
+        """Route every Translate client lookup to *client*."""
+        monkeypatch.setattr(
+            stdapi.aws, "get_client", lambda _service, _region=None: client
+        )
+
+    async def test_unsupported_source_is_refused_without_calling_translate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A language Translate does not support answers 400 listing the codes.
+
+        Ref: stdapi/aws_translate.py:_unsupported_pair_error
+        """
+        client = _StubLanguagesClient()
+        self._patch_client(monkeypatch, client)
+        monkeypatch.setattr(aws_translate, "_SUPPORTED_LANGUAGE_CODES", {"en", "es"})
+
+        with pytest.raises(ApiError) as exc_info:
+            await aws_translate.translate("dumela", "tn-ZA")
+
+        assert exc_info.value.status == 400
+        assert "en, es" in str(exc_info.value)
+        assert client.translate_calls == 0
+
+    @pytest.mark.usefixtures("request_log")
+    async def test_supported_source_still_reaches_translate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A supported pair is translated as before.
+
+        Ref: stdapi/aws_translate.py:translate
+        """
+        client = _StubLanguagesClient()
+        self._patch_client(monkeypatch, client)
+        monkeypatch.setattr(aws_translate, "_SUPPORTED_LANGUAGE_CODES", {"en", "es"})
+
+        assert await aws_translate.translate("hola", "es-US") == "translated"
+        assert client.translate_calls == 1
+
+    @pytest.mark.usefixtures("request_log")
+    async def test_validation_is_off_while_the_catalog_is_unknown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without the catalog the pair is left to AWS, as it was before.
+
+        A deployment whose role lacks ``translate:ListLanguages`` must keep
+        translating rather than refuse every request.
+
+        Ref: stdapi/aws_translate.py:translate
+        """
+        client = _StubLanguagesClient()
+        self._patch_client(monkeypatch, client)
+        monkeypatch.setattr(aws_translate, "_SUPPORTED_LANGUAGE_CODES", set())
+
+        assert await aws_translate.translate("dumela", "tn-ZA") == "translated"
+        assert client.translate_calls == 1
+
+    async def test_load_reads_every_page_of_the_catalog(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``ListLanguages`` is paginated, so every page reaches the cache.
+
+        Ref: stdapi/aws_translate.py:load_supported_languages
+        """
+        codes: set[str] = set()
+        monkeypatch.setattr(aws_translate, "_SUPPORTED_LANGUAGE_CODES", codes)
+        self._patch_client(
+            monkeypatch, _StubLanguagesClient(["en", "es"], ["fr", "de"])
+        )
+
+        await aws_translate.load_supported_languages()
+
+        assert codes == {"en", "es", "fr", "de"}
+
+    async def test_load_failure_leaves_validation_disabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A refused ``ListLanguages`` never fails startup nor blocks requests.
+
+        Ref: stdapi/aws_translate.py:load_supported_languages
+        """
+        codes: set[str] = set()
+        monkeypatch.setattr(aws_translate, "_SUPPORTED_LANGUAGE_CODES", codes)
+        self._patch_client(
+            monkeypatch,
+            _StubLanguagesClient(
+                error=make_client_error("AccessDeniedException", "ListLanguages")
+            ),
+        )
+
+        await aws_translate.load_supported_languages()
+
+        assert not codes

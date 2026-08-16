@@ -6,12 +6,14 @@ from re import DOTALL, IGNORECASE
 from re import compile as compile_regex
 from typing import TYPE_CHECKING
 
-from botocore.exceptions import ClientError, ParamValidationError
+from botocore.exceptions import BotoCoreError, ClientError, ParamValidationError
 
+from stdapi import server
 from stdapi.api_errors import ApiError
 from stdapi.aws import call_with_region_failover, service_regions
 from stdapi.config import SETTINGS
-from stdapi.monitoring import log_error_details
+from stdapi.metering import SERVER_FULL_VERSION
+from stdapi.monitoring import EventLog, log_error_details, write_log_event
 from stdapi.usage import record_translate_usage
 from stdapi.utils import language_code_to_name
 
@@ -21,6 +23,7 @@ if TYPE_CHECKING:
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_translate import TranslateClient
     from types_aiobotocore_translate.type_defs import (
+        ListLanguagesRequestTypeDef,
         TranslateTextRequestTypeDef,
         TranslateTextResponseTypeDef,
     )
@@ -41,6 +44,84 @@ _TRANSLATE_DISTINCT_LANGUAGE_CODES: frozenset[str] = frozenset(
 _SUBTITLE_SPAN_RE = compile_regex(
     r'<span[^>]*id="seg(\d+)"[^>]*>(.*?)</span>', IGNORECASE | DOTALL
 )
+
+#: Language codes AWS Translate supports, cached at startup; empty when unread.
+_SUPPORTED_LANGUAGE_CODES: set[str] = set()
+
+
+async def load_supported_languages() -> None:
+    """Cache the language codes AWS Translate supports.
+
+    Read once at startup: the catalog is the same for every request, and
+    holding it is what lets an unsupported pair be refused before any billed
+    call. Validation stays off when the catalog cannot be read, so a
+    deployment without ``translate:ListLanguages`` keeps its current behavior
+    (the pair then fails on the translation call itself).
+    """
+
+    async def _list_languages(client: TranslateClient, _region: RegionName) -> set[str]:
+        """Collect every page of one region's supported-language list."""
+        codes: set[str] = set()
+        request: ListLanguagesRequestTypeDef = {}
+        while True:
+            response = await client.list_languages(**request)
+            codes.update(language["LanguageCode"] for language in response["Languages"])
+            if not (next_token := response.get("NextToken")):
+                return codes
+            request["NextToken"] = next_token
+
+    try:
+        codes, _used_region = await call_with_region_failover(
+            "translate", service_regions(SETTINGS.aws_translate_region), _list_languages
+        )
+    # KeyError: no translate client was started, so the deployment does not
+    # serve translation at all and has nothing to validate a pair against.
+    except (BotoCoreError, ClientError, KeyError) as error:
+        write_log_event(
+            EventLog(
+                type="background",
+                level="warning",
+                date=SETTINGS.now(),
+                server_id=server.SERVER_NAME,
+                server_version=SERVER_FULL_VERSION,
+                event="translate_languages_load",
+                error_detail=[
+                    (
+                        f"{type(error).__name__}: unable to list the languages AWS "
+                        "Translate supports. Grant translate:ListLanguages to the "
+                        "server role so an unsupported language is refused before "
+                        "the audio is transcribed."
+                    )
+                ],
+            )
+        )
+        return
+    _SUPPORTED_LANGUAGE_CODES.update(codes)
+
+
+def _unsupported_pair_error(
+    source_language_code: str, target_language_code: str
+) -> ApiError:
+    """Build the error refusing a language pair AWS Translate cannot serve.
+
+    Args:
+        source_language_code: Source language code.
+        target_language_code: Target language code.
+
+    Returns:
+        The 400 to raise, listing the supported codes when they are known.
+    """
+    msg = (
+        f"Translation from {language_code_to_name(source_language_code).capitalize()} "
+        f"to {language_code_to_name(target_language_code).capitalize()} is not "
+        "supported. "
+    )
+    if _SUPPORTED_LANGUAGE_CODES:
+        codes = ", ".join(sorted(_SUPPORTED_LANGUAGE_CODES))
+        msg += f"Supported language codes: {codes}."
+    else:
+        msg += "Choose a supported language pair."
+    return ApiError(msg)
 
 
 async def translate(
@@ -64,13 +145,18 @@ async def translate(
         Translated text in English
 
     Raises:
-        ApiError: When translation fails, or ``settings``/``terminology_names``
-            hold a value AWS Translate rejects
+        ApiError: When the language pair is unsupported, when translation
+            fails, or when ``settings``/``terminology_names`` hold a value AWS
+            Translate rejects
     """
     if source_language_code not in _TRANSLATE_DISTINCT_LANGUAGE_CODES:
         source_language_code = source_language_code.split("-", 1)[0]
     if not text.strip() or source_language_code == "en":
         return text
+    if _SUPPORTED_LANGUAGE_CODES and not _SUPPORTED_LANGUAGE_CODES.issuperset(
+        (source_language_code, target_language_code)
+    ):
+        raise _unsupported_pair_error(source_language_code, target_language_code)
 
     def _translate(
         client: TranslateClient, _region: RegionName
@@ -96,12 +182,9 @@ async def translate(
 
     except ClientError as error:
         if error.response["Error"]["Code"] == "UnsupportedLanguagePairException":
-            msg = (
-                f"Translation from {language_code_to_name(source_language_code).capitalize()} "
-                f"to {language_code_to_name(target_language_code).capitalize()} is not "
-                "supported. Choose a supported language pair."
-            )
-            raise ApiError(msg) from None
+            raise _unsupported_pair_error(
+                source_language_code, target_language_code
+            ) from None
         raise
     except ParamValidationError as error:
         # botocore validates Settings/TerminologyNames client-side; surface it

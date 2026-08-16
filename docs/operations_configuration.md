@@ -174,6 +174,7 @@ This section provides a quick reference of all available configuration options. 
 | [`VECTOR_STORE_CHUNK_SIZE_TOKENS`](#vector-store-chunk-size-tokens) | `800`   | Default chunk size for files indexed without an explicit `chunking_strategy`                         |
 | [`VECTOR_STORE_CHUNK_OVERLAP_TOKENS`](#vector-store-chunk-overlap-tokens) | `400` | Default chunk overlap; must not exceed half the chunk size                                 |
 | [`AWS_TRANSCRIBE_S3_BUCKET`](#aws-transcribe-s3-bucket) | `AWS_S3_BUCKET` | S3 bucket for temporary audio transcription files; must be in same region as `AWS_TRANSCRIBE_REGION` |
+| [`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN`](#aws-transcribe-output-encryption-key-arn) | None | AWS KMS key encrypting the transcription output objects; unset keeps the bucket's own encryption |
 
 ### :material-robot: AWS AI Services { #summary-aws-ai-services }
 
@@ -785,6 +786,26 @@ export AWS_TRANSCRIBE_S3_BUCKET=my-transcribe-temp-us-east-1
 # If AWS_TRANSCRIBE_REGION is eu-west-1
 export AWS_TRANSCRIBE_S3_BUCKET=my-transcribe-temp-eu-west-1
 ```
+
+#### `AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN` { #aws-transcribe-output-encryption-key-arn }
+
+:octicons-package-24: **Purpose**
+:   AWS KMS key encrypting the transcription output written to [`AWS_TRANSCRIBE_S3_BUCKET`](#aws-transcribe-s3-bucket)
+
+:octicons-gear-24: **Default**
+:   None — output objects keep the bucket's own default encryption (SSE-S3)
+
+:octicons-code-24: **Format**
+:   KMS key ARN: `arn:<partition>:kms:<region>:<account-id>:key/<key-id>`; startup fails on any other value
+
+:octicons-alert-24: **Requirement**
+:   The server's role needs `kms:GenerateDataKey` and `kms:Decrypt` on the key ([IAM Permissions](operations_iam_permissions.md#speech-to-text-optional)). With the default multi-region behavior the key must be usable from every candidate region — a [multi-Region key](https://docs.aws.amazon.com/kms/latest/developerguide/multi-region-keys-overview.html) or a single [`AWS_TRANSCRIBE_REGION`](#aws-transcribe-region)
+
+```bash
+export AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN=arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012
+```
+
+Each job also sends its request identifiers (`stdapi-ai.request_id`, `stdapi-ai.server_id`, and `stdapi-ai.user_id` when the user is known) as the [KMS encryption context](https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#encrypt_context), so a key policy can be conditioned on them.
 
 #### `AWS_S3_REGIONAL_BUCKETS` { #aws-s3-regional-buckets }
 
