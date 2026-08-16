@@ -1,6 +1,6 @@
 """Local OpenAI-compatible Responses API types."""
 
-from typing import Annotated, ClassVar, Literal, Self
+from typing import Annotated, ClassVar, Final, Literal, Self
 
 from pydantic import ConfigDict, Field, model_validator
 
@@ -4147,6 +4147,10 @@ class PromptCacheOptions(BaseModelRequest):
     )
 
 
+#: Unsupported-parameter values naming the behavior this implementation already has.
+_ACCEPTED_DEFAULTS: Final[dict[str, str]] = {"truncation": "disabled"}
+
+
 # Ref: openai.types.responses.response_create_params.ResponseCreateParamsBase
 class ResponseCreateParams(BaseModelRequestWithExtra):
     """Request body for POST /v1/responses.
@@ -4278,7 +4282,8 @@ class ResponseCreateParams(BaseModelRequestWithExtra):
     )
     truncation: Literal["auto", "disabled"] | None = Field(
         default=None,
-        description="Truncation strategy.\nUNSUPPORTED on this implementation.",
+        description="Truncation strategy. `disabled` (the default) is the "
+        "behavior served; `auto` is UNSUPPORTED on this implementation.",
     )
     user: str | None = Field(
         default=None, description="User identifier (use safety_identifier instead)."
@@ -4340,9 +4345,14 @@ class ResponseCreateParams(BaseModelRequestWithExtra):
             ApiError: If a parameter is incompatible with ``prompt``.
         """
         for key in self._UNSUPPORTED & self.model_fields_set:
-            # `null`/`false` request the supported default behavior, like omission
+            # `null`/`false`, and a value naming the behavior already in force,
+            # request the supported default behavior, like omission
             value = getattr(self, key)
-            if value is not None and value is not False:
+            if (
+                value is not None
+                and value is not False
+                and value != _ACCEPTED_DEFAULTS.get(key)
+            ):
                 raise UnsupportedParameterError(key)
         if self.prompt is not None and (
             incompatible := sorted(self._PROMPT_INCOMPATIBLE & self.model_fields_set)
@@ -4384,7 +4394,8 @@ class InputTokenCountParams(BaseModelRequest):
     )
     truncation: Literal["auto", "disabled"] | None = Field(
         default=None,
-        description="Truncation strategy.\nUNSUPPORTED on this implementation.",
+        description="Truncation strategy. `disabled` (the default) is the "
+        "behavior served; `auto` is UNSUPPORTED on this implementation.",
     )
     previous_response_id: str | None = Field(
         default=None,
@@ -4427,9 +4438,14 @@ class InputTokenCountParams(BaseModelRequest):
             UnsupportedParameterError: If a parameter marked as unsupported is used.
         """
         for key in self._UNSUPPORTED & self.model_fields_set:
-            # `null`/`false` request the supported default behavior, like omission
+            # `null`/`false`, and a value naming the behavior already in force,
+            # request the supported default behavior, like omission
             value = getattr(self, key)
-            if value is not None and value is not False:
+            if (
+                value is not None
+                and value is not False
+                and value != _ACCEPTED_DEFAULTS.get(key)
+            ):
                 raise UnsupportedParameterError(key)
         return self
 
