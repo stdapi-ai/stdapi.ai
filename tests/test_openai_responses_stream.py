@@ -33,7 +33,9 @@ from sse_starlette import JSONServerSentEvent, ServerSentEvent
 
 from stdapi import monitoring
 from stdapi.aws_bedrock import GUARDRAIL_TRACE_VAR
+from stdapi.cleanup import CLEANUPS
 from stdapi.models import ModelBase
+from stdapi.models import chat as models_chat
 from stdapi.models.chat._adapters import _openai_chat_completion as chat_adapter
 from stdapi.models.chat._adapters import _openai_responses as responses_adapter
 from stdapi.models.chat._adapters._openai_common import extract_stream_usage
@@ -49,6 +51,7 @@ from stdapi.types.openai_responses import (
     AnnotationURLCitation,
     ImageGeneration,
     ImageGenerationCall,
+    Response,
     ResponseCreateParams,
     ResponseFunctionToolCall,
     ResponseFunctionWebSearch,
@@ -58,9 +61,10 @@ from stdapi.types.openai_responses import (
     ResponseOutputText,
     WebSearchActionSearch,
 )
+from stdapi.vector_stores import SearchResult, StoreRecord
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Sequence
+    from collections.abc import AsyncGenerator, Awaitable, Generator, Sequence
 
     from types_aiobotocore_bedrock_runtime.type_defs import (
         ConverseResponseTypeDef,
@@ -2043,3 +2047,342 @@ class TestImageGenerationConcurrency:
             "resp-1-img-2",
         ], "materialised items must keep the call order"
         assert state.output_index == 2
+
+
+#: A syntactically valid vector store identifier, so `parse_store_id` accepts it.
+_STORE_ID = "vs_" + "0" * 26
+
+
+def _stream_search_result(text: str, score: float = 0.9) -> SearchResult:
+    """Build one vector store hit the stubbed search answers with."""
+    return SearchResult(
+        file_id="file-1", filename="file-1.md", score=score, text=text, attributes={}
+    )
+
+
+@pytest.fixture
+def cleanups() -> Generator[list[Awaitable[None]]]:
+    """Bind the request cleanup list the retrieval loop defers store writes to."""
+    pending: list[Awaitable[None]] = []
+    token = CLEANUPS.set(pending)
+    yield pending
+    for task in pending:
+        task.close()  # type: ignore[attr-defined]
+    CLEANUPS.reset(token)
+
+
+def _file_search_stream_events() -> list[dict[str, object]]:
+    """Build a Bedrock stream whose only block is a ``file_search`` tool call."""
+    return [
+        {
+            "contentBlockStart": {
+                "start": {"toolUse": {"toolUseId": "tu1", "name": "file_search"}},
+                "contentBlockIndex": 0,
+            }
+        },
+        {
+            "contentBlockDelta": {
+                "delta": {"toolUse": {"input": '{"query": "vacation days"}'}},
+                "contentBlockIndex": 0,
+            }
+        },
+        {"contentBlockStop": {"contentBlockIndex": 0}},
+        {"messageStop": {"stopReason": "tool_use"}},
+        {"metadata": {"usage": {"inputTokens": 10, "outputTokens": 4}}},
+    ]
+
+
+class _StubGroundedModel:
+    """Chat model answering the continued turn from a fabricated Converse reply."""
+
+    def __init__(self, answer: str = "Twenty-five days.") -> None:
+        self.answer = answer
+        self.inputs: list[Any] = []
+
+    async def create_response(
+        self,
+        request: ResponseCreateParams,
+        response_id: str,
+        created_at: float,
+        **_kwargs: object,
+    ) -> Response:
+        """Record the continued input and answer it with a text message."""
+        self.inputs.append(request.input)
+        return await format_response(
+            response_id,
+            created_at,
+            "amazon.nova-2-lite-v1:0",
+            _bedrock_response(
+                [{"text": self.answer}], usage={"inputTokens": 7, "outputTokens": 3}
+            ),
+            request,
+        )
+
+
+class _StubSearchingModel:
+    """Chat model that answers every continued turn with one more search."""
+
+    def __init__(self) -> None:
+        self.turns = 0
+
+    async def create_response(
+        self,
+        request: ResponseCreateParams,
+        response_id: str,
+        created_at: float,
+        **_kwargs: object,
+    ) -> Response:
+        """Answer with a ``file_search`` tool call instead of a message."""
+        self.turns += 1
+        return await format_response(
+            response_id,
+            created_at,
+            "amazon.nova-2-lite-v1:0",
+            _bedrock_response(
+                [
+                    {
+                        "toolUse": {
+                            "toolUseId": f"tu-{self.turns}",
+                            "name": "file_search",
+                            "input": {"query": "again"},
+                        }
+                    }
+                ],
+                stop_reason="tool_use",
+                usage={"inputTokens": 1, "outputTokens": 1},
+            ),
+            request,
+        )
+
+
+def _stub_streamed_file_search(
+    monkeypatch: pytest.MonkeyPatch, results: list[SearchResult]
+) -> _StubGroundedModel:
+    """Stub the vector store and the model that answers the retrieved passages."""
+    grounded = _StubGroundedModel()
+
+    async def _read_store(store_id: str) -> StoreRecord:
+        return StoreRecord(
+            id=store_id,
+            created_at=0,
+            last_active_at=0,
+            embedding_model="amazon.titan-embed-text-v2:0",
+            dimensions=8,
+        )
+
+    async def _search(
+        _store: StoreRecord, _queries: Sequence[str], **_kwargs: object
+    ) -> list[SearchResult]:
+        return results
+
+    async def _touch_store(_store: StoreRecord) -> None:
+        return None
+
+    monkeypatch.setattr(responses_adapter, "read_store", _read_store)
+    monkeypatch.setattr(responses_adapter, "search", _search)
+    monkeypatch.setattr(responses_adapter, "touch_store", _touch_store)
+    monkeypatch.setattr(models_chat, "get_chat_model", lambda _model_id: grounded)
+    return grounded
+
+
+def _file_search_request(**fields: object) -> ResponseCreateParams:
+    """Build a streamed request carrying a ``file_search`` tool."""
+    return _request(
+        stream=True,
+        tools=[{"type": "file_search", "vector_store_ids": [_STORE_ID]}],
+        **fields,
+    )
+
+
+@pytest.mark.usefixtures("cleanups")
+class TestFileSearchStreamEvents:
+    """A streamed retrieval reports the search, then streams the grounded answer.
+
+    The model's ``file_search`` call never reaches the client as a function
+    call: it is suppressed, answered from the vector stores as a
+    ``file_search_call`` item with its three lifecycle events, and the turn
+    continues inside the same stream.
+
+    Ref: https://developers.openai.com/api/docs/guides/tools-file-search
+         https://developers.openai.com/api/reference/resources/responses/streaming-events
+         openai.types.responses.response_file_search_call_searching_event.ResponseFileSearchCallSearchingEvent
+         stdapi/models/chat/_adapters/_openai_responses.py:file_search_stream_handler
+    """
+
+    async def test_event_sequence_of_a_streamed_retrieval(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The three file search events frame the item, and the answer follows.
+
+        Sequence numbers stay contiguous across the retrieval and the continued
+        turn, and the terminal snapshot carries both output items.
+        """
+        _stub_streamed_file_search(
+            monkeypatch, [_stream_search_result("Employees receive 25 days.")]
+        )
+
+        events = await _collect(
+            format_stream(
+                "resp-1",
+                0.0,
+                "amazon.nova-2-lite-v1:0",
+                _stream(_file_search_stream_events()),
+                _file_search_request(),
+            )
+        )
+
+        assert _event_names(events) == [
+            "response.created",
+            "response.in_progress",
+            "response.output_item.added",
+            "response.file_search_call.in_progress",
+            "response.file_search_call.searching",
+            "response.file_search_call.completed",
+            "response.output_item.done",
+            "response.output_item.added",
+            "response.content_part.added",
+            "response.output_text.delta",
+            "response.output_text.done",
+            "response.content_part.done",
+            "response.output_item.done",
+            "response.completed",
+        ]
+        assert _sequence_numbers(events) == list(range(len(events)))
+        payloads = [_payload(sse) for sse in events]
+        assert payloads[2]["item"]["status"] == "in_progress"
+        assert payloads[2]["item"]["queries"] == ["vacation days"]
+        assert payloads[6]["item"]["status"] == "completed"
+        assert [payload["output_index"] for payload in payloads[2:7]] == [0] * 5
+        assert [payload["output_index"] for payload in payloads[7:13]] == [1] * 6
+        snapshot = payloads[-1]["response"]
+        assert [item["type"] for item in snapshot["output"]] == [
+            "file_search_call",
+            "message",
+        ]
+        assert snapshot["output"][1]["content"][0]["text"] == "Twenty-five days."
+        assert snapshot["status"] == "completed"
+
+    async def test_passages_reach_the_continued_turn(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The continued invocation reads the retrieved passages as a tool result.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:_map_file_search_call
+        """
+        grounded = _stub_streamed_file_search(
+            monkeypatch, [_stream_search_result("Employees receive 25 days.")]
+        )
+
+        await _collect(
+            format_stream(
+                "resp-1",
+                0.0,
+                "amazon.nova-2-lite-v1:0",
+                _stream(_file_search_stream_events()),
+                _file_search_request(),
+            )
+        )
+
+        (continued,) = grounded.inputs
+        assert isinstance(continued, list)
+        answered = continued[-1]
+        assert answered.type == "file_search_call"
+        assert answered.queries == ["vacation days"]
+        assert "Employees receive 25 days." in json.dumps(answered.results)
+
+    async def test_results_are_reported_only_when_included(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``include=["file_search_call.results"]`` is what attaches the passages.
+
+        Ref: https://developers.openai.com/api/docs/guides/tools-file-search
+        """
+        _stub_streamed_file_search(
+            monkeypatch, [_stream_search_result("Employees receive 25 days.")]
+        )
+
+        silent = await _collect(
+            format_stream(
+                "resp-1",
+                0.0,
+                "amazon.nova-2-lite-v1:0",
+                _stream(_file_search_stream_events()),
+                _file_search_request(),
+            )
+        )
+        included = await _collect(
+            format_stream(
+                "resp-1",
+                0.0,
+                "amazon.nova-2-lite-v1:0",
+                _stream(_file_search_stream_events()),
+                _file_search_request(include=["file_search_call.results"]),
+            )
+        )
+
+        assert "results" not in _payload(silent[6])["item"]
+        (result,) = _payload(included[6])["item"]["results"]
+        assert result["text"] == "Employees receive 25 days."
+        assert result["file_id"] == "file-1"
+        assert result["score"] == 0.9
+
+    async def test_usage_covers_both_invocations(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The terminal event bills the retrieval turn and the grounded answer.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:_accumulate_stream_usage
+        """
+        _stub_streamed_file_search(monkeypatch, [])
+
+        events = await _collect(
+            format_stream(
+                "resp-1",
+                0.0,
+                "amazon.nova-2-lite-v1:0",
+                _stream(_file_search_stream_events()),
+                _file_search_request(),
+            )
+        )
+
+        usage = _payload(events[-1])["response"]["usage"]
+        assert usage["input_tokens"] == 17, "10 for the search turn, 7 for the answer"
+        assert usage["output_tokens"] == 7
+        assert usage["total_tokens"] == 24
+
+    async def test_a_model_that_keeps_searching_is_stopped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The retrieval loop is bounded, and the last call is reported incomplete.
+
+        A model asking for one more search on every turn would otherwise loop
+        without end; the last request is answered with an ``incomplete`` item
+        and no further invocation.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:_stream_unanswered_file_search
+        """
+        _stub_streamed_file_search(monkeypatch, [])
+        searching = _StubSearchingModel()
+        monkeypatch.setattr(models_chat, "get_chat_model", lambda _id: searching)
+
+        events = await _collect(
+            format_stream(
+                "resp-1",
+                0.0,
+                "amazon.nova-2-lite-v1:0",
+                _stream(_file_search_stream_events()),
+                _file_search_request(),
+            )
+        )
+
+        assert _event_names(events).count("response.file_search_call.searching") == 3
+        assert _event_names(events).count("response.file_search_call.completed") == 2, (
+            "only the searches that ran report a completion"
+        )
+        assert searching.turns == 2, "the loop stops at the round limit"
+        snapshot = _payload(events[-1])["response"]
+        assert [item["status"] for item in snapshot["output"]] == [
+            "completed",
+            "completed",
+            "incomplete",
+        ]

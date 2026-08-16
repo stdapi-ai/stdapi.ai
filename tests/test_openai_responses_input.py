@@ -157,16 +157,6 @@ class TestHostedToolItemsParseAndDrop:
             ),
             (
                 {
-                    "id": "fs_1",
-                    "type": "file_search_call",
-                    "status": "completed",
-                    "queries": ["cats"],
-                    "results": [{"file_id": "f_1", "text": "meow", "score": 0.9}],
-                },
-                FileSearchCallInput,
-            ),
-            (
-                {
                     "id": "ci_1",
                     "type": "code_interpreter_call",
                     "container_id": "cont_1",
@@ -329,6 +319,65 @@ class TestHostedToolItemsParseAndDrop:
         )
         assert messages == []
         assert system == []
+
+
+class TestFileSearchCallItems:
+    """A replayed ``file_search_call`` carries its passages back to the model.
+
+    The gateway runs the search itself, so the item is the only record of what
+    was retrieved: it is replayed as the ``toolUse`` the model made and the
+    ``toolResult`` that answered it. An item with no results carries nothing
+    the model could read, and a ``toolUse`` without its result is not a valid
+    conversation, so both are dropped together.
+
+    Ref: https://developers.openai.com/api/docs/guides/tools-file-search
+         stdapi/models/chat/_adapters/_openai_responses.py:_map_file_search_call
+    """
+
+    async def test_an_answered_call_is_replayed_with_its_passages(self) -> None:
+        """The call becomes a toolUse and its passages the matching toolResult."""
+        item = _parse(
+            {
+                "id": "fs_1",
+                "type": "file_search_call",
+                "status": "completed",
+                "queries": ["cats"],
+                "results": [{"text": "meow"}],
+            }
+        )
+        assert isinstance(item, FileSearchCallInput)
+
+        messages, _system = await map_input(
+            cast("list[ResponseInputItem]", [item]), None
+        )
+
+        assert [message["role"] for message in messages] == ["assistant", "user"]
+        tool_use = messages[0]["content"][0]["toolUse"]
+        assert tool_use == {
+            "toolUseId": "fs_1",
+            "name": "file_search",
+            "input": {"query": "cats"},
+        }
+        tool_result = messages[1]["content"][0]["toolResult"]
+        assert tool_result["toolUseId"] == "fs_1"
+        assert tool_result["content"] == [{"text": "meow"}]
+
+    async def test_a_call_without_results_is_dropped(self) -> None:
+        """An item whose results were never included leaves no dangling toolUse."""
+        item = _parse(
+            {
+                "id": "fs_1",
+                "type": "file_search_call",
+                "status": "completed",
+                "queries": ["cats"],
+            }
+        )
+
+        messages, _system = await map_input(
+            cast("list[ResponseInputItem]", [item]), None
+        )
+
+        assert messages == []
 
 
 class TestCustomToolCallItems:

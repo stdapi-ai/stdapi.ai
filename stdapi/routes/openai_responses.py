@@ -43,8 +43,10 @@ from stdapi.models import resolve_bedrock_prompt, validate_model
 from stdapi.models.capabilities import Capability, register_route_capability
 from stdapi.models.chat import get_chat_model, serves_via_mantle
 from stdapi.models.chat._adapters._openai_responses import (
+    check_file_search_stores,
     count_input_tokens_via_bedrock,
     encode_compaction_content,
+    execute_file_search_calls,
 )
 from stdapi.monitoring import (
     REQUEST_ID,
@@ -744,6 +746,24 @@ def _compaction_user_messages(items: Sequence[Any]) -> list[CompactionUserMessag
     return messages
 
 
+async def _check_file_search(request: ResponseCreateParams, model_id: str) -> None:
+    """Check a ``file_search`` tool's vector stores before any generation runs.
+
+    An unreachable store then costs no model call, and cannot surface once a
+    streamed response has started. A natively served model reads its own
+    stores, which this deployment does not hold.
+
+    Args:
+        request: The incoming request.
+        model_id: Model ID resolved from the request's ``model`` field.
+
+    Raises:
+        ApiError: 404 when a named vector store does not exist.
+    """
+    if not serves_via_mantle(model_id):
+        await check_file_search_stores(request)
+
+
 async def _apply_prompt_template(
     prompt: ResponsePrompt | None, chat_model: ChatModelBase[Any, Any], model_id: str
 ) -> None:
@@ -837,6 +857,7 @@ async def create_response(
     # After the model: an alias may carry the guardrail 'moderation' reports on.
     apply_request_moderation(request.moderation)
     chat_model = get_chat_model(model_id)
+    await _check_file_search(request, model_id)
     await _apply_prompt_template(request.prompt, chat_model, model_id)
     previous_response_id = request.previous_response_id
     native_supported = chat_model.native_store_supported()
@@ -863,15 +884,15 @@ async def create_response(
             created_at,
             moderation_builder=partial(build_response_moderation, request.moderation),
         )
-        if (
-            isinstance(result, Response)
-            and result.status == "failed"
-            and not request.background
-        ):
-            # A synchronous request must not swallow an upstream failure into
-            # a 200 with empty output (Mantle models already enforce this
-            # upstream); background requests keep the failed terminal state.
-            _failed_response_error(result)
+        if isinstance(result, Response):
+            result = await execute_file_search_calls(
+                result, request, model_id, response_id, created_at
+            )
+            if result.status == "failed" and not request.background:
+                # A synchronous request must not swallow an upstream failure
+                # into a 200 with empty output (Mantle models already enforce
+                # this upstream); background requests keep the failed state.
+                _failed_response_error(result)
     except BaseException:
         if store:
             schedule_cleanup(discard_stored_response_session(response_id, "response"))

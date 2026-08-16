@@ -12,7 +12,7 @@ from enum import Enum
 from time import time
 from traceback import format_exception
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from botocore.exceptions import ClientError, HTTPClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
@@ -27,6 +27,7 @@ from stdapi.aws_bedrock import (
     handle_bedrock_client_error,
     set_inference_configuration,
 )
+from stdapi.cleanup import schedule_cleanup
 from stdapi.input_file import FileIdInputFile, InputFile
 from stdapi.models import validate_model
 from stdapi.models.chat._adapters import _common, _openai_common
@@ -41,6 +42,7 @@ from stdapi.monitoring import (
 )
 from stdapi.types.openai import ResponseFormatJSONObject, ResponseFormatText
 from stdapi.types.openai_responses import (
+    AnnotationFileCitation,
     AnnotationURLCitation,
     CodeInterpreter,
     CompactionItemParam,
@@ -48,6 +50,8 @@ from stdapi.types.openai_responses import (
     CustomToolCallInput,
     CustomToolCallOutput,
     EasyInputMessage,
+    FileSearchCallInput,
+    FileSearchResult,
     FileSearchTool,
     FunctionCallInput,
     FunctionCallOutput,
@@ -71,6 +75,10 @@ from stdapi.types.openai_responses import (
     ResponseError,
     ResponseErrorEvent,
     ResponseFailedEvent,
+    ResponseFileSearchCallCompletedEvent,
+    ResponseFileSearchCallInProgressEvent,
+    ResponseFileSearchCallSearchingEvent,
+    ResponseFileSearchToolCall,
     ResponseFormatTextJSONSchemaConfig,
     ResponseFunctionCallArgumentsDeltaEvent,
     ResponseFunctionCallArgumentsDoneEvent,
@@ -108,8 +116,15 @@ from stdapi.types.openai_responses import (
     WebSearchPreviewTool,
     WebSearchTool,
 )
+from stdapi.types.openai_vector_stores import (
+    ComparisonFilter as VectorStoreComparisonFilter,
+)
+from stdapi.types.openai_vector_stores import (
+    CompoundFilter as VectorStoreCompoundFilter,
+)
 from stdapi.utils import b64decode as b64decode_async
 from stdapi.utils import hide_security_details, json_sse, try_parse_json
+from stdapi.vector_stores import parse_store_id, read_store, search, touch_store
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -164,12 +179,14 @@ if TYPE_CHECKING:
     from stdapi.types.openai import ResponseModeration
     from stdapi.types.openai_responses import (
         Annotation,
+        FileSearchFilters,
         ResponseInputContent,
         ResponseInputItem,
         ResponseOutputItem,
         ResponseTextConfig,
         ToolChoice,
     )
+    from stdapi.types.openai_vector_stores import SearchFilter
 
 #: Empty tool schema for Bedrock tool configuration.
 _EMPTY_TOOL: dict[str, str] = {"type": "object"}
@@ -226,6 +243,42 @@ _IMAGE_GENERATION_SCHEMA: JsonMapping = {
         "output_format": {"type": "string", "enum": ["png", "jpeg", "webp"]},
     },
 }
+
+#: Name of the synthetic function tool the model calls to search the attached vector stores.
+_FILE_SEARCH_TOOL_NAME: Final[str] = "file_search"
+
+#: Input schema for the synthetic ``file_search`` function tool presented to the LLM (the gateway runs the retrieval itself).
+_FILE_SEARCH_SCHEMA: JsonMapping = {
+    "type": "object",
+    "required": ["query"],
+    "properties": {
+        "query": {
+            "type": "string",
+            "description": "What to look for in the attached files, in natural language.",
+        }
+    },
+}
+
+#: Bedrock declaration of the synthetic ``file_search`` function tool.
+_FILE_SEARCH_TOOL_SPEC: ToolTypeDef = {
+    "toolSpec": {
+        "name": _FILE_SEARCH_TOOL_NAME,
+        "description": (
+            "Search the files attached to this conversation and return the "
+            "passages closest in meaning to the query."
+        ),
+        "inputSchema": {"json": _FILE_SEARCH_SCHEMA},
+    }
+}
+
+#: Passages returned per file_search call when the tool sets no max_num_results.
+_FILE_SEARCH_DEFAULT_RESULTS: Final[int] = 20
+
+#: Searches one response may run before the tool is withdrawn and the model must answer.
+_MAX_FILE_SEARCH_ROUNDS: Final[int] = 2
+
+#: Vector stores searched concurrently for one file_search call.
+_FILE_SEARCH_CONCURRENCY: Final[int] = 8
 
 #: Magic-byte prefixes used to sniff the format of echoed generated images.
 _IMAGE_MAGIC_FORMATS: tuple[tuple[bytes, ImageFormatType], ...] = (
@@ -383,12 +436,10 @@ def _build_tool_config(
     """Build a Bedrock tool configuration from a Responses API request.
 
     Maps ``FunctionTool`` entries to Bedrock toolSpec and OpenAI integrated
-    tool types (code_interpreter, web_search, image_generation) to their
-    Bedrock equivalents.  Tool types without a backend equivalent, such as
+    tool types (code_interpreter, web_search, image_generation, file_search) to
+    their Bedrock equivalents.  Tool types without a backend equivalent, such as
     ``programmatic_tool_calling``, are accepted for compatibility and dropped;
-    the model then calls the declared function tools directly.  ``file_search``
-    is the exception: dropping it would answer from the model's own knowledge
-    while the caller believes the answer is grounded in the attached stores.
+    the model then calls the declared function tools directly.
 
     When ``tool_choice="none"``, no tool config is returned so that the model
     cannot call any tools.
@@ -406,9 +457,8 @@ def _build_tool_config(
 
     Raises:
         ApiError: If ``tool_name_map`` is provided and an integrated tool's
-            canonical name is absent from the map, if a ``web_search`` tool
-            carries search restrictions, or if a ``file_search`` tool is
-            declared.
+            canonical name is absent from the map, or if a ``web_search`` tool
+            carries search restrictions.
     """
     if request.tool_choice == "none" or not request.tools:
         return None
@@ -416,17 +466,18 @@ def _build_tool_config(
     tools: list[ToolTypeDef] = []
     has_image_gen = False
 
+    # Gateway-served: a synthetic function tool the model can ask for a search
+    # with, withdrawn once the round limit is reached so the last invocation
+    # has to answer. FileSearchTool has no Bedrock name, so the loop skips it.
+    if (
+        get_file_search_tool(request) is not None
+        and _pending_file_search_rounds(request) < _MAX_FILE_SEARCH_ROUNDS
+    ):
+        tools.append(_FILE_SEARCH_TOOL_SPEC)
+
     for tool in request.tools:
         if isinstance(tool, FunctionTool):
             tools.append(_function_tool_spec(tool))
-        elif isinstance(tool, FileSearchTool):
-            msg = (
-                "The 'file_search' tool is not available on this model. Search "
-                "your vector stores with the vector store search endpoint and "
-                "pass the results in the input, or use a model that serves "
-                "file_search."
-            )
-            raise ApiError(msg)
         elif isinstance(tool, ImageGeneration):
             # Gateway handles ImageGeneration; expose a synthetic function tool so the LLM can request it.
             if not has_image_gen:
@@ -734,6 +785,480 @@ async def image_generation_stream_handler(
         # Drop still-pending generations if the stream is abandoned early.
         for task in tasks:
             task.cancel()
+
+
+def get_file_search_tool(
+    request: ResponseCreateParams | InputTokenCountParams,
+) -> FileSearchTool | None:
+    """Return the ``file_search`` tool of a request, if it declares one.
+
+    Args:
+        request: Responses API creation or input-token count request.
+
+    Returns:
+        The first ``FileSearchTool`` found, or ``None`` if absent.
+    """
+    return next(
+        (tool for tool in request.tools or () if isinstance(tool, FileSearchTool)), None
+    )
+
+
+def _pending_file_search_rounds(
+    request: ResponseCreateParams | InputTokenCountParams,
+) -> int:
+    """Count the searches already answered in this turn.
+
+    Only the ``file_search_call`` items closing the input are counted: earlier
+    ones belong to previous turns a client replayed, and must not withdraw the
+    tool from a fresh question.
+
+    Args:
+        request: Responses API creation or input-token count request.
+
+    Returns:
+        Number of searches answered since the last message.
+    """
+    if not isinstance(request.input, list):
+        return 0
+    rounds = 0
+    for item in reversed(request.input):
+        if not isinstance(item, FileSearchCallInput):
+            break
+        rounds += 1
+    return rounds
+
+
+def _vector_store_filter(filters: FileSearchFilters) -> SearchFilter | None:
+    """Convert a tool attribute filter to the vector store dialect.
+
+    Args:
+        filters: The ``filters`` of the ``file_search`` tool.
+
+    Returns:
+        The same restriction as a vector store search filter, or ``None``.
+    """
+    if filters is None:
+        return None
+    payload = filters.model_dump(mode="json", exclude_none=True)
+    if payload.get("type") in ("and", "or"):
+        return VectorStoreCompoundFilter.model_validate(payload)
+    return VectorStoreComparisonFilter.model_validate(payload)
+
+
+async def check_file_search_stores(request: ResponseCreateParams) -> None:
+    """Refuse a ``file_search`` tool naming a vector store this deployment has not.
+
+    Run before the model is invoked, so an identifier the caller cannot reach is
+    answered with a status code rather than mid-stream, and costs no generation.
+
+    Args:
+        request: Responses API creation request.
+
+    Raises:
+        ApiError: 404 when a named vector store does not exist.
+    """
+    if (tool := get_file_search_tool(request)) is None:
+        return
+    await gather(
+        *(read_store(parse_store_id(store_id)) for store_id in tool.vector_store_ids)
+    )
+
+
+async def _search_one_store(
+    store_id: str, tool: FileSearchTool, query: str, semaphore: Semaphore
+) -> list[FileSearchResult]:
+    """Search a single vector store under the concurrency bound.
+
+    Args:
+        store_id: The vector store to search.
+        tool: The ``file_search`` tool definition from the request.
+        query: The query the model asked for.
+        semaphore: Bound on concurrent store searches.
+
+    Returns:
+        The matching passages of that store.
+
+    Raises:
+        ApiError: 404 when the store does not exist, 400 when its backend
+            cannot express the requested filter or score threshold.
+    """
+    async with semaphore:
+        store = await read_store(parse_store_id(store_id))
+        results = await search(
+            store,
+            (query,),
+            max_num_results=tool.max_num_results or _FILE_SEARCH_DEFAULT_RESULTS,
+            filters=_vector_store_filter(tool.filters),
+            score_threshold=(
+                tool.ranking_options.score_threshold if tool.ranking_options else None
+            ),
+        )
+        schedule_cleanup(touch_store(store))
+    return [
+        FileSearchResult(
+            attributes=dict(result.attributes) or None,
+            file_id=result.file_id,
+            filename=result.filename,
+            score=result.score,
+            text=result.text,
+        )
+        for result in results
+    ]
+
+
+async def _run_file_search(tool: FileSearchTool, query: str) -> list[FileSearchResult]:
+    """Search every attached vector store and keep the best passages.
+
+    Args:
+        tool: The ``file_search`` tool definition from the request.
+        query: The query the model asked for.
+
+    Returns:
+        The passages, best score first, capped at ``max_num_results``.
+
+    Raises:
+        ApiError: 404 when a named store does not exist, 400 when its backend
+            cannot express the requested filter or score threshold.
+    """
+    max_results = tool.max_num_results or _FILE_SEARCH_DEFAULT_RESULTS
+    semaphore = Semaphore(_FILE_SEARCH_CONCURRENCY)
+    per_store = await gather(
+        *(
+            _search_one_store(store_id, tool, query, semaphore)
+            for store_id in tool.vector_store_ids
+        )
+    )
+    merged = [result for store_results in per_store for result in store_results]
+    merged.sort(key=lambda result: result.score or 0.0, reverse=True)
+    return merged[:max_results]
+
+
+def _file_search_query(arguments: str) -> str:
+    """Return the query of a model-authored ``file_search`` call.
+
+    Args:
+        arguments: Raw arguments string of the tool call.
+
+    Returns:
+        The requested query, empty when the model sent none.
+    """
+    return _str_args(arguments).get("query", "")
+
+
+def _file_search_passages(results: list[FileSearchResult]) -> str:
+    """Render retrieved passages as the tool result the model reads.
+
+    Args:
+        results: The passages the search returned.
+
+    Returns:
+        The passages, or a statement that nothing matched.
+    """
+    if not results:
+        return "No passage of the attached files matches this query."
+    return "\n\n".join(
+        f"<result file_id={result.file_id!r} filename={result.filename!r}>\n"
+        f"{result.text or ''}\n</result>"
+        for result in results
+    )
+
+
+async def _execute_file_search_call(
+    tool: FileSearchTool, query: str, item_id: str, *, include_results: bool
+) -> tuple[ResponseFileSearchToolCall, FileSearchCallInput, list[FileSearchResult]]:
+    """Answer one ``file_search`` call the model made.
+
+    Args:
+        tool: The ``file_search`` tool definition from the request.
+        query: The query the model asked for.
+        item_id: Identifier of the ``file_search_call`` item.
+        include_results: Whether the request asked for the passages to be
+            reported back to the client.
+
+    Returns:
+        The output item the client sees, the input item the next model call
+        reads the passages from, and those passages -- reported to the client
+        or not, they are what the answer gets cited against.
+
+    Raises:
+        ApiError: 404 when a named store does not exist, 400 when its backend
+            cannot express the requested filter or score threshold.
+    """
+    results = await _run_file_search(tool, query)
+    return (
+        ResponseFileSearchToolCall(
+            id=item_id,
+            queries=[query],
+            status="completed",
+            type="file_search_call",
+            results=results if include_results else None,
+        ),
+        FileSearchCallInput(
+            id=item_id,
+            queries=[query],
+            status="completed",
+            type="file_search_call",
+            results=[{"text": _file_search_passages(results)}],
+        ),
+        results,
+    )
+
+
+def _cite_retrieved_files(
+    output_items: list[ResponseOutputItem], passages: Iterable[FileSearchResult]
+) -> None:
+    """Annotate a grounded answer with the files its passages were read from.
+
+    Retrieval grounds the whole answer rather than a span of it: the model
+    reports which passages it was given, never which sentence came from which
+    one.  So there is one citation per file instead of one per passage, and
+    each is anchored at the end of the text it annotates -- the only position
+    in that text the gateway can state truthfully.
+
+    Args:
+        output_items: Output items of one model invocation, patched in place.
+        passages: The passages handed to the model, best score first.
+    """
+    files = {
+        passage.file_id: passage.filename or ""
+        for passage in passages
+        if passage.file_id
+    }
+    if not files:
+        return
+    for item in output_items:
+        if not isinstance(item, ResponseOutputMessage):
+            continue
+        for part in item.content:
+            if isinstance(part, ResponseOutputText):
+                part.annotations.extend(
+                    AnnotationFileCitation(
+                        file_id=file_id,
+                        filename=filename,
+                        index=len(part.text),
+                        type="file_citation",
+                    )
+                    for file_id, filename in files.items()
+                )
+
+
+def _unanswered_file_search_call(
+    item_id: str, query: str
+) -> ResponseFileSearchToolCall:
+    """Build the item reported for a call left unanswered by the round limit.
+
+    Args:
+        item_id: Identifier of the ``file_search_call`` item.
+        query: The query the model asked for.
+
+    Returns:
+        An ``incomplete`` file search call carrying no results.
+    """
+    return ResponseFileSearchToolCall(
+        id=item_id,
+        queries=[query],
+        status="incomplete",
+        type="file_search_call",
+        results=None,
+    )
+
+
+def _input_items(request: ResponseCreateParams) -> list[ResponseInputItem]:
+    """Return a request's input as a list of items.
+
+    Args:
+        request: Responses API creation request.
+
+    Returns:
+        The input items, a bare string input becoming one user message.
+    """
+    if request.input is None:
+        return []
+    if isinstance(request.input, str):
+        return [EasyInputMessage(role="user", content=request.input, type="message")]
+    return list(request.input)
+
+
+async def _continue_after_file_search(
+    request: ResponseCreateParams,
+    items: list[ResponseInputItem],
+    model_id: str,
+    response_id: str,
+    created_at: float,
+) -> Response:
+    """Ask the model again, now that it can read the retrieved passages.
+
+    Args:
+        request: Responses API creation request.
+        items: The turn's input, ending with the answered ``file_search_call``
+            items.
+        model_id: The model serving this request.
+        response_id: Unique identifier for this response.
+        created_at: Unix timestamp when the response was created.
+
+    Returns:
+        The model's response to the retrieved passages.
+    """
+    # Local: `stdapi.models.chat` imports this module through its model classes.
+    from stdapi.models.chat import get_chat_model  # noqa: PLC0415
+
+    follow_up = request.model_copy(update={"input": items, "stream": False})
+    response = await get_chat_model(model_id).create_response(
+        follow_up, response_id, created_at
+    )
+    if not isinstance(response, Response):  # pragma: no cover — stream=False above
+        msg = "The model did not answer the retrieved passages."
+        raise ApiError(msg, status=502)
+    return response
+
+
+def _merge_usage(
+    first: ResponseUsage | None, second: ResponseUsage | None
+) -> ResponseUsage | None:
+    """Add the token usage of two model invocations of the same response.
+
+    Args:
+        first: Usage accumulated so far, if any.
+        second: Usage of the invocation that just finished, if any.
+
+    Returns:
+        The combined usage, or whichever half exists.
+    """
+    if first is None:
+        return second
+    if second is None:
+        return first
+    return ResponseUsage(
+        input_tokens=first.input_tokens + second.input_tokens,
+        input_tokens_details=InputTokensDetails(
+            cached_tokens=(
+                first.input_tokens_details.cached_tokens
+                + second.input_tokens_details.cached_tokens
+            ),
+            cache_write_tokens=(
+                first.input_tokens_details.cache_write_tokens
+                + second.input_tokens_details.cache_write_tokens
+            ),
+        ),
+        output_tokens=first.output_tokens + second.output_tokens,
+        output_tokens_details=OutputTokensDetails(),
+        total_tokens=first.total_tokens + second.total_tokens,
+    )
+
+
+def _includes_file_search_results(request: ResponseCreateParams) -> bool:
+    """Whether the request asked for the retrieved passages to be reported.
+
+    Args:
+        request: Responses API creation request.
+
+    Returns:
+        True when ``include`` carries ``file_search_call.results``.
+    """
+    return bool(request.include and "file_search_call.results" in request.include)
+
+
+def _file_search_calls(
+    output_items: list[ResponseOutputItem],
+) -> list[ResponseFunctionToolCall]:
+    """Return the ``file_search`` calls of a model response, in order.
+
+    Args:
+        output_items: Output items of one model invocation.
+
+    Returns:
+        The tool calls the gateway has to answer.
+    """
+    return [
+        item
+        for item in output_items
+        if isinstance(item, ResponseFunctionToolCall)
+        and item.name == _FILE_SEARCH_TOOL_NAME
+    ]
+
+
+async def execute_file_search_calls(
+    response: Response,
+    request: ResponseCreateParams,
+    model_id: str,
+    response_id: str,
+    created_at: float,
+) -> Response:
+    """Answer the model's ``file_search`` calls and continue the turn.
+
+    Each call is replaced by the ``file_search_call`` item it produced, and the
+    model is asked again with the retrieved passages, until it answers or the
+    round limit is reached.  Every answer it gives along the way is annotated
+    with the files the passages it read came from.
+
+    Args:
+        response: The model's first response.
+        request: Responses API creation request.
+        model_id: The model serving this request.
+        response_id: Unique identifier for this response.
+        created_at: Unix timestamp when the response was created.
+
+    Returns:
+        The response, with the retrieval items and the grounded answer.
+
+    Raises:
+        ApiError: 404 when a named store does not exist, 400 when its backend
+            cannot express the requested filter or score threshold.
+    """
+    tool = get_file_search_tool(request)
+    if tool is None or not _file_search_calls(response.output):
+        return response
+    include_results = _includes_file_search_results(request)
+    items = _input_items(request)
+    output: list[ResponseOutputItem] = []
+    grounding: list[FileSearchResult] = []
+    usage = response.usage
+    current = response
+    for round_index in range(_MAX_FILE_SEARCH_ROUNDS):
+        calls = _file_search_calls(current.output)
+        if not calls:
+            break
+        executed = await gather(
+            *(
+                _execute_file_search_call(
+                    tool,
+                    _file_search_query(call.arguments),
+                    f"{response_id}-fs-{round_index}-{index}",
+                    include_results=include_results,
+                )
+                for index, call in enumerate(calls, start=1)
+            )
+        )
+        answered = iter(executed)
+        output.extend(
+            next(answered)[0]
+            if isinstance(item, ResponseFunctionToolCall)
+            and item.name == _FILE_SEARCH_TOOL_NAME
+            else item
+            for item in current.output
+        )
+        items = [*items, *(item for _, item, _results in executed)]
+        grounding.extend(passage for *_, results in executed for passage in results)
+        current = await _continue_after_file_search(
+            request, items, model_id, response_id, created_at
+        )
+        _cite_retrieved_files(current.output, grounding)
+        usage = _merge_usage(usage, current.usage)
+    output.extend(
+        _unanswered_file_search_call(
+            f"{response_id}-fs-{_MAX_FILE_SEARCH_ROUNDS}-{index}",
+            _file_search_query(item.arguments),
+        )
+        if isinstance(item, ResponseFunctionToolCall)
+        and item.name == _FILE_SEARCH_TOOL_NAME
+        else item
+        for index, item in enumerate(current.output, start=1)
+    )
+    response.output = output
+    response.usage = usage
+    response.status = current.status
+    response.incomplete_details = current.incomplete_details
+    return response
 
 
 def _build_output_config(
@@ -1195,6 +1720,37 @@ async def _map_image_generation_call(
     )
 
 
+def _map_file_search_call(
+    item: FileSearchCallInput, bedrock_messages: list[MessageTypeDef]
+) -> None:
+    """Map an answered ``file_search_call`` item back into the conversation.
+
+    The call is replayed as an assistant ``toolUse`` followed by a user
+    ``toolResult`` carrying the retrieved passages.  An item without results
+    carries nothing the model could read, and is dropped with its call.
+
+    Args:
+        item: The file search call input item.
+        bedrock_messages: Mutable Bedrock messages list to append to.
+    """
+    if not item.results:
+        return
+    tool_use: ToolUseBlockTypeDef = {
+        "toolUseId": item.id,
+        "name": _FILE_SEARCH_TOOL_NAME,
+        "input": {"query": item.queries[0] if item.queries else ""},
+    }
+    _common.append_or_merge(bedrock_messages, "assistant", [{"toolUse": tool_use}])
+    passages = "\n\n".join(
+        text for entry in item.results if isinstance(text := entry.get("text"), str)
+    )
+    _common.append_or_merge(
+        bedrock_messages,
+        "user",
+        [{"toolResult": {"toolUseId": item.id, "content": [{"text": passages}]}}],
+    )
+
+
 async def map_input(
     input_param: str | list[ResponseInputItem] | None,
     instructions: str | None,
@@ -1257,7 +1813,8 @@ async def _map_input_item(
     """Map a single Responses input item to Bedrock messages or system blocks.
 
     Unsupported item types (e.g. hosted-tool calls such as ``web_search_call``
-    or ``item_reference`` entries) are accepted and silently dropped.
+    or ``item_reference`` entries) are accepted and silently dropped;
+    ``file_search_call`` is replayed with the passages it returned.
 
     Args:
         item: The input item to map.
@@ -1273,6 +1830,28 @@ async def _map_input_item(
             await _map_message_item(item, bedrock_messages, system_blocks, cache_point)
         case ResponseOutputMessage():
             _map_output_message(item, bedrock_messages)
+        case ResponseReasoningItem():
+            _map_reasoning_item(
+                item, bedrock_messages, signature_required=reasoning_signature_required
+            )
+        case CompactionItemParam():
+            await _map_compaction_item(item, bedrock_messages)
+        case _:
+            await _map_tool_call_item(item, bedrock_messages)
+
+
+async def _map_tool_call_item(
+    item: ResponseInputItem, bedrock_messages: list[MessageTypeDef]
+) -> None:
+    """Map an echoed tool call or tool result item into the conversation.
+
+    Item types the backend has no equivalent for are accepted and dropped.
+
+    Args:
+        item: The input item to map.
+        bedrock_messages: Mutable Bedrock messages list to append to.
+    """
+    match item:
         case FunctionCallInput():
             _map_function_call(item, bedrock_messages)
         case FunctionCallOutput():
@@ -1283,12 +1862,8 @@ async def _map_input_item(
             _map_custom_tool_call_output(item, bedrock_messages)
         case ImageGenerationCallInput():
             await _map_image_generation_call(item, bedrock_messages)
-        case ResponseReasoningItem():
-            _map_reasoning_item(
-                item, bedrock_messages, signature_required=reasoning_signature_required
-            )
-        case CompactionItemParam():
-            await _map_compaction_item(item, bedrock_messages)
+        case FileSearchCallInput():
+            _map_file_search_call(item, bedrock_messages)
 
 
 #: Marker identifying locally-encoded compaction content; ":" is outside the base64url alphabet, so upstream ciphertext can never collide with it.
@@ -1840,6 +2415,13 @@ def _extract_output_items(
         _attach_web_search_sources(output_items, ws_sources)
     return output_items
 
+
+#: Bedrock stop reason a continued turn's status resolves back to, for the terminal event.
+_STATUS_STOP_REASONS: dict[str, str] = {
+    "completed": "end_turn",
+    "incomplete": "max_tokens",
+    "failed": "malformed_model_output",
+}
 
 #: Maps Bedrock stop reasons; unknown reasons default to ``"max_output_tokens"``.
 _INCOMPLETE_REASONS: dict[str, Literal["max_output_tokens", "content_filter"]] = {
@@ -2808,6 +3390,381 @@ def _classify_stream_error(
     )
 
 
+def _emit_message_content(
+    state: _StreamState, item: ResponseOutputMessage
+) -> Generator[JSONServerSentEvent]:
+    """Replay a generated message's content parts as stream events.
+
+    Args:
+        state: Mutable stream state.
+        item: The message item to emit.
+
+    Yields:
+        One content-part lifecycle per part, with the text as a single delta.
+    """
+    for content_index, part in enumerate(item.content):
+        text = part.text if isinstance(part, ResponseOutputText) else None
+        yield json_sse(
+            "response.content_part.added",
+            ResponseContentPartAddedEvent(
+                item_id=item.id,
+                output_index=state.output_index,
+                content_index=content_index,
+                part=(
+                    ResponseOutputText(annotations=[], text="", type="output_text")
+                    if text is not None
+                    else part
+                ),
+                sequence_number=state.next_seq(),
+                type="response.content_part.added",
+            ),
+        )
+        if text is not None:
+            yield json_sse(
+                "response.output_text.delta",
+                ResponseTextDeltaEvent(
+                    item_id=item.id,
+                    output_index=state.output_index,
+                    content_index=content_index,
+                    delta=text,
+                    logprobs=[],
+                    sequence_number=state.next_seq(),
+                    type="response.output_text.delta",
+                ),
+            )
+            yield json_sse(
+                "response.output_text.done",
+                ResponseTextDoneEvent(
+                    item_id=item.id,
+                    output_index=state.output_index,
+                    content_index=content_index,
+                    text=text,
+                    logprobs=[],
+                    sequence_number=state.next_seq(),
+                    type="response.output_text.done",
+                ),
+            )
+        yield json_sse(
+            "response.content_part.done",
+            ResponseContentPartDoneEvent(
+                item_id=item.id,
+                output_index=state.output_index,
+                content_index=content_index,
+                part=part,
+                sequence_number=state.next_seq(),
+                type="response.content_part.done",
+            ),
+        )
+
+
+def _emit_item_events(
+    state: _StreamState, item: ResponseOutputItem
+) -> Generator[JSONServerSentEvent]:
+    """Replay an already-generated output item as its stream events.
+
+    Args:
+        state: Mutable stream state.
+        item: The output item to emit.
+
+    Yields:
+        The item's lifecycle events, text content included.
+    """
+    if isinstance(item, ResponseOutputMessage):
+        yield json_sse(
+            "response.output_item.added",
+            ResponseOutputItemAddedEvent(
+                item=item.model_copy(update={"status": "in_progress", "content": []}),
+                output_index=state.output_index,
+                sequence_number=state.next_seq(),
+                type="response.output_item.added",
+            ),
+        )
+        yield from _emit_message_content(state, item)
+    else:
+        yield json_sse(
+            "response.output_item.added",
+            ResponseOutputItemAddedEvent(
+                item=item,
+                output_index=state.output_index,
+                sequence_number=state.next_seq(),
+                type="response.output_item.added",
+            ),
+        )
+    yield json_sse(
+        "response.output_item.done",
+        ResponseOutputItemDoneEvent(
+            item=item,
+            output_index=state.output_index,
+            sequence_number=state.next_seq(),
+            type="response.output_item.done",
+        ),
+    )
+    state.output_items.append(item)
+    state.output_index += 1
+
+
+def _emit_file_search_item(
+    state: _StreamState, item: ResponseFileSearchToolCall
+) -> Generator[JSONServerSentEvent]:
+    """Close a ``file_search_call`` item the gateway has just answered.
+
+    Args:
+        state: Mutable stream state.
+        item: The completed file search call.
+
+    Yields:
+        The completion event and the item's ``output_item.done``.
+    """
+    if item.status == "completed":
+        yield json_sse(
+            "response.file_search_call.completed",
+            ResponseFileSearchCallCompletedEvent(
+                item_id=item.id,
+                output_index=state.output_index,
+                sequence_number=state.next_seq(),
+                type="response.file_search_call.completed",
+            ),
+        )
+    yield json_sse(
+        "response.output_item.done",
+        ResponseOutputItemDoneEvent(
+            item=item,
+            output_index=state.output_index,
+            sequence_number=state.next_seq(),
+            type="response.output_item.done",
+        ),
+    )
+    state.output_items.append(item)
+    state.output_index += 1
+
+
+def _open_file_search_item(
+    state: _StreamState, item_id: str, query: str
+) -> Generator[JSONServerSentEvent]:
+    """Announce a ``file_search_call`` the gateway is about to run.
+
+    Args:
+        state: Mutable stream state.
+        item_id: Identifier of the ``file_search_call`` item.
+        query: The query the model asked for.
+
+    Yields:
+        The item addition followed by its two progress events.
+    """
+    yield json_sse(
+        "response.output_item.added",
+        ResponseOutputItemAddedEvent(
+            item=ResponseFileSearchToolCall(
+                id=item_id,
+                queries=[query],
+                status="in_progress",
+                type="file_search_call",
+                results=None,
+            ),
+            output_index=state.output_index,
+            sequence_number=state.next_seq(),
+            type="response.output_item.added",
+        ),
+    )
+    yield json_sse(
+        "response.file_search_call.in_progress",
+        ResponseFileSearchCallInProgressEvent(
+            item_id=item_id,
+            output_index=state.output_index,
+            sequence_number=state.next_seq(),
+            type="response.file_search_call.in_progress",
+        ),
+    )
+    yield json_sse(
+        "response.file_search_call.searching",
+        ResponseFileSearchCallSearchingEvent(
+            item_id=item_id,
+            output_index=state.output_index,
+            sequence_number=state.next_seq(),
+            type="response.file_search_call.searching",
+        ),
+    )
+
+
+def _accumulate_stream_usage(state: _StreamState, usage: ResponseUsage | None) -> None:
+    """Fold another invocation's usage into the streamed totals.
+
+    Args:
+        state: Mutable stream state.
+        usage: Usage of the invocation that just finished, if any.
+    """
+    if usage is None:
+        return
+    cached = usage.input_tokens_details.cached_tokens
+    cache_write = usage.input_tokens_details.cache_write_tokens
+    # `state.input_tokens` excludes the cache buckets; the response includes them.
+    state.input_tokens += usage.input_tokens - cached - cache_write
+    state.cached_tokens += cached
+    state.cache_write_tokens += cache_write
+    state.output_tokens += usage.output_tokens
+
+
+async def _stream_file_search_round(
+    state: _StreamState,
+    tool: FileSearchTool,
+    queries: list[str],
+    round_index: int,
+    items: list[ResponseInputItem],
+    grounding: list[FileSearchResult],
+    *,
+    include_results: bool,
+) -> AsyncGenerator[JSONServerSentEvent]:
+    """Run one round of searches, emitting each as its ``file_search_call`` item.
+
+    Args:
+        state: Mutable stream state.
+        tool: The ``file_search`` tool definition from the request.
+        queries: The queries the model asked for.
+        round_index: Zero-based index of the retrieval round.
+        items: Mutable turn input, extended with each answered call.
+        grounding: Mutable passage list, extended with what each search found.
+        include_results: Whether the client asked for the passages.
+
+    Yields:
+        The lifecycle events of every ``file_search_call`` item.
+
+    Raises:
+        ApiError: 404 when a named store does not exist, 400 when its backend
+            cannot express the requested filter or score threshold.
+    """
+    for index, query in enumerate(queries, start=1):
+        item_id = f"{state.response_id}-fs-{round_index}-{index}"
+        for sse in _open_file_search_item(state, item_id, query):
+            yield sse
+        call, answered, results = await _execute_file_search_call(
+            tool, query, item_id, include_results=include_results
+        )
+        items.append(answered)
+        grounding.extend(results)
+        for sse in _emit_file_search_item(state, call):
+            yield sse
+
+
+async def _stream_unanswered_file_search(
+    state: _StreamState, queries: list[str]
+) -> AsyncGenerator[JSONServerSentEvent]:
+    """Report the searches the round limit left unanswered.
+
+    Args:
+        state: Mutable stream state.
+        queries: The queries that will not be run.
+
+    Yields:
+        An ``incomplete`` ``file_search_call`` item per query.
+    """
+    for index, query in enumerate(queries, start=1):
+        item_id = f"{state.response_id}-fs-{_MAX_FILE_SEARCH_ROUNDS}-{index}"
+        for sse in _open_file_search_item(state, item_id, query):
+            yield sse
+        for sse in _emit_file_search_item(
+            state, _unanswered_file_search_call(item_id, query)
+        ):
+            yield sse
+
+
+async def _stream_continued_items(
+    state: _StreamState, output_items: list[ResponseOutputItem]
+) -> AsyncGenerator[JSONServerSentEvent]:
+    """Replay a continued turn's own output items as stream events.
+
+    Args:
+        state: Mutable stream state.
+        output_items: Output items of the continued invocation.
+
+    Yields:
+        The lifecycle events of every item that is not a new search request.
+    """
+    searches = frozenset(id(call) for call in _file_search_calls(output_items))
+    for item in output_items:
+        if id(item) not in searches:
+            for sse in _emit_item_events(state, item):
+                yield sse
+
+
+def _suppressed_file_search_queries(state: _StreamState) -> list[str]:
+    """Return the queries of the ``file_search`` calls the stream suppressed.
+
+    Args:
+        state: Mutable stream state.
+
+    Returns:
+        One query per call the model made, in order.
+    """
+    return [
+        _file_search_query(arguments)
+        for _tool_id, name, arguments in state.suppressed_tool_calls
+        if name == _FILE_SEARCH_TOOL_NAME
+    ]
+
+
+async def file_search_stream_handler(
+    state: _StreamState,
+    tool: FileSearchTool | None,
+    request: ResponseCreateParams,
+    model_id: str,
+    created_at: float,
+) -> AsyncGenerator[JSONServerSentEvent]:
+    """Answer the streamed ``file_search`` calls and stream the grounded answer.
+
+    Invoked after the main Bedrock stream, it emits each retrieval as its
+    ``file_search_call`` item, asks the model again with the passages, and
+    replays that answer's items -- annotated with the files they were read
+    from -- until the model answers or the round limit is reached.
+
+    Args:
+        state: Mutable stream state from ``format_stream``.
+        tool: The ``file_search`` tool definition from the request.
+        request: The original Responses API creation request.
+        model_id: The model serving this request.
+        created_at: Unix timestamp when the response was created.
+
+    Yields:
+        SSE events for the retrievals and for the answer they grounded.
+
+    Raises:
+        ApiError: 404 when a named store does not exist, 400 when its backend
+            cannot express the requested filter or score threshold.
+    """
+    if tool is None:
+        return
+    include_results = _includes_file_search_results(request)
+    items = _input_items(request)
+    grounding: list[FileSearchResult] = []
+    queries = _suppressed_file_search_queries(state)
+    for round_index in range(_MAX_FILE_SEARCH_ROUNDS):
+        if not queries:
+            return
+        async for sse in _stream_file_search_round(
+            state,
+            tool,
+            queries,
+            round_index,
+            items,
+            grounding,
+            include_results=include_results,
+        ):
+            yield sse
+        response = await _continue_after_file_search(
+            request, items, model_id, state.response_id, created_at
+        )
+        _cite_retrieved_files(response.output, grounding)
+        _accumulate_stream_usage(state, response.usage)
+        state.stop_reason = _STATUS_STOP_REASONS.get(response.status or "", "end_turn")
+        queries = [
+            _file_search_query(call.arguments)
+            for call in _file_search_calls(response.output)
+        ]
+        async for sse in _stream_continued_items(state, response.output):
+            yield sse
+    async for sse in _stream_unanswered_file_search(state, queries):
+        yield sse
+
+
 def _finalize_output_items(state: _StreamState) -> None:
     """Patch pending citation sources and annotations into stored output items.
 
@@ -2877,6 +3834,38 @@ def _terminal_event(
             )
 
 
+async def _post_stream_events(
+    state: _StreamState,
+    request: ResponseCreateParams,
+    model_id: str,
+    created_at: float,
+    file_search_tool: FileSearchTool | None,
+    post_suppress_handler: Callable[[_StreamState], AsyncGenerator[JSONServerSentEvent]]
+    | None,
+) -> AsyncGenerator[JSONServerSentEvent]:
+    """Emit everything the gateway itself produces once the model stream ended.
+
+    Args:
+        state: Mutable stream state.
+        request: The original Responses API creation request.
+        model_id: The model serving this request.
+        created_at: Unix timestamp when the response was created.
+        file_search_tool: The request's ``file_search`` tool, if any.
+        post_suppress_handler: The model class's own post-stream handler, if any.
+
+    Yields:
+        The handler's events, then the retrieval events and the answer they
+        grounded.
+    """
+    if post_suppress_handler:
+        async for sse in post_suppress_handler(state):
+            yield sse
+    async for sse in file_search_stream_handler(
+        state, file_search_tool, request, model_id, created_at
+    ):
+        yield sse
+
+
 async def format_stream(
     response_id: str,
     created_at: float,
@@ -2909,7 +3898,9 @@ async def format_stream(
         post_suppress_handler: Optional async generator called after the main stream
             but before the terminal event.  Receives the stream state and may
             append items to ``state.output_items`` and yield additional SSE events
-            (e.g. for server-side image generation results).
+            (e.g. for server-side image generation results).  A ``file_search``
+            tool is served the same way, after that handler: its calls are
+            suppressed, answered from the vector stores, and the turn continues.
         web_search_tool_names: Tool names to emit as ``web_search_call`` output
             items with query and completion events.
         moderation_builder: Optional callable building the response ``moderation``
@@ -2926,6 +3917,11 @@ async def format_stream(
     state = _StreamState(
         response_id, include_encrypted_reasoning=_includes_encrypted_reasoning(request)
     )
+    # Gateway-served: its calls never reach the client as function calls.
+    if file_search_tool := get_file_search_tool(request):
+        suppress_tool_names = (suppress_tool_names or frozenset()) | {
+            _FILE_SEARCH_TOOL_NAME
+        }
     try:
         initial_response = _build_response_object(
             response_id,
@@ -2966,9 +3962,15 @@ async def format_stream(
         for sse in _handle_block_stop(state):
             yield sse
 
-        if post_suppress_handler:
-            async for sse in post_suppress_handler(state):
-                yield sse
+        async for sse in _post_stream_events(
+            state,
+            request,
+            model_id,
+            created_at,
+            file_search_tool,
+            post_suppress_handler,
+        ):
+            yield sse
 
         _finalize_output_items(state)
 

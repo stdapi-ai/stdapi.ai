@@ -54,7 +54,8 @@ Generate model responses with Amazon Bedrock foundation models through an OpenAI
 | `function_call_output`                                                |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Submit tool results as input; supports text, image, and file parts           |
 | Echoed output items (message, reasoning, refusal)                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Replayed to the model; refusal parts preserved; unknown upstream fields tolerated |
 | Echoed `custom_tool_call` / `image_generation_call`                   |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Replayed as tool calls (freeform input wrapped as `{"input": ...}`; image results attached) |
-| Hosted-tool call items (`web_search_call`, `file_search_call`, `code_interpreter_call`, `computer_call`, `tool_search_call`, shell/apply-patch/MCP items, `compaction_trigger`) | :material-check-circle:{ .success role="img" aria-label="Supported" } | Input-history tolerance only: echoed items are accepted and dropped on replay (no Bedrock equivalent). Whether each *tool* can actually be used is listed under Tool Calling below |
+| Echoed `file_search_call`                                             |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Replayed as a search the model already ran, with the passages it returned; an item carrying no `results` is dropped with its call |
+| Hosted-tool call items (`web_search_call`, `code_interpreter_call`, `computer_call`, `tool_search_call`, shell/apply-patch/MCP items, `compaction_trigger`) | :material-check-circle:{ .success role="img" aria-label="Supported" } | Input-history tolerance only: echoed items are accepted and dropped on replay (no Bedrock equivalent). Whether each *tool* can actually be used is listed under Tool Calling below |
 | Echoed `program` / `program_output` items                             |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Input-history tolerance only: accepted and dropped on replay (no Bedrock equivalent) |
 | `item_reference`                                                      |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Accepted and dropped on replay                                               |
 | **Tool Calling**                                                      |                                         |                                                                              |
@@ -66,7 +67,7 @@ Generate model responses with Amazon Bedrock foundation models through an OpenAI
 | `tool_choice: allowed_tools`                                          |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Approximated: `required` + 1 function → forced tool; `required` + many → any tool; `auto` → auto; type-variants add no constraint |
 | `parallel_tool_calls`                                                 |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Accepted for every model and honored by models able to constrain tool use; echoed in the response, which reports the tool calls actually made |
 | Built-in tools (`code_interpreter`, `web_search`, `image_generation`) |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | See [OpenAI Integrated Tools](#openai-integrated-tools)                      |
-| `file_search` tool                                                    |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Rejected with a `400` — an answer that ignored the attached stores would read as grounded in them; forwarded upstream on Bedrock Mantle native models |
+| `file_search` tool                                                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Served from the vector stores named in `vector_store_ids` (see [File Search](#file-search)); forwarded upstream on Bedrock Mantle native models |
 | `web_search` `filters.allowed_domains` / `user_location`              |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Rejected with a `400` where the search cannot be restricted; honored on Bedrock Mantle native models |
 | `web_search` `search_context_size`                                    |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Accepted and ignored — the answer is still searched and cited; honored on Bedrock Mantle native models |
 | `computer` / `computer_use_preview` tools                             |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | No Converse equivalent — accepted and dropped (see [Computer Use Not Supported](#computer-use-not-supported)); forwarded upstream on Bedrock Mantle native models |
@@ -179,12 +180,8 @@ Define function tools and submit results in a round-trip conversation.
     equivalent: they are **accepted for compatibility and dropped** from the tool
     configuration, so the model cannot call them.
 
-    `file_search` is **rejected with a `400`** instead: an answer produced
-    without searching the vector stores the request attached would still read as
-    grounded in them. Search the stores with
-    [`POST /v1/vector_stores/{id}/search`](api_openai_vector_stores.md) and pass
-    the results in the input. Bedrock Mantle native models receive the tool
-    unchanged and answer it themselves when the model supports it.
+    `file_search` is the exception: it is **served** from the vector stores the
+    request names — see [File Search](#file-search).
 
 !!! warning "Programmatic Tool Calling"
     The `programmatic_tool_calling` tool — and `tool_choice: {"type": "programmatic_tool_calling"}` —
@@ -538,6 +535,74 @@ curl -X POST "$BASE/v1/responses" \
 The stored prompt version already provides the conversation, the system prompt, the tools and the inference parameters, so combining `prompt` with `input`, `instructions`, `tools`, `tool_choice`, `text`, `temperature`, `top_p`, `max_output_tokens`, `reasoning` or `previous_response_id` returns `400` instead of silently dropping them.
 
 Streaming, `store`, `moderation` and guardrail headers remain available. The remaining request-level parameters (`metadata`, `service_tier`, `prompt_cache_*`, …) are accepted and echoed on the response, but not applied: the Bedrock call carries only the prompt resource and its variables.
+
+### File Search { #file-search }
+
+`file_search` lets any chat model answer from the files you indexed in a
+[vector store](api_openai_vector_stores.md), with no change to your client code:
+
+```bash
+curl -X POST "$BASE/v1/responses" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-2-lite-v1:0",
+    "input": "How many vacation days do I get?",
+    "tools": [{
+      "type": "file_search",
+      "vector_store_ids": ["vs_abc123"]
+    }]
+  }'
+```
+
+The model decides when to search and with which query. Each search it runs is
+reported as a `file_search_call` output item — carrying the `queries` used —
+ahead of the `message` it grounded. When streaming, that item is framed by
+`response.file_search_call.in_progress`, `.searching` and `.completed`, and the
+answer streams after it.
+
+The retrieved passages are **not** returned unless you ask for them:
+
+```json
+{
+  "model": "amazon.nova-2-lite-v1:0",
+  "input": "How many vacation days do I get?",
+  "include": ["file_search_call.results"],
+  "tools": [{"type": "file_search", "vector_store_ids": ["vs_abc123"]}]
+}
+```
+
+Each result then carries its `file_id`, `filename`, `text`, `score` and the
+`attributes` stored with the file.
+
+!!! note "Citations"
+    The grounded answer carries a `file_citation` annotation on its
+    `output_text` content for every file the passages were read from, each
+    naming the `file_id` and `filename`, so a client can attribute the answer
+    without asking for the passages themselves.
+
+    A model reports the passages it was given, never which sentence came from
+    which one, so there is one citation per file rather than one per passage,
+    and `index` is the end of the answer text rather than the position of a
+    cited span. When streaming, they arrive on the message item itself
+    (`response.output_item.done` and the terminal event) rather than as
+    separate `response.output_text.annotation.added` events.
+
+**Narrowing the search:**
+
+| Field | Behavior |
+|---|---|
+| `vector_store_ids` | Every store listed is searched and the best passages across all of them are kept. At least one is required, and a store this deployment does not serve answers `404` before the model is called |
+| `max_num_results` | Passages kept per search, `1`–`50`; defaults to `20` |
+| `filters` | Restricts the search to files carrying given `attributes`. A comparison operator the store cannot apply is refused with a `400` naming the ones it accepts |
+| `ranking_options.score_threshold` | Drops passages below the score. Refused with a `400` on a store whose relevance scores are not comparable between searches |
+| `ranking_options.ranker`, `ranking_options.hybrid_search` | Accepted and ignored — the passages are still ranked by relevance |
+
+!!! note "Rounds per response"
+    The model may refine its query and search again; after two searches the
+    tool is withdrawn and the model answers with what it has, so one response
+    never loops indefinitely. Each round is a further model invocation and is
+    billed as such.
 
 ### OpenAI Integrated Tools
 

@@ -11,7 +11,7 @@ Ref: https://developers.openai.com/api/docs/guides/structured-outputs
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import pytest
 
@@ -218,33 +218,80 @@ class TestWebSearchRestrictions:
 
 
 class TestFileSearchTool:
-    """``file_search`` is refused rather than dropped.
+    """``file_search`` is declared to the model as a tool the gateway answers.
 
-    Retrieval over the attached vector stores has no backend equivalent here,
-    and a dropped tool answers from the model's own knowledge while the caller
-    reads the answer as grounded in the stores it attached.
+    The retrieval runs here, not in the model, so the model is given a plain
+    function tool it can ask a search with; the gateway runs it against the
+    attached vector stores and continues the turn. It is withdrawn once the
+    turn has already searched twice, so the last invocation has to answer.
 
     Ref: https://developers.openai.com/api/docs/guides/tools-file-search
          stdapi/models/chat/_adapters/_openai_responses.py:_build_tool_config
     """
 
-    def test_file_search_is_refused(self) -> None:
-        """A ``file_search`` tool fails with a 400 naming what is unavailable."""
-        tool = {"type": "file_search", "vector_store_ids": ["vs_123"]}
-        with pytest.raises(ApiError) as excinfo:
-            _build_tool_config(_request(tool), _NO_SERVER_TOOLS or None)
-        assert excinfo.value.status == 400
-        message = str(excinfo.value)
-        assert "file_search" in message
-        assert "vector store" in message
+    #: One answered search, as it comes back in the continued turn's input.
+    _ANSWERED: ClassVar[dict[str, object]] = {
+        "id": "fs_1",
+        "type": "file_search_call",
+        "status": "completed",
+        "queries": ["cats"],
+        "results": [{"text": "meow"}],
+    }
 
-    def test_it_is_refused_beside_a_function_tool(self) -> None:
-        """The refusal does not depend on the tool being alone in the request."""
-        with pytest.raises(ApiError, match="file_search"):
-            _build_tool_config(
-                _request(
-                    {"type": "function", "name": "get_weather"},
-                    {"type": "file_search", "vector_store_ids": ["vs_123"]},
-                ),
-                None,
-            )
+    def test_file_search_is_declared_as_a_function_tool(self) -> None:
+        """The model can call it, on a model serving no system tool of its own."""
+        tool = {"type": "file_search", "vector_store_ids": ["vs_123"]}
+        tool_config = _build_tool_config(_request(tool), _NO_SERVER_TOOLS or None)
+        assert tool_config is not None
+        (spec,) = tool_config["tools"]
+        assert spec["toolSpec"]["name"] == "file_search"
+        assert spec["toolSpec"]["inputSchema"]["json"]["required"] == ["query"]
+
+    def test_it_is_declared_beside_a_function_tool(self) -> None:
+        """A caller's own tools stay declared alongside it."""
+        tool_config = _build_tool_config(
+            _request(
+                {"type": "function", "name": "get_weather"},
+                {"type": "file_search", "vector_store_ids": ["vs_123"]},
+            ),
+            None,
+        )
+        assert tool_config is not None
+        assert {spec["toolSpec"]["name"] for spec in tool_config["tools"]} == {
+            "file_search",
+            "get_weather",
+        }
+
+    def test_it_is_withdrawn_once_the_turn_reached_its_search_limit(self) -> None:
+        """Two answered searches in the input leave the model no tool to loop with."""
+        request = ResponseCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "input": [
+                    {"role": "user", "content": "hi"},
+                    self._ANSWERED,
+                    self._ANSWERED | {"id": "fs_2"},
+                ],
+                "tools": [{"type": "file_search", "vector_store_ids": ["vs_123"]}],
+            }
+        )
+
+        assert _build_tool_config(request, None) is None
+
+    def test_a_replayed_search_from_a_previous_turn_does_not_withdraw_it(self) -> None:
+        """Searches followed by a message belong to a turn that already ended."""
+        request = ResponseCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "input": [
+                    self._ANSWERED,
+                    self._ANSWERED | {"id": "fs_2"},
+                    {"role": "user", "content": "and now?"},
+                ],
+                "tools": [{"type": "file_search", "vector_store_ids": ["vs_123"]}],
+            }
+        )
+
+        tool_config = _build_tool_config(request, None)
+        assert tool_config is not None
+        assert tool_config["tools"][0]["toolSpec"]["name"] == "file_search"

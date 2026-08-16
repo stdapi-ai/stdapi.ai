@@ -15,9 +15,17 @@ import pytest
 from botocore.exceptions import ClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
 from openai import BadRequestError, NotFoundError, OpenAI
+from openai.types.responses.response_file_search_tool_call import (
+    ResponseFileSearchToolCall as SDKFileSearchToolCall,
+)
+from openai.types.responses.response_output_text import (
+    AnnotationFileCitation as SDKAnnotationFileCitation,
+)
 
 from stdapi import usage
+from stdapi.api_errors import ApiError
 from stdapi.config import SETTINGS
+from stdapi.models.chat._adapters import _openai_responses as responses_adapter
 from stdapi.models.chat._adapters._openai_common import JSON_OBJECT_SYSTEM_INSTRUCTION
 from stdapi.models.chat._adapters._openai_responses import (
     _classify_stream_error,
@@ -31,16 +39,22 @@ from stdapi.types.openai_responses import (
     ResponseOutputMessage,
 )
 from stdapi.usage import record_bedrock_usage
+from stdapi.vector_stores import SearchResult, StoreRecord
+from stdapi.vector_stores.backend import IndexCapabilities
 from tests._helpers import strip_code_fence
+from tests.test_openai_vector_stores import _PLANTED
+from tests.test_openai_vector_stores import indexed_store as _indexed_store
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Sequence
 
     from openai import APIStatusError
     from openai.types.responses import Response as SdkResponse
+    from openai.types.responses import ResponseFileSearchToolCallParam
     from starlette.testclient import TestClient as TestClientType
 
     from stdapi.models import ModelDetails
+    from stdapi.types.openai_vector_stores import SearchFilter
 
 #: Deterministic context long enough to exceed the minimum cacheable prompt size.
 _CACHEABLE_CONTEXT = (
@@ -3116,3 +3130,796 @@ class TestTopLogprobsIsEchoedWithoutLogprobs:
         assert all(getattr(part, "logprobs", None) in (None, []) for part in parts), (
             "Converse returns no log probabilities, so none may be reported"
         )
+
+
+#: A syntactically valid vector store identifier, so `parse_store_id` accepts it.
+_STORE_ID = "vs_" + "0" * 26
+
+#: A second one, for the multi-store merge.
+_OTHER_STORE_ID = "vs_" + "1" * 26
+
+
+def _search_result(text: str, score: float, file_id: str = "file-1") -> SearchResult:
+    """Build one vector store hit the stubbed search answers with."""
+    return SearchResult(
+        file_id=file_id,
+        filename=f"{file_id}.md",
+        score=score,
+        text=text,
+        attributes={"category": "policy"},
+    )
+
+
+def _file_search_request(**tool_fields: object) -> dict[str, Any]:
+    """Build a Responses request body carrying a ``file_search`` tool."""
+    return {
+        "model": "amazon.nova-2-lite-v1:0",
+        "input": "How many vacation days do I get?",
+        "tools": [
+            {"type": "file_search", "vector_store_ids": [_STORE_ID], **tool_fields}
+        ],
+    }
+
+
+#: A Bedrock stream whose only block is the model asking for one file search.
+_FILE_SEARCH_STREAM_EVENTS: list[dict[str, Any]] = [
+    {
+        "contentBlockStart": {
+            "start": {"toolUse": {"toolUseId": "tu1", "name": "file_search"}},
+            "contentBlockIndex": 0,
+        }
+    },
+    {
+        "contentBlockDelta": {
+            "delta": {"toolUse": {"input": '{"query": "vacation days"}'}},
+            "contentBlockIndex": 0,
+        }
+    },
+    {"contentBlockStop": {"contentBlockIndex": 0}},
+    {"messageStop": {"stopReason": "tool_use"}},
+    {"metadata": {"usage": {"inputTokens": 10, "outputTokens": 4}}},
+]
+
+
+def _sse_payloads(body: str) -> list[dict[str, Any]]:
+    """Decode the JSON payload of every event of an SSE response body.
+
+    Args:
+        body: The raw ``text/event-stream`` body.
+
+    Returns:
+        One decoded payload per event, in order.
+    """
+    return [
+        json.loads(line.removeprefix("data:").strip())
+        for line in body.splitlines()
+        if line.startswith("data:")
+    ]
+
+
+def _stub_file_search(
+    monkeypatch: pytest.MonkeyPatch,
+    results: list[SearchResult],
+    searcher: Callable[[SearchFilter | None], Awaitable[list[SearchResult]]]
+    | None = None,
+) -> dict[str, Any]:
+    """Stub the vector store reads and searches the retrieval loop performs.
+
+    Args:
+        monkeypatch: Fixture used to replace the vector store entry points.
+        results: Hits every stubbed search answers with.
+        searcher: Optional replacement answering from the requested filter.
+
+    Returns:
+        A record of the store identifiers read, the search arguments used, and
+        the stores whose deferred activity refresh actually ran.
+    """
+    seen: dict[str, Any] = {"stores": [], "searches": [], "touched": []}
+
+    async def _read_store(store_id: str) -> StoreRecord:
+        seen["stores"].append(store_id)
+        return StoreRecord(
+            id=store_id,
+            created_at=0,
+            last_active_at=0,
+            embedding_model="amazon.titan-embed-text-v2:0",
+            dimensions=8,
+        )
+
+    async def _search(
+        store: StoreRecord,
+        queries: Sequence[str],
+        *,
+        max_num_results: int,
+        filters: SearchFilter | None,
+        score_threshold: float | None,
+    ) -> list[SearchResult]:
+        seen["searches"].append(
+            {
+                "store": store.id,
+                "queries": list(queries),
+                "max_num_results": max_num_results,
+                "filters": filters,
+                "score_threshold": score_threshold,
+            }
+        )
+        return await searcher(filters) if searcher is not None else results
+
+    async def _touch_store(store: StoreRecord) -> None:
+        seen["touched"].append(store.id)
+
+    monkeypatch.setattr(responses_adapter, "read_store", _read_store)
+    monkeypatch.setattr(responses_adapter, "search", _search)
+    monkeypatch.setattr(responses_adapter, "touch_store", _touch_store)
+    return seen
+
+
+def _stub_retrieval_turn(
+    monkeypatch: pytest.MonkeyPatch, answer: str = "Twenty-five days."
+) -> list[dict[str, Any]]:
+    """Stub Converse so the first call asks for a search and the second answers.
+
+    Args:
+        monkeypatch: Fixture used to stub ``ChatModel.converse``.
+        answer: Text the second, grounded invocation answers with.
+
+    Returns:
+        The Converse request bodies, in call order.
+    """
+    from stdapi.routes import openai_responses  # noqa: PLC0415
+    from tests._helpers import make_model_details  # noqa: PLC0415
+
+    async def _validate_model(
+        model_id: str, *_args: object, **_kwargs: object
+    ) -> ModelDetails:
+        return make_model_details(model_id)
+
+    monkeypatch.setattr(openai_responses, "validate_model", _validate_model)
+    calls: list[dict[str, Any]] = []
+
+    async def fake_converse(
+        _self: ChatModel, bedrock_request: dict[str, Any]
+    ) -> dict[str, Any]:
+        calls.append(bedrock_request)
+        if len(calls) == 1:
+            content: list[dict[str, Any]] = [
+                {
+                    "toolUse": {
+                        "toolUseId": "tooluse-1",
+                        "name": "file_search",
+                        "input": {"query": "vacation days"},
+                    }
+                }
+            ]
+            stop_reason = "tool_use"
+        else:
+            content = [{"text": answer}]
+            stop_reason = "end_turn"
+        return {
+            "output": {"message": {"role": "assistant", "content": content}},
+            "stopReason": stop_reason,
+            "usage": {"inputTokens": 10, "outputTokens": 4, "totalTokens": 14},
+        }
+
+    monkeypatch.setattr(ChatModel, "converse", fake_converse)
+    return calls
+
+
+@pytest.mark.local
+class TestFileSearchTool:
+    """``file_search`` is served from the vector stores this gateway hosts.
+
+    The model is given a synthetic tool it can ask a search with; the gateway
+    runs the search against `/v1/vector_stores`, reports it as a
+    ``file_search_call`` output item and asks the model again with the
+    passages, so the answer the caller receives is grounded in their files.
+
+    Ref: https://developers.openai.com/api/docs/guides/tools-file-search
+         https://developers.openai.com/api/reference/resources/responses/methods/create
+         openai.types.responses.response_file_search_tool_call.ResponseFileSearchToolCall
+         stdapi/models/chat/_adapters/_openai_responses.py:execute_file_search_calls
+    """
+
+    def test_tool_answers_from_the_vector_store(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The model's call is answered by a search and the turn continues.
+
+        The passages reach the second invocation as a tool result, and the
+        response carries the retrieval item ahead of the grounded message.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:_map_file_search_call
+        """
+        seen = _stub_file_search(
+            monkeypatch, [_search_result("Employees receive 25 days.", 0.91)]
+        )
+        calls = _stub_retrieval_turn(monkeypatch)
+
+        response = app_client.post("/v1/responses", json=_file_search_request())
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [item["type"] for item in body["output"]] == [
+            "file_search_call",
+            "message",
+        ]
+        assert seen["searches"][0]["queries"] == ["vacation days"]
+        assert len(calls) == 2, "the turn must continue once the search answered"
+        assert "Employees receive 25 days." in json.dumps(calls[1], default=str), (
+            "the retrieved passages must reach the model that answers"
+        )
+        assert body["output"][1]["content"][0]["text"] == "Twenty-five days."
+
+    def test_file_search_call_item_shape(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The item carries the queries run and, when asked for, the results.
+
+        Upstream omits ``results`` unless ``include`` requests it, and the SDK
+        type is what a client parses the item with.
+        """
+        _stub_file_search(
+            monkeypatch, [_search_result("Employees receive 25 days.", 0.91)]
+        )
+        _stub_retrieval_turn(monkeypatch)
+
+        without = app_client.post("/v1/responses", json=_file_search_request())
+        _stub_retrieval_turn(monkeypatch)
+        with_results = app_client.post(
+            "/v1/responses",
+            json=_file_search_request() | {"include": ["file_search_call.results"]},
+        )
+
+        assert without.status_code == 200, without.text
+        item = without.json()["output"][0]
+        assert item["status"] == "completed"
+        assert item["queries"] == ["vacation days"]
+        assert item.get("results") is None, "results are opt-in, as upstream"
+        assert with_results.status_code == 200, with_results.text
+        parsed = SDKFileSearchToolCall.model_validate(with_results.json()["output"][0])
+        assert parsed.results is not None
+        (result,) = parsed.results
+        assert (result.file_id, result.filename) == ("file-1", "file-1.md")
+        assert result.score == 0.91
+        assert result.text == "Employees receive 25 days."
+        assert result.attributes == {"category": "policy"}
+
+    @pytest.mark.parametrize(
+        "store_id", ["vs_" + "2" * 26, "vs_not-a-store"], ids=["unknown", "unreachable"]
+    )
+    def test_a_store_the_caller_cannot_reach_is_not_found(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch, store_id: str
+    ) -> None:
+        """A store this deployment does not serve answers 404, before any model call.
+
+        An identifier that names nothing and one this deployment cannot reach
+        are the same answer, and neither costs a generation.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:check_file_search_stores
+        """
+
+        async def _missing(_store_id: str) -> StoreRecord:
+            # The wording `read_store` answers an identifier it cannot find with.
+            message = f"No vector store found with id '{_store_id}'."
+            raise ApiError(message, status=404)
+
+        monkeypatch.setattr(responses_adapter, "read_store", _missing)
+        calls = _stub_retrieval_turn(monkeypatch)
+
+        response = app_client.post(
+            "/v1/responses",
+            json=_file_search_request()
+            | {"tools": [{"type": "file_search", "vector_store_ids": [store_id]}]},
+        )
+
+        assert response.status_code == 404, response.text
+        assert (
+            response.json()["error"]["message"]
+            == f"No vector store found with id '{store_id}'."
+        ), "an unreachable store answers exactly as an unknown one does"
+        assert not calls, "the model must not be invoked for an unusable store"
+
+    def test_a_filter_the_backend_cannot_express_is_refused(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An operator the store's backend does not declare answers 400.
+
+        The tool's filter is handed to the store in the vector store dialect,
+        so the backend's own capability check is what refuses it.
+
+        Ref: stdapi/vector_stores/backend.py:IndexCapabilities
+        """
+        from stdapi.vector_stores.backend import check_filter  # noqa: PLC0415
+
+        capabilities = IndexCapabilities(
+            filter_operators=frozenset({"eq", "ne"}),
+            filter_combinators=frozenset({"and"}),
+            ingested_media_types=frozenset(),
+            refused_media_types=frozenset(),
+            ingests_decodable_text=True,
+            chunks_on_ingestion=False,
+            normalised_score=True,
+            max_chunk_bytes=0,
+        )
+
+        async def _search(filters: SearchFilter | None) -> list[SearchResult]:
+            assert filters is not None
+            check_filter(filters, capabilities)
+            return []
+
+        _stub_file_search(monkeypatch, [], searcher=_search)
+        _stub_retrieval_turn(monkeypatch)
+
+        response = app_client.post(
+            "/v1/responses",
+            json=_file_search_request(
+                filters={"type": "in", "key": "category", "value": ["policy"]}
+            ),
+        )
+
+        assert response.status_code == 400, response.text
+        message = response.json()["error"]["message"]
+        assert "'in' filter is not available" in message
+        assert "'eq', 'ne'" in message
+
+    def test_result_count_and_score_threshold_reach_the_store(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``max_num_results`` and ``ranking_options`` are applied, not dropped.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:_run_file_search
+        """
+        seen = _stub_file_search(monkeypatch, [])
+        _stub_retrieval_turn(monkeypatch)
+
+        response = app_client.post(
+            "/v1/responses",
+            json=_file_search_request(
+                max_num_results=3, ranking_options={"score_threshold": 0.6}
+            ),
+        )
+
+        assert response.status_code == 200, response.text
+        (search,) = seen["searches"]
+        assert search["max_num_results"] == 3
+        assert search["score_threshold"] == 0.6
+
+    def test_every_named_store_is_searched_and_the_best_hits_kept(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Results of several stores are merged by score and capped.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:_run_file_search
+        """
+        scores = iter((0.2, 0.8))
+
+        async def _search(_filters: SearchFilter | None) -> list[SearchResult]:
+            return [_search_result("passage", next(scores))]
+
+        seen = _stub_file_search(monkeypatch, [], searcher=_search)
+        _stub_retrieval_turn(monkeypatch)
+
+        response = app_client.post(
+            "/v1/responses",
+            json=_file_search_request()
+            | {
+                "include": ["file_search_call.results"],
+                "tools": [
+                    {
+                        "type": "file_search",
+                        "vector_store_ids": [_STORE_ID, _OTHER_STORE_ID],
+                        "max_num_results": 1,
+                    }
+                ],
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert sorted(seen["stores"]) == sorted([_STORE_ID, _OTHER_STORE_ID] * 2), (
+            "each store is checked before the model runs, then searched"
+        )
+        results = response.json()["output"][0]["results"]
+        assert [entry["score"] for entry in results] == [0.8], (
+            "max_num_results caps the merged results, best score first"
+        )
+
+    def test_a_model_that_keeps_searching_is_stopped(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The retrieval loop is bounded, and the last call reads ``incomplete``.
+
+        A model asking for one more search on every turn would otherwise loop
+        without end; the tool is withdrawn and the last request is reported
+        unanswered rather than run.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:execute_file_search_calls
+        """
+        seen = _stub_file_search(monkeypatch, [])
+        calls = _stub_retrieval_turn(monkeypatch)
+
+        async def always_searching(
+            _self: ChatModel, bedrock_request: dict[str, Any]
+        ) -> dict[str, Any]:
+            calls.append(bedrock_request)
+            return {
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "toolUse": {
+                                    "toolUseId": f"tooluse-{len(calls)}",
+                                    "name": "file_search",
+                                    "input": {"query": "again"},
+                                }
+                            }
+                        ],
+                    }
+                },
+                "stopReason": "tool_use",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            }
+
+        monkeypatch.setattr(ChatModel, "converse", always_searching)
+
+        response = app_client.post("/v1/responses", json=_file_search_request())
+
+        assert response.status_code == 200, response.text
+        statuses = [item["status"] for item in response.json()["output"]]
+        assert statuses == ["completed", "completed", "incomplete"]
+        assert len(seen["searches"]) == 2, "the loop stops at the round limit"
+
+    def test_the_grounded_answer_cites_the_files_it_read(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The answer carries one ``file_citation`` per file it was grounded in.
+
+        A client renders citations from the message, not from the retrieval
+        item, so an answer with an empty ``annotations`` list is uncitable. The
+        model never reports which sentence came from which passage, so the
+        citations are per file rather than per passage and are anchored at the
+        end of the answer -- the one position in it the gateway can state.
+
+        Ref: openai.types.responses.response_output_text.AnnotationFileCitation
+             stdapi/models/chat/_adapters/_openai_responses.py:_cite_retrieved_files
+        """
+        _stub_file_search(
+            monkeypatch,
+            [
+                _search_result("Employees receive 25 days.", 0.91),
+                _search_result("Carry-over is capped at five.", 0.44),
+                _search_result("Public holidays are extra.", 0.31, file_id="file-2"),
+            ],
+        )
+        _stub_retrieval_turn(monkeypatch)
+
+        response = app_client.post("/v1/responses", json=_file_search_request())
+
+        assert response.status_code == 200, response.text
+        part = response.json()["output"][1]["content"][0]
+        citations = [
+            SDKAnnotationFileCitation.model_validate(annotation)
+            for annotation in part["annotations"]
+        ]
+        assert [(citation.file_id, citation.filename) for citation in citations] == [
+            ("file-1", "file-1.md"),
+            ("file-2", "file-2.md"),
+        ], "one citation per grounding file, best score first, never per passage"
+        assert [citation.index for citation in citations] == [len(part["text"])] * 2, (
+            "the citations are anchored at the end of the text they annotate"
+        )
+
+    def test_a_streamed_answer_is_cited_and_refreshes_the_store_it_read(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A streamed retrieval cites its files and still runs its deferred work.
+
+        Both halves are invisible to the caller of a streamed request: the
+        terminal snapshot is where a streaming client reads the citations, and
+        the store activity refresh is deferred from inside the stream body,
+        long after the endpoint returned.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:file_search_stream_handler
+             stdapi/main.py:_middleware
+        """
+        seen = _stub_file_search(
+            monkeypatch, [_search_result("Employees receive 25 days.", 0.91)]
+        )
+        calls = _stub_retrieval_turn(monkeypatch)
+
+        async def answering(
+            _self: ChatModel, bedrock_request: dict[str, Any]
+        ) -> dict[str, Any]:
+            calls.append(bedrock_request)
+            return {
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"text": "Twenty-five days."}],
+                    }
+                },
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 10, "outputTokens": 4, "totalTokens": 14},
+            }
+
+        async def searching_stream(
+            _self: ChatModel, _bedrock_request: dict[str, Any]
+        ) -> dict[str, Any]:
+            async def events() -> AsyncGenerator[dict[str, Any]]:
+                for event in _FILE_SEARCH_STREAM_EVENTS:
+                    yield event
+
+            return {"stream": events()}
+
+        monkeypatch.setattr(ChatModel, "converse", answering)
+        monkeypatch.setattr(ChatModel, "converse_stream", searching_stream)
+
+        response = app_client.post(
+            "/v1/responses", json=_file_search_request() | {"stream": True}
+        )
+
+        assert response.status_code == 200, response.text
+        snapshot = _sse_payloads(response.text)[-1]["response"]
+        assert snapshot["status"] == "completed"
+        part = snapshot["output"][-1]["content"][0]
+        (citation,) = [
+            SDKAnnotationFileCitation.model_validate(annotation)
+            for annotation in part["annotations"]
+        ]
+        assert (citation.file_id, citation.filename) == ("file-1", "file-1.md")
+        assert citation.index == len(part["text"])
+        assert seen["touched"] == [_STORE_ID], (
+            "the store searched mid-stream must still have its activity refreshed"
+        )
+
+    def test_an_empty_vector_store_list_is_rejected(
+        self, app_client: TestClientType
+    ) -> None:
+        """``file_search`` with no store names nothing to search.
+
+        Ref: stdapi/types/openai_responses.py:FileSearchTool
+        """
+        response = app_client.post(
+            "/v1/responses",
+            json=_file_search_request()
+            | {"tools": [{"type": "file_search", "vector_store_ids": []}]},
+        )
+
+        assert response.status_code == 400, response.text
+
+
+#: The live vector store of the Vector Stores tests, indexed once and reused here.
+indexed_store = _indexed_store
+
+#: The code the passage planted in ``indexed_store`` carries, and nothing else does.
+_PLANTED_CODE = "QUINCEY-7"
+
+#: A question only that passage answers, so searching is the only way to the answer.
+_PLANTED_QUESTION = (
+    "Answer only from the attached documents: which code opens the maintenance "
+    "hatch of the Kelvin observatory?"
+)
+
+
+def _replayed_search(item_id: str) -> ResponseFileSearchToolCallParam:
+    """Build an input item replaying a search the gateway already ran.
+
+    Args:
+        item_id: Identifier of the ``file_search_call`` item.
+
+    Returns:
+        The completed retrieval item, carrying the passage it retrieved.
+    """
+    return {
+        "type": "file_search_call",
+        "id": item_id,
+        "status": "completed",
+        "queries": ["maintenance hatch code"],
+        "results": [{"text": _PLANTED}],
+    }
+
+
+@pytest.mark.slow
+@pytest.mark.xdist_group("openai_vector_stores")
+@pytest.mark.usefixtures("vector_stores_api")
+class TestFileSearchToolLive:
+    """A real model searching a real vector store, on every target.
+
+    Every other ``file_search`` test replaces the retrieval, the model, or both,
+    so none of them can show that the loop works end to end or that the item
+    this gateway emits is the one upstream emits. The store is built by the
+    Vector Stores API of the target under test, so on ``--use-official-api`` the
+    file is indexed by OpenAI and the search is OpenAI's own: the same
+    assertions then read the vendor's wire shape.
+
+    The model is never asked to search: the question names a code no model can
+    know and the documents are the only place it exists, so the search is the
+    only action that can answer it, and the assertions are on the items the
+    gateway emits rather than on the answer.
+
+    Ref: https://developers.openai.com/api/docs/guides/tools-file-search
+         openai.types.responses.response_file_search_tool_call.ResponseFileSearchToolCall
+         stdapi/models/chat/_adapters/_openai_responses.py:execute_file_search_calls
+    """
+
+    def test_a_search_of_a_live_store_is_reported_with_its_passages(
+        self,
+        openai_client: OpenAI,
+        responses_model: str,
+        indexed_store: tuple[str, str, str],
+    ) -> None:
+        """The turn carries a ``file_search_call`` holding the retrieved passages.
+
+        ``include=["file_search_call.results"]`` is what attaches them, and each
+        one names the file it came from, so a caller can cite it. A model may
+        speak in the same turn it searches, so the retrieval is not necessarily
+        the first item -- only the answer closing the turn follows it.
+
+        Both targets annotate the answer with a ``file_citation`` naming the
+        file it was grounded in; only the ``index`` differs, upstream anchoring
+        it at the cited span and this gateway at the end of the answer.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:_execute_file_search_call
+             openai.types.responses.response_output_text.AnnotationFileCitation
+        """
+        store_id, planted, _ = indexed_store
+
+        response = openai_client.responses.create(
+            model=responses_model,
+            input=_PLANTED_QUESTION,
+            tools=[{"type": "file_search", "vector_store_ids": [store_id]}],
+            include=["file_search_call.results"],
+        )
+
+        assert response.status == "completed"
+        types = [item.type for item in response.output]
+        searches = [
+            item for item in response.output if isinstance(item, SDKFileSearchToolCall)
+        ]
+        assert searches, f"the turn must report the search it ran: {types}"
+        assert types[-1] == "message", f"the turn ends with its answer: {types}"
+        assert types.index("file_search_call") < len(types) - 1, (
+            f"the retrieval is reported before the answer it grounds: {types}"
+        )
+        call = searches[0]
+        assert call.status == "completed"
+        assert call.queries, "the queries the search ran are reported"
+        assert all(query for query in call.queries), f"empty query: {call.queries!r}"
+        assert call.results, "include=file_search_call.results attaches the passages"
+        hits = [
+            result for result in call.results if _PLANTED_CODE in (result.text or "")
+        ]
+        assert hits, f"the planted passage must be retrieved: {call.results!r}"
+        assert hits[0].file_id == planted
+        assert hits[0].filename == "observatory.txt"
+        assert hits[0].score is not None, "a retrieved passage is scored"
+        assert 0.0 < hits[0].score <= 1.0, f"score out of range: {hits[0].score}"
+        assert response.output_text
+
+        citations = [
+            annotation
+            for item in response.output
+            if item.type == "message"
+            for part in item.content
+            for annotation in getattr(part, "annotations", ())
+            if annotation.type == "file_citation"
+        ]
+        assert citations, "the answer must cite the files it is grounded in"
+        cited = {(citation.file_id, citation.filename) for citation in citations}
+        assert (planted, "observatory.txt") in cited, (
+            f"the file holding the answer must be cited: {cited}"
+        )
+
+    def test_the_passages_are_withheld_unless_the_request_asks_for_them(
+        self,
+        openai_client: OpenAI,
+        responses_model: str,
+        indexed_store: tuple[str, str, str],
+    ) -> None:
+        """Without ``include``, the search is reported but its passages are not.
+
+        Ref: openai.types.responses.response_file_search_tool_call.ResponseFileSearchToolCall
+        """
+        store_id, _, _ = indexed_store
+
+        response = openai_client.responses.create(
+            model=responses_model,
+            input=_PLANTED_QUESTION,
+            tools=[{"type": "file_search", "vector_store_ids": [store_id]}],
+        )
+
+        searches = [
+            item for item in response.output if isinstance(item, SDKFileSearchToolCall)
+        ]
+        assert searches, f"the turn must report the search it ran: {response.output!r}"
+        assert searches[0].queries
+        assert not searches[0].results, (
+            f"passages are opt-in, as upstream: {searches[0].results!r}"
+        )
+
+    @pytest.mark.gateway("the retrieval round limit is this gateway's own bound")
+    def test_a_turn_that_has_searched_twice_is_answered_without_the_tool(
+        self,
+        openai_client: OpenAI,
+        responses_model: str,
+        indexed_store: tuple[str, str, str],
+    ) -> None:
+        """Two searches already in the input withdraw the tool from the next call.
+
+        The searches are replayed to the model as the tool exchange that
+        produced them, so this is also what proves Bedrock accepts that history
+        once the tool answering it is gone.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:_MAX_FILE_SEARCH_ROUNDS
+        """
+        store_id, _, _ = indexed_store
+
+        response = openai_client.responses.create(
+            model=responses_model,
+            input=[
+                {"role": "user", "content": _PLANTED_QUESTION},
+                _replayed_search("fs_1"),
+                _replayed_search("fs_2"),
+            ],
+            tools=[{"type": "file_search", "vector_store_ids": [store_id]}],
+        )
+
+        assert response.status == "completed"
+        assert not [
+            item for item in response.output if item.type == "file_search_call"
+        ], f"the tool is withdrawn once a turn has searched twice: {response.output!r}"
+        assert response.output_text
+
+    def test_a_streamed_search_reports_its_lifecycle_before_the_answer(
+        self,
+        openai_client: OpenAI,
+        responses_model: str,
+        indexed_store: tuple[str, str, str],
+    ) -> None:
+        """The three ``file_search_call`` events fire in order, then the text.
+
+        The synthetic tool the model actually calls must not surface: a client
+        sees a retrieval item, never ``response.function_call_arguments`` events.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             stdapi/models/chat/_adapters/_openai_responses.py:file_search_stream_handler
+        """
+        store_id, _, _ = indexed_store
+        lifecycle: list[str] = []
+        leaked: list[str] = []
+        answered: list[SDKFileSearchToolCall] = []
+        deltas = 0
+        completed = False
+
+        stream = openai_client.responses.create(
+            model=responses_model,
+            input=_PLANTED_QUESTION,
+            tools=[{"type": "file_search", "vector_store_ids": [store_id]}],
+            include=["file_search_call.results"],
+            stream=True,
+        )
+        for event in stream:
+            if event.type.startswith("response.file_search_call."):
+                lifecycle.append(event.type)
+            elif event.type.startswith("response.function_call_arguments."):
+                leaked.append(event.type)
+            elif event.type == "response.output_item.done" and isinstance(
+                event.item, SDKFileSearchToolCall
+            ):
+                answered.append(event.item)
+            elif event.type == "response.output_text.delta":
+                deltas += 1
+            elif event.type == "response.completed":
+                completed = True
+
+        assert lifecycle[:3] == [
+            "response.file_search_call.in_progress",
+            "response.file_search_call.searching",
+            "response.file_search_call.completed",
+        ], f"the search lifecycle must be streamed in order: {lifecycle}"
+        assert leaked == [], f"the synthetic tool must not reach the client: {leaked}"
+        assert answered, "the completed retrieval item must be streamed"
+        assert answered[0].status == "completed"
+        assert answered[0].results, "the streamed item carries the included passages"
+        assert deltas, "the grounded answer must still be streamed as text"
+        assert completed

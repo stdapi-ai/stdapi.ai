@@ -312,13 +312,12 @@ class FileSearchRankingOptions(BaseModelRequest):
 
 # Ref: openai.types.responses.file_search_tool.FileSearchTool
 class FileSearchTool(BaseModelRequest):
-    """A tool that searches for relevant content from uploaded files.
-
-    Served only by models that host it themselves; rejected otherwise.
-    """
+    """A tool that searches for relevant content in the attached vector stores."""
 
     type: Literal["file_search"] = Field(description="File search tool type.")
-    vector_store_ids: list[str] = Field(description="Vector store IDs to search.")
+    vector_store_ids: list[str] = Field(
+        min_length=1, description="Vector store IDs to search; at least one."
+    )
     filters: FileSearchFilters = Field(default=None, description="Filter to apply.")
     max_num_results: int | None = Field(
         default=None, ge=1, le=50, description="Maximum results to return (1-50)."
@@ -4185,7 +4184,8 @@ class ResponseCreateParams(BaseModelRequestWithExtra):
         default=None,
         description="Specify additional output data to include in the model response. "
         "`reasoning.encrypted_content` is honored (reasoning items carry a "
-        "self-contained round-trip envelope); other values are accepted and ignored.",
+        "self-contained round-trip envelope) and `file_search_call.results` "
+        "attaches the retrieved passages; other values are accepted and ignored.",
     )
     instructions: str | None = Field(
         default=None,
