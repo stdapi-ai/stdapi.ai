@@ -496,8 +496,9 @@ def register_default_prices(
 
     Last-resort rates hand-copied from the AWS pricing page, the only place
     AWS publishes them. Called by ``stdapi.models`` at import time with its
-    ``pricing_overrides.DEFAULT_MODEL_PRICES`` table. Applied at catalog load
-    only to models with no published row at all (see
+    ``pricing_overrides.DEFAULT_MODEL_PRICES`` table, and below for the
+    model-less rates this module mints a synthetic model for. Applied at
+    catalog load only to models with no published row at all (see
     :func:`_apply_default_prices`); ``cost_price_overrides`` still wins.
 
     Args:
@@ -812,6 +813,22 @@ WEB_SEARCH_MODEL: Final = "amazon.bedrock-web-search"
 
 #: usagetype fragment identifying the model-less Bedrock web search rows.
 _WEB_SEARCH_USAGETYPE_FRAGMENT: Final = "websearchqueries"
+
+#: Synthetic model a managed knowledge base's per-retrieval rate is billed against.
+KNOWLEDGE_BASE_MODEL: Final = "amazon.bedrock-knowledge-base"
+
+#: Managed knowledge base retrieval, $1.00 per 1,000 calls (aws.amazon.com/bedrock/pricing/).
+_KNOWLEDGE_BASE_RETRIEVAL_PRICE: Final = "0.001"
+
+#: Regions the pricing page quotes the managed knowledge base rates for.
+_KNOWLEDGE_BASE_PRICE_REGIONS: Final = ("us-east-1", "us-east-2", "us-west-2")
+
+# The Price List API publishes no row for it, so the pricing page's rate is the
+# only source; the regional fallback carries it to the other configured regions.
+register_default_prices(
+    {KNOWLEDGE_BASE_MODEL: {Dimension.SEARCH_UNITS: _KNOWLEDGE_BASE_RETRIEVAL_PRICE}},
+    _KNOWLEDGE_BASE_PRICE_REGIONS,
+)
 
 #: Guardrails usagetype fragment to the policy slug it prices (ordered).
 _GUARDRAIL_POLICY_SLUGS: Final[tuple[tuple[str, str], ...]] = (

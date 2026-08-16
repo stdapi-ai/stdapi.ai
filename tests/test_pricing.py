@@ -27,6 +27,7 @@ from stdapi.config import SETTINGS
 from stdapi.models.deprecation import DEPRECATED_MODELS
 from stdapi.models.moderation import GUARDRAIL_CHECKS_MODERATION_MODEL
 from stdapi.pricing import (
+    KNOWLEDGE_BASE_MODEL,
     WEB_SEARCH_MODEL,
     Dimension,
     Price,
@@ -3029,6 +3030,59 @@ class TestDefaultModelPrices:
         assert price.amount == Decimal("0.05")
 
 
+class TestKnowledgeBaseRetrievalPrice:
+    """The managed knowledge base's per-retrieval rate, published only on the page.
+
+    AWS charges $1.00 per 1,000 standard retrieval calls of a managed
+    knowledge base, and the Price List API carries no row for it at all -- no
+    usagetype of any Bedrock service code mentions knowledge bases. The rate
+    therefore reaches the catalog only as a built-in default, and a search
+    would otherwise be reported as free.
+
+    Ref: https://aws.amazon.com/bedrock/pricing/
+         stdapi/usage.py:record_knowledge_base_usage
+    """
+
+    def test_a_retrieval_resolves_at_the_published_rate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The key the recorder bills against prices at $0.001 per retrieval."""
+        index: dict[PriceKey, Price] = {}
+        pricing._apply_default_prices(index)  # noqa: SLF001
+        monkeypatch.setattr(pricing._state, "price_index", index)  # noqa: SLF001
+
+        price = resolve_price(
+            Service.BEDROCK, KNOWLEDGE_BASE_MODEL, "us-east-1", Dimension.SEARCH_UNITS
+        )
+
+        assert price is not None
+        assert price.amount == Decimal("0.001")
+        assert price.currency == "USD"
+
+    def test_the_rate_reaches_a_region_the_page_does_not_quote(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A deployment outside the quoted regions still prices its retrievals.
+
+        The page quotes three US regions; the regional fallback is what carries
+        the rate to the rest of the partition, and without it a European
+        deployment would report every search as free.
+
+        Ref: stdapi/pricing.py:_apply_regional_fallback
+        """
+        index: dict[PriceKey, Price] = {}
+        pricing._apply_default_prices(index)  # noqa: SLF001
+        pricing._apply_regional_fallback(index, {"eu-west-1"})  # noqa: SLF001
+        monkeypatch.setattr(pricing._state, "price_index", index)  # noqa: SLF001
+
+        price = resolve_price(
+            Service.BEDROCK, KNOWLEDGE_BASE_MODEL, "eu-west-1", Dimension.SEARCH_UNITS
+        )
+
+        assert price is not None
+        assert price.amount == Decimal("0.001")
+
+
 class TestParseUnitScale:
     """Scale-multiplier parsing from AWS Price List `unit` strings.
 
@@ -4700,6 +4754,9 @@ _SYNTHETIC_MODEL_PROBES: Final[tuple[tuple[Service, str, Dimension], ...]] = (
     (Service.BEDROCK, GUARDRAIL_CHECKS_MODERATION_MODEL, Dimension.TEXT_UNITS),
     # The built-in web search tool's one flat per-query rate.
     (Service.BEDROCK, WEB_SEARCH_MODEL, Dimension.GROUNDING_REQUESTS),
+    # A managed knowledge base's per-retrieval rate, which reaches the loaded
+    # catalog as a built-in default: the Price List API publishes no row for it.
+    (Service.BEDROCK, KNOWLEDGE_BASE_MODEL, Dimension.SEARCH_UNITS),
     (Service.POLLY, "amazon.polly-standard", Dimension.INPUT_CHARACTERS),
     (Service.POLLY, "amazon.polly-neural", Dimension.INPUT_CHARACTERS),
     (Service.POLLY, "amazon.polly-long-form", Dimension.INPUT_CHARACTERS),

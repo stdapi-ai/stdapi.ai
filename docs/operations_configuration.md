@@ -173,6 +173,7 @@ This section provides a quick reference of all available configuration options. 
 | [`VECTOR_STORE_EMBEDDING_MODEL`](#vector-store-embedding-model) | `amazon.titan-embed-text-v2:0` | Model embedding the indexed files and the search queries                    |
 | [`VECTOR_STORE_CHUNK_SIZE_TOKENS`](#vector-store-chunk-size-tokens) | `800`   | Default chunk size for files indexed without an explicit `chunking_strategy`                         |
 | [`VECTOR_STORE_CHUNK_OVERLAP_TOKENS`](#vector-store-chunk-overlap-tokens) | `400` | Default chunk overlap; must not exceed half the chunk size                                 |
+| [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](#aws-bedrock-knowledge-base-ids) | `[]`    | Allowlist of Amazon Bedrock knowledge bases addressed as `vs_kb_...` vector stores; empty disables it |
 | [`AWS_TRANSCRIBE_S3_BUCKET`](#aws-transcribe-s3-bucket) | `AWS_S3_BUCKET` | S3 bucket for temporary audio transcription files; must be in same region as `AWS_TRANSCRIBE_REGION` |
 | [`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN`](#aws-transcribe-output-encryption-key-arn) | None | AWS KMS key encrypting the transcription output objects; unset keeps the bucket's own encryption |
 
@@ -668,7 +669,7 @@ Each batch stores its data under a folder of its own below this prefix. Because 
 
 #### Vector Stores { #vector-stores-optional }
 
-The [Vector Stores API](api_openai_vector_stores.md) needs an [Amazon S3 vector bucket](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors.html) — a resource type of its own, created separately from a general purpose bucket — plus the general purpose bucket in [`AWS_S3_BUCKET`](#aws-s3-bucket), which holds the stores' records. The vector store endpoints answer `503` until both are configured.
+The [Vector Stores API](api_openai_vector_stores.md) needs an [Amazon S3 vector bucket](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors.html) — a resource type of its own, created separately from a general purpose bucket — plus the general purpose bucket in [`AWS_S3_BUCKET`](#aws-s3-bucket), which holds the stores' records. The vector store endpoints answer `503` until both are configured, or until [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](#aws-bedrock-knowledge-base-ids) names a knowledge base to serve instead.
 
 #### `AWS_S3_VECTORS_BUCKET` { #aws-s3-vectors-bucket }
 
@@ -767,6 +768,30 @@ export VECTOR_STORE_CHUNK_OVERLAP_TOKENS=400
 ```
 
 More overlap keeps a sentence split across two chunks findable from either one, at the cost of more chunks to embed and store.
+
+#### `AWS_BEDROCK_KNOWLEDGE_BASE_IDS` { #aws-bedrock-knowledge-base-ids }
+
+:octicons-package-24: **Purpose**
+:   Comma-separated allowlist of [Amazon Bedrock knowledge bases](https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base.html) served through the [Vector Stores API](api_openai_vector_stores.md). Each allowlisted knowledge base is addressed as the vector store `vs_kb_<knowledgeBaseId>` on every `/v1/vector_stores` endpoint, and is returned by `GET /v1/vector_stores` next to the stores the server owns
+
+:octicons-gear-24: **Default**
+:   Empty — no knowledge base is addressable, and a `vs_kb_...` identifier is answered exactly as an unknown vector store is, so the allowlist cannot be probed
+
+:octicons-alert-24: **Requirement**
+:   Each knowledge base must already exist, in the first [`AWS_BEDROCK_REGIONS`](#aws-bedrock-regions) entry, and the gateway's role needs the [Knowledge Base Vector Stores permissions](operations_iam_permissions.md#knowledge-base-vector-stores) on it
+
+```bash
+export AWS_BEDROCK_KNOWLEDGE_BASE_IDS=ABCDE12345,FGHIJ67890/KLMNO13579
+```
+
+Write each entry as `<knowledgeBaseId>`, or as `<knowledgeBaseId>/<dataSourceId>` when the knowledge base has more than one data source; with a single data source the server resolves it itself.
+
+The knowledge base itself always stays yours: the server never creates one and never deletes one. It searches it, and manages the documents of its data source. Name, description, creation time and status are read from the knowledge base, and the requests that would change them are refused — see [Knowledge Base Stores](api_openai_vector_stores.md#knowledge-base-stores).
+
+This setting is independent of [`AWS_S3_VECTORS_BUCKET`](#aws-s3-vectors-bucket): a deployment that sets only this one serves its allowlisted knowledge bases and creates no store of its own.
+
+!!! info "What a knowledge base costs"
+    A knowledge base search costs more than a search on a store the server owns, and a knowledge base backed by an always-on vector database bills whether it is queried or not. Both backends are offered so the choice is yours — see [Cost Management](operations_cost_management.md).
 
 #### `AWS_TRANSCRIBE_S3_BUCKET` { #aws-transcribe-s3-bucket }
 

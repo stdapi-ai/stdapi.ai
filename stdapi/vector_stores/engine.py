@@ -25,13 +25,23 @@ from stdapi.files import get_file, get_file_content, parse_file_id
 from stdapi.models import validate_model
 from stdapi.models.embedding import get_embedding_model
 from stdapi.monitoring import REQUEST_ID, log_background_event, log_error_details
+from stdapi.types import FILE_ID_PATTERN
 from stdapi.utils import now_utc_timestamp
 from stdapi.vector_stores._concurrency import gather_bounded
+from stdapi.vector_stores._paging import page_records
 from stdapi.vector_stores.backend import (
-    IndexCapabilities,
     IndexVector,
     as_stream,
     check_filter,
+    raise_not_found,
+    unsupported_file_message,
+)
+from stdapi.vector_stores.knowledge_base import (
+    DOCUMENT_ID_PATTERN,
+    KNOWLEDGE_BASE_ID_PATTERN,
+    STORE_ID_PREFIX,
+    check_allowlisted,
+    is_knowledge_base_store,
 )
 from stdapi.vector_stores.models import (
     BatchRecord,
@@ -49,9 +59,6 @@ from stdapi.vector_stores.records import (
     delete_record,
     file_key,
     gather_records,
-    raise_not_found,
-    read_batch,
-    read_file,
     read_record,
     records_bucket,
     store_key,
@@ -59,7 +66,18 @@ from stdapi.vector_stores.records import (
     update_record,
     write_record,
 )
-from stdapi.vector_stores.registry import backend_for, default_backend
+from stdapi.vector_stores.records import list_batch_files as _list_batch_file_records
+from stdapi.vector_stores.records import list_store_files as _list_store_file_records
+from stdapi.vector_stores.records import list_stores as _list_store_records
+from stdapi.vector_stores.records import read_batch as _read_batch_record
+from stdapi.vector_stores.records import read_file as _read_file_record
+from stdapi.vector_stores.registry import (
+    alternative_for,
+    backend_for,
+    default_backend,
+    external_store_for,
+    external_stores,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Sequence
@@ -70,9 +88,17 @@ if TYPE_CHECKING:
         ChunkingStrategyParam,
         SearchFilter,
     )
+    from stdapi.vector_stores.backend import VectorIndex
 
 #: Regex pattern a vector store identifier must match on input.
-VECTOR_STORE_ID_PATTERN: str = r"^vs_[0-9a-v]{26}$"
+VECTOR_STORE_ID_PATTERN: str = (
+    rf"^(vs_[0-9a-v]{{26}}|{STORE_ID_PREFIX}{KNOWLEDGE_BASE_ID_PATTERN})$"
+)
+
+#: Regex pattern the identifier of a file attached to a store must match on input.
+VECTOR_STORE_FILE_ID_PATTERN: str = (
+    rf"^({FILE_ID_PATTERN[1:-1]}|{DOCUMENT_ID_PATTERN})$"
+)
 
 #: Regex pattern a file batch identifier must match on input.
 FILE_BATCH_ID_PATTERN: str = r"^vsfb_[0-9a-v]{26}$"
@@ -101,13 +127,16 @@ _REWRITE_WINDOW: Final[int] = 100
 #: Seconds of inactivity before a search refreshes ``last_active_at``.
 _LAST_ACTIVE_REFRESH_SECONDS: Final[int] = 3600
 
-#: Message reported for a file whose bytes are not indexable text.
-_UNSUPPORTED_MESSAGE: Final = (
-    "This file type cannot be indexed. Provide the content as a text file."
-)
-
 #: Strong references to running indexing tasks, held until they finish.
 _INDEXING_TASKS: Final[set[Task[None]]] = set()
+
+#: Records a merged listing reads before paging in memory.
+_LIST_ALL: Final[int] = 1000
+
+#: Why a store held elsewhere answers no file batch.
+_NO_BATCH: Final[str] = (
+    "it keeps no file batches. Attach and follow its files one at a time instead."
+)
 
 
 def new_store_id() -> str:
@@ -123,6 +152,10 @@ def new_batch_id() -> str:
 def parse_store_id(store_id: str) -> str:
     """Validate a vector store identifier.
 
+    A store served from elsewhere is only addressable when the deployment was
+    given it. One it was not is answered exactly as a malformed or unknown
+    identifier is, so the configuration cannot be probed through the API.
+
     Args:
         store_id: The identifier to validate.
 
@@ -130,10 +163,13 @@ def parse_store_id(store_id: str) -> str:
         The identifier, unchanged.
 
     Raises:
-        ApiError: When the identifier is malformed (404, as upstream reports it).
+        ApiError: When the identifier is malformed, or names a store this
+            deployment may not address (404, as upstream reports an unknown one).
     """
     if not _STORE_ID_RE(store_id):
         raise_not_found("vector store", store_id)
+    if is_knowledge_base_store(store_id):
+        check_allowlisted(store_id)
     return store_id
 
 
@@ -342,6 +378,9 @@ async def read_store(store_id: str) -> StoreRecord:
     Raises:
         ApiError: When the store does not exist (404).
     """
+    external = external_store_for(store_id)
+    if external is not None:
+        return await external.read_store(store_id)
     current = await read_record(StoreRecord, store_key(store_id))
     if current is None:
         raise_not_found("vector store", store_id)
@@ -435,8 +474,13 @@ async def delete_store(store_id: str) -> None:
         store_id: A validated vector store identifier.
 
     Raises:
-        ApiError: When the store does not exist (404).
+        ApiError: When the store does not exist (404), or is held elsewhere and
+            is therefore not this deployment's to delete (400).
     """
+    external = external_store_for(store_id)
+    if external is not None:
+        await external.read_store(store_id)
+        external.refuse("it cannot be deleted here. Detach its files instead.")
     store = await read_store(store_id)
     prefix = store_prefix(store_id)
     await delete_record(store_key(store_id))
@@ -467,8 +511,16 @@ async def update_store(
         The updated store record.
 
     Raises:
-        ApiError: When the store does not exist (404).
+        ApiError: When the store does not exist (404), or is held elsewhere and
+            therefore describes itself (400).
     """
+    external = external_store_for(store_id)
+    if external is not None:
+        await external.read_store(store_id)
+        external.refuse(
+            "its name, metadata and expiration are read from it and cannot be "
+            "changed here."
+        )
     await read_store(store_id)
 
     def mutate(record: StoreRecord) -> None:
@@ -497,7 +549,8 @@ async def touch_store(record: StoreRecord) -> None:
     Args:
         record: The store record a request just used.
     """
-    if record.expired or record.index_deleted:
+    # A store held elsewhere has no expiration here, so nothing anchors.
+    if record.expired or record.index_deleted or external_store_for(record) is not None:
         return
     now = now_utc_timestamp()
     if now - record.last_active_at < _LAST_ACTIVE_REFRESH_SECONDS:
@@ -530,6 +583,14 @@ async def attach_files(
     Raises:
         ApiError: When one of the files does not exist (404).
     """
+    external = external_store_for(store)
+    if external is not None:
+        if batch_id:
+            external.refuse(
+                "files cannot be attached to it in batches. Attach them one at "
+                "a time instead."
+            )
+        return await external.attach_documents(store.id, pending)
     now = now_utc_timestamp()
     # One file is one record: a repeated id would inflate the totals for good.
     unique: dict[str, PendingFile] = {}
@@ -687,15 +748,15 @@ async def _index_one_file(
     """
     backend = backend_for(store)
     try:
-        record = await read_file(store.id, file_id)
+        record = await _read_file_record(store.id, file_id)
     except ApiError:
         return "", 0
-    if batch_id and (await read_batch(store.id, batch_id)).cancel_requested:
+    if batch_id and (await _read_batch_record(store.id, batch_id)).cancel_requested:
         record.status = "cancelled"
         await write_record(file_key(store.id, file_id), record)
         return record.status, 0
     try:
-        chunks = await _load_chunks(store, record, backend.capabilities)
+        chunks = await _load_chunks(store, record, backend)
     except _FileIndexingError as exc:
         record.status = "failed"
         record.last_error = FileErrorRecord(code=exc.code, message=str(exc))
@@ -757,15 +818,30 @@ class _InvalidFileError(_FileIndexingError):
     code = "invalid_file"
 
 
+def _unsupported_message(media_type: str, backend: VectorIndex) -> str:
+    """Return how a file the store cannot index is explained to the caller.
+
+    Args:
+        media_type: The media type the file was uploaded with.
+        backend: The backend serving the store the file is attached to.
+
+    Returns:
+        The message the file's ``last_error`` reports.
+    """
+    return unsupported_file_message(
+        backend.capabilities, alternative=alternative_for(media_type, backend)
+    )
+
+
 async def _load_chunks(
-    store: StoreRecord, record: FileRecord, capabilities: IndexCapabilities
+    store: StoreRecord, record: FileRecord, backend: VectorIndex
 ) -> list[str]:
     """Read a file's text and split it into chunks.
 
     Args:
         store: The store the file is attached to.
         record: The file record.
-        capabilities: What the backend serving the store ingests.
+        backend: The backend serving the store, which declares what it ingests.
 
     Returns:
         The chunks, in document order.
@@ -773,9 +849,11 @@ async def _load_chunks(
     Raises:
         _FileIndexingError: When the file holds no indexable text.
     """
+    capabilities = backend.capabilities
     stream, content_type = await get_file_content(parse_file_id(record.id))
-    if not capabilities.may_ingest(content_type.split(";", 1)[0].strip()):
-        raise _UnsupportedFileError(_UNSUPPORTED_MESSAGE)
+    media_type = content_type.split(";", 1)[0].strip()
+    if not capabilities.may_ingest(media_type):
+        raise _UnsupportedFileError(_unsupported_message(media_type, backend))
     # Zero means no limit, but indexing buffers the file, so it caps its own.
     limit = SETTINGS.max_input_file_size
     limit = min(limit, _MAX_INDEXABLE_BYTES) if limit else _MAX_INDEXABLE_BYTES
@@ -788,10 +866,10 @@ async def _load_chunks(
     try:
         text = body.decode()
     except UnicodeDecodeError:
-        raise _UnsupportedFileError(_UNSUPPORTED_MESSAGE) from None
+        raise _UnsupportedFileError(_unsupported_message(media_type, backend)) from None
     del body
     if "\x00" in text:
-        raise _UnsupportedFileError(_UNSUPPORTED_MESSAGE)
+        raise _UnsupportedFileError(_unsupported_message(media_type, backend))
     chunks = chunk_text(
         text,
         record.max_chunk_size_tokens,
@@ -828,7 +906,7 @@ async def _embedded_chunks(
                 filename=record.filename,
                 chunk_index=start + offset,
                 text=chunk,
-                attributes=record.attributes,
+                attributes=record.attributes or {},
                 embedding=vector,
             )
 
@@ -876,7 +954,11 @@ async def detach_file(store_id: str, file_id: str) -> None:
     Raises:
         ApiError: When the file is not attached to the store (404).
     """
-    record = await read_file(store_id, file_id)
+    external = external_store_for(store_id)
+    if external is not None:
+        await external.delete_document(store_id, file_id)
+        return
+    record = await _read_file_record(store_id, file_id)
     await delete_record(file_key(store_id, file_id))
 
     def mutate(store: StoreRecord) -> None:
@@ -917,9 +999,17 @@ async def update_file_attributes(
         The updated file record.
 
     Raises:
-        ApiError: When the file is not attached to the store (404).
+        ApiError: When the file is not attached to the store (404), or the
+            store keeps the attributes it was given at attachment (400).
     """
-    await read_file(store_id, file_id)
+    external = external_store_for(store_id)
+    if external is not None:
+        await external.read_document(store_id, file_id)
+        external.refuse(
+            "the attributes of an attached file cannot be replaced. Attach the "
+            "file again with the attributes it should carry."
+        )
+    await _read_file_record(store_id, file_id)
     record = await update_record(
         FileRecord,
         file_key(store_id, file_id),
@@ -941,7 +1031,7 @@ async def _rewrite_attributes(store_id: str, record: FileRecord) -> None:
         )
         rewritten = [vector for vector in stored if vector.embedding]
         for vector in rewritten:
-            vector.attributes = record.attributes
+            vector.attributes = record.attributes or {}
         if rewritten:
             await backend.put_vectors(store_id, as_stream(rewritten))
 
@@ -955,7 +1045,17 @@ async def read_file_chunks(store_id: str, record: FileRecord) -> list[str]:
 
     Returns:
         The chunk texts.
+
+    Raises:
+        ApiError: When the store cuts its own passages and does not address
+            them individually (400).
     """
+    external = external_store_for(store_id)
+    if external is not None:
+        external.refuse(
+            "the passages a file was indexed as cannot be listed. Download the "
+            "file itself instead."
+        )
     stored = await backend_for(store_id).get_vectors(
         store_id,
         [vector_key(record.id, index) for index in range(record.chunk_count)],
@@ -1002,10 +1102,16 @@ async def search(
             "Search it with 'max_num_results' instead."
         )
         raise ApiError(msg)
-    vectors = await _embed(store.embedding_model, list(queries))
-    matches = await backend.query(
-        store.id, vectors, max_results=max_num_results, search_filter=filters
-    )
+    external = external_store_for(store)
+    if external is not None:
+        matches = await external.query_text(
+            store.id, queries, max_results=max_num_results, search_filter=filters
+        )
+    else:
+        vectors = await _embed(store.embedding_model, list(queries))
+        matches = await backend.query(
+            store.id, vectors, max_results=max_num_results, search_filter=filters
+        )
     best: dict[str, SearchResult] = {}
     for match in matches:
         if score_threshold is not None and match.score < score_threshold:
@@ -1022,6 +1128,175 @@ async def search(
     results = list(best.values())
     results.sort(key=lambda result: result.score, reverse=True)
     return results[:max_num_results]
+
+
+def _native_configured() -> bool:
+    """Whether this deployment can serve stores of its own.
+
+    Returns:
+        Whether both the record bucket and the vector index are configured. A
+        deployment given only external stores serves those and nothing else.
+    """
+    if not SETTINGS.aws_s3_bucket:
+        return False
+    try:
+        default_backend().check_configured()
+    except ApiError:
+        return False
+    return True
+
+
+async def list_stores(
+    *, after: str, before: str, limit: int, order: str
+) -> tuple[list[StoreRecord], bool]:
+    """List every vector store, this deployment's own and the ones it addresses.
+
+    A store held elsewhere is addressed by an identifier naming it rather than
+    minted here, so it carries no creation time: the two sources are merged on
+    the ``created_at`` every store reports, and the cursors name positions in
+    that order.
+
+    Args:
+        after: Return the stores following this identifier.
+        before: Return the page ending immediately before this identifier.
+        limit: Maximum records to return.
+        order: ``"asc"`` or ``"desc"``.
+
+    Returns:
+        ``(records, has_more)``.
+
+    Raises:
+        FeatureUnavailableError: When the deployment serves no vector store at
+            all (503).
+    """
+    external: list[StoreRecord] = []
+    for backend in external_stores():
+        external.extend(await backend.list_stores())
+    if not external:
+        # Also where a deployment serving no store at all reports what it lacks.
+        return await _list_store_records(
+            after=after, before=before, limit=limit, order=order
+        )
+    records: list[StoreRecord] = []
+    if _native_configured():
+        # Read whole, so the two sources page as one listing.
+        records, _ = await _list_store_records(
+            after="", before="", limit=_LIST_ALL, order="asc"
+        )
+    return page_records(
+        records + external, after=after, before=before, limit=limit, order=order
+    )
+
+
+async def list_store_files(
+    store_id: str, *, after: str, before: str, limit: int, order: str, status: str
+) -> tuple[list[FileRecord], bool]:
+    """List the files attached to *store_id*.
+
+    Args:
+        store_id: A validated vector store identifier.
+        after: Return files created strictly after this identifier.
+        before: Return files created strictly before this identifier.
+        limit: Maximum records to return.
+        order: ``"asc"`` or ``"desc"``.
+        status: Keep only files with this status, or ``""`` for all.
+
+    Returns:
+        ``(records, has_more)``.
+    """
+    external = external_store_for(store_id)
+    if external is not None:
+        return await external.list_documents(
+            store_id,
+            after=after,
+            before=before,
+            limit=limit,
+            order=order,
+            status=status,
+        )
+    return await _list_store_file_records(
+        store_id, after=after, before=before, limit=limit, order=order, status=status
+    )
+
+
+async def read_file(store_id: str, file_id: str) -> FileRecord:
+    """Return the record of *file_id* in *store_id*.
+
+    Args:
+        store_id: A validated vector store identifier.
+        file_id: A file identifier.
+
+    Returns:
+        The file record.
+
+    Raises:
+        ApiError: When the file is not attached to the store (404).
+    """
+    external = external_store_for(store_id)
+    if external is not None:
+        return await external.read_document(store_id, file_id)
+    return await _read_file_record(store_id, file_id)
+
+
+async def read_batch(store_id: str, batch_id: str) -> BatchRecord:
+    """Return the batch record of *batch_id* in *store_id*.
+
+    Args:
+        store_id: A validated vector store identifier.
+        batch_id: A validated file batch identifier.
+
+    Returns:
+        The batch record.
+
+    Raises:
+        ApiError: When the batch does not exist (404), or the store takes no
+            batch at all (400).
+    """
+    external = external_store_for(store_id)
+    if external is not None:
+        external.refuse(_NO_BATCH)
+    return await _read_batch_record(store_id, batch_id)
+
+
+async def list_batch_files(
+    store_id: str,
+    batch_id: str,
+    *,
+    after: str,
+    before: str,
+    limit: int,
+    order: str,
+    status: str,
+) -> tuple[list[FileRecord], bool]:
+    """List the files of one batch.
+
+    Args:
+        store_id: A validated vector store identifier.
+        batch_id: A validated file batch identifier.
+        after: Return files created strictly after this identifier.
+        before: Return files created strictly before this identifier.
+        limit: Maximum records to return.
+        order: ``"asc"`` or ``"desc"``.
+        status: Keep only files with this status, or ``""`` for all.
+
+    Returns:
+        ``(records, has_more)``.
+
+    Raises:
+        ApiError: When the store takes no batch at all (400).
+    """
+    external = external_store_for(store_id)
+    if external is not None:
+        external.refuse(_NO_BATCH)
+    return await _list_batch_file_records(
+        store_id,
+        batch_id,
+        after=after,
+        before=before,
+        limit=limit,
+        order=order,
+        status=status,
+    )
 
 
 async def cancel_batch(store_id: str, batch_id: str) -> BatchRecord:

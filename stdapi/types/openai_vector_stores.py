@@ -479,7 +479,11 @@ class RankingOptions(BaseModelRequest):
         default=None,
         ge=0.0,
         le=1.0,
-        description="Drop results scoring below this value.",
+        description=(
+            "Drop results scoring below this value. Rejected by a vector store "
+            "whose scores are not comparable between searches; use "
+            "`max_num_results` there."
+        ),
     )
 
 
@@ -525,7 +529,13 @@ class VectorStoreSearchResult(BaseModelResponse):
 
     file_id: str = Field(description="The file the content comes from.")
     filename: str = Field(description="The name of that file.")
-    score: float = Field(description="Similarity score between 0 and 1.")
+    score: float = Field(
+        description=(
+            "Relevance of the result, best match first. A similarity between 0 "
+            "and 1, or, on a vector store that measures its own relevance, that "
+            "measure reported unchanged — comparable within this page only."
+        )
+    )
     attributes: Attributes | None = Field(
         default=None, description="The attributes stored with the file."
     )

@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Final, Literal, TypedDict
 
 from stdapi.config import SETTINGS
 from stdapi.pricing import (
+    KNOWLEDGE_BASE_MODEL,
     WEB_SEARCH_MODEL,
     CacheTtlBucket,
     ContextLength,
@@ -692,6 +693,30 @@ def record_web_search_usage(queries: int, *, region: str = "") -> None:
             WEB_SEARCH_MODEL,
             region,
             quantities={Dimension.GROUNDING_REQUESTS: queries},
+        )
+
+
+def record_knowledge_base_usage(retrievals: int, *, region: str) -> None:
+    """Record retrievals a managed knowledge base bills per call.
+
+    AWS publishes one flat per-call rate for that generation's standard
+    retrieval, which covers the search, the embedding of the query and the
+    reranking of the passages -- none of which reaches a model of this
+    server's -- so the calls are billed against their own synthetic model.
+    The other generation carries no such rate: its search costs whatever its
+    embedding model and its own vector store charge, and neither is recorded
+    here.
+
+    Args:
+        retrievals: Number of retrieval calls the search issued.
+        region: Region hosting the knowledge base.
+    """
+    if retrievals > 0:
+        _record_usage(
+            Service.BEDROCK,
+            KNOWLEDGE_BASE_MODEL,
+            region,
+            quantities={Dimension.SEARCH_UNITS: retrievals},
         )
 
 

@@ -195,6 +195,14 @@ Indexing runs after the response is sent, so its usage is reported on a `backgro
 
 The **storage and request charges of the vector storage itself are not recorded**: like the bytes the [Files API](api_openai_files.md) stores, they appear on your AWS bill and not in the usage log. Read them from AWS Cost Explorer, filtered on Amazon S3 Vectors — the service holding [`AWS_S3_VECTORS_BUCKET`](operations_configuration.md#aws-s3-vectors-bucket).
 
+A [knowledge base store](api_openai_vector_stores.md#knowledge-base-stores) is billed differently, because the retrieval happens inside Amazon Bedrock and no embedding call of this server's is involved:
+
+- A **fully managed** knowledge base charges a flat rate per retrieval call, with the document parsing, the embedding and the reranking included in it. Every query of a search is one retrieval, recorded as one `search_units` unit under the model `amazon.bedrock-knowledge-base` and priced from the rate on the [Amazon Bedrock pricing page](https://aws.amazon.com/bedrock/pricing/) — the Price List API publishes no row for it, so that rate is built in and can be replaced through `COST_PRICE_OVERRIDES`.
+- A knowledge base whose **vector storage you provisioned yourself** has no published per-retrieval rate: its search costs whatever its embedding model and its vector database charge, both billed outside this server's view. Nothing is recorded for it rather than a figure that would be invented.
+- **Attaching a file records nothing, on either kind.** AWS publishes no per-document ingestion charge — a fully managed knowledge base includes parsing and embedding in its rates and bills its index storage monthly per GB of raw data, and the other kind bills the embedding model and the parser it is configured with.
+
+Read all of these from AWS Cost Explorer, filtered on Amazon Bedrock.
+
 ### Long-Context Pricing
 
 Some 1M-context-capable models (currently Claude Sonnet 4, via the `context-1m` `anthropic-beta` flag) are billed by AWS at a higher rate — roughly double for input-side tokens — when a call's prompt (input + cache read/write tokens) exceeds 200K tokens. stdapi.ai detects this per model call and prices the whole call at the published long-context rate, reporting it with `"context": "long"` in the usage entry. When AWS publishes no long-context rate for a model, the standard rate is used as the best available estimate.

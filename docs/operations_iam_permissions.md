@@ -383,6 +383,41 @@ Required by the [Vector Stores API](api_openai_vector_stores.md). The indexed co
 
 ---
 
+## :material-book-search: Knowledge Base Vector Stores (Optional) { #knowledge-base-vector-stores }
+
+**Environment Variables**: [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration.md#aws-bedrock-knowledge-base-ids)
+
+Required to serve an [Amazon Bedrock knowledge base](https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base.html) you created as a [vector store](api_openai_vector_stores.md#knowledge-base-stores). Grant one statement per allowlisted knowledge base, on its own ARN.
+
+??? example "Knowledge Base Vector Stores IAM Policy Statements"
+    ```json
+    {
+      "Sid": "BedrockKnowledgeBaseVectorStores",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:GetKnowledgeBase",
+        "bedrock:Retrieve",
+        "bedrock:ListDataSources",
+        "bedrock:IngestKnowledgeBaseDocuments",
+        "bedrock:ListKnowledgeBaseDocuments",
+        "bedrock:GetKnowledgeBaseDocuments",
+        "bedrock:DeleteKnowledgeBaseDocuments"
+      ],
+      "Resource": "arn:aws:bedrock:REGION:ACCOUNT_ID:knowledge-base/KNOWLEDGE_BASE_ID"
+    }
+    ```
+
+    !!! info "Replace the Placeholders"
+        Replace `REGION` with the first [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) entry, `ACCOUNT_ID` with your account, and `KNOWLEDGE_BASE_ID` with the knowledge base identifier — one ARN per entry of [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration.md#aws-bedrock-knowledge-base-ids).
+
+    !!! note "No discovery action, deliberately"
+        `bedrock:ListKnowledgeBases` is **not** granted, and is not needed: the server never discovers knowledge bases it was not given. Only the identifiers in the allowlist are ever addressed, and any other one is answered as an unknown vector store.
+
+    !!! note "The knowledge base is yours to create"
+        The gateway never creates or deletes a knowledge base, so no create, update or delete action on the knowledge base itself is granted — only the documents of its data source.
+
+---
+
 ## :material-video: Video Generation (Optional) { #video-generation-optional }
 
 **Environment Variables**: [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets)
@@ -1065,6 +1100,7 @@ Required if you configure API authentication. See the [Authentication](operation
 | **Video Generation**                            | Core Bedrock invoke permissions (incl. `bedrock:GetAsyncInvoke`, `bedrock:TagResource`)<br>`bedrock:ListAsyncInvokes` and `bedrock:ListTagsForResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) for job listing<br>File Storage S3 permissions on each regional bucket | `AWS_S3_REGIONAL_BUCKETS`                                                    |
 | **Batch Inference**                             | `bedrock:CreateModelInvocationJob`<br>`bedrock:GetModelInvocationJob`<br>`bedrock:StopModelInvocationJob` (on `arn:aws:bedrock:*:*:model-invocation-job/*`)<br>`iam:PassRole` on the batch service role, scoped with `iam:PassedToService: bedrock.amazonaws.com`<br>File Storage S3 permissions on each bucket a batch uses, plus the service role's own policy (see [Batch Inference](#batch-inference)) | `AWS_BEDROCK_BATCH_ROLE_ARN`                                                 |
 | **Vector Stores**                               | `s3vectors:CreateIndex`<br>`s3vectors:DeleteIndex`<br>`s3vectors:GetIndex`<br>`s3vectors:PutVectors`<br>`s3vectors:GetVectors`<br>`s3vectors:QueryVectors`<br>`s3vectors:DeleteVectors` (on the vector bucket and its indexes)<br>File Storage S3 permissions on `AWS_S3_BUCKET` for the stores' records | `AWS_S3_VECTORS_BUCKET`<br>`AWS_S3_VECTORS_REGION`                           |
+| **Knowledge Base Vector Stores**                | `bedrock:GetKnowledgeBase`<br>`bedrock:Retrieve`<br>`bedrock:ListDataSources`<br>`bedrock:IngestKnowledgeBaseDocuments`<br>`bedrock:ListKnowledgeBaseDocuments`<br>`bedrock:GetKnowledgeBaseDocuments`<br>`bedrock:DeleteKnowledgeBaseDocuments` (on each allowlisted knowledge base ARN; no `bedrock:ListKnowledgeBases`) | `AWS_BEDROCK_KNOWLEDGE_BASE_IDS`                                             |
 | **KMS Encrypted S3 Buckets**                    | `kms:Decrypt`<br>`kms:GenerateDataKey`<br>with `kms:ViaService` condition                                                                                  | If S3 buckets use KMS encryption                                             |
 | **Text-to-Speech**                              | `polly:SynthesizeSpeech`<br>`polly:DescribeVoices`<br>`polly:StartSpeechSynthesisStream` for generative voices above 3,000 characters<br>`polly:StartSpeechSynthesisTask`, `polly:GetSpeechSynthesisTask` and S3 `PutObject`/`GetObject`/`DeleteObject` on each bucket serving a Polly region, for the other voices above 3,000 characters | `AWS_POLLY_REGION`<br>`AWS_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`           |
 | **Speech-to-Text**                              | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`transcribe:TagResource` (on `arn:aws:transcribe:*:*:transcription-job/*`)<br>File Storage S3 permissions on every bucket serving a candidate region<br>`kms:GenerateDataKey`, `kms:Decrypt` on the output encryption key, when one is configured | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`<br>`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN` |

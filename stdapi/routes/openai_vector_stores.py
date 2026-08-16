@@ -12,7 +12,6 @@ from stdapi.auth import authenticate
 from stdapi.cleanup import schedule_cleanup
 from stdapi.config import SETTINGS
 from stdapi.monitoring import log_request_params, log_response_params
-from stdapi.types import FILE_ID_PATTERN
 from stdapi.types.openai_vector_stores import (
     ExpiresAfter,
     FileBatchCreateParams,
@@ -40,6 +39,7 @@ from stdapi.types.openai_vector_stores import (
 )
 from stdapi.vector_stores import (
     FILE_BATCH_ID_PATTERN,
+    VECTOR_STORE_FILE_ID_PATTERN,
     VECTOR_STORE_ID_PATTERN,
     BatchRecord,
     FileRecord,
@@ -88,7 +88,10 @@ _StoreId = Annotated[
 
 #: Reusable path annotation for the ``file_id`` path parameter.
 _FileId = Annotated[
-    str, Path(description="The ID of the attached file.", pattern=FILE_ID_PATTERN)
+    str,
+    Path(
+        description="The ID of the attached file.", pattern=VECTOR_STORE_FILE_ID_PATTERN
+    ),
 ]
 
 #: Reusable path annotation for the ``batch_id`` path parameter.
@@ -170,11 +173,15 @@ def _to_file(store_id: str, record: FileRecord) -> VectorStoreFile:
             if record.last_error
             else None
         ),
-        chunking_strategy=StaticChunkingStrategy(
-            static=StaticChunkingConfig(
-                max_chunk_size_tokens=record.max_chunk_size_tokens,
-                chunk_overlap_tokens=record.chunk_overlap_tokens,
+        chunking_strategy=(
+            StaticChunkingStrategy(
+                static=StaticChunkingConfig(
+                    max_chunk_size_tokens=record.max_chunk_size_tokens,
+                    chunk_overlap_tokens=record.chunk_overlap_tokens,
+                )
             )
+            if record.max_chunk_size_tokens
+            else None
         ),
         attributes=record.attributes,
     )
@@ -467,7 +474,9 @@ async def update_vector_store(
     operation_id="openai_vector_store_delete",
     description=(
         "Permanently deletes a vector store and everything indexed in it "
-        "(OpenAI Vector Stores API). The uploaded files themselves are kept."
+        "(OpenAI Vector Stores API). The uploaded files themselves are kept.\n\n"
+        "A store the server does not own is rejected: it is addressed, never "
+        "created or deleted here."
     ),
     response_description="Deletion status.",
     response_model_exclude_none=True,
@@ -499,9 +508,10 @@ async def delete_vector_store(
         "Returns the passages of the indexed files closest in meaning to the "
         "query (OpenAI Vector Stores API).\n\n"
         "Each result carries its source `file_id`, `filename`, the matching "
-        "text and a `score` between 0 and 1, best match first. Use `filters` to "
-        "restrict the search to files carrying given `attributes`, and "
-        "`ranking_options.score_threshold` to drop weak matches."
+        "text and a `score`, best match first. Use `filters` to restrict the "
+        "search to files carrying given `attributes`, and "
+        "`ranking_options.score_threshold` to drop weak matches, on a store "
+        "whose scores are comparable between searches."
     ),
     response_description="The search results.",
     response_model_exclude_none=True,
@@ -616,13 +626,15 @@ async def list_vector_store_files(
     after: Annotated[
         str | None,
         Query(
-            description="Cursor: the object ID to start after.", pattern=FILE_ID_PATTERN
+            description="Cursor: the object ID to start after.",
+            pattern=VECTOR_STORE_FILE_ID_PATTERN,
         ),
     ] = None,
     before: Annotated[
         str | None,
         Query(
-            description="Cursor: the object ID to stop before.", pattern=FILE_ID_PATTERN
+            description="Cursor: the object ID to stop before.",
+            pattern=VECTOR_STORE_FILE_ID_PATTERN,
         ),
     ] = None,
     limit: _Limit = 20,
@@ -962,13 +974,15 @@ async def list_vector_store_file_batch_files(
     after: Annotated[
         str | None,
         Query(
-            description="Cursor: the object ID to start after.", pattern=FILE_ID_PATTERN
+            description="Cursor: the object ID to start after.",
+            pattern=VECTOR_STORE_FILE_ID_PATTERN,
         ),
     ] = None,
     before: Annotated[
         str | None,
         Query(
-            description="Cursor: the object ID to stop before.", pattern=FILE_ID_PATTERN
+            description="Cursor: the object ID to stop before.",
+            pattern=VECTOR_STORE_FILE_ID_PATTERN,
         ),
     ] = None,
     limit: _Limit = 20,

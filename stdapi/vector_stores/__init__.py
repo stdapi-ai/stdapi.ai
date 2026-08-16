@@ -4,9 +4,12 @@ A vector store is a vector index plus the bookkeeping the API answers with.
 The package separates the two so a second index can be served without touching
 the callers:
 
-- ``backend`` — the :class:`~stdapi.vector_stores.backend.VectorIndex` contract
-  and the capabilities a backend declares.
+- ``backend`` — the :class:`~stdapi.vector_stores.backend.VectorIndex` contract,
+  the capabilities a backend declares, and the
+  :class:`~stdapi.vector_stores.backend.ExternalStore` contract a store held
+  elsewhere answers through.
 - ``s3_vectors`` — the Amazon S3 Vectors implementation of it.
+- ``knowledge_base`` — the Amazon Bedrock Knowledge Bases implementation of it.
 - ``registry`` — which backend serves which store.
 - ``models`` — the records and the values the routes read.
 - ``records`` — those records in the application bucket, under conditional writes.
@@ -19,6 +22,7 @@ imports the modules above directly.
 
 from stdapi.vector_stores.engine import (
     FILE_BATCH_ID_PATTERN,
+    VECTOR_STORE_FILE_ID_PATTERN,
     VECTOR_STORE_ID_PATTERN,
     attach_files,
     cancel_batch,
@@ -29,10 +33,15 @@ from stdapi.vector_stores.engine import (
     delete_store,
     detach_file,
     index_files,
+    list_batch_files,
+    list_store_files,
+    list_stores,
     new_batch_id,
     new_store_id,
     parse_batch_id,
     parse_store_id,
+    read_batch,
+    read_file,
     read_file_chunks,
     read_store,
     resolve_embedding_model,
@@ -52,18 +61,11 @@ from stdapi.vector_stores.models import (
     SearchResult,
     StoreRecord,
 )
-from stdapi.vector_stores.records import (
-    list_batch_files,
-    list_store_files,
-    list_stores,
-    read_batch,
-    read_file,
-    records_bucket,
-    update_record,
-)
+from stdapi.vector_stores.records import records_bucket, update_record
 
 __all__ = [
     "FILE_BATCH_ID_PATTERN",
+    "VECTOR_STORE_FILE_ID_PATTERN",
     "VECTOR_STORE_ID_PATTERN",
     "BatchRecord",
     "FileCountsRecord",

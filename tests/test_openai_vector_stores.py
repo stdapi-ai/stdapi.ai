@@ -21,6 +21,7 @@ Ref: https://platform.openai.com/docs/api-reference/vector-stores
 import time
 from asyncio import run
 from dataclasses import replace
+from itertools import count
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal
 from zlib import crc32
@@ -45,7 +46,9 @@ from stdapi.types.openai_vector_stores import (
     StaticChunkingConfig,
 )
 from stdapi.vector_stores import (
+    BatchRecord,
     FileCountsRecord,
+    FileRecord,
     PendingFile,
     StoreRecord,
     attach_files,
@@ -75,8 +78,10 @@ from stdapi.vector_stores.backend import (
     IndexVector,
     VectorMatch,
     parse_filter,
+    unsupported_file_message,
 )
-from stdapi.vector_stores.records import file_key, store_key
+from stdapi.vector_stores.knowledge_base import CAPABILITIES as _KB_CAPABILITIES
+from stdapi.vector_stores.records import batch_key, file_key, store_key
 from stdapi.vector_stores.s3_vectors import (
     S3VectorsIndex,
     attribute_key,
@@ -1134,6 +1139,9 @@ def vector_backend(monkeypatch: pytest.MonkeyPatch) -> _FakeBackend:
     backend = _FakeBackend()
     monkeypatch.setattr(SETTINGS, "aws_s3_bucket", "stdapi-test-records")
     monkeypatch.setattr(SETTINGS, "aws_s3_vectors_bucket", "stdapi-test-vectors")
+    # The stores of this API and no other: a knowledge base the deployment
+    # allowlisted is served from AWS, which this backend stands in for.
+    monkeypatch.setattr(SETTINGS, "aws_bedrock_knowledge_base_ids", [])
     monkeypatch.setattr(records, "records_client", lambda: backend.records)
     monkeypatch.setattr(s3_vectors, "vectors_client", lambda: backend.vectors)
     monkeypatch.setattr(engine, "get_embedding_model", lambda _model_id: backend.model)
@@ -1210,18 +1218,320 @@ def _seed_store_record(backend: _FakeBackend, **overrides: Any) -> StoreRecord: 
     Returns:
         The record as it was written.
     """
-    record = StoreRecord(
-        id=new_store_id(),
-        created_at=1,
-        last_active_at=1,
-        embedding_model="m",
-        dimensions=8,
-        **overrides,
-    )
+    defaults: dict[str, Any] = {
+        "id": new_store_id(),
+        "created_at": 1,
+        "last_active_at": 1,
+        "embedding_model": "m",
+        "dimensions": 8,
+    }
+    record = StoreRecord(**(defaults | overrides))
     key = store_key(record.id)
     backend.records.objects[key] = record.model_dump_json().encode()
     backend.records.etags[key] = '"etag-seed"'
     return record
+
+
+def _seed_file_record(
+    backend: _FakeBackend,
+    store_id: str,
+    file_id: str,
+    created_at: int,
+    batch_id: str = "",
+) -> None:
+    """Write one file record straight into the record bucket.
+
+    Args:
+        backend: The in-memory backend serving the API.
+        store_id: The store the file is attached to.
+        file_id: The uploaded file's identifier.
+        created_at: The moment the file was attached, as the record reports it.
+        batch_id: The batch the file belongs to, or ``""``.
+    """
+    record = FileRecord(
+        id=file_id, created_at=created_at, status="completed", batch_id=batch_id
+    )
+    key = file_key(store_id, file_id)
+    backend.records.objects[key] = record.model_dump_json().encode()
+    backend.records.etags[key] = '"etag-seed"'
+
+
+def _seed_batch_record(backend: _FakeBackend, store_id: str, batch_id: str) -> None:
+    """Write one batch record straight into the record bucket."""
+    record = BatchRecord(
+        id=batch_id,
+        created_at=_LISTING_BASE,
+        file_counts=FileCountsRecord(completed=len(_LISTING_TIMES)),
+    )
+    key = batch_key(store_id, batch_id)
+    backend.records.objects[key] = record.model_dump_json().encode()
+    backend.records.etags[key] = '"etag-seed"'
+
+
+def _walk_listing(
+    app_client: TestClient, path: str, *, order: str, limit: int
+) -> list[dict[str, Any]]:
+    """Return every object of a listing, one *limit*-sized page at a time.
+
+    Args:
+        app_client: The client the listing is read through.
+        path: The listing path, without its query string.
+        order: ``"asc"`` or ``"desc"``.
+        limit: Page size; below the number of objects, so the walk spans pages.
+
+    Returns:
+        The objects, concatenated in the order the pages handed them back.
+    """
+    collected: list[dict[str, Any]] = []
+    after = ""
+    for _ in range(_WALK_MAX_PAGES):
+        query = f"?limit={limit}&order={order}{f'&after={after}' if after else ''}"
+        response = app_client.get(f"{path}{query}")
+        assert response.status_code == 200, response.text
+        page = response.json()
+        collected.extend(page["data"])
+        if not page["has_more"] or not page["data"]:
+            return collected
+        after = page["last_id"]
+    pytest.fail("the cursor walk did not terminate")
+
+
+#: Epoch second the seeded listing times are counted from.
+_LISTING_BASE: int = 1_760_000_000
+
+#: Seconds after :data:`_LISTING_BASE` each seeded record reports, in identifier order.
+_LISTING_TIMES: tuple[int, ...] = (1, 6, 2, 7, 3, 8)
+
+#: Identifier letters the seeded files are named after, in identifier order.
+_LISTING_LETTERS: tuple[str, ...] = ("a", "b", "c", "d", "e", "f")
+
+#: Pages a cursor walk may take before the test calls it non-terminating.
+_WALK_MAX_PAGES: int = 12
+
+#: Knowledge base identifiers the merged listing test addresses stores on.
+_EXTERNAL_KB_IDS: tuple[str, ...] = ("AAAAA11111", "ZZZZZ99999")
+
+
+@pytest.mark.local
+class TestStoreFileListingOrder:
+    """A file listing orders on the attachment time it reports, across pages.
+
+    Issue #165: the order came from the S3 key, which is the *uploaded file's*
+    identifier — minted when the file was uploaded — while ``created_at`` is
+    the moment the file was attached to this store. A file uploaded last week
+    and attached today therefore sorted as an old one, and re-attaching a file
+    rewrote its ``created_at`` without moving its row.
+
+    The seeded times invert the identifier order in pairs, so every page of two
+    is internally ordered whichever of the two quantities the listing ran on:
+    only concatenating the pages tells them apart.
+
+    Ref: https://platform.openai.com/docs/api-reference/vector-stores-files/listFiles
+         stdapi/vector_stores/records.py:list_store_files
+    """
+
+    @pytest.fixture
+    def seeded_store(self, vector_backend: _FakeBackend) -> str:
+        """Return a store holding one file per :data:`_LISTING_TIMES` entry."""
+        store = _seed_store_record(vector_backend)
+        for letter, offset in zip(_LISTING_LETTERS, _LISTING_TIMES, strict=True):
+            _seed_file_record(
+                vector_backend, store.id, f"file-{letter * 32}", _LISTING_BASE + offset
+            )
+        return store.id
+
+    @pytest.mark.parametrize("order", ["asc", "desc"])
+    def test_pages_concatenate_in_created_at_order(
+        self, app_client: TestClient, seeded_store: str, order: str
+    ) -> None:
+        """Walking every page with the ``after`` cursor yields one ``created_at`` sequence.
+
+        Ref: https://platform.openai.com/docs/api-reference/vector-stores-files/listFiles
+             stdapi/vector_stores/records.py:list_store_files
+        """
+        files = _walk_listing(
+            app_client, f"/v1/vector_stores/{seeded_store}/files", order=order, limit=2
+        )
+        assert len(files) == len(_LISTING_TIMES)
+        created = [entry["created_at"] for entry in files]
+        assert created == sorted(created, reverse=order == "desc"), (
+            f"order={order} must hold across pages, got {created}"
+        )
+
+    def test_created_at_is_the_moment_the_file_was_attached(
+        self, app_client: TestClient, seeded_store: str
+    ) -> None:
+        """Every reported ``created_at`` is the attachment the record holds.
+
+        Ref: stdapi/vector_stores/engine.py:attach_files
+        """
+        files = _walk_listing(
+            app_client, f"/v1/vector_stores/{seeded_store}/files", order="asc", limit=2
+        )
+        assert {entry["id"]: entry["created_at"] for entry in files} == {
+            f"file-{letter * 32}": _LISTING_BASE + offset
+            for letter, offset in zip(_LISTING_LETTERS, _LISTING_TIMES, strict=True)
+        }
+
+    @pytest.mark.parametrize(
+        ("order", "cursor", "expected"),
+        [("asc", "b", ("c", "e")), ("desc", "e", ("d", "b"))],
+    )
+    def test_before_returns_the_page_ending_at_the_cursor(
+        self,
+        app_client: TestClient,
+        seeded_store: str,
+        order: str,
+        cursor: str,
+        expected: tuple[str, ...],
+    ) -> None:
+        """``before`` names a position in the listing, so its page ends at the cursor.
+
+        The page it names is the two files preceding the cursor in the listing's
+        own direction — the two attached just before it when ascending, the two
+        attached just after it when descending — and never the start of the
+        listing.
+
+        Ref: https://platform.openai.com/docs/api-reference/vector-stores-files/listFiles
+             stdapi/vector_stores/_paging.py:page_records
+        """
+        page = app_client.get(
+            f"/v1/vector_stores/{seeded_store}/files"
+            f"?limit=2&order={order}&before=file-{cursor * 32}"
+        ).json()
+        assert [entry["id"] for entry in page["data"]] == [
+            f"file-{letter * 32}" for letter in expected
+        ]
+
+    @pytest.mark.parametrize("order", ["asc", "desc"])
+    def test_a_batch_listing_pages_in_the_same_order(
+        self, app_client: TestClient, vector_backend: _FakeBackend, order: str
+    ) -> None:
+        """A batch's own file listing orders on the same quantity as the store's.
+
+        Ref: https://platform.openai.com/docs/api-reference/vector-stores-file-batches/listBatchFiles
+             stdapi/vector_stores/records.py:list_batch_files
+        """
+        store = _seed_store_record(vector_backend)
+        batch_id = new_batch_id()
+        _seed_batch_record(vector_backend, store.id, batch_id)
+        for letter, offset in zip(_LISTING_LETTERS, _LISTING_TIMES, strict=True):
+            _seed_file_record(
+                vector_backend,
+                store.id,
+                f"file-{letter * 32}",
+                _LISTING_BASE + offset,
+                batch_id=batch_id,
+            )
+        files = _walk_listing(
+            app_client,
+            f"/v1/vector_stores/{store.id}/file_batches/{batch_id}/files",
+            order=order,
+            limit=2,
+        )
+        created = [entry["created_at"] for entry in files]
+        assert len(created) == len(_LISTING_TIMES)
+        assert created == sorted(created, reverse=order == "desc"), (
+            f"order={order} must hold across pages, got {created}"
+        )
+
+    def test_reattaching_a_file_moves_it_to_the_newest_end(
+        self,
+        app_client: TestClient,
+        vector_backend: _FakeBackend,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A file attached again is listed as the newest, since that is what it reports.
+
+        Re-attaching replaces the record and rewrites its ``created_at``, so a
+        listing ordered on anything else reports a time that contradicts its own
+        order.
+
+        Ref: stdapi/vector_stores/engine.py:attach_files
+        """
+        clock = count(_LISTING_BASE)
+        monkeypatch.setattr(engine, "now_utc_timestamp", lambda: next(clock))
+        store_id = app_client.post("/v1/vector_stores", json={}).json()["id"]
+        first = vector_backend.upload(_TEXT_FILE)
+        second = vector_backend.upload(_OTHER_FILE)
+        for file_id in (first, second, first):
+            attached = app_client.post(
+                f"/v1/vector_stores/{store_id}/files", json={"file_id": file_id}
+            )
+            assert attached.status_code == 200, attached.text
+
+        page = app_client.get(f"/v1/vector_stores/{store_id}/files?limit=2").json()
+
+        assert [entry["id"] for entry in page["data"]] == [first, second]
+
+
+@pytest.mark.local
+class TestMergedStoreListingOrder:
+    """The listing of a deployment serving both kinds of store orders on one quantity.
+
+    Issue #165: the merge sorted on ``record.id``, and the identifier of a store
+    held elsewhere names the knowledge base rather than a moment, so external
+    stores fell into an arbitrary order among themselves and the merge threw
+    away the ordering the backend had already done.
+
+    Ref: https://platform.openai.com/docs/api-reference/vector-stores/list
+         stdapi/vector_stores/engine.py:list_stores
+    """
+
+    @pytest.fixture
+    def merged_stores(
+        self, vector_backend: _FakeBackend, monkeypatch: pytest.MonkeyPatch
+    ) -> dict[str, int]:
+        """Serve two stores of our own and two held elsewhere, interleaved in time.
+
+        Returns:
+            The creation time of every store, keyed by identifier.
+        """
+        native = [
+            _seed_store_record(
+                vector_backend,
+                created_at=_LISTING_BASE + offset,
+                last_active_at=_LISTING_BASE + offset,
+            )
+            for offset in (2, 5)
+        ]
+        external = [
+            StoreRecord(
+                id=f"vs_kb_{kb_id}",
+                created_at=_LISTING_BASE + offset,
+                last_active_at=_LISTING_BASE + offset,
+                embedding_model="m",
+                dimensions=8,
+                external_status="completed",
+            )
+            for kb_id, offset in zip(_EXTERNAL_KB_IDS, (1, 3), strict=True)
+        ]
+
+        class _ExternalBackend:
+            """A backend answering for stores this deployment only addresses."""
+
+            async def list_stores(self) -> list[StoreRecord]:
+                """Return the external stores, ordered as the backend orders them."""
+                return sorted(external, key=lambda record: record.created_at)
+
+        monkeypatch.setattr(engine, "external_stores", lambda: (_ExternalBackend(),))
+        return {record.id: record.created_at for record in native + external}
+
+    @pytest.mark.parametrize("order", ["asc", "desc"])
+    def test_pages_concatenate_in_created_at_order(
+        self, app_client: TestClient, merged_stores: dict[str, int], order: str
+    ) -> None:
+        """Both kinds of store take their place in one ``created_at`` sequence.
+
+        Ref: https://platform.openai.com/docs/api-reference/vector-stores/list
+             stdapi/vector_stores/engine.py:list_stores
+        """
+        stores = _walk_listing(app_client, "/v1/vector_stores", order=order, limit=2)
+        assert {entry["id"] for entry in stores} == set(merged_stores)
+        created = [entry["created_at"] for entry in stores]
+        assert created == sorted(created, reverse=order == "desc"), (
+            f"order={order} must hold across pages, got {created}"
+        )
 
 
 @pytest.mark.local
@@ -2059,6 +2369,29 @@ class TestRoutesOffline:
         ]
         page = app_client.get(f"/v1/vector_stores?order=asc&after={ids[0]}").json()
         assert [entry["id"] for entry in page["data"]] == ids[1:]
+
+    @pytest.mark.parametrize(
+        ("order", "expected_index"), [("asc", 0), ("desc", 2)], ids=["asc", "desc"]
+    )
+    def test_before_returns_the_page_ending_at_the_cursor(
+        self, app_client: TestClient, order: str, expected_index: int
+    ) -> None:
+        """``before`` names a position, so its page is the one preceding the cursor.
+
+        Which side of the cursor that is follows the listing's own direction: the
+        older store when ascending, the newer one when descending.
+
+        Ref: https://platform.openai.com/docs/api-reference/vector-stores/list
+             stdapi/vector_stores/_paging.py:page_identifiers
+        """
+        ids = [
+            app_client.post("/v1/vector_stores", json={"name": f"b{index}"}).json()[
+                "id"
+            ]
+            for index in range(3)
+        ]
+        page = app_client.get(f"/v1/vector_stores?order={order}&before={ids[1]}").json()
+        assert [entry["id"] for entry in page["data"]] == [ids[expected_index]]
 
     def test_unknown_identifiers_answer_404(self, app_client: TestClient) -> None:
         """Every route answers 404 for a well-formed identifier naming nothing.
@@ -3170,3 +3503,92 @@ class TestBackendCapabilities:
         await delete_store(store.id)
         await _run_cleanups(scheduled_cleanups)
         assert index.deleted == [store.id]
+
+
+@pytest.mark.local
+class TestUnsupportedFileMessage:
+    """A refused file is explained in the terms of the store that refused it.
+
+    Two backends disagree about what they take, so one fixed sentence would
+    describe the wrong store on one of them. The explanation is built from the
+    serving backend's own declaration and names where the file would be indexed
+    instead, while the settled shape — ``failed`` with ``unsupported_file`` —
+    stays exactly what upstream defines.
+
+    Ref: stdapi/vector_stores/backend.py:unsupported_file_message
+         openai.types.vector_stores.vector_store_file.LastError
+    """
+
+    async def test_a_document_format_names_the_store_that_would_take_it(
+        self, vector_backend: _FakeBackend
+    ) -> None:
+        """A PDF refused by a text-only store is pointed at a store that indexes it.
+
+        Ref: stdapi/vector_stores/engine.py:_load_chunks
+        """
+        store = await _create_store()
+        file_id = vector_backend.upload(b"%PDF-1.7\x00binary", "application/pdf")
+        await _attach(store, [file_id])
+        await index_files(store.id, [file_id], "", "test-request")
+
+        record = await read_file(store.id, file_id)
+        assert record.status == "failed"
+        assert record.last_error is not None
+        assert record.last_error.code == "unsupported_file"
+        message = record.last_error.message
+        assert "text" in message
+        assert "knowledge base store" in message
+        # What another backend takes is never listed as what this store takes.
+        assert "application/msword" not in message
+
+    async def test_a_format_no_store_takes_offers_no_alternative(
+        self, vector_backend: _FakeBackend
+    ) -> None:
+        """An archive is refused with nowhere else to send it.
+
+        Ref: stdapi/vector_stores/backend.py:unsupported_file_message
+        """
+        store = await _create_store()
+        file_id = vector_backend.upload(b"PK\x03\x04binary", "application/zip")
+        await _attach(store, [file_id])
+        await index_files(store.id, [file_id], "", "test-request")
+
+        record = await read_file(store.id, file_id)
+        assert record.status == "failed"
+        assert record.last_error is not None
+        assert record.last_error.code == "unsupported_file"
+        assert "knowledge base" not in record.last_error.message
+
+    def test_the_same_file_is_explained_differently_per_backend(self) -> None:
+        """The two shipped backends refuse the same archive with different sentences.
+
+        Ref: stdapi/vector_stores/knowledge_base.py:CAPABILITIES
+        """
+        text_only = unsupported_file_message(_S3_CAPABILITIES)
+        documents = unsupported_file_message(_KB_CAPABILITIES)
+        assert text_only != documents
+        assert "application/pdf" not in text_only
+        assert "application/pdf" in documents
+
+    async def test_the_message_follows_the_backend_serving_the_store(
+        self, fake_index: Callable[..., _FakeVectorIndex], vector_backend: _FakeBackend
+    ) -> None:
+        """A backend declaring its own formats is described by them, not by a constant.
+
+        Ref: stdapi/vector_stores/backend.py:IndexCapabilities
+        """
+        fake_index(
+            ingests_decodable_text=False,
+            ingested_media_types=frozenset({"application/x-parquet"}),
+            refused_media_types=frozenset(),
+        )
+        store = await _create_store()
+        file_id = vector_backend.upload(_TEXT_FILE)
+        await _attach(store, [file_id])
+        await index_files(store.id, [file_id], "", "test-request")
+
+        record = await read_file(store.id, file_id)
+        assert record.status == "failed"
+        assert record.last_error is not None
+        assert record.last_error.code == "unsupported_file"
+        assert "application/x-parquet" in record.last_error.message

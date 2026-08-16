@@ -10,7 +10,7 @@ it — a store still reporting ``in_progress`` for a file already ``completed``
 converges, while counters claiming a completion the listing cannot show does not.
 """
 
-from typing import TYPE_CHECKING, Final, NoReturn
+from typing import TYPE_CHECKING, Final
 
 from botocore.exceptions import ClientError
 from pydantic import BaseModel
@@ -20,7 +20,8 @@ from stdapi.aws import get_client
 from stdapi.aws_s3 import BUCKET_TO_REGION, S3_TAGGING
 from stdapi.config import SETTINGS
 from stdapi.vector_stores._concurrency import gather_bounded
-from stdapi.vector_stores.backend import FEATURE
+from stdapi.vector_stores._paging import page_identifiers, page_records
+from stdapi.vector_stores.backend import FEATURE, raise_not_found
 from stdapi.vector_stores.models import BatchRecord, FileRecord, StoreRecord
 from stdapi.vector_stores.registry import default_backend
 
@@ -45,20 +46,6 @@ _MISSING_CODES: Final[frozenset[str]] = frozenset({"404", "NoSuchKey"})
 _CONFLICT_CODES: Final[frozenset[str]] = frozenset(
     {"PreconditionFailed", "ConditionalRequestConflict"}
 )
-
-
-def raise_not_found(resource: str, identifier: str) -> NoReturn:
-    """Raise the 404 answering an unknown store, file or batch.
-
-    Args:
-        resource: Human-readable resource name.
-        identifier: The identifier that was not found.
-
-    Raises:
-        ApiError: Always (404).
-    """
-    msg = f"No {resource} found with id '{identifier}'."
-    raise ApiError(msg, status=404)
 
 
 def records_bucket() -> str:
@@ -316,9 +303,13 @@ async def list_stores(
 ) -> tuple[list[StoreRecord], bool]:
     """List vector stores, newest first by default.
 
+    A store identifier is minted from the instant the record reports as its
+    creation, so ascending key order is ascending creation order and the page is
+    cut on the identifiers rather than on a thousand records read to sort them.
+
     Args:
-        after: Return stores created strictly after this identifier.
-        before: Return stores created strictly before this identifier.
+        after: Return the stores following this identifier.
+        before: Return the page ending immediately before this identifier.
         limit: Maximum records to return.
         order: ``"asc"`` or ``"desc"``.
 
@@ -329,19 +320,10 @@ async def list_stores(
     if order == "asc" and not before:
         ids, has_more = await list_ids(prefix, "/", after=after, limit=limit)
     else:
-        ids, has_more = await list_ids(prefix, "/", after="", limit=_LIST_SCAN_MAX)
-        if after:
-            ids = (
-                [i for i in ids if i > after]
-                if order == "asc"
-                else [i for i in ids if i < after]
-            )
-        if before:
-            ids = [i for i in ids if i < before]
-        if order == "desc":
-            ids = ids[::-1]
-        has_more = len(ids) > limit
-        ids = ids[:limit]
+        ids, _ = await list_ids(prefix, "/", after="", limit=_LIST_SCAN_MAX)
+        ids, has_more = page_identifiers(
+            ids, after=after, before=before, limit=limit, order=order
+        )
     records = [
         record[0]
         for record in (await gather_records(StoreRecord, [store_key(i) for i in ids]))
@@ -350,34 +332,18 @@ async def list_stores(
     return records, has_more
 
 
-async def list_store_files(
-    store_id: str, *, after: str, before: str, limit: int, order: str, status: str
-) -> tuple[list[FileRecord], bool]:
-    """List the files attached to *store_id*.
+async def store_file_records(store_id: str, status: str) -> list[FileRecord]:
+    """Return every file attached to *store_id*, in no particular order.
 
     Args:
         store_id: A validated vector store identifier.
-        after: Return files created strictly after this identifier.
-        before: Return files created strictly before this identifier.
-        limit: Maximum records to return.
-        order: ``"asc"`` or ``"desc"``.
         status: Keep only files with this status, or ``""`` for all.
 
     Returns:
-        ``(records, has_more)``.
+        The file records.
     """
     prefix = f"{store_prefix(store_id)}files/"
     ids, _ = await list_ids(prefix, "", after="", limit=_LIST_SCAN_MAX)
-    if after:
-        ids = (
-            [i for i in ids if i > after]
-            if order == "asc"
-            else [i for i in ids if i < after]
-        )
-    if before:
-        ids = [i for i in ids if i < before]
-    if order == "desc":
-        ids = ids[::-1]
     records = [
         record[0]
         for record in (
@@ -385,9 +351,40 @@ async def list_store_files(
         )
         if record is not None
     ]
-    if status:
-        records = [r for r in records if r.status == status]
-    return records[:limit], len(records) > limit
+    return (
+        [record for record in records if record.status == status] if status else records
+    )
+
+
+async def list_store_files(
+    store_id: str, *, after: str, before: str, limit: int, order: str, status: str
+) -> tuple[list[FileRecord], bool]:
+    """List the files attached to *store_id*, most recently attached first.
+
+    A file keeps the identifier it was uploaded under, which names the moment of
+    the *upload* — a file uploaded last week and attached today would sort as an
+    old one — and re-attaching it rewrites ``created_at`` where the identifier
+    cannot move.  The listing therefore orders on the attachment time it
+    reports, and the cursors name positions in that order.
+
+    Args:
+        store_id: A validated vector store identifier.
+        after: Return the files following this identifier.
+        before: Return the page ending immediately before this identifier.
+        limit: Maximum records to return.
+        order: ``"asc"`` or ``"desc"``.
+        status: Keep only files with this status, or ``""`` for all.
+
+    Returns:
+        ``(records, has_more)``.
+    """
+    return page_records(
+        await store_file_records(store_id, status),
+        after=after,
+        before=before,
+        limit=limit,
+        order=order,
+    )
 
 
 async def list_batch_files(
@@ -400,13 +397,16 @@ async def list_batch_files(
     order: str,
     status: str,
 ) -> tuple[list[FileRecord], bool]:
-    """List the files of one batch.
+    """List the files of one batch, most recently attached first.
+
+    Ordered on the attachment time it reports, exactly as the store's own file
+    listing is.
 
     Args:
         store_id: A validated vector store identifier.
         batch_id: A validated file batch identifier.
-        after: Return files created strictly after this identifier.
-        before: Return files created strictly before this identifier.
+        after: Return the files following this identifier.
+        before: Return the page ending immediately before this identifier.
         limit: Maximum records to return.
         order: ``"asc"`` or ``"desc"``.
         status: Keep only files with this status, or ``""`` for all.
@@ -414,13 +414,11 @@ async def list_batch_files(
     Returns:
         ``(records, has_more)``.
     """
-    records, _ = await list_store_files(
-        store_id,
+    records = await store_file_records(store_id, status)
+    return page_records(
+        [record for record in records if record.batch_id == batch_id],
         after=after,
         before=before,
-        limit=_LIST_SCAN_MAX,
+        limit=limit,
         order=order,
-        status=status,
     )
-    batch_records = [record for record in records if record.batch_id == batch_id]
-    return batch_records[:limit], len(batch_records) > limit

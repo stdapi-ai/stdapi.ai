@@ -56,6 +56,7 @@ class StoreRecord(BaseModel):
     file_counts: FileCountsRecord = Field(default_factory=FileCountsRecord)
     usage_bytes: int = 0
     index_deleted: bool = False
+    external_status: Literal["in_progress", "completed"] | None = None
 
     @property
     def expires_at(self) -> int | None:
@@ -72,9 +73,15 @@ class StoreRecord(BaseModel):
 
     @property
     def status(self) -> Literal["expired", "in_progress", "completed"]:
-        """The store status the API reports."""
+        """The store status the API reports.
+
+        A store held elsewhere reports its own readiness: its files are not
+        counted here, so the counters cannot answer for it.
+        """
         if self.expired:
             return "expired"
+        if self.external_status is not None:
+            return self.external_status
         return "in_progress" if self.file_counts.in_progress else "completed"
 
 
@@ -86,7 +93,13 @@ class FileErrorRecord(BaseModel):
 
 
 class FileRecord(BaseModel):
-    """The bookkeeping of one file attached to a vector store."""
+    """The bookkeeping of one file attached to a vector store.
+
+    ``attributes`` is ``None`` and ``max_chunk_size_tokens`` is ``0`` on a store
+    that answers for its own files: it keeps the attributes searchable without
+    reading them back, and cuts the passages itself. Both are reported as
+    unknown rather than as a value this server would be inventing.
+    """
 
     id: str
     created_at: int
@@ -96,7 +109,7 @@ class FileRecord(BaseModel):
     usage_bytes: int = 0
     chunk_count: int = 0
     previous_chunk_count: int = 0
-    attributes: Attributes = Field(default_factory=dict)
+    attributes: Attributes | None = None
     max_chunk_size_tokens: int = CHUNK_SIZE_TOKENS_DEFAULT
     chunk_overlap_tokens: int = CHUNK_OVERLAP_TOKENS_DEFAULT
     batch_id: str = ""

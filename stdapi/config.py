@@ -95,6 +95,9 @@ _IAM_ROLE_ARN_PATTERN = re.compile(
 #: Session tag key charset accepted by AWS STS AssumeRole (1-128 characters).
 _SESSION_TAG_KEY_PATTERN = re.compile(r"^[\w.:/=+\-@ ]{1,128}$")
 
+#: Allowlist entry naming a knowledge base and, optionally, its data source.
+_KNOWLEDGE_BASE_ENTRY_RE = re.compile(r"^[0-9A-Za-z]{10}(?:/[0-9A-Za-z]{1,64})?$").match
+
 #: Built-in set of ``anthropic_beta`` flags known to be supported by AWS Bedrock.
 _ANTHROPIC_BETA_BEDROCK_FLAGS: frozenset[str] = frozenset(
     {
@@ -1094,6 +1097,37 @@ class _Settings(BaseSettings):
         ),
     )
 
+    aws_bedrock_knowledge_base_ids: Annotated[list[str], NoDecode] = Field(
+        default=[],
+        description=(
+            "Comma-separated allowlist of Amazon Bedrock knowledge bases served "
+            "through the Vector Stores API. Each allowlisted knowledge base is "
+            "addressed as the vector store 'vs_kb_<knowledgeBaseId>' on every "
+            "/v1/vector_stores endpoint, and is returned by "
+            "GET /v1/vector_stores next to the stores the server owns.\n\n"
+            "The knowledge base itself always stays yours: the server never "
+            "creates one and never deletes one. It searches it, and ingests, "
+            "reads and deletes the documents of its data source.\n\n"
+            "Write each entry as '<knowledgeBaseId>', or as "
+            "'<knowledgeBaseId>/<dataSourceId>' when the knowledge base has "
+            "more than one data source; with a single data source the server "
+            "resolves it itself. The knowledge base must live in the first "
+            "aws_bedrock_regions entry.\n\n"
+            "Required IAM permissions, on the knowledge base ARN:\n"
+            "- bedrock:GetKnowledgeBase\n"
+            "- bedrock:Retrieve\n"
+            "- bedrock:ListDataSources\n"
+            "- bedrock:IngestKnowledgeBaseDocuments\n"
+            "- bedrock:ListKnowledgeBaseDocuments\n"
+            "- bedrock:GetKnowledgeBaseDocuments\n"
+            "- bedrock:DeleteKnowledgeBaseDocuments\n\n"
+            "Example: 'ABCDE12345,FGHIJ67890/KLMNO13579'\n\n"
+            "Unset (default): no knowledge base is addressable, and a "
+            "'vs_kb_...' identifier is answered exactly as an unknown vector "
+            "store is."
+        ),
+    )
+
     aws_translate_region: RegionName | None = Field(
         default=None,
         description=(
@@ -1997,6 +2031,7 @@ class _Settings(BaseSettings):
         return default_dropped | frozenset(extra)
 
     @field_validator(
+        "aws_bedrock_knowledge_base_ids",
         "aws_bedrock_mantle_regions",
         "aws_bedrock_mantle_preferred_models",
         "aws_cognito_client_ids",
@@ -2021,6 +2056,32 @@ class _Settings(BaseSettings):
         if isinstance(value, str):
             value = [item for item in (v.strip() for v in value.split(",")) if item]
         return list(dict.fromkeys(value))
+
+    @field_validator("aws_bedrock_knowledge_base_ids")
+    @classmethod
+    def _validate_knowledge_base_ids(cls, value: list[str]) -> list[str]:
+        """Reject an allowlist entry that is not a knowledge base identifier.
+
+        Args:
+            value: The allowlisted entries, already split.
+
+        Returns:
+            The entries, unchanged.
+
+        Raises:
+            ValueError: When an entry is not '<knowledgeBaseId>' or
+                '<knowledgeBaseId>/<dataSourceId>'.
+        """
+        for entry in value:
+            if not _KNOWLEDGE_BASE_ENTRY_RE(entry):
+                msg = (
+                    f"aws_bedrock_knowledge_base_ids entry '{entry}' is not a "
+                    "knowledge base identifier: write '<knowledgeBaseId>', or "
+                    "'<knowledgeBaseId>/<dataSourceId>' to name the data source "
+                    "documents are ingested into."
+                )
+                raise ValueError(msg)
+        return value
 
     @field_validator("aws_bedrock_regions", mode="before")
     @classmethod

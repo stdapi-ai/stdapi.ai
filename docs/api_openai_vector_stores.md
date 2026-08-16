@@ -1,7 +1,7 @@
 ---
 title: Vector Stores API - OpenAI-Compatible Managed Semantic Search
-description: Index files into a managed vector store and search them by meaning with the OpenAI-compatible Vector Stores API. Asynchronous indexing, file batches, attribute filters, expiration policies and per-chunk scoring, backed by your own AWS account.
-keywords: Vector Stores API, OpenAI vector store, semantic search, managed retrieval, file indexing, chunking strategy, attribute filters, vector search AWS, RAG vector store
+description: Index files into a managed vector store and search them by meaning with the OpenAI-compatible Vector Stores API. Asynchronous indexing, file batches, attribute filters, expiration policies and per-chunk scoring, backed by your own AWS account — or by an Amazon Bedrock knowledge base you already run.
+keywords: Vector Stores API, OpenAI vector store, semantic search, managed retrieval, file indexing, chunking strategy, attribute filters, vector search AWS, RAG vector store, Amazon Bedrock knowledge base, knowledge base vector store, vs_kb
 ---
 
 # Vector Stores API
@@ -34,6 +34,9 @@ search it.
 - :material-shield-lock: __Your Own Account__
   <br>Documents, passages and vectors are stored in your AWS account, and never leave it.
 
+- :material-database-arrow-right: __Bring Your Own Knowledge Base__
+  <br>Address an [Amazon Bedrock knowledge base](#knowledge-base-stores) you already run as a vector store, through the same endpoints.
+
 </div>
 
 ## Available Endpoints
@@ -56,6 +59,23 @@ search it.
 | `/v1/vector_stores/{vector_store_id}/file_batches/{batch_id}`        | `GET`    | Retrieve a file batch               | `openai_vector_store_file_batch_get`         |
 | `/v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/cancel` | `POST`   | Cancel a file batch                 | `openai_vector_store_file_batch_cancel`      |
 | `/v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/files`  | `GET`    | List a file batch's files           | `openai_vector_store_file_batch_file_list`   |
+
+## Listing Order
+
+Every listing — stores, a store's files, a batch's files — is ordered by the
+`created_at` it reports for each object, **most recent first**; `order=asc`
+reverses it. Objects sharing a second are ordered by identifier, so the sequence
+is stable from one page to the next.
+
+| Object | `created_at` is                                                                 |
+|--------|-----------------------------------------------------------------------------------|
+| Store  | When the store was created.                                                       |
+| File   | When the file was **attached to that store** — not when it was uploaded. Attaching the same file again moves it to the newest end. |
+
+The `after` and `before` cursors are positions in that order: `after` returns the
+objects that follow the named one, `before` the page that ends just before it,
+both in the direction `order` asks for. Neither restarts the listing from the
+top when the object it names has since been deleted.
 
 ## Quick Start
 
@@ -106,15 +126,27 @@ not a known binary one — a text file uploaded as `application/octet-stream` or
 `application/pdf` is refused on its content type, before its bytes are read.
 
 A file that is not text settles as `status="failed"` with
-`last_error.code="unsupported_file"`. Convert documents to text before
-uploading them — [RAG Pipelines](use_cases_rag.md#document-parsing) shows a
-document-conversion stage that produces Markdown from PDF and office formats.
+`last_error.code="unsupported_file"`. The message names what **that** store
+indexes, and — when another kind of store would take the file as it stands —
+where to send it instead:
+
+> This file type cannot be indexed by this vector store. It indexes text only.
+> Provide the content as a text file. A knowledge base store indexes this file
+> type as it stands.
+
+Convert documents to text otherwise — [RAG
+Pipelines](use_cases_rag.md#document-parsing) shows a document-conversion stage
+that produces Markdown from PDF and office formats.
 
 | `last_error.code` | Meaning                                                        |
 |-------------------|----------------------------------------------------------------|
-| `unsupported_file`| The file's bytes are not text.                                  |
+| `unsupported_file`| The file is not one this store indexes.                         |
 | `invalid_file`    | The file is text but holds nothing to index, or is too large.   |
 | `server_error`    | Indexing failed; detach the file and attach it again.           |
+
+A [knowledge base store](#knowledge-base-stores) indexes more than text — PDF and
+office documents as they stand, and media on a fully managed one. Its own
+refusals list the formats that store accepts.
 
 ## Chunking
 
@@ -175,6 +207,13 @@ Each result carries `file_id`, `filename`, the file's `attributes`, the matching
 `content`, and a `score` between `0` and `1` where `1` is an exact match. Results
 are ordered best first, and the page is complete — search is never paginated.
 
+!!! note "Scores on a knowledge base store"
+    On a [`vs_kb_...` store](#knowledge-base-stores) the `score` is the relevance
+    value the knowledge base measured, reported unchanged. It orders the results
+    within one response and is **not** the `0`-to-`1` similarity above, so never
+    compare it across stores or against a fixed threshold —
+    `ranking_options.score_threshold` is refused on those stores for that reason.
+
 ### Filters
 
 | `type`                            | Matches                                    |
@@ -222,6 +261,143 @@ expiration a store reads back with `status="expired"` and returns no search
 result; its indexed content is released and a search never brings it back. Send
 `"expires_after": null` on an update to remove the policy.
 
+## Knowledge Base Stores { #knowledge-base-stores }
+
+A vector store can also be served by an
+[Amazon Bedrock knowledge base](https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base.html)
+you already created. Allowlist it in
+[`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration.md#aws-bedrock-knowledge-base-ids)
+and it is addressed as the vector store `vs_kb_<knowledgeBaseId>` — the knowledge
+base identifier is ten alphanumeric characters — on every `/v1/vector_stores`
+endpoint, and returned by `GET /v1/vector_stores` next to the stores the server
+owns.
+
+**The knowledge base stays yours.** It is addressed, never created and never
+deleted; the server searches it and manages the documents of its data source.
+Its name, description, creation time and status are read from the knowledge base
+itself.
+
+!!! warning "Attaching a file needs a custom data source"
+    A file attached through this API becomes an in-line document, which only a
+    **custom** data source takes — on either generation. Point the allowlist
+    entry at one, as `<knowledgeBaseId>/<dataSourceId>`; pointed at a data
+    source that syncs its corpus from a bucket or another service, the store
+    answers `400` to an attach and keeps serving search, listing and reading.
+    A knowledge base can hold both kinds.
+
+```python
+store = client.vector_stores.retrieve("vs_kb_ABCDE12345")
+
+uploaded = client.files.create(file=open("handbook.pdf", "rb"), purpose="assistants")
+client.vector_stores.files.create(
+    vector_store_id=store.id, file_id=uploaded.id, attributes={"department": "hr"}
+)
+
+for result in client.vector_stores.search(
+    store.id, query="How much parental leave do I get?", max_num_results=5
+):
+    print(result.score, result.filename, result.content[0].text)
+```
+
+### What Works
+
+| Request                                              | On a `vs_kb_...` store                                                                                     |
+|------------------------------------------------------|--------------------------------------------------------------------------------------------------------------|
+| `GET /v1/vector_stores`                              | Lists it alongside the stores the server owns.                                                               |
+| `GET /v1/vector_stores/{id}`                         | Name, description, creation time and status, as the knowledge base reports them.                             |
+| `POST /v1/vector_stores/{id}/files`                  | Attaches an uploaded file: it becomes a document of the knowledge base's custom data source, with its `attributes` kept searchable. |
+| `GET /v1/vector_stores/{id}/files`                   | Lists the documents of the store's data source, including the ones put there outside this API.               |
+| `GET /v1/vector_stores/{id}/files/{file_id}`         | Retrieves one document, including one a search returned from elsewhere in the knowledge base.                 |
+| `DELETE /v1/vector_stores/{id}/files/{file_id}`      | Removes a document this API attached.                                                                        |
+| `POST /v1/vector_stores/{id}/search`                 | Searches it, with `filters` and `max_num_results`.                                                           |
+
+`filters` works in full: all eight comparison operators (`eq`, `ne`, `gt`,
+`gte`, `lt`, `lte`, `in`, `nin`) and both combinators (`and`, `or`), over any
+metadata key, with no schema to declare beforehand.
+
+### What Is Refused
+
+| Request                                                              | Answer                                                                                                              |
+|------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------|
+| `POST /v1/vector_stores` creating one                                | Not creatable: the store is addressed, never created. No request field names a knowledge base.                        |
+| `DELETE /v1/vector_stores/{id}`                                      | `400` — the store is managed outside the server.                                                                      |
+| `POST /v1/vector_stores/{id}` (`name`, `metadata`, `expires_after`)  | `400` — they are read from the knowledge base.                                                                        |
+| `chunking_strategy` on an attach                                     | `400` — the store chooses its own passage boundaries.                                                                 |
+| `POST /v1/vector_stores/{id}/files/{file_id}` (attribute rewrite)    | `400` — attach the file again with the attributes it should carry.                                                    |
+| `GET /v1/vector_stores/{id}/files/{file_id}/content`                 | `400` — the passages a file was indexed as cannot be listed. Download the file itself with the [Files API](api_openai_files.md). |
+| `POST /v1/vector_stores/{id}/files` on a store whose data source syncs its corpus | `400` — that corpus is maintained where it comes from. Use a store this server owns, or ask for one that accepts uploads. |
+| `DELETE /v1/vector_stores/{id}/files/{file_id}` on a document of the corpus | `400` — it was not attached here, and is removed where the corpus comes from.                                          |
+| `POST /v1/vector_stores/{id}/file_batches` and the other batch routes | `400` — attach and follow files one at a time.                                                                        |
+| `ranking_options.score_threshold`                                    | `400` — the store's relevance scores are not comparable between searches; use `max_num_results` instead.               |
+| A `query` over the length limit                                      | `400` naming the limit. The query is never truncated.                                                                 |
+
+`usage_bytes`, `file_counts`, and a file's `chunking_strategy` and `attributes`
+are reported as unknown — zero, or absent — rather than invented: the corpus is
+yours, and the server does not claim to know what it holds.
+
+A document's `created_at` is the only time the knowledge base reports for it: the
+instant it last ingested that document, which for a document ingested once is
+when it was created. The document listing is ordered on that same value, so a
+page never reports a time that contradicts its own order.
+
+### Identifiers
+
+A file you attach keeps its own `file-...` identifier. A document that was
+already in the knowledge base — one of the corpus behind it — is reported under
+an opaque `kbdoc_...` identifier, and the per-file routes accept it.
+
+A search covers the whole knowledge base, not only the documents attached here,
+so a result may name a document of a corpus this API never wrote to. Its
+`kbdoc_...` identifier still reads back: `GET /v1/vector_stores/{id}/files/{file_id}`
+answers for it, wherever in the knowledge base it lives. Removing it is the one
+thing refused — that corpus is maintained where it comes from.
+
+### Document Formats
+
+Files are indexed as they stand, with no conversion step:
+
+| Formats                                                                 | Indexed by                                     |
+|---------------------------------------------------------------------------|--------------------------------------------------|
+| `.txt`, `.md`, `.html`, `.csv`, `.doc`, `.docx`, `.xls`, `.xlsx`, `.pdf` | Every knowledge base                             |
+| `.ppt`, `.pptx`, images, audio and video                                | A fully managed knowledge base, additionally     |
+| Anything else whose bytes decode as text                                | Every knowledge base, indexed as text            |
+
+One file is at most **5 MiB**.
+
+A format outside that table is refused when the file is attached — `400`, naming
+the formats **this** store takes — rather than accepted and then reported as
+`failed`. A file that is attached and then fails is one of a format the store
+does take, so it settles with `last_error.code="server_error"`.
+
+### Two Generations, Two Differences
+
+Both generations are supported: a knowledge base you provisioned the storage for,
+and a fully managed one. Only two things differ from the client's point of view:
+
+| Difference               | You provisioned the storage | Fully managed                              |
+|--------------------------|-----------------------------|--------------------------------------------|
+| Document formats indexed | The table above             | Also `.ppt`, `.pptx`, images, audio, video |
+| `query` length           | 1,000 characters            | 10,000 characters                          |
+
+### Cost
+
+A knowledge base search costs more than a search on a store the server owns, and
+a knowledge base backed by an always-on vector database bills whether it is
+queried or not. This is information for choosing between the two, not a
+recommendation.
+
+What the [usage log](operations_cost_management.md#vector-stores) reports differs
+per generation, because the retrieval runs inside the knowledge base rather than
+through an embedding model of the server's:
+
+| Generation                  | Search                                                         | Attaching a file                                     |
+|-----------------------------|----------------------------------------------------------------|------------------------------------------------------|
+| Fully managed               | One `search_units` unit per query, at the published flat rate  | Not reported: index storage is billed monthly per GB |
+| You provisioned the storage | Not reported: no per-retrieval rate is published for it         | Not reported: billed by its own embedding model      |
+
+Everything left unreported is on your AWS bill and readable from AWS Cost
+Explorer. Full detail in [Cost Management](operations_cost_management.md#vector-stores).
+
 ## Limits
 
 | Limit                             | Value                                      |
@@ -240,8 +416,8 @@ that cannot be indexed.
 
 | Status | When                                                                             |
 |--------|-----------------------------------------------------------------------------------|
-| `400`  | Attributes above the total budget, a chunking strategy outside its bounds, or a `gt`/`gte`/`lt`/`lte` filter given a non-numeric value. |
-| `404`  | An identifier that names no store, attached file or batch.                         |
+| `400`  | Attributes above the total budget, a chunking strategy outside its bounds, a `gt`/`gte`/`lt`/`lte` filter given a non-numeric value, or a request a [knowledge base store](#knowledge-base-stores) does not accept. |
+| `404`  | An identifier that names no store, attached file or batch. A `vs_kb_...` identifier that is not allowlisted answers exactly like any unknown store. |
 | `409`  | The store is being updated concurrently by another request; retry it.              |
 | `503`  | The deployment has no vector storage configured.                                   |
 
@@ -262,6 +438,14 @@ The model that turns text into vectors is
 It is recorded on each store when the store is created, so changing the setting
 only affects stores created afterwards — existing stores keep answering with the
 model they were built with.
+
+[Knowledge base stores](#knowledge-base-stores) need none of the above: they need
+[`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration.md#aws-bedrock-knowledge-base-ids),
+the [knowledge base permissions](operations_iam_permissions.md#knowledge-base-vector-stores),
+and a knowledge base in the first
+[`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) entry.
+They bring their own storage and their own embedding model, and they are listed
+and served even when no vector bucket is configured.
 
 ## See Also
 
