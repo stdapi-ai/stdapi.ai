@@ -15,11 +15,12 @@ be searchable polls until the store reports it ``completed``.
 Ref: https://platform.openai.com/docs/api-reference/vector-stores
      https://stdapi.ai/api_openai_vector_stores/
      stdapi/routes/openai_vector_stores.py
-     stdapi/vector_stores.py
+     stdapi/vector_stores/engine.py
 """
 
 import time
 from asyncio import run
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal
 from zlib import crc32
@@ -47,41 +48,62 @@ from stdapi.vector_stores import (
     FileCountsRecord,
     PendingFile,
     StoreRecord,
-    _file_key,
-    _index_files,
-    _store_key,
     attach_files,
-    attribute_key,
     cancel_batch,
     chunk_text,
     create_store,
     delete_store,
     detach_file,
-    index_name,
+    engine,
+    index_files,
     new_batch_id,
     new_store_id,
     read_batch,
     read_file,
     read_file_chunks,
     read_store,
-    score_from_distance,
+    records,
+    s3_vectors,
     search,
     touch_store,
-    translate_filter,
     update_file_attributes,
     update_record,
     vector_key,
+)
+from stdapi.vector_stores.backend import (
+    IndexCapabilities,
+    IndexVector,
+    VectorMatch,
+    parse_filter,
+)
+from stdapi.vector_stores.records import file_key, store_key
+from stdapi.vector_stores.s3_vectors import (
+    S3VectorsIndex,
+    attribute_key,
+    index_name,
+    score_from_distance,
+    translate_filter,
 )
 from tests._helpers import make_client_error, red_png
 from tests.conftest import logged_usage_entries
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+    from collections.abc import (
+        AsyncIterable,
+        AsyncIterator,
+        Awaitable,
+        Callable,
+        Iterator,
+        Sequence,
+    )
 
     from botocore.exceptions import ClientError
     from openai.types import VectorStore
     from openai.types.vector_stores import VectorStoreFile
     from starlette.testclient import TestClient
+
+    from stdapi.types.openai_vector_stores import Attributes, SearchFilter
+
 
 #: The vector store namespace is account-wide: keep this module on one worker.
 pytestmark = pytest.mark.xdist_group("openai_vector_stores")
@@ -111,6 +133,9 @@ _INDEX_TIMEOUT = 180.0
 
 #: Seconds a test waits for an eventually consistent listing to catch up.
 _LIST_TIMEOUT = 120.0
+
+#: What the shipped backend declares, for the tests pinning its dialect.
+_S3_CAPABILITIES = S3VectorsIndex().capabilities
 
 
 def _wait_for_listed_files(client: OpenAI, store_id: str, expected: set[str]) -> None:
@@ -271,23 +296,23 @@ def empty_store(openai_client: OpenAI) -> Iterator[str]:
 class TestChunking:
     """The chunker turns a token budget into overlapping text slices.
 
-    Ref: stdapi/vector_stores.py:chunk_text
+    Ref: stdapi/vector_stores/engine.py:chunk_text
     """
 
     def test_short_text_is_one_chunk(self) -> None:
         """Text below the budget is not split.
 
-        Ref: stdapi/vector_stores.py:chunk_text
+        Ref: stdapi/vector_stores/engine.py:chunk_text
         """
-        assert chunk_text("hello world", 100, 20, 0) == ["hello world"]
+        assert chunk_text("hello world", 100, 20, 0, 0) == ["hello world"]
 
     def test_long_text_is_split_and_overlaps(self) -> None:
         """A long text yields several chunks whose ends overlap.
 
-        Ref: stdapi/vector_stores.py:chunk_text
+        Ref: stdapi/vector_stores/engine.py:chunk_text
         """
         text = " ".join(f"word{i:04d}" for i in range(400))
-        chunks = chunk_text(text, 100, 50, 0)
+        chunks = chunk_text(text, 100, 50, 0, 0)
         assert len(chunks) > 1
         # 100 tokens is approximated as 400 characters.
         assert all(len(chunk) <= 400 for chunk in chunks)
@@ -296,10 +321,10 @@ class TestChunking:
     def test_cut_falls_on_a_word_boundary(self) -> None:
         """A chunk does not end mid-word when a separator is within reach.
 
-        Ref: stdapi/vector_stores.py:chunk_text
+        Ref: stdapi/vector_stores/engine.py:chunk_text
         """
         text = " ".join("alpha" for _ in range(300))
-        for chunk in chunk_text(text, 100, 0, 0):
+        for chunk in chunk_text(text, 100, 0, 0, 0):
             assert set(chunk.split()) == {"alpha"}
 
     def test_chunk_is_clamped_to_the_model_character_limit(self) -> None:
@@ -308,23 +333,25 @@ class TestChunking:
         Ref: stdapi/models/embedding/cohere_embed.py:EmbeddingModel.max_input_characters
         """
         text = "x" * 20000
-        assert all(len(chunk) <= 2048 for chunk in chunk_text(text, 4096, 0, 2048))
+        assert all(len(chunk) <= 2048 for chunk in chunk_text(text, 4096, 0, 2048, 0))
 
     def test_whitespace_only_text_yields_no_chunk(self) -> None:
         """A file holding only whitespace produces nothing to index.
 
-        Ref: stdapi/vector_stores.py:chunk_text
+        Ref: stdapi/vector_stores/engine.py:chunk_text
         """
-        assert chunk_text("   \n\n\t  ", 100, 20, 0) == []
+        assert chunk_text("   \n\n\t  ", 100, 20, 0, 0) == []
 
     def test_every_chunk_fits_the_per_vector_text_budget(self) -> None:
-        """A chunk of multi-byte characters is split to fit the stored-text budget.
+        """A chunk of multi-byte characters is split to fit the backend's text budget.
 
-        Ref: stdapi/vector_stores.py:_split_on_bytes
+        Ref: stdapi/vector_stores/engine.py:_split_on_bytes
         """
-        chunks = chunk_text("é" * 40000, 4096, 0, 0)
+        budget = _S3_CAPABILITIES.max_chunk_bytes
+        assert budget == 32768
+        chunks = chunk_text("é" * 40000, 4096, 0, 0, budget)
         assert chunks
-        assert all(len(chunk.encode()) <= 32768 for chunk in chunks)
+        assert all(len(chunk.encode()) <= budget for chunk in chunks)
 
 
 @pytest.mark.local
@@ -332,7 +359,7 @@ class TestFilterTranslation:
     """Every upstream filter operator has an index equivalent.
 
     Ref: openai.types.shared_params.comparison_filter.ComparisonFilter
-         stdapi/vector_stores.py:translate_filter
+         stdapi/vector_stores/s3_vectors.py:translate_filter
     """
 
     @pytest.mark.parametrize(
@@ -354,7 +381,7 @@ class TestFilterTranslation:
     ) -> None:
         """Each comparison operator maps to its index operator, under the attribute key.
 
-        Ref: stdapi/vector_stores.py:translate_filter
+        Ref: stdapi/vector_stores/s3_vectors.py:translate_filter
         """
         search_filter = ComparisonFilter(key="topic", type=operator, value=value)  # type: ignore[arg-type]
         translated = translate_filter(search_filter)
@@ -379,7 +406,7 @@ class TestFilterTranslation:
     def test_compound_operators(self, operator: Literal["and", "or"]) -> None:
         """A compound filter nests its translated members.
 
-        Ref: stdapi/vector_stores.py:translate_filter
+        Ref: stdapi/vector_stores/s3_vectors.py:translate_filter
         """
         translated = translate_filter(
             CompoundFilter(
@@ -403,7 +430,7 @@ class TestFilterTranslation:
         Nesting is carried as a plain object rather than a self-referential
         schema, so this is the path that proves the deeper levels still work.
 
-        Ref: stdapi/vector_stores.py:translate_filter
+        Ref: stdapi/vector_stores/s3_vectors.py:translate_filter
         """
         translated = translate_filter(
             CompoundFilter(
@@ -435,7 +462,7 @@ class TestFilterTranslation:
     def test_a_malformed_nested_filter_is_a_request_error(self) -> None:
         """A nested entry that is not a filter is reported as an invalid request.
 
-        Ref: stdapi/vector_stores.py:translate_filter
+        Ref: stdapi/vector_stores/s3_vectors.py:translate_filter
         """
         with pytest.raises(RequestValidationError):
             translate_filter(CompoundFilter(type="and", filters=[{"not": "a filter"}]))
@@ -446,7 +473,7 @@ class TestFilterTranslation:
         The chunk text and the source file name are stored on the same vector,
         so a caller attribute must not be able to overwrite them.
 
-        Ref: stdapi/vector_stores.py:attribute_key
+        Ref: stdapi/vector_stores/s3_vectors.py:attribute_key
         """
         assert attribute_key("_text") != "_text"
         assert attribute_key("_filename") != "_filename"
@@ -457,7 +484,7 @@ class TestFilterTranslation:
 class TestScoreMapping:
     """Cosine distance becomes the similarity score the API reports.
 
-    Ref: stdapi/vector_stores.py:score_from_distance
+    Ref: stdapi/vector_stores/s3_vectors.py:score_from_distance
     """
 
     @pytest.mark.parametrize(
@@ -470,14 +497,14 @@ class TestScoreMapping:
         The distances are the ones measured against the real index for unit
         vectors at 0, 90, 180 and 45 degrees.
 
-        Ref: stdapi/vector_stores.py:score_from_distance
+        Ref: stdapi/vector_stores/s3_vectors.py:score_from_distance
         """
         assert score_from_distance(distance) == pytest.approx(score)
 
     def test_score_never_leaves_the_unit_range(self) -> None:
         """A score is always reportable against ``ranking_options.score_threshold``.
 
-        Ref: stdapi/vector_stores.py:score_from_distance
+        Ref: stdapi/vector_stores/s3_vectors.py:score_from_distance
         """
         assert score_from_distance(-0.5) == 1.0
         assert score_from_distance(3.0) == 0.0
@@ -487,13 +514,13 @@ class TestScoreMapping:
 class TestIdentifiers:
     """Store identifiers map to index names reversibly and sort by creation time.
 
-    Ref: stdapi/vector_stores.py:index_name
+    Ref: stdapi/vector_stores/s3_vectors.py:index_name
     """
 
     def test_index_name_is_derived_from_the_store_id(self) -> None:
         """The identifier's separator is the only character that changes.
 
-        Ref: stdapi/vector_stores.py:index_name
+        Ref: stdapi/vector_stores/s3_vectors.py:index_name
         """
         store_id = new_store_id()
         name = index_name(store_id)
@@ -513,7 +540,7 @@ class TestIdentifiers:
     def test_identifiers_sort_by_creation_time(self) -> None:
         """A later identifier sorts after an earlier one, which the listing relies on.
 
-        Ref: stdapi/vector_stores.py:new_store_id
+        Ref: stdapi/vector_stores/engine.py:new_store_id
         """
         first = new_store_id()
         time.sleep(0.005)
@@ -525,7 +552,7 @@ class TestIdentifiers:
     def test_malformed_identifiers_are_rejected(self) -> None:
         """An identifier that is not one of ours never reaches a backend call.
 
-        Ref: stdapi/vector_stores.py:parse_store_id
+        Ref: stdapi/vector_stores/engine.py:parse_store_id
         """
         for candidate in ("vs_", "vs-abc", "VS_ABCDEFGHIJKLMNOPQRSTUVWXYZ", "../etc"):
             with pytest.raises(ApiError) as raised:
@@ -577,7 +604,7 @@ class TestRequestValidation:
         is smaller, so the request is refused with the limit named rather than
         the file failing later.
 
-        Ref: stdapi/vector_stores.py:check_attributes
+        Ref: stdapi/vector_stores/engine.py:check_attributes
         """
         with pytest.raises(ApiError) as raised:
             vector_stores.check_attributes({f"k{i}": "v" * 512 for i in range(16)})
@@ -587,105 +614,9 @@ class TestRequestValidation:
     def test_attributes_within_the_budget_are_accepted(self) -> None:
         """A realistic attribute set passes untouched.
 
-        Ref: stdapi/vector_stores.py:check_attributes
+        Ref: stdapi/vector_stores/engine.py:check_attributes
         """
         vector_stores.check_attributes({"topic": "physics", "year": 2026.0})
-
-
-@pytest.mark.local
-class TestConditionalUpdate:
-    """Counter updates retry when another writer won the conditional write.
-
-    Ref: stdapi/vector_stores.py:update_record
-    """
-
-    async def test_retries_until_the_write_lands(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A losing conditional write is retried against the re-read record.
-
-        Ref: stdapi/vector_stores.py:_update
-        """
-        record = StoreRecord(
-            id=new_store_id(),
-            created_at=1,
-            last_active_at=1,
-            embedding_model="m",
-            dimensions=8,
-        )
-        reads = 0
-
-        async def fake_read(_model: object, _key: str) -> tuple[StoreRecord, str]:
-            nonlocal reads
-            reads += 1
-            return record, f"etag-{reads}"
-
-        writes = 0
-
-        async def fake_write(_key: str, _record: object, *, etag: str | None) -> None:
-            nonlocal writes
-            del etag
-            writes += 1
-            if writes < 3:
-                raise _precondition_failed()
-
-        monkeypatch.setattr(vector_stores, "_read", fake_read)
-        monkeypatch.setattr(vector_stores, "_write", fake_write)
-        updated = await update_record(
-            StoreRecord, "key", lambda r: setattr(r, "usage_bytes", r.usage_bytes + 1)
-        )
-        assert writes == 3
-        assert reads == 3
-        assert updated.usage_bytes == 3
-
-    async def test_missing_record_never_names_internal_storage(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A record deleted mid-update answers 404 without naming its object key.
-
-        Ref: AGENTS.md "Never Leak Internals"
-        """
-
-        async def fake_read(_model: object, _key: str) -> None:
-            return None
-
-        monkeypatch.setattr(vector_stores, "_read", fake_read)
-        with pytest.raises(ApiError) as raised:
-            await update_record(
-                StoreRecord, "vector_stores/vs_x/store.json", lambda _record: None
-            )
-        assert raised.value.status == 404
-        message = str(raised.value)
-        assert "vector_stores/" not in message
-        assert ".json" not in message
-
-    async def test_gives_up_with_a_retryable_status(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Endless contention answers 409 rather than looping forever.
-
-        Ref: stdapi/vector_stores.py:_update
-        """
-        record = StoreRecord(
-            id=new_store_id(),
-            created_at=1,
-            last_active_at=1,
-            embedding_model="m",
-            dimensions=8,
-        )
-
-        async def fake_read(_model: object, _key: str) -> tuple[StoreRecord, str]:
-            return record, "etag"
-
-        async def fake_write(_key: str, _record: object, *, etag: str | None) -> None:
-            del etag
-            raise _precondition_failed()
-
-        monkeypatch.setattr(vector_stores, "_read", fake_read)
-        monkeypatch.setattr(vector_stores, "_write", fake_write)
-        with pytest.raises(ApiError) as raised:
-            await update_record(StoreRecord, "key", lambda _record: None)
-        assert raised.value.status == 409
 
 
 @pytest.mark.local
@@ -781,6 +712,12 @@ class _FakeObjectStore:
         self.etags: dict[str, str] = {}
         #: Errors to raise once, keyed by ``(operation, key)``.
         self.fail_once: dict[tuple[str, str], ClientError] = {}
+        #: Conditional writes another writer wins first, keyed by object key.
+        self.lose_writes: dict[str, int] = {}
+        #: Keys returned per listing page, whatever ``MaxKeys`` asked for.
+        self.page_size: int = 0
+        self.reads = 0
+        self.writes = 0
         self._counter = 0
 
     def _scheduled_error(self, operation: str, key: str) -> None:
@@ -791,6 +728,7 @@ class _FakeObjectStore:
 
     async def get_object(self, **params: Any) -> dict[str, Any]:  # noqa: ANN401
         key = params["Key"]
+        self.reads += 1
         self._scheduled_error("get_object", key)
         if key not in self.objects:
             missing = make_client_error("NoSuchKey", "GetObject")
@@ -799,7 +737,14 @@ class _FakeObjectStore:
 
     async def put_object(self, **params: Any) -> dict[str, Any]:  # noqa: ANN401
         key = params["Key"]
+        self.writes += 1
         self._scheduled_error("put_object", key)
+        if self.lose_writes.get(key):
+            # Another writer landed first: the etag the caller held is stale.
+            self.lose_writes[key] -= 1
+            self._counter += 1
+            self.etags[key] = f'"etag-{self._counter}"'
+            raise _precondition_failed()
         if "IfNoneMatch" in params and key in self.objects:
             raise _precondition_failed()
         if "IfMatch" in params and self.etags.get(key) != params["IfMatch"]:
@@ -817,6 +762,9 @@ class _FakeObjectStore:
     async def list_objects_v2(self, **params: Any) -> dict[str, Any]:  # noqa: ANN401
         prefix = params.get("Prefix", "")
         limit = params.get("MaxKeys", 1000)
+        if self.page_size:
+            # S3 may answer with fewer keys than asked for; the caller must page.
+            limit = min(limit, self.page_size)
         keys = sorted(key for key in self.objects if key.startswith(prefix))
         start = params.get("StartAfter") or params.get("ContinuationToken") or ""
         if start:
@@ -886,8 +834,13 @@ _COMPARISONS: dict[str, Callable[[Any, Any], bool]] = {
 }
 
 
-class _FakeVectorIndex:
-    """In-memory stand-in for the S3 Vectors bucket backing the stores."""
+class _FakeS3VectorsClient:
+    """In-memory stand-in for the S3 Vectors service the shipped backend calls.
+
+    Substituted at the AWS client, not at the backend, so ``S3VectorsIndex``
+    itself — its metadata layout, filter dialect, score conversion and IAM
+    guards — is the code the offline route and engine tests exercise.
+    """
 
     def __init__(self) -> None:
         self.indexes: dict[str, dict[str, dict[str, Any]]] = {}
@@ -954,6 +907,143 @@ class _FakeVectorIndex:
         return {"vectors": hits[: params["topK"]]}
 
 
+#: How a filter operator applies to a caller attribute, before any translation.
+_UPSTREAM_COMPARISONS: dict[str, Callable[[Any, Any], bool]] = {
+    "eq": lambda value, expected: value == expected,
+    "ne": lambda value, expected: value != expected,
+    "gt": lambda value, expected: isinstance(value, float | int) and value > expected,
+    "gte": lambda value, expected: isinstance(value, float | int) and value >= expected,
+    "lt": lambda value, expected: isinstance(value, float | int) and value < expected,
+    "lte": lambda value, expected: isinstance(value, float | int) and value <= expected,
+    "in": lambda value, expected: value in expected,
+    "nin": lambda value, expected: value not in expected,
+}
+
+
+def _upstream_filter_matches(
+    search_filter: SearchFilter | dict[str, Any] | None, attributes: Attributes
+) -> bool:
+    """Evaluate an upstream search filter against a file's attributes.
+
+    Args:
+        search_filter: The filter as the API received it, or ``None``.
+        attributes: The attributes stored with the file.
+
+    Returns:
+        Whether the file matches.
+    """
+    if search_filter is None:
+        return True
+    node = parse_filter(search_filter)
+    if isinstance(node, CompoundFilter):
+        inner = (_upstream_filter_matches(entry, attributes) for entry in node.filters)
+        return all(inner) if node.type == "and" else any(inner)
+    return _UPSTREAM_COMPARISONS[node.type](attributes.get(node.key), node.value)
+
+
+class _FakeVectorIndex:
+    """An in-memory implementation of the vector index contract.
+
+    Written against the protocol rather than against any service, and taking
+    its capabilities from the test, so it is what proves the engine holds
+    nothing backend-specific and refuses what a backend does not declare.
+    """
+
+    def __init__(self, capabilities: IndexCapabilities) -> None:
+        self._capabilities = capabilities
+        #: Stored chunks, keyed by store then by vector key.
+        self.indexes: dict[str, dict[str, IndexVector]] = {}
+        #: Stores whose index was deleted, in order.
+        self.deleted: list[str] = []
+        #: Queries this backend was actually asked to run.
+        self.queries = 0
+
+    @property
+    def capabilities(self) -> IndexCapabilities:
+        """What this backend declares it can express."""
+        return self._capabilities
+
+    def check_configured(self) -> None:
+        """Nothing to configure: the index is this object."""
+
+    def check_attributes(self, attributes: Attributes) -> None:
+        """Accept any attribute set; the per-vector budget is the service's."""
+
+    async def create_index(self, store_id: str, *, dimensions: int) -> None:
+        """Open an empty index for *store_id*."""
+        del dimensions
+        self.indexes[store_id] = {}
+
+    async def delete_index(self, store_id: str) -> None:
+        """Drop the index of *store_id*, ignoring an already-deleted one."""
+        if self.indexes.pop(store_id, None) is not None:
+            self.deleted.append(store_id)
+
+    async def put_vectors(
+        self, store_id: str, vectors: AsyncIterable[IndexVector]
+    ) -> None:
+        """Store every chunk the engine streams."""
+        index = self.indexes[store_id]
+        async for vector in vectors:
+            index[vector.key] = replace(vector, attributes=dict(vector.attributes))
+
+    async def get_vectors(
+        self, store_id: str, keys: Sequence[str], *, with_embeddings: bool
+    ) -> list[IndexVector]:
+        """Return the stored chunks of *keys* that exist."""
+        index = self.indexes[store_id]
+        return [
+            replace(
+                index[key],
+                attributes=dict(index[key].attributes),
+                embedding=list(index[key].embedding) if with_embeddings else [],
+            )
+            for key in keys
+            if key in index
+        ]
+
+    async def delete_vectors(self, store_id: str, keys: Sequence[str]) -> None:
+        """Remove the chunks of *keys*, ignoring the ones already gone."""
+        index = self.indexes.get(store_id, {})
+        for key in keys:
+            index.pop(key, None)
+
+    async def query(
+        self,
+        store_id: str,
+        embeddings: Sequence[Sequence[float]],
+        *,
+        max_results: int,
+        search_filter: SearchFilter | None,
+    ) -> list[VectorMatch]:
+        """Return the closest chunks of every query, filter applied."""
+        index = self.indexes[store_id]
+        matches: list[VectorMatch] = []
+        self.queries += len(embeddings)
+        for embedding in embeddings:
+            query = list(embedding)
+            hits = [
+                vector
+                for vector in index.values()
+                if _upstream_filter_matches(search_filter, vector.attributes)
+            ]
+            hits.sort(key=lambda vector: _cosine_distance(query, vector.embedding))
+            matches.extend(
+                VectorMatch(
+                    key=vector.key,
+                    score=score_from_distance(
+                        _cosine_distance(query, vector.embedding)
+                    ),
+                    file_id=vector.file_id,
+                    filename=vector.filename,
+                    text=vector.text,
+                    attributes=dict(vector.attributes),
+                )
+                for vector in hits[:max_results]
+            )
+        return matches
+
+
 #: Dimension of the vectors the stub embedding model produces.
 _STUB_DIMENSIONS = 8
 
@@ -998,7 +1088,7 @@ class _FakeBackend:
 
     def __init__(self) -> None:
         self.records = _FakeObjectStore()
-        self.vectors = _FakeVectorIndex()
+        self.vectors = _FakeS3VectorsClient()
         self.model = _StubEmbeddingModel()
         #: Uploaded file content and content type, keyed by bare file payload.
         self.uploads: dict[str, tuple[bytes, str]] = {}
@@ -1037,28 +1127,51 @@ class _FakeBackend:
 def vector_backend(monkeypatch: pytest.MonkeyPatch) -> _FakeBackend:
     """Serve the Vector Stores API from an in-memory backend.
 
-    Only the boundaries are replaced — the record bucket, the vector index, the
-    embedding model and the Files API — so the engine, the routes and the
+    Only the boundaries are replaced — the AWS clients, the embedding model and
+    the Files API — so the engine, the S3 Vectors backend, the routes and the
     conditional-update loop are the code actually under test.
     """
     backend = _FakeBackend()
     monkeypatch.setattr(SETTINGS, "aws_s3_bucket", "stdapi-test-records")
     monkeypatch.setattr(SETTINGS, "aws_s3_vectors_bucket", "stdapi-test-vectors")
-    monkeypatch.setattr(vector_stores, "_records_client", lambda: backend.records)
-    monkeypatch.setattr(vector_stores, "_vectors_client", lambda: backend.vectors)
-    monkeypatch.setattr(
-        vector_stores, "get_embedding_model", lambda _model_id: backend.model
-    )
+    monkeypatch.setattr(records, "records_client", lambda: backend.records)
+    monkeypatch.setattr(s3_vectors, "vectors_client", lambda: backend.vectors)
+    monkeypatch.setattr(engine, "get_embedding_model", lambda _model_id: backend.model)
 
     async def _validate_model(model_id: str, _modality: str) -> SimpleNamespace:
         return SimpleNamespace(id=model_id)
 
-    monkeypatch.setattr(vector_stores, "validate_model", _validate_model)
-    monkeypatch.setattr(vector_stores, "get_file", backend.get_file)
-    monkeypatch.setattr(vector_stores, "get_file_content", backend.get_file_content)
+    monkeypatch.setattr(engine, "validate_model", _validate_model)
+    monkeypatch.setattr(engine, "get_file", backend.get_file)
+    monkeypatch.setattr(engine, "get_file_content", backend.get_file_content)
     # Indexing is driven by the tests: a racing task is not deterministic.
-    monkeypatch.setattr(vector_stores, "_start_indexing", backend.start_indexing)
+    monkeypatch.setattr(engine, "start_indexing", backend.start_indexing)
     return backend
+
+
+@pytest.fixture
+def fake_index(
+    vector_backend: _FakeBackend, monkeypatch: pytest.MonkeyPatch
+) -> Callable[..., _FakeVectorIndex]:
+    """Serve every store from a backend whose capabilities the test chooses.
+
+    The seam is the registry, not a private attribute: it is the one place a
+    second backend is wired in, so a test substituting here drives the engine
+    exactly as another backend would.
+
+    Returns:
+        A callable taking capability overrides and installing the backend.
+    """
+    del vector_backend
+
+    def install(**overrides: Any) -> _FakeVectorIndex:  # noqa: ANN401
+        index = _FakeVectorIndex(replace(_S3_CAPABILITIES, **overrides))
+        monkeypatch.setattr(engine, "default_backend", lambda: index)
+        monkeypatch.setattr(engine, "backend_for", lambda _store: index)
+        monkeypatch.setattr(records, "default_backend", lambda: index)
+        return index
+
+    return install
 
 
 @pytest.fixture
@@ -1085,6 +1198,94 @@ def _error_of(response: Any) -> dict[str, Any]:  # noqa: ANN401
     """Return the error envelope of a failed response."""
     payload: dict[str, Any] = response.json()["error"]
     return payload
+
+
+def _seed_store_record(backend: _FakeBackend, **overrides: Any) -> StoreRecord:  # noqa: ANN401
+    """Write one store record straight into the record bucket.
+
+    Args:
+        backend: The in-memory backend serving the API.
+        overrides: Fields to set on the record.
+
+    Returns:
+        The record as it was written.
+    """
+    record = StoreRecord(
+        id=new_store_id(),
+        created_at=1,
+        last_active_at=1,
+        embedding_model="m",
+        dimensions=8,
+        **overrides,
+    )
+    key = store_key(record.id)
+    backend.records.objects[key] = record.model_dump_json().encode()
+    backend.records.etags[key] = '"etag-seed"'
+    return record
+
+
+@pytest.mark.local
+class TestConditionalUpdate:
+    """Counter updates retry when another writer won the conditional write.
+
+    Ref: stdapi/vector_stores/records.py:update_record
+    """
+
+    async def test_retries_until_the_write_lands(
+        self, vector_backend: _FakeBackend
+    ) -> None:
+        """A losing conditional write is retried against the re-read record.
+
+        The mutation is applied to what the store holds at the moment it lands,
+        never to the copy the losing attempt read: a counter incremented from a
+        stale record is how totals drift.
+
+        Ref: stdapi/vector_stores/records.py:update_record
+        """
+        record = _seed_store_record(vector_backend)
+        key = store_key(record.id)
+        vector_backend.records.lose_writes[key] = 2
+        vector_backend.records.reads = 0
+        vector_backend.records.writes = 0
+
+        updated = await update_record(
+            StoreRecord, key, lambda r: setattr(r, "usage_bytes", r.usage_bytes + 1)
+        )
+
+        assert vector_backend.records.writes == 3
+        assert vector_backend.records.reads == 3
+        assert updated.usage_bytes == 1
+
+    async def test_missing_record_never_names_internal_storage(
+        self, vector_backend: _FakeBackend
+    ) -> None:
+        """A record deleted mid-update answers 404 without naming its object key.
+
+        Ref: AGENTS.md "Never Leak Internals"
+        """
+        del vector_backend
+        with pytest.raises(ApiError) as raised:
+            await update_record(
+                StoreRecord, "vector_stores/vs_x/store.json", lambda _record: None
+            )
+        assert raised.value.status == 404
+        message = str(raised.value)
+        assert "vector_stores/" not in message
+        assert ".json" not in message
+
+    async def test_gives_up_with_a_retryable_status(
+        self, vector_backend: _FakeBackend
+    ) -> None:
+        """Endless contention answers 409 rather than looping forever.
+
+        Ref: stdapi/vector_stores/records.py:update_record
+        """
+        record = _seed_store_record(vector_backend)
+        key = store_key(record.id)
+        vector_backend.records.lose_writes[key] = 99
+        with pytest.raises(ApiError) as raised:
+            await update_record(StoreRecord, key, lambda _record: None)
+        assert raised.value.status == 409
 
 
 @pytest.mark.usefixtures("vector_stores_api")
@@ -1657,7 +1858,7 @@ class TestIndexingUsage:
     test, every attach would bill invisibly with the suite still green.
 
     Ref: stdapi/monitoring.py:log_background_event
-         stdapi/vector_stores.py:_index_files
+         stdapi/vector_stores/engine.py:index_files
     """
 
     def test_indexing_records_embedding_usage(
@@ -1696,7 +1897,7 @@ class TestIndexingUsage:
 class TestUnconfiguredDeployment:
     """Without vector storage the routes answer 503, naming nothing internal.
 
-    Ref: stdapi/vector_stores.py:records_bucket
+    Ref: stdapi/vector_stores/records.py:records_bucket
     """
 
     def test_missing_vector_bucket_answers_503(
@@ -1704,7 +1905,7 @@ class TestUnconfiguredDeployment:
     ) -> None:
         """A deployment with no vector bucket refuses cleanly.
 
-        Ref: stdapi/vector_stores.py:records_bucket
+        Ref: stdapi/vector_stores/records.py:records_bucket
         """
         monkeypatch.setattr(SETTINGS, "aws_s3_vectors_bucket", None, raising=False)
         with pytest.raises(ApiError) as raised:
@@ -1733,7 +1934,7 @@ class TestUnconfiguredDeployment:
         The settings can be complete while the role is not, and that gap reached
         the caller as a raw 403 blaming them for the operator's IAM policy.
 
-        Ref: stdapi/vector_stores.py:_vectors_guard
+        Ref: stdapi/vector_stores/s3_vectors.py:_vectors_guard
              stdapi/api_errors.py:feature_unavailable_guard
         """
         store_id = app_client.post("/v1/vector_stores", json={}).json()["id"]
@@ -1848,7 +2049,7 @@ class TestRoutesOffline:
     ) -> None:
         """An ``after`` cursor is exclusive in ascending order too.
 
-        Ref: stdapi/vector_stores.py:_list_ids
+        Ref: stdapi/vector_stores/records.py:list_ids
         """
         ids = [
             app_client.post("/v1/vector_stores", json={"name": f"a{index}"}).json()[
@@ -1904,7 +2105,7 @@ class TestRoutesOffline:
     ) -> None:
         """Attributes too large to stay searchable are refused with the limit named.
 
-        Ref: stdapi/vector_stores.py:check_attributes
+        Ref: stdapi/vector_stores/engine.py:check_attributes
         """
         store_id = app_client.post("/v1/vector_stores", json={}).json()["id"]
         file_id = vector_backend.upload(_OTHER_FILE)
@@ -2136,7 +2337,7 @@ class TestRoutesOffline:
     ) -> None:
         """The same operator on a number reaches the index and narrows the page.
 
-        Ref: stdapi/vector_stores.py:translate_filter
+        Ref: stdapi/vector_stores/s3_vectors.py:translate_filter
         """
         store_id, _ = _seed_indexed_store(app_client, vector_backend)
         page = app_client.post(
@@ -2209,7 +2410,7 @@ class TestRoutesOffline:
     ) -> None:
         """Without a vector bucket the routes refuse, naming nothing internal.
 
-        Ref: stdapi/vector_stores.py:records_bucket
+        Ref: stdapi/vector_stores/records.py:records_bucket
         """
         monkeypatch.setattr(SETTINGS, "aws_s3_vectors_bucket", None)
         response = app_client.post("/v1/vector_stores", json={})
@@ -2243,7 +2444,7 @@ def _seed_indexed_store(client: TestClient, backend: _FakeBackend) -> tuple[str,
         f"/v1/vector_stores/{store_id}/files",
         json={"file_id": file_id, "attributes": {"topic": "observatory", "year": 2026}},
     )
-    run(_index_files(store_id, [file_id], "", "test-request"))
+    run(index_files(store_id, [file_id], "", "test-request"))
     return store_id, file_id
 
 
@@ -2284,7 +2485,7 @@ async def _attach(
 class TestIndexingOffline:
     """The asynchronous indexer, driven deterministically against the fake backend.
 
-    Ref: stdapi/vector_stores.py:_index_files
+    Ref: stdapi/vector_stores/engine.py:index_files
     """
 
     async def test_a_file_is_chunked_embedded_and_counted(
@@ -2292,7 +2493,7 @@ class TestIndexingOffline:
     ) -> None:
         """Indexing embeds every chunk in waves and settles the store counters.
 
-        Ref: stdapi/vector_stores.py:_index_one_file
+        Ref: stdapi/vector_stores/engine.py:_index_one_file
         """
         store = await _create_store()
         # Long enough to cross the embedding wave, which one chunk never does.
@@ -2300,7 +2501,7 @@ class TestIndexingOffline:
         file_id = vector_backend.upload(content.encode())
         await _attach(store, [file_id])
         vector_backend.model.waves.clear()
-        await _index_files(store.id, [file_id], "", "test-request")
+        await index_files(store.id, [file_id], "", "test-request")
 
         record = await read_file(store.id, file_id)
         assert record.status == "completed"
@@ -2327,15 +2528,15 @@ class TestIndexingOffline:
         Nothing else settles these records: an error escaping the loop leaves
         every file after it — and the store — ``in_progress`` forever.
 
-        Ref: stdapi/vector_stores.py:_index_files
+        Ref: stdapi/vector_stores/engine.py:index_files
         """
         store = await _create_store()
         files = [vector_backend.upload(_TEXT_FILE) for _ in range(3)]
         await _attach(store, files)
         vector_backend.records.fail_once[
-            ("get_object", _file_key(store.id, files[1]))
+            ("get_object", file_key(store.id, files[1]))
         ] = make_client_error("SlowDown", "GetObject", status=503)
-        await _index_files(store.id, files, "", "test-request")
+        await index_files(store.id, files, "", "test-request")
 
         assert (await read_file(store.id, files[0])).status == "completed"
         assert (await read_file(store.id, files[2])).status == "completed"
@@ -2359,7 +2560,7 @@ class TestIndexingOffline:
         store = await _create_store()
         file_id = vector_backend.upload(red_png(), "image/png")
         await _attach(store, [file_id])
-        await _index_files(store.id, [file_id], "", "test-request")
+        await index_files(store.id, [file_id], "", "test-request")
 
         record = await read_file(store.id, file_id)
         assert record.status == "failed"
@@ -2385,9 +2586,9 @@ class TestIndexingOffline:
         batch_id = new_batch_id()
         files = [vector_backend.upload(_TEXT_FILE) for _ in range(2)]
         await _attach(store, files, batch_id=batch_id)
-        await _index_files(store.id, files[:1], batch_id, "test-request")
+        await index_files(store.id, files[:1], batch_id, "test-request")
         await cancel_batch(store.id, batch_id)
-        await _index_files(store.id, files[1:], batch_id, "test-request")
+        await index_files(store.id, files[1:], batch_id, "test-request")
 
         assert (await read_file(store.id, files[0])).status == "completed"
         assert (await read_file(store.id, files[1])).status == "cancelled"
@@ -2405,14 +2606,14 @@ class TestIndexingOffline:
     ) -> None:
         """Detaching during indexing leaves no count the listing cannot show.
 
-        Ref: stdapi/vector_stores.py:_index_one_file
+        Ref: stdapi/vector_stores/engine.py:_index_one_file
         """
         store = await _create_store()
         file_id = vector_backend.upload(_TEXT_FILE)
         await _attach(store, [file_id])
         await detach_file(store.id, file_id)
         await _run_cleanups(scheduled_cleanups)
-        await _index_files(store.id, [file_id], "", "test-request")
+        await index_files(store.id, [file_id], "", "test-request")
 
         settled = await read_store(store.id)
         assert settled.file_counts.total == 0
@@ -2424,14 +2625,14 @@ class TestIndexingOffline:
     ) -> None:
         """A repeated file identifier is counted once, so the totals can converge.
 
-        Ref: stdapi/vector_stores.py:attach_files
+        Ref: stdapi/vector_stores/engine.py:attach_files
         """
         store = await _create_store()
         file_id = vector_backend.upload(_TEXT_FILE)
         batch_id = new_batch_id()
         attached = await _attach(store, [file_id, file_id], batch_id=batch_id)
         assert attached == [file_id]
-        await _index_files(store.id, attached, batch_id, "test-request")
+        await index_files(store.id, attached, batch_id, "test-request")
         settled = await read_store(store.id)
         assert settled.file_counts.total == 1
         assert (await read_batch(store.id, batch_id)).file_counts.total == 1
@@ -2441,18 +2642,18 @@ class TestIndexingOffline:
     ) -> None:
         """A file re-attached with larger chunks leaves no stale passage searchable.
 
-        Ref: stdapi/vector_stores.py:_index_one_file
+        Ref: stdapi/vector_stores/engine.py:_index_one_file
         """
         store = await _create_store()
         content = "\n".join(f"Paragraph {index} of the manual." for index in range(60))
         file_id = vector_backend.upload(content.encode())
         await _attach(store, [file_id], size=100)
-        await _index_files(store.id, [file_id], "", "test-request")
+        await index_files(store.id, [file_id], "", "test-request")
         first = (await read_file(store.id, file_id)).chunk_count
         assert first > 1
 
         await _attach(store, [file_id], size=4096)
-        await _index_files(store.id, [file_id], "", "test-request")
+        await index_files(store.id, [file_id], "", "test-request")
         record = await read_file(store.id, file_id)
         assert record.chunk_count < first
         assert set(vector_backend.vectors.indexes[index_name(store.id)]) == {
@@ -2467,18 +2668,18 @@ class TestIndexingOffline:
     ) -> None:
         """Detaching a file whose re-indexing failed removes the vectors it still owns.
 
-        Ref: stdapi/vector_stores.py:detach_file
+        Ref: stdapi/vector_stores/engine.py:detach_file
         """
         store = await _create_store()
         content = "\n".join(f"Paragraph {index} of the manual." for index in range(60))
         file_id = vector_backend.upload(content.encode())
         await _attach(store, [file_id])
-        await _index_files(store.id, [file_id], "", "test-request")
+        await index_files(store.id, [file_id], "", "test-request")
         assert vector_backend.vectors.indexes[index_name(store.id)]
 
         vector_backend.uploads[file_id[5:]] = (red_png(), "image/png")
         await _attach(store, [file_id])
-        await _index_files(store.id, [file_id], "", "test-request")
+        await index_files(store.id, [file_id], "", "test-request")
         assert (await read_file(store.id, file_id)).status == "failed"
 
         await detach_file(store.id, file_id)
@@ -2499,7 +2700,7 @@ class TestIndexingOffline:
             [PendingFile(file_id=file_id, attributes={"topic": "catering"})],
             batch_id="",
         )
-        await _index_files(store.id, [records[0].id], "", "test-request")
+        await index_files(store.id, [records[0].id], "", "test-request")
         await update_file_attributes(store.id, file_id, {"topic": "menu"})
         await _run_cleanups(scheduled_cleanups)
 
@@ -2523,12 +2724,12 @@ class TestIndexingOffline:
     ) -> None:
         """Several queries are merged into one page, each passage scored at its best.
 
-        Ref: stdapi/vector_stores.py:search
+        Ref: stdapi/vector_stores/engine.py:search
         """
         store = await _create_store()
         file_id = vector_backend.upload(_TEXT_FILE)
         await _attach(store, [file_id])
-        await _index_files(store.id, [file_id], "", "test-request")
+        await index_files(store.id, [file_id], "", "test-request")
         record = await read_store(store.id)
         one = await search(
             record, [_PLANTED], max_num_results=10, filters=None, score_threshold=None
@@ -2555,10 +2756,10 @@ class TestIndexingOffline:
         store = await _create_store(expires_after_days=1)
         file_id = vector_backend.upload(_TEXT_FILE)
         await _attach(store, [file_id])
-        await _index_files(store.id, [file_id], "", "test-request")
+        await index_files(store.id, [file_id], "", "test-request")
         await update_record(
             StoreRecord,
-            _store_key(store.id),
+            store_key(store.id),
             lambda stored: setattr(stored, "last_active_at", 1),
         )
 
@@ -2586,12 +2787,12 @@ class TestIndexingOffline:
     ) -> None:
         """Refreshing the anchor of an expired store would leave it pointing at nothing.
 
-        Ref: stdapi/vector_stores.py:touch_store
+        Ref: stdapi/vector_stores/engine.py:touch_store
         """
         store = await _create_store(expires_after_days=1)
         await update_record(
             StoreRecord,
-            _store_key(store.id),
+            store_key(store.id),
             lambda stored: setattr(stored, "last_active_at", 1),
         )
         expired = await read_store(store.id)
@@ -2604,19 +2805,15 @@ class TestIndexingOffline:
     ) -> None:
         """Deletion is not stopped by a page boundary: no caller data is left behind.
 
-        Ref: stdapi/vector_stores.py:_all_record_keys
+        Ref: stdapi/vector_stores/records.py:all_record_keys
         """
         store = await _create_store()
         files = [vector_backend.upload(_OTHER_FILE) for _ in range(3)]
         await _attach(store, files, batch_id=new_batch_id())
         # One record per listing page, so the deletion has to paginate.
-        monkey = pytest.MonkeyPatch()
-        monkey.setattr(vector_stores, "_LIST_SCAN_MAX", 1)
-        try:
-            await delete_store(store.id)
-            await _run_cleanups(scheduled_cleanups)
-        finally:
-            monkey.undo()
+        vector_backend.records.page_size = 1
+        await delete_store(store.id)
+        await _run_cleanups(scheduled_cleanups)
         assert vector_backend.records.objects == {}
         assert vector_backend.vectors.indexes == {}
 
@@ -2628,7 +2825,7 @@ class TestFileSizeLimit:
     The zero-means-unlimited sense broke every indexing run once: read as a
     literal ceiling, a default deployment failed every file it was given.
 
-    Ref: stdapi/vector_stores.py:_load_chunks
+    Ref: stdapi/vector_stores/engine.py:_load_chunks
     """
 
     async def test_zero_means_unlimited(
@@ -2642,7 +2839,7 @@ class TestFileSizeLimit:
         store = await _create_store()
         file_id = vector_backend.upload(b"word " * 200_000)
         await _attach(store, [file_id])
-        await _index_files(store.id, [file_id], "", "test-request")
+        await index_files(store.id, [file_id], "", "test-request")
         record = await read_file(store.id, file_id)
         assert record.status == "completed"
         assert record.chunk_count > 1
@@ -2658,7 +2855,7 @@ class TestFileSizeLimit:
         store = await _create_store()
         file_id = vector_backend.upload(_TEXT_FILE)
         await _attach(store, [file_id])
-        await _index_files(store.id, [file_id], "", "test-request")
+        await index_files(store.id, [file_id], "", "test-request")
         record = await read_file(store.id, file_id)
         assert record.status == "failed"
         assert record.last_error is not None
@@ -2698,14 +2895,278 @@ class TestEmbeddingModelLimits:
     ) -> None:
         """A model with a character ceiling caps the chunk, whatever the token budget.
 
-        Ref: stdapi/vector_stores.py:_load_chunks
+        Ref: stdapi/vector_stores/engine.py:_load_chunks
         """
         vector_backend.model.max_input_characters = 200
         store = await _create_store(max_chunk_size_tokens=4096)
         file_id = vector_backend.upload(b"word " * 2000)
         await _attach(store, [file_id], size=4096)
-        await _index_files(store.id, [file_id], "", "test-request")
+        await index_files(store.id, [file_id], "", "test-request")
         record = await read_file(store.id, file_id)
         chunks = await read_file_chunks(store.id, record)
         assert chunks
         assert all(len(chunk) <= 200 for chunk in chunks)
+
+
+@pytest.mark.local
+class TestBackendCapabilities:
+    """The engine refuses what the backend serving a store does not declare.
+
+    Another backend expresses fewer filter operators, ingests other formats,
+    cuts its own passages, or scores on a scale of its own. Each of those is a
+    declaration the engine reads before it calls, so the gap is a clean 400 or
+    a settled ``unsupported_file`` rather than the backend's own error reaching
+    the caller mid-search.
+
+    Ref: stdapi/vector_stores/backend.py:IndexCapabilities
+    """
+
+    def test_the_shipped_backend_declares_the_upstream_dialect_whole(self) -> None:
+        """S3 Vectors expresses every operator and combinator the API accepts.
+
+        Nothing is degraded on the default deployment: this pins the
+        declaration, so an operator quietly dropped from it becomes a failure
+        here rather than a 400 on a request that used to work.
+
+        Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors-metadata-filtering.html
+        """
+        assert _S3_CAPABILITIES.filter_operators == frozenset(
+            {"eq", "ne", "gt", "gte", "lt", "lte", "in", "nin"}
+        )
+        assert _S3_CAPABILITIES.filter_combinators == frozenset({"and", "or"})
+        assert _S3_CAPABILITIES.normalised_score
+        assert not _S3_CAPABILITIES.chunks_on_ingestion
+        assert _S3_CAPABILITIES.ingests_decodable_text
+        assert _S3_CAPABILITIES.ingested_media_types == frozenset()
+
+    async def test_an_undeclared_operator_never_reaches_the_backend(
+        self, fake_index: Callable[..., _FakeVectorIndex], vector_backend: _FakeBackend
+    ) -> None:
+        """A filter the backend cannot express is refused before any work is paid for.
+
+        Ref: stdapi/vector_stores/backend.py:check_filter
+        """
+        index = fake_index(filter_operators=frozenset({"eq", "ne"}))
+        store = await _create_store()
+        vector_backend.model.waves.clear()
+        with pytest.raises(ApiError) as raised:
+            await search(
+                store,
+                ["anything"],
+                max_num_results=5,
+                filters=ComparisonFilter(key="year", type="gte", value=2020),
+                score_threshold=None,
+            )
+        assert raised.value.status == 400
+        message = str(raised.value)
+        assert "gte" in message
+        # The index dialect and the internal metadata key stay out of it.
+        assert "$gte" not in message
+        assert attribute_key("year") not in message
+        assert index.queries == 0
+        assert vector_backend.model.waves == []
+
+    async def test_an_undeclared_combinator_is_refused(
+        self, fake_index: Callable[..., _FakeVectorIndex]
+    ) -> None:
+        """A backend expressing only ``and`` refuses an ``or`` filter.
+
+        Ref: stdapi/vector_stores/backend.py:check_filter
+        """
+        index = fake_index(filter_combinators=frozenset({"and"}))
+        store = await _create_store()
+        with pytest.raises(ApiError) as raised:
+            await search(
+                store,
+                ["anything"],
+                max_num_results=5,
+                filters=CompoundFilter(
+                    type="or",
+                    filters=[ComparisonFilter(key="topic", type="eq", value="x")],
+                ),
+                score_threshold=None,
+            )
+        assert raised.value.status == 400
+        assert "or" in str(raised.value)
+        assert index.queries == 0
+
+    async def test_an_operator_nested_two_levels_deep_is_checked_too(
+        self, fake_index: Callable[..., _FakeVectorIndex]
+    ) -> None:
+        """Nesting is carried as a plain object, and is walked all the same.
+
+        Ref: stdapi/vector_stores/backend.py:check_filter
+        """
+        index = fake_index(filter_operators=frozenset({"eq"}))
+        store = await _create_store()
+        with pytest.raises(ApiError) as raised:
+            await search(
+                store,
+                ["anything"],
+                max_num_results=5,
+                filters=CompoundFilter(
+                    type="and",
+                    filters=[
+                        ComparisonFilter(key="topic", type="eq", value="x"),
+                        {
+                            "type": "or",
+                            "filters": [{"key": "year", "type": "in", "value": [1, 2]}],
+                        },
+                    ],
+                ),
+                score_threshold=None,
+            )
+        assert raised.value.status == 400
+        assert "'in'" in str(raised.value)
+        assert index.queries == 0
+
+    async def test_a_threshold_needs_a_score_that_means_the_same_every_time(
+        self, fake_index: Callable[..., _FakeVectorIndex], vector_backend: _FakeBackend
+    ) -> None:
+        """A backend whose score is not normalised refuses ``score_threshold``.
+
+        Dropping the threshold silently would answer with results the caller
+        asked to be excluded, which is not a usable version of the request.
+
+        Ref: stdapi/vector_stores/backend.py:IndexCapabilities
+        """
+        index = fake_index(normalised_score=False)
+        store = await _create_store()
+        file_id = vector_backend.upload(_TEXT_FILE)
+        await _attach(store, [file_id])
+        await index_files(store.id, [file_id], "", "test-request")
+        with pytest.raises(ApiError) as raised:
+            await search(
+                store, [_PLANTED], max_num_results=5, filters=None, score_threshold=0.5
+            )
+        assert raised.value.status == 400
+        assert "score_threshold" in str(raised.value)
+        assert index.queries == 0
+        # The same search without a threshold is served.
+        assert await search(
+            store, [_PLANTED], max_num_results=5, filters=None, score_threshold=None
+        )
+
+    def test_a_backend_that_cuts_its_own_passages_refuses_a_chunking_strategy(
+        self, app_client: TestClient, fake_index: Callable[..., _FakeVectorIndex]
+    ) -> None:
+        """A per-request chunk size cannot be honoured where the backend chunks.
+
+        Ref: stdapi/vector_stores/engine.py:check_chunking_strategy
+        """
+        fake_index(chunks_on_ingestion=True)
+        response = app_client.post(
+            "/v1/vector_stores",
+            json={
+                "chunking_strategy": {
+                    "type": "static",
+                    "static": {
+                        "max_chunk_size_tokens": 100,
+                        "chunk_overlap_tokens": 20,
+                    },
+                }
+            },
+        )
+        assert response.status_code == 400, response.text
+        message = _error_of(response)["message"]
+        assert "chunking_strategy" in message
+        # The default strategy is still accepted, so the store can be created.
+        assert app_client.post("/v1/vector_stores", json={}).status_code == 200
+
+    async def test_a_media_type_the_backend_refuses_settles_as_unsupported_file(
+        self, fake_index: Callable[..., _FakeVectorIndex], vector_backend: _FakeBackend
+    ) -> None:
+        """The refused-format list is the backend's, not the engine's.
+
+        Ref: openai.types.vector_stores.vector_store_file.LastError
+        """
+        fake_index(refused_media_types=frozenset({"text/csv"}))
+        store = await _create_store()
+        file_id = vector_backend.upload(b"a,b\n1,2\n", "text/csv")
+        await _attach(store, [file_id])
+        await index_files(store.id, [file_id], "", "test-request")
+        record = await read_file(store.id, file_id)
+        assert record.status == "failed"
+        assert record.last_error is not None
+        assert record.last_error.code == "unsupported_file"
+
+    async def test_a_backend_taking_no_text_refuses_a_text_file(
+        self, fake_index: Callable[..., _FakeVectorIndex], vector_backend: _FakeBackend
+    ) -> None:
+        """A backend ingesting only named formats refuses everything else.
+
+        Ref: openai.types.vector_stores.vector_store_file.LastError
+        """
+        fake_index(
+            ingests_decodable_text=False,
+            ingested_media_types=frozenset({"application/pdf"}),
+            refused_media_types=frozenset(),
+        )
+        store = await _create_store()
+        file_id = vector_backend.upload(_TEXT_FILE)
+        await _attach(store, [file_id])
+        await index_files(store.id, [file_id], "", "test-request")
+        record = await read_file(store.id, file_id)
+        assert record.status == "failed"
+        assert record.last_error is not None
+        assert record.last_error.code == "unsupported_file"
+
+    async def test_the_engine_serves_a_whole_store_through_the_protocol(
+        self,
+        fake_index: Callable[..., _FakeVectorIndex],
+        vector_backend: _FakeBackend,
+        scheduled_cleanups: list[Awaitable[None]],
+    ) -> None:
+        """Attach, index, search, re-attribute, detach and delete, with no AWS call.
+
+        The backend here shares no code with the shipped one, so a store that
+        round-trips through it is what proves the engine holds nothing specific
+        to a service.
+
+        Ref: stdapi/vector_stores/backend.py:VectorIndex
+        """
+        index = fake_index()
+        store = await _create_store()
+        assert index.indexes[store.id] == {}
+        file_id = vector_backend.upload(_TEXT_FILE)
+        records_written = await attach_files(
+            store,
+            [PendingFile(file_id=file_id, attributes={"topic": "observatory"})],
+            batch_id="",
+        )
+        await index_files(store.id, [records_written[0].id], "", "test-request")
+
+        record = await read_file(store.id, file_id)
+        assert record.status == "completed"
+        assert record.chunk_count > 0
+        assert set(index.indexes[store.id]) == {
+            vector_key(file_id, position) for position in range(record.chunk_count)
+        }
+        chunks = await read_file_chunks(store.id, record)
+        assert "QUINCEY-7" in "\n".join(chunks)
+
+        results = await search(
+            store,
+            [_PLANTED],
+            max_num_results=5,
+            filters=ComparisonFilter(key="topic", type="eq", value="observatory"),
+            score_threshold=None,
+        )
+        assert results
+        assert results[0].file_id == file_id
+        assert results[0].attributes == {"topic": "observatory"}
+        assert 0.0 < results[0].score <= 1.0
+
+        await update_file_attributes(store.id, file_id, {"topic": "menu"})
+        await _run_cleanups(scheduled_cleanups)
+        assert all(
+            vector.attributes == {"topic": "menu"}
+            for vector in index.indexes[store.id].values()
+        )
+
+        await detach_file(store.id, file_id)
+        await _run_cleanups(scheduled_cleanups)
+        assert index.indexes[store.id] == {}
+        await delete_store(store.id)
+        await _run_cleanups(scheduled_cleanups)
+        assert index.deleted == [store.id]

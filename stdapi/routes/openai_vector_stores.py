@@ -48,6 +48,7 @@ from stdapi.vector_stores import (
     attach_files,
     cancel_batch,
     check_attributes,
+    check_chunking_strategy,
     create_store,
     delete_store,
     detach_file,
@@ -216,7 +217,11 @@ def _chunking(
 
     Returns:
         ``(max_chunk_size_tokens, chunk_overlap_tokens)``.
+
+    Raises:
+        ApiError: When the store's backend chooses its own passages (400).
     """
+    check_chunking_strategy(strategy, store)
     if strategy is not None and strategy.type == "static":
         return (
             strategy.static.max_chunk_size_tokens,
@@ -251,7 +256,7 @@ def _pending(
         ApiError: When the attributes do not fit the per-file budget (400).
     """
     resolved = attributes or {}
-    check_attributes(resolved)
+    check_attributes(resolved, store)
     size, overlap = _chunking(strategy, store)
     return PendingFile(
         file_id=file_id,
