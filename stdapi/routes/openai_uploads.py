@@ -176,7 +176,9 @@ async def add_upload_part(
         "Assembles all uploaded parts into a final `File` object and marks the session as completed (OpenAI Uploads API).\n\n"
         "**Prerequisite:** All parts must have been uploaded via `openai_upload_part`. "
         "Provide the ordered list of part IDs returned by those calls. "
-        "The resulting file behaves like a file uploaded with `openai_file`."
+        "The resulting file behaves like a file uploaded with `openai_file`.\n\n"
+        "**Integrity:** pass `md5` to have the assembled file checked against the "
+        "digest of the bytes you sent; a mismatch is refused and leaves no file behind."
     ),
     response_description="The completed Upload object with a nested File object.",
     response_model_exclude_none=True,
@@ -190,17 +192,20 @@ async def complete_upload_endpoint(
 
     Args:
         upload_id: Upload session identifier.
-        body: Ordered list of part IDs.
+        body: Ordered list of part IDs and the optional content checksum.
 
     Returns:
         Upload object with ``status="completed"`` and the ``file`` field populated.
 
     Raises:
         ApiError: If the upload is not found (404), not pending (400), a part ID
-            is unknown (400), or the assembled size does not match (400).
+            is unknown (400), the assembled size does not match (400), or the
+            contents do not match the declared ``md5`` (400).
     """
     log_request_params({"upload_id": upload_id, "part_ids": body.part_ids})
-    session, file_record = await complete_multipart_session(upload_id, body.part_ids)
+    session, file_record = await complete_multipart_session(
+        upload_id, body.part_ids, body.md5
+    )
     return log_response_params(
         _to_upload(session, "completed", _to_file_object(file_record))
     )

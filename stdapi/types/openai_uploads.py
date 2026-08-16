@@ -1,6 +1,6 @@
 """Local OpenAI-compatible Uploads API types."""
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field
 
@@ -15,6 +15,9 @@ from stdapi.types.openai_files import FileObject, FilePurpose
 
 #: Valid status values for an in-progress or finished upload.
 UploadStatus = Literal["pending", "completed", "cancelled", "expired"]
+
+#: Accepted form of the completion checksum: a hex-encoded MD5 digest, either case.
+_MD5_PATTERN = r"^[0-9a-fA-F]{32}$"
 
 
 class UploadExpiresAfter(BaseModelRequest):
@@ -72,9 +75,11 @@ class CompleteUploadBody(BaseModelRequest):
     """Request body for ``POST /v1/uploads/{upload_id}/complete``."""
 
     part_ids: list[str] = Field(description="The ordered list of Part IDs.")
-    md5: str | None = Field(
+    md5: Annotated[str, Field(pattern=_MD5_PATTERN)] | None = Field(
         default=None,
-        description="Optional md5 checksum for the file contents. Accepted but not validated.",
+        description="Hex-encoded md5 digest of the whole file contents, i.e. of "
+        "the parts concatenated in `part_ids` order. When set, the completed "
+        "file is verified against it and a mismatch is rejected.",
     )
 
 

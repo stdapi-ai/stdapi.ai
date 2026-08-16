@@ -1,7 +1,7 @@
 ---
 title: Files API - OpenAI-Compatible File Storage
 description: Upload, manage, and reference files in chat completions using the OpenAI-compatible Files API backed by Amazon S3. Supports documents, images, expiry, cursor pagination, and multipart uploads.
-keywords: Files API, OpenAI files, file upload, S3 file storage, chat completion file, expires_after, cursor pagination, Amazon Bedrock files, multipart upload
+keywords: Files API, OpenAI files, file upload, S3 file storage, chat completion file, expires_after, cursor pagination, Amazon Bedrock files, multipart upload, md5 checksum
 ---
 
 # Files API
@@ -299,11 +299,14 @@ curl -X POST "$BASE/v1/uploads/upload_0190c51c7de7455d9b8c2efe27dfbf67/complete"
     "part_ids": [
       "part_a3f5c81d2b6e49070001abcdef012345",
       "part_a3f5c81d2b6e49070002fedcba987654"
-    ]
+    ],
+    "md5": "9e107d9d372bb6826bd81d3542a419d6"
   }'
 ```
 
 `part_ids` must be listed in ascending upload order (part 1, part 2, ...); S3 cannot reassemble multipart uploads out of order, so a reordered list is rejected with a 400 error rather than silently reordered.
+
+The optional `md5` is the hex-encoded MD5 digest of the **whole file** — the parts concatenated in `part_ids` order, not a digest per part. When it is supplied the completed file is verified against it, and a mismatch is refused with a 400 error and leaves no file behind. Omit it and the upload completes unverified.
 
 **Response:** A completed `Upload` object with the `file` field populated.
 
@@ -354,7 +357,7 @@ curl -X POST "$BASE/v1/uploads/upload_0190c51c7de7455d9b8c2efe27dfbf67/cancel" \
 | Part data (JSON body)    | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents |
 | Part ordering            |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | `part_ids` must be listed in ascending upload order; S3 cannot reassemble out of order |
 | Part count / size limits |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Max 10,000 parts; every part except the last must be at least 5 MiB |
-| `md5` checksum           | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted but not validated                                   |
+| `md5` checksum           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Hex MD5 of the whole file; a mismatch is refused with a 400 error |
 | Session TTL              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 1 day from creation                                          |
 
 </div>
@@ -382,11 +385,12 @@ PART_B_ID=$(curl -s -X POST "$BASE/v1/uploads/$UPLOAD_ID/parts" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -F "data=@part2.bin" | jq -r .id)
 
-# 3. Complete — file is immediately available
+# 3. Complete — the checksum covers the parts concatenated, in order
+MD5=$(cat part1.bin part2.bin | md5sum | cut -d' ' -f1)
 FILE_ID=$(curl -s -X POST "$BASE/v1/uploads/$UPLOAD_ID/complete" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
-  -d "{\"part_ids\": [\"$PART_A_ID\", \"$PART_B_ID\"]}" | jq -r .file.id)
+  -d "{\"part_ids\": [\"$PART_A_ID\", \"$PART_B_ID\"], \"md5\": \"$MD5\"}" | jq -r .file.id)
 echo "File ready: $FILE_ID"
 
 # Cleanup

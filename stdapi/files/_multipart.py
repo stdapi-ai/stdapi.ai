@@ -9,10 +9,17 @@ does not expose ``ContentType``, ``ContentDisposition``, or ``Metadata``).
 The marker is deleted in the background on completion or cancellation.
 
 The S3 multipart upload ID is resolved via a bounded per-process LRU cache
-(``upload_id → (s3_upload_id, expiry)``), sparing :func:`add_part` a
+(``upload_id → _SessionState``), sparing :func:`add_part` a
 ``list_multipart_uploads`` call; ALB sticky sessions maximise cache hits across
 sequential parts.  Concurrent calls from different pods may race on the part
 number (last writer wins); sequential use is safe.
+
+The same entry carries the running MD5 of the parts this process proxied, which
+is what the client-declared ``md5`` is compared against at completion — the
+bytes are hashed while they are already in memory, so nothing is buffered and
+nothing is read back.  When that state does not cover exactly the parts being
+completed (another instance served some of them, or the entry was evicted), the
+assembled object is streamed back and hashed instead.
 
 ID formats
 ----------
@@ -24,10 +31,11 @@ ID formats
 from asyncio import gather
 from contextlib import suppress
 from dataclasses import dataclass
-from hashlib import sha256
+from hashlib import md5, sha256
 from time import monotonic
 from typing import TYPE_CHECKING, Never
 from uuid import uuid4
+from zlib import crc32
 
 from botocore.exceptions import ClientError
 
@@ -37,6 +45,7 @@ from stdapi.aws_s3 import (
     BUCKET_TO_REGION,
     EXPIRING_S3_TAGGING,
     S3_TAGGING,
+    UPLOAD_CHUNK_SIZE,
     track_temporary_s3_objects,
 )
 from stdapi.config import SETTINGS
@@ -53,6 +62,8 @@ from stdapi.files._core import (
 from stdapi.utils import now_utc_timestamp
 
 if TYPE_CHECKING:
+    from hashlib import _Hash
+
     from types_aiobotocore_s3.client import S3Client
 
 #: TTL in seconds for a pending multipart session (1 day, matching the S3 lifecycle cleanup window).
@@ -64,32 +75,70 @@ _MAX_PART_NUMBER: int = 10000
 #: Minimum size in bytes for a part that is not the last one (S3 limit, 5 MiB).
 _MIN_PART_SIZE: int = 5 * 1024 * 1024
 
-#: Per-process cache: upload_id → (s3_upload_id, expires_monotonic) (bounded LRU).
-_cache: dict[str, tuple[str, float]] = {}
+
+@dataclass(slots=True)
+class _SessionState:
+    """Per-process state for a pending multipart session.
+
+    Attributes:
+        s3_upload_id: S3 multipart upload ID, fixed for the session's lifetime.
+        expires: ``monotonic()`` deadline after which the entry is stale.
+        digest: Running MD5 over the parts proxied here, or ``None`` if none were.
+        parts_signature: Fingerprint of the parts folded into ``digest``.
+    """
+
+    s3_upload_id: str
+    expires: float
+    digest: _Hash | None = None
+    parts_signature: int = 0
+
+
+#: Per-process cache: upload_id → session state (bounded LRU).
+_cache: dict[str, _SessionState] = {}
 
 #: Maximum entries retained in the multipart session cache.
 _CACHE_MAX: int = 4096
 
 
-def _cache_get(upload_id: str) -> str | None:
-    """Return the cached ``s3_upload_id`` for *upload_id*, or ``None`` if absent/expired."""
-    if entry := _cache.pop(upload_id, None):
-        s3_upload_id, expires = entry
-        if monotonic() < expires:
-            _cache[upload_id] = entry
-            return s3_upload_id
+def _fold_part(signature: int, part_number: int, etag: str) -> int:
+    """Extend *signature* with one part, identified by its number and entity tag.
+
+    Constant-size whatever the part count, and keyed on the entity tag so a part
+    another instance re-uploaded under the same number no longer matches.
+
+    Args:
+        signature: Fingerprint to extend.
+        part_number: 1-based S3 part number.
+        etag: Entity tag S3 reported for that part.
+
+    Returns:
+        The extended fingerprint.
+    """
+    return crc32(f"{part_number}:{etag}".encode(), signature)
+
+
+def _cache_get(upload_id: str) -> _SessionState | None:
+    """Return the cached state for *upload_id*, or ``None`` if absent/expired."""
+    if (entry := _cache.pop(upload_id, None)) and monotonic() < entry.expires:
+        _cache[upload_id] = entry
+        return entry
     return None
 
 
-def _cache_set(upload_id: str, s3_upload_id: str) -> None:
-    """Store *s3_upload_id* in the per-process cache for the session TTL.
+def _cache_set(upload_id: str, s3_upload_id: str) -> _SessionState:
+    """Store a fresh state for *upload_id* in the per-process cache for the session TTL.
 
     Sessions abandoned without a completion or cancellation are never looked up
     again, so the least recently used entry is dropped once the cache is full.
+
+    Returns:
+        The stored state.
     """
     if upload_id not in _cache and len(_cache) >= _CACHE_MAX:
         del _cache[next(iter(_cache))]
-    _cache[upload_id] = (s3_upload_id, monotonic() + _MULTIPART_EXPIRY_SECONDS)
+    entry = _SessionState(s3_upload_id, monotonic() + _MULTIPART_EXPIRY_SECONDS)
+    _cache[upload_id] = entry
+    return entry
 
 
 def _cache_del(upload_id: str) -> None:
@@ -270,14 +319,15 @@ async def _check_not_pending(upload_id: str, bucket: str, s3: S3Client) -> Never
     raise ApiError(msg)
 
 
-async def _require_s3_upload_id(
+async def _require_session_state(
     upload_id: str, bucket: str, s3_key: str, s3: S3Client
-) -> str:
-    """Return the S3 multipart upload ID for a pending session.
+) -> _SessionState:
+    """Return the per-process state of a pending session.
 
     Checks the per-process cache first; on a cache miss falls back to
     ``list_multipart_uploads`` to populate the cache. The upload ID is fixed
-    for the session's lifetime, so caching it never goes stale.
+    for the session's lifetime, so caching it never goes stale — the rebuilt
+    entry simply carries no running digest, since this process saw no part.
 
     Args:
         upload_id: Session identifier.
@@ -295,11 +345,37 @@ async def _require_s3_upload_id(
         "Uploads", []
     ):
         if upload["Key"] == s3_key:
-            s3_upload_id = upload["UploadId"]
-            _cache_set(upload_id, s3_upload_id)
-            return s3_upload_id
+            return _cache_set(upload_id, upload["UploadId"])
 
     return await _check_not_pending(upload_id, bucket, s3)
+
+
+def _checksum_mismatch() -> Never:
+    """Refuse a completion whose contents differ from the declared checksum.
+
+    Raises:
+        ApiError: Always, as a 400.
+    """
+    msg = "The uploaded contents do not match the md5 checksum given for this upload."
+    raise ApiError(msg)
+
+
+async def _object_md5(s3: S3Client, bucket: str, key: str) -> str:
+    """Return the hex MD5 of a stored object, reading it in bounded chunks.
+
+    Args:
+        s3: Authenticated S3 client.
+        bucket: S3 bucket.
+        key: S3 key of the object to hash.
+
+    Returns:
+        Lowercase hex MD5 digest of the object's contents.
+    """
+    digest = md5(usedforsecurity=False)
+    body = (await s3.get_object(Bucket=bucket, Key=key))["Body"]
+    async for chunk in body.iter_chunks(UPLOAD_CHUNK_SIZE):
+        digest.update(chunk)
+    return digest.hexdigest()
 
 
 async def _list_all_parts(
@@ -419,20 +495,20 @@ async def add_part(upload_id: str, data: bytes) -> tuple[str, int]:
     s3_key = file_id_s3_key(file_id)
     s3: S3Client = get_client("s3", BUCKET_TO_REGION.get(bucket))
 
-    s3_upload_id = await _require_s3_upload_id(upload_id, bucket, s3_key, s3)
+    state = await _require_session_state(upload_id, bucket, s3_key, s3)
     # Numbering from the parts S3 holds: another instance may have served the
     # previous part, and reusing its number would overwrite it.
-    parts = await _list_all_parts(s3, bucket, s3_key, s3_upload_id)
+    parts = await _list_all_parts(s3, bucket, s3_key, state.s3_upload_id)
     part_number = max(parts, default=0) + 1
     if part_number > _MAX_PART_NUMBER:
         msg = f"This upload already has the maximum of {_MAX_PART_NUMBER} parts."
         raise ApiError(msg)
 
     try:
-        await s3.upload_part(
+        stored = await s3.upload_part(
             Bucket=bucket,
             Key=s3_key,
-            UploadId=s3_upload_id,
+            UploadId=state.s3_upload_id,
             PartNumber=part_number,
             Body=data,
         )
@@ -442,11 +518,19 @@ async def add_part(upload_id: str, data: bytes) -> tuple[str, int]:
             await _check_not_pending(upload_id, bucket, s3)
         raise  # pragma: no cover
 
+    # Folded in while the bytes are still in memory, so the completion checksum
+    # costs no buffering and no read-back; only the digest state outlives the call.
+    state.digest = digest = state.digest or md5(usedforsecurity=False)
+    digest.update(data)
+    state.parts_signature = _fold_part(
+        state.parts_signature, part_number, stored["ETag"]
+    )
+
     return _make_part_id(upload_id, part_number), now_utc_timestamp()
 
 
 async def complete_multipart_session(
-    upload_id: str, part_ids: list[str]
+    upload_id: str, part_ids: list[str], md5_checksum: str | None = None
 ) -> tuple[MultipartSession, FileRecord]:
     """Assemble parts and produce a file record, validating fingerprints and total size.
 
@@ -456,24 +540,28 @@ async def complete_multipart_session(
     Args:
         upload_id: Session identifier.
         part_ids: Ordered part IDs to include in the final file.
+        md5_checksum: Hex MD5 the caller declared for the whole file contents,
+            or ``None`` to assemble without verifying them.
 
     Returns:
         ``(session, file_record)`` — session metadata and the assembled file.
 
     Raises:
         ApiError: 404 not found; 400 not pending, out-of-order part_ids, bad
-            part fingerprint, unknown part, undersized non-last part, or size
-            mismatch.
+            part fingerprint, unknown part, undersized non-last part, size
+            mismatch, or contents differing from *md5_checksum*.
     """
     file_id = _file_id_from_upload_id(upload_id)
     bucket = resolve_file_bucket(file_id)
     s3_key = file_id_s3_key(file_id)
     s3: S3Client = get_client("s3", BUCKET_TO_REGION.get(bucket))
+    expected = md5_checksum.lower() if md5_checksum else None
 
-    session, s3_upload_id = await gather(
+    session, state = await gather(
         _load_multipart_session(upload_id, bucket, s3),
-        _require_s3_upload_id(upload_id, bucket, s3_key, s3),
+        _require_session_state(upload_id, bucket, s3_key, s3),
     )
+    s3_upload_id = state.s3_upload_id
     parts_info = await _list_all_parts(s3, bucket, s3_key, s3_upload_id)
 
     # Ordering is validated over the whole list first: only once it is known to be
@@ -494,6 +582,7 @@ async def complete_multipart_session(
 
     s3_parts: list[dict[str, int | str]] = []
     assembled_size = 0
+    stored_signature = 0
     last_index = len(part_ids) - 1
     for i, (pid, pn) in enumerate(zip(part_ids, part_numbers, strict=True)):
         if (part := parts_info.get(pn)) is None:
@@ -508,6 +597,7 @@ async def complete_multipart_session(
             raise ApiError(msg)
         s3_parts.append({"PartNumber": pn, "ETag": etag})
         assembled_size += size
+        stored_signature = _fold_part(stored_signature, pn, etag)
 
     if assembled_size != session.total_bytes:
         msg = (
@@ -515,6 +605,18 @@ async def complete_multipart_session(
             f"declared bytes {session.total_bytes}."
         )
         raise ApiError(msg)
+
+    # The running digest only answers for these parts when it covers exactly the
+    # ones S3 holds, in this order; otherwise the stored object is hashed after
+    # assembly.
+    if (
+        expected is not None
+        and state.digest is not None
+        and state.parts_signature == stored_signature
+    ):
+        if state.digest.hexdigest() != expected:
+            _checksum_mismatch()
+        expected = None
 
     await s3.complete_multipart_upload(
         Bucket=bucket,
@@ -524,6 +626,14 @@ async def complete_multipart_session(
     )
     _cache_del(upload_id)
     track_temporary_s3_objects(bucket, _multipart_meta_key(upload_id))
+
+    if expected is not None and await _object_md5(s3, bucket, s3_key) != expected:
+        # The identifier of a refused file is derivable from the upload's, so
+        # leaving it in place would serve contents the caller already disowned.
+        with suppress(ClientError):
+            await s3.delete_object(Bucket=bucket, Key=s3_key)
+        _checksum_mismatch()
+
     return session, _record_from_head(
         file_id, await s3.head_object(Bucket=bucket, Key=s3_key)
     )
@@ -540,13 +650,13 @@ async def cancel_multipart_session(upload_id: str) -> MultipartSession:
     s3_key = file_id_s3_key(file_id)
     s3: S3Client = get_client("s3", BUCKET_TO_REGION.get(bucket))
 
-    session, s3_upload_id = await gather(
+    session, state = await gather(
         _load_multipart_session(upload_id, bucket, s3),
-        _require_s3_upload_id(upload_id, bucket, s3_key, s3),
+        _require_session_state(upload_id, bucket, s3_key, s3),
     )
     with suppress(ClientError):
         await s3.abort_multipart_upload(
-            Bucket=bucket, Key=s3_key, UploadId=s3_upload_id
+            Bucket=bucket, Key=s3_key, UploadId=state.s3_upload_id
         )
     _cache_del(upload_id)
     track_temporary_s3_objects(bucket, _multipart_meta_key(upload_id))

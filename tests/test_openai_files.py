@@ -1092,8 +1092,9 @@ class _StubAddPartS3Client(_StubCompleteS3Client):
     async def upload_part(self, **kwargs: object) -> dict[str, Any]:
         part_number = cast("int", kwargs["PartNumber"])
         body = cast("bytes", kwargs["Body"])
-        self.parts[part_number] = (f"etag-{part_number}", len(body))
-        return {}
+        etag = f"etag-{part_number}"
+        self.parts[part_number] = (etag, len(body))
+        return {"ETag": etag}
 
 
 @pytest.mark.local
