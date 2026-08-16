@@ -20,8 +20,13 @@ from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import BEDROCK_BODY_SIZE_LIMIT, MIME_TYPES_TO_AUDIO_TYPE
 from stdapi.models import ModelDetails, _compute_model_capabilities
 from stdapi.models.audio import _default, get_audio_model
-from stdapi.models.audio._default import CONVERSE_AUDIO_FORMATS, AudioModel
+from stdapi.models.audio._default import (
+    _MAX_INLINE_AUDIO_BYTES,
+    CONVERSE_AUDIO_FORMATS,
+    AudioModel,
+)
 from stdapi.types.openai_audio import TranscriptionTextDoneEvent
+from stdapi.utils import b64_encoded_len
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -426,9 +431,13 @@ class TestInlineBodySizeGuard:
 
     The audio travels as inline bytes in the Converse request, and FLAC is
     roughly PCM-sized, so a transcoded upload can outgrow what Bedrock accepts
-    and come back as an opaque upstream ValidationException.
+    and come back as an opaque upstream ValidationException. The limit applies
+    to the encoded body, which is 4/3 of the payload: real Converse calls on
+    Amazon Nova Lite accept 18,749,997 raw bytes (24,999,996 encoded) and
+    reject 18,750,003 raw bytes (25,000,004 encoded).
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_AudioSource.html
+         https://github.com/stdapi-ai/stdapi.ai/issues/136
          stdapi/models/audio/_default.py:AudioModel._check_inline_size
     """
 
@@ -437,12 +446,28 @@ class TestInlineBodySizeGuard:
         with pytest.raises(ApiError, match="too large") as exc_info:
             await AudioModel(_MODEL_ID)._audio_content_block(  # noqa: SLF001
                 _FakeAudioContent(  # type: ignore[arg-type]
-                    "audio", "mp3", b"\0" * (BEDROCK_BODY_SIZE_LIMIT + 1)
+                    "audio", "mp3", b"\0" * (_MAX_INLINE_AUDIO_BYTES + 1)
                 )
             )
 
         assert exc_info.value.status == 400
         assert "shorter file" in str(exc_info.value)
+        # The size quoted must be the one the upload is measured against.
+        assert str(_MAX_INLINE_AUDIO_BYTES) in str(exc_info.value)
+
+    async def test_payload_the_backend_refuses_is_rejected_here(self) -> None:
+        """An upload the backend measures as too big never reaches it.
+
+        18,750,003 raw bytes encode to 25,000,004, which real Converse calls
+        refuse. Measured against the raw length it sits well under the limit,
+        so the request used to travel and come back as an opaque failure.
+        """
+        with pytest.raises(ApiError, match="too large") as exc_info:
+            await AudioModel(_MODEL_ID)._audio_content_block(  # noqa: SLF001
+                _FakeAudioContent("audio", "mp3", b"\0" * 18_750_003)  # type: ignore[arg-type]
+            )
+
+        assert exc_info.value.status == 400
 
     async def test_oversized_transcode_result_is_rejected(
         self, monkeypatch: pytest.MonkeyPatch
@@ -453,7 +478,7 @@ class TestInlineBodySizeGuard:
             stream: AsyncGenerator[bytes],  # noqa: ARG001
             output_format: str,  # noqa: ARG001
         ) -> AsyncGenerator[bytes]:
-            yield b"\0" * (BEDROCK_BODY_SIZE_LIMIT + 1)
+            yield b"\0" * (_MAX_INLINE_AUDIO_BYTES + 1)
 
         monkeypatch.setattr(_default, "encode_audio_stream", _fat_encode)
 
@@ -477,7 +502,7 @@ class TestInlineBodySizeGuard:
                 _FakeAudioContent(  # type: ignore[arg-type]
                     "audio",
                     "mp3",
-                    b"\0" * (BEDROCK_BODY_SIZE_LIMIT + 1),
+                    b"\0" * (_MAX_INLINE_AUDIO_BYTES + 1),
                     reported_size=0,
                 )
             )
@@ -491,11 +516,12 @@ class TestInlineBodySizeGuard:
 
         A long audio track transcodes to far more FLAC than Converse accepts,
         so consuming the whole stream to then reject it would let an upload
-        choose how much memory the server spends.
+        choose how much memory the server spends. Four chunks reach exactly
+        what fits, so the fifth is the one that cannot.
         """
         chunks_yielded = 0
         closed = False
-        chunk = b"\0" * (BEDROCK_BODY_SIZE_LIMIT // 4)
+        chunk = b"\0" * (_MAX_INLINE_AUDIO_BYTES // 4)
 
         async def _endless_encode(
             stream: AsyncGenerator[bytes],  # noqa: ARG001
@@ -518,17 +544,26 @@ class TestInlineBodySizeGuard:
             )
 
         assert chunks_yielded == 5, "the encode ran past the first oversized chunk"
+        assert chunks_yielded * len(chunk) <= _MAX_INLINE_AUDIO_BYTES + len(chunk), (
+            "the encode buffered past what the backend accepts"
+        )
         assert closed, "the ffmpeg pipeline was left running"
 
     async def test_payload_at_the_limit_is_accepted(self) -> None:
-        """The limit itself is inclusive: only what exceeds it is refused."""
+        """The limit itself is inclusive: only what exceeds it is refused.
+
+        The largest accepted payload is the one whose encoded length is the
+        limit exactly.
+        """
+        assert b64_encoded_len(_MAX_INLINE_AUDIO_BYTES) == BEDROCK_BODY_SIZE_LIMIT
+
         block = await AudioModel(_MODEL_ID)._audio_content_block(  # noqa: SLF001
             _FakeAudioContent(  # type: ignore[arg-type]
-                "audio", "mp3", b"\0" * BEDROCK_BODY_SIZE_LIMIT
+                "audio", "mp3", b"\0" * _MAX_INLINE_AUDIO_BYTES
             )
         )
 
-        assert len(block["audio"]["source"]["bytes"]) == BEDROCK_BODY_SIZE_LIMIT  # type: ignore[arg-type]
+        assert len(block["audio"]["source"]["bytes"]) == _MAX_INLINE_AUDIO_BYTES  # type: ignore[arg-type]
 
 
 class TestConverseStreamEvents:

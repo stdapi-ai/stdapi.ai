@@ -26,6 +26,7 @@ from stdapi.types.openai_audio import (
     Translation,
     UsageTokens,
 )
+from stdapi.utils import b64_encoded_len
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Mapping
@@ -73,6 +74,9 @@ _TRANSCODABLE_MEDIA_TYPES: frozenset[str] = frozenset({"audio", "video"})
 
 #: ApiError status returned by the ffmpeg pipeline when the encode itself failed.
 _ENCODE_FAILURE_STATUS = 500
+
+#: Largest audio payload whose encoded form still fits in the request body.
+_MAX_INLINE_AUDIO_BYTES = BEDROCK_BODY_SIZE_LIMIT // 4 * 3
 
 
 async def _single_chunk_stream(data: bytes) -> AsyncGenerator[bytes]:
@@ -349,10 +353,14 @@ class AudioModel(AudioModelBase[Any, Any]):
             # cannot fit, and the read length is what actually travels, since a
             # chunked response or an upload without a length reports zero.
             self._check_inline_size(
-                await audio_content.get_size(), audio_format, transcoded=False
+                b64_encoded_len(await audio_content.get_size()),
+                audio_format,
+                transcoded=False,
             )
             data = await audio_content.to_bytes()
-            self._check_inline_size(len(data), audio_format, transcoded=False)
+            self._check_inline_size(
+                b64_encoded_len(len(data)), audio_format, transcoded=False
+            )
             audio_block: AudioBlockTypeDef = {
                 "format": audio_format,  # type: ignore[typeddict-item]
                 "source": {"bytes": data},
@@ -372,7 +380,7 @@ class AudioModel(AudioModelBase[Any, Any]):
             ) as encoded:
                 async for chunk in encoded:
                     buf.extend(chunk)
-                    if len(buf) > BEDROCK_BODY_SIZE_LIMIT:
+                    if b64_encoded_len(len(buf)) > BEDROCK_BODY_SIZE_LIMIT:
                         # Closing the stream kills ffmpeg: a long audio track
                         # would otherwise buffer far past what Converse accepts.
                         break
@@ -386,7 +394,7 @@ class AudioModel(AudioModelBase[Any, Any]):
                 "audio. Upload a file carrying a decodable audio track."
             )
             raise ApiError(msg) from exception
-        self._check_inline_size(len(buf), file_format, transcoded=True)
+        self._check_inline_size(b64_encoded_len(len(buf)), file_format, transcoded=True)
         transcoded_block: AudioBlockTypeDef = {
             "format": "flac",
             "source": {"bytes": bytes(buf)},
@@ -394,19 +402,24 @@ class AudioModel(AudioModelBase[Any, Any]):
         return {"audio": transcoded_block}
 
     @staticmethod
-    def _check_inline_size(size: int, file_format: str, *, transcoded: bool) -> None:
+    def _check_inline_size(
+        encoded_size: int, file_format: str, *, transcoded: bool
+    ) -> None:
         """Reject audio too large for the Converse inline bytes source.
 
         Args:
-            size: Size of the audio to embed, in bytes. The transcode stops as
-                soon as it passes the limit, so it is a lower bound there.
+            encoded_size: Size the audio occupies once encoded into the request
+                body, which is the dimension the limit applies to. The
+                transcode stops as soon as it passes the limit, so it is a
+                lower bound there.
             file_format: Format of the uploaded file, for the error message.
-            transcoded: Whether *size* is the FLAC conversion of that upload.
+            transcoded: Whether *encoded_size* is the FLAC conversion of that
+                upload.
 
         Raises:
             ApiError: If the audio exceeds the Bedrock inline body limit.
         """
-        if size <= BEDROCK_BODY_SIZE_LIMIT:
+        if encoded_size <= BEDROCK_BODY_SIZE_LIMIT:
             return
         origin = (
             f"the '{file_format}' file converted to FLAC exceeds"
@@ -415,7 +428,7 @@ class AudioModel(AudioModelBase[Any, Any]):
         )
         msg = (
             f"The audio to transcribe is too large: {origin} the "
-            f"{BEDROCK_BODY_SIZE_LIMIT} bytes accepted inline. Upload a shorter "
+            f"{_MAX_INLINE_AUDIO_BYTES} bytes accepted inline. Upload a shorter "
             "file, or one already in a natively supported format: "
             f"{', '.join(sorted(CONVERSE_AUDIO_FORMATS))}."
         )
