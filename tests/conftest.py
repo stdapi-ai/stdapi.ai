@@ -313,8 +313,10 @@ environ.setdefault("cost_tracking", "false")
 environ.setdefault("log_level", "info")
 # Pin Bedrock Mantle to one region: deterministic surfaces and stored-response locality.
 environ.setdefault("aws_bedrock_mantle_regions", "us-east-1")
-# Serve the cheap dual-homed Gemma 3 test model via Mantle instead of bedrock-runtime.
-environ.setdefault("aws_bedrock_mantle_preferred_models", "google.gemma-3-4b-it")
+# Serve the dual-homed Gemma 3 and Luna test models via Mantle, not bedrock-runtime.
+environ.setdefault(
+    "aws_bedrock_mantle_preferred_models", "google.gemma-3-4b-it,openai.gpt-5.6-luna"
+)
 
 # Model mappings for different test contexts
 MODEL_MAPPINGS = {
