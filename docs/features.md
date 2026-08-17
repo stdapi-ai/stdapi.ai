@@ -634,17 +634,17 @@ Typical requests are dominated by the fixed sub-millisecond serving floor; the o
 
 <div class="grid cards" markdown>
 
-- :material-test-tube: __5,000+ automated tests__
+- :material-test-tube: __6,000+ automated tests__
   <br>Run against real AWS services rather than mocks.
 
-- :material-shield-check: __Branch coverage, every test tier enabled__
-  <br>Tracked continuously, from fast contract checks to full release validation against a live deployment.
+- :material-shield-check: __95%+ branch coverage__
+  <br>Measured with every test tier enabled — the full suite, not the offline CI gate that runs on every push.
 
 - :material-account-check: __Validated against the vendors__
   <br>The same tests run against the real OpenAI, Anthropic and Cohere APIs.
 
 - :material-robot-happy: __Driven by real client software__
-  <br>Seventeen third-party clients — Claude Code, n8n, Open WebUI and more — driven end to end against a live gateway.
+  <br>Twenty third-party clients — Claude Code, n8n, Open WebUI and more — driven end to end against a live gateway.
 
 </div>
 

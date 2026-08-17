@@ -556,10 +556,10 @@ Media generation, knowledge management and team chatbots are covered too. [:octi
 
 <div class="grid cards" markdown>
 
-- :material-test-tube: __5,000+ test cases__
+- :material-test-tube: __6,000+ test cases__
   <br>Run against real AWS services rather than mocks.
 
-- :material-account-check: __12 client &amp; framework suites__
+- :material-account-check: __20 client &amp; framework suites__
   <br>Real CLIs, apps, and libraries driven end to end against a live deployment.
 
 - :material-brain: __100 model-probe records__
@@ -570,7 +570,7 @@ Media generation, knowledge management and team chatbots are covered too. [:octi
 
 </div>
 
-Offline CI runs on every push and pull request with an enforced coverage floor. The live-AWS, vendor cross-validation, and client suites run on demand against a real deployment.
+Offline CI runs on every push and pull request with an enforced coverage floor. The live-AWS, vendor cross-validation, and client suites run on demand against a real deployment. Branch coverage measured with every test tier enabled — the full suite, not just the offline CI run — is 95%+.
 { .band__note }
 
 [:octicons-arrow-right-24: Inspect the public test suite](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests) &nbsp;·&nbsp; [what each client suite exercises](https://github.com/stdapi-ai/stdapi.ai/blob/main/tests/agentic/README.md)

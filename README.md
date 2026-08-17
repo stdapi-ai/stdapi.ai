@@ -144,7 +144,7 @@ Prefer a hands-off setup? A [managed deployment service](https://aws.amazon.com/
 - **🤖 Integrated MCP server** — Every API endpoint exposed as a Model Context Protocol tool. AI agents connect directly—no HTTP client code required. Streamable HTTP and SSE transports with configurable tool selection.
 - **🔄 Automatic deprecated model fallback** — When AWS retires a model, requests are transparently redirected to its replacement. Applications survive model deprecations without code changes.
 
-**Measured, not asserted:** `<1 ms` gateway overhead (0.8 ms of gateway CPU on a 2.5 KB chat request) · **5,000+ automated test cases** run against real AWS services · **17 third-party clients** driven end to end against a live gateway · **50+ API operations** exposed as MCP tools.
+**Measured, not asserted:** `<1 ms` gateway overhead (0.8 ms of gateway CPU on a 2.5 KB chat request) · **6,000+ automated test cases** run against real AWS services · **20 third-party clients** driven end to end against a live gateway · **50+ API operations** exposed as MCP tools.
 
 **[See all features →](https://stdapi.ai/features/)** · **[Browse the test suite →](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests)**
 
