@@ -1,0 +1,107 @@
+---
+name: Price drift detection
+
+on:
+  schedule:
+    # Weekly is the right order of magnitude for vendor price changes; Monday
+    # 06:17 UTC lands early in the work week (a Friday find would sit unread
+    # over the weekend) and off both the hour and the day boundary, where
+    # GitHub warns scheduled-workflow load concentrates and delays can follow.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: read
+
+concurrency:
+  group: price-drift
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    name: Compare DEFAULT_MODEL_PRICES against its vendor sources
+    runs-on: ubuntu-latest
+    env:
+      FORCE_COLOR: "1"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+          activate-environment: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --group test
+
+      # -m drift scopes the run to the lane's one live test, leaving the same
+      # file's offline parser tests (already covered by the Test workflow) out
+      # of this schedule. The lane fails only on an actual DRIFT: an
+      # unreachable source or a vanished/new rate is reported in the output
+      # captured below but never turns this step red (see
+      # tests/test_pricing_drift.py). A source that cannot be compared at all
+      # makes the test skip, which is not a failure either.
+      - name: Run the price drift detector
+        run: |
+          set -o pipefail
+          pytest --drift -m drift tests/test_pricing_drift.py -q | tee drift-report.txt
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-report
+          path: drift-report.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  report:
+    name: Open an issue for a real drift
+    needs: detect
+    if: failure()
+    runs-on: ubuntu-latest
+    # Scoped to this job alone: only opening the issue needs write access,
+    # nothing else in the workflow reads or writes repository content.
+    permissions:
+      issues: write
+    steps:
+      - name: Download the report
+        uses: actions/download-artifact@v4
+        with:
+          name: drift-report
+
+      # Idempotent by construction: the label is created once (--force makes a
+      # second run a no-op) and then used to find an already-open issue, so a
+      # second consecutive failing run comments instead of opening a duplicate.
+      - name: Ensure the tracking label exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create price-drift \
+            --repo "$GITHUB_REPOSITORY" \
+            --color B60205 \
+            --description "DEFAULT_MODEL_PRICES no longer matches its vendor source" \
+            --force
+
+      - name: Open or update the tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" \
+            --label price-drift --state open --json number --jq '.[0].number')
+          {
+            echo "Detected by the scheduled price drift workflow: $RUN_URL"
+            echo
+            cat drift-report.txt
+          } > issue-body.txt
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file issue-body.txt
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "Price drift: DEFAULT_MODEL_PRICES no longer matches its vendor source" \
+              --label price-drift \
+              --body-file issue-body.txt
+          fi

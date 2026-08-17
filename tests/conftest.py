@@ -490,7 +490,7 @@ OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 _OPENAI_ORGANIZATION = "tests_stdapi.ai"
 #: Markers whose tests are collected only when the matching ``--<marker>`` flag is passed.
-_OPT_IN_MARKERS = ("expensive", "agentic", "slow", "video", "container")
+_OPT_IN_MARKERS = ("expensive", "agentic", "slow", "video", "container", "drift")
 #: Fallback skip reason for a ``gateway`` marker that names none of its own.
 _GATEWAY_SKIP_REASON = "Exercises a gateway-only capability (official API selected)"
 #: Message every route of an optional API answers when the operator left it unconfigured.
@@ -569,6 +569,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store_true",
         default=False,
         help="Build the container images and run the tests against them",
+    )
+    parser.addoption(
+        "--drift",
+        action="store_true",
+        default=False,
+        help="Compare hardcoded vendor facts against their published source "
+        "(needs public internet, no AWS credentials and no vendor key)",
     )
     parser.addoption(
         "--offline",
