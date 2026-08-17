@@ -51,7 +51,8 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.agentic
 
 #: OpenClaw onboards, then runs an embedded turn; both share one container run.
-_TIMEOUT = 1800
+#: Bounded under the lane's 15-minute budget: the slowest measured run is ~62 s.
+_TIMEOUT = 900
 
 #: Gateway route each compatibility value must be observed reaching.
 #:

@@ -56,8 +56,9 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.agentic
 
-#: Hermes plans several file reads per turn; the same ceiling pi uses.
-_TIMEOUT = 1800
+#: Hermes plans several file reads per turn; the same ceiling pi uses. Bounded
+#: under the lane's 15-minute budget: the slowest measured run here is ~374 s.
+_TIMEOUT = 900
 
 #: Gateway route each transport must be observed reaching.
 _EXPECTED_PATHS = {

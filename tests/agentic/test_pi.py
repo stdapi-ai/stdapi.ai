@@ -57,8 +57,9 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.agentic
 
-#: pi plans more tool calls than Claude Code for the same task.
-_TIMEOUT = 1800
+#: pi plans more tool calls than Claude Code for the same task. Still bounded well
+#: under the lane's 15-minute budget: the slowest measured run here is ~256 s.
+_TIMEOUT = 900
 
 #: The three gateway routes pi speaks, one entry per wire format.
 _TOOLS = [
@@ -262,11 +263,11 @@ _MANTLE_ROUTE_MODELS = [
     ),
     pytest.param(
         PI_MESSAGES,
-        # Measured at ~45 min for two runs, and Mantle answers it with an
-        # upstream 500 often enough to matter -- the same reason
-        # `test_claude_code.py` already carries this model as flaky. Both are
-        # upstream conditions: the conversion itself completes its tool loop.
-        ModelConfig(model="google.gemma-4-31b", timeout=3600, flaky=True),
+        # The slowest pair in this module (~285 s for both runs), and Mantle
+        # answers it with an upstream 500 often enough to matter -- the same
+        # reason `test_claude_code.py` already carries this model as flaky. Both
+        # are upstream conditions: the conversion itself completes its tool loop.
+        ModelConfig(model="google.gemma-4-31b", timeout=_TIMEOUT, flaky=True),
         id="gemma-4-31b-messages",
     ),
 ]

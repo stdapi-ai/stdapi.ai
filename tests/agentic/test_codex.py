@@ -42,9 +42,12 @@ TOOL = CODEX
 pytestmark = pytest.mark.agentic
 
 #: Codex runs longer than Claude Code on the same task; it plans more shell calls.
-#: Deliberately generous: a ceiling costs nothing when it is not reached, whereas a
-#: run killed part-way is indistinguishable from a gateway fault.
-_TIMEOUT = 1800
+#: Still bounded well under the lane's 15-minute budget: the slowest measured run
+#: here is ~280 s, so this is a wide margin rather than an expectation.
+_TIMEOUT = 900
+
+#: Ceiling for the ``slow``-marked models, which sit outside the ``--agentic`` budget.
+_SLOW_TIMEOUT = 1200
 
 _MODEL_CONFIGS = [
     pytest.param(
@@ -53,11 +56,8 @@ _MODEL_CONFIGS = [
     ),
     pytest.param(
         # Reaches the answer through many more shell round trips than the larger
-        # models: the parameter-mapping prompt points it at the largest file in
-        # the tree, and it reads it in small chunks. That takes about seven
-        # minutes alone and over twenty when it shares the machine, so it gets
-        # its own ceiling rather than a downgraded timeout signature.
-        ModelConfig(model="amazon.nova-2-lite-v1:0", timeout=3600),
+        # models, so it is the one this module's prompts are sized for.
+        ModelConfig(model="amazon.nova-2-lite-v1:0", timeout=_TIMEOUT),
         id="nova-2-lite",
     ),
     pytest.param(
@@ -70,7 +70,7 @@ _MODEL_CONFIGS = [
     ),
     pytest.param(
         # Notably slower than its siblings; give each run extra headroom.
-        ModelConfig(model="qwen.qwen3-coder-next", timeout=3600, flaky=True),
+        ModelConfig(model="qwen.qwen3-coder-next", timeout=_SLOW_TIMEOUT, flaky=True),
         id="qwen3-coder-next",
         marks=pytest.mark.slow,
     ),

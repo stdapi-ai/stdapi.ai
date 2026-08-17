@@ -48,8 +48,9 @@ pytestmark = pytest.mark.agentic
 #: The CLI this module drives; read by the autouse model-identity fixture.
 TOOL = QWEN_CODE
 
-#: Qwen Code plans several read-only tool calls per turn, like pi.
-_TIMEOUT = 1800
+#: Qwen Code plans several read-only tool calls per turn, like pi. Still bounded
+#: well under the lane's 15-minute budget: the slowest measured run here is ~205 s.
+_TIMEOUT = 900
 
 #: Models exercised on the standard agent task.
 #:

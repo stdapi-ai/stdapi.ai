@@ -42,6 +42,10 @@ pytestmark = pytest.mark.agentic
 #: Env disabling the CLI's own thinking budget for models that reason internally.
 _NO_THINKING = {"DISABLE_PROMPT_CACHING": "1", "MAX_THINKING_TOKENS": "0"}
 
+#: Ceiling for the ``slow``-marked models, which sit outside the ``--agentic`` budget.
+#: Every other model here runs under the shared default, itself measured.
+_SLOW_TIMEOUT = 1200
+
 _MODEL_CONFIGS = [
     # Reference baseline: the only model here that is natively Anthropic.
     pytest.param(
@@ -79,11 +83,12 @@ _MODEL_CONFIGS = [
         id="qwen3-coder-30b",
     ),
     pytest.param(
-        # Notably slower than its siblings; give each run extra headroom.
+        # Notably slower than its siblings, and outside the --agentic budget
+        # anyway; give each run extra headroom.
         ModelConfig(
             model="qwen.qwen3-coder-next",
             extra_env=_NO_THINKING,
-            timeout=2400,
+            timeout=_SLOW_TIMEOUT,
             flaky=True,
         ),
         id="qwen3-coder-next",
@@ -91,9 +96,7 @@ _MODEL_CONFIGS = [
     ),
     pytest.param(
         # M2.5 reasons internally, so the CLI's own thinking budget is suppressed.
-        # That internal reasoning also makes it the slowest model here, by enough
-        # of a margin to need a ceiling of its own under a parallel run.
-        ModelConfig(model="minimax.minimax-m2.5", extra_env=_NO_THINKING, timeout=2400),
+        ModelConfig(model="minimax.minimax-m2.5", extra_env=_NO_THINKING),
         id="minimax-m2.5",
     ),
     pytest.param(
