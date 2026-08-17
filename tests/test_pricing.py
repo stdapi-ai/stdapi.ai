@@ -2921,26 +2921,91 @@ class TestDefaultModelPrices:
         assert price.currency == "USD"
 
     @pytest.mark.parametrize(
-        ("model_id", "input_rate", "output_rate"),
+        ("model_id", "rates"),
         [
-            ("openai.gpt-5.6-cyber", "0.00001375", "0.0000825"),
-            ("openai.gpt-daybreak-blue-5.6-sol", "0.0000055", "0.000033"),
+            (
+                "openai.gpt-5.4",
+                {
+                    Dimension.INPUT_TOKENS: "0.00000275",
+                    Dimension.CACHE_READ_TOKENS: "0.000000275",
+                    Dimension.OUTPUT_TOKENS: "0.0000165",
+                },
+            ),
+            (
+                "openai.gpt-5.5",
+                {
+                    Dimension.INPUT_TOKENS: "0.0000055",
+                    Dimension.CACHE_READ_TOKENS: "0.00000055",
+                    Dimension.OUTPUT_TOKENS: "0.000033",
+                },
+            ),
+            (
+                "openai.gpt-5.6-cyber",
+                {
+                    Dimension.INPUT_TOKENS: "0.00001375",
+                    Dimension.CACHE_WRITE_TOKENS: "0.0000171875",
+                    Dimension.CACHE_READ_TOKENS: "0.000001375",
+                    Dimension.OUTPUT_TOKENS: "0.0000825",
+                },
+            ),
+            (
+                "openai.gpt-5.6-luna",
+                {
+                    Dimension.INPUT_TOKENS: "0.00000022",
+                    Dimension.CACHE_WRITE_TOKENS: "0.000000275",
+                    Dimension.CACHE_READ_TOKENS: "0.000000022",
+                    Dimension.OUTPUT_TOKENS: "0.00000132",
+                },
+            ),
+            (
+                "openai.gpt-5.6-sol",
+                {
+                    Dimension.INPUT_TOKENS: "0.0000055",
+                    Dimension.CACHE_WRITE_TOKENS: "0.000006875",
+                    Dimension.CACHE_READ_TOKENS: "0.00000055",
+                    Dimension.OUTPUT_TOKENS: "0.000033",
+                },
+            ),
+            (
+                "openai.gpt-5.6-terra",
+                {
+                    Dimension.INPUT_TOKENS: "0.0000022",
+                    Dimension.CACHE_WRITE_TOKENS: "0.00000275",
+                    Dimension.CACHE_READ_TOKENS: "0.00000022",
+                    Dimension.OUTPUT_TOKENS: "0.0000132",
+                },
+            ),
+            (
+                "openai.gpt-daybreak-blue-5.6-sol",
+                {
+                    Dimension.INPUT_TOKENS: "0.0000055",
+                    Dimension.CACHE_WRITE_TOKENS: "0.000006875",
+                    Dimension.CACHE_READ_TOKENS: "0.00000055",
+                    Dimension.OUTPUT_TOKENS: "0.000033",
+                },
+            ),
         ],
     )
-    def test_daybreak_models_price_at_their_model_card_rate(
+    def test_openai_mantle_models_price_at_their_model_card_rate(
         self,
         monkeypatch: pytest.MonkeyPatch,
         model_id: str,
-        input_rate: str,
-        output_rate: str,
+        rates: dict[Dimension, str],
     ) -> None:
-        """Daybreak Red and Blue resolve a price instead of billing at zero.
+        """Every OpenAI Mantle model prices at its card's In-Region rate, to the cent.
 
-        Both are Mantle-only and in-Region in us-east-2, and the OpenAI Mantle
-        rows are absent from the Price List API, so the model-card rate is the
-        only source a deployment has.
+        They are Mantle-only and in-Region in us-east-2, and their rows are
+        absent from the Price List API, so the model-card rate is the only
+        source a deployment has: a stale or rounded figure here is reported to
+        the operator as fact, with nothing live to correct it. GPT-5.6 takes
+        the 272K short-context tier, this table having no context axis.
 
-        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-cyber.html
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-54.html
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-cyber.html
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-luna.html
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-terra.html
              https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-daybreak-blue-56-sol.html
         """
         index: dict[PriceKey, Price] = {}
@@ -2950,11 +3015,12 @@ class TestDefaultModelPrices:
             dimension: resolve_price(
                 Service.BEDROCK_MANTLE, model_id, "us-east-2", dimension
             )
-            for dimension in (Dimension.INPUT_TOKENS, Dimension.OUTPUT_TOKENS)
+            for dimension in rates
         }
         assert all(price is not None for price in prices.values())
-        assert prices[Dimension.INPUT_TOKENS].amount == Decimal(input_rate)  # type: ignore[union-attr]
-        assert prices[Dimension.OUTPUT_TOKENS].amount == Decimal(output_rate)  # type: ignore[union-attr]
+        assert {dimension: price.amount for dimension, price in prices.items()} == {  # type: ignore[union-attr]
+            dimension: Decimal(rate) for dimension, rate in rates.items()
+        }
 
     def test_gap_model_prices_identically_on_the_mantle_service(
         self, monkeypatch: pytest.MonkeyPatch

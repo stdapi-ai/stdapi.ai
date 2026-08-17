@@ -136,9 +136,10 @@ DEFAULT_MODEL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
     "stability.stable-creative-upscale-v1:0": {Dimension.OUTPUT_IMAGES: "0.60"},
     "stability.stable-fast-upscale-v1:0": {Dimension.OUTPUT_IMAGES: "0.03"},
     "stability.stable-outpaint-v1:0": {Dimension.OUTPUT_IMAGES: "0.06"},
-    # OpenAI Mantle models: Bedrock pricing page per-1M rates / 1e6 (retrieved
-    # 2026-07-19), absent from the Price List API outside GovCloud. Dated
-    # aliases share these via MODEL_KEY_OVERRIDES.
+    # OpenAI Mantle models: model-card In-Region per-1M rates / 1e6 (verified
+    # 2026-08-17), absent from the Price List API outside GovCloud. GPT-5.6
+    # takes the 272K short-context tier, this table having no context axis.
+    # Dated aliases share these via MODEL_KEY_OVERRIDES.
     "openai.gpt-5.4": {
         Dimension.INPUT_TOKENS: "0.00000275",
         Dimension.CACHE_READ_TOKENS: "0.000000275",
@@ -149,35 +150,35 @@ DEFAULT_MODEL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
         Dimension.CACHE_READ_TOKENS: "0.00000055",
         Dimension.OUTPUT_TOKENS: "0.000033",
     },
-    # Daybreak Red: model-card 272K in-Region rates (retrieved 2026-08-17).
+    # Daybreak Red.
     "openai.gpt-5.6-cyber": {
         Dimension.INPUT_TOKENS: "0.00001375",
-        Dimension.CACHE_WRITE_TOKENS: "0.00001719",
-        Dimension.CACHE_READ_TOKENS: "0.00000138",
+        Dimension.CACHE_WRITE_TOKENS: "0.0000171875",
+        Dimension.CACHE_READ_TOKENS: "0.000001375",
         Dimension.OUTPUT_TOKENS: "0.0000825",
     },
     "openai.gpt-5.6-luna": {
-        Dimension.INPUT_TOKENS: "0.0000011",
-        Dimension.CACHE_WRITE_TOKENS: "0.00000138",
-        Dimension.CACHE_READ_TOKENS: "0.00000011",
-        Dimension.OUTPUT_TOKENS: "0.0000066",
+        Dimension.INPUT_TOKENS: "0.00000022",
+        Dimension.CACHE_WRITE_TOKENS: "0.000000275",
+        Dimension.CACHE_READ_TOKENS: "0.000000022",
+        Dimension.OUTPUT_TOKENS: "0.00000132",
     },
     "openai.gpt-5.6-sol": {
         Dimension.INPUT_TOKENS: "0.0000055",
-        Dimension.CACHE_WRITE_TOKENS: "0.00000688",
+        Dimension.CACHE_WRITE_TOKENS: "0.000006875",
         Dimension.CACHE_READ_TOKENS: "0.00000055",
         Dimension.OUTPUT_TOKENS: "0.000033",
     },
     "openai.gpt-5.6-terra": {
-        Dimension.INPUT_TOKENS: "0.00000275",
-        Dimension.CACHE_WRITE_TOKENS: "0.00000344",
-        Dimension.CACHE_READ_TOKENS: "0.00000028",
-        Dimension.OUTPUT_TOKENS: "0.0000165",
+        Dimension.INPUT_TOKENS: "0.0000022",
+        Dimension.CACHE_WRITE_TOKENS: "0.00000275",
+        Dimension.CACHE_READ_TOKENS: "0.00000022",
+        Dimension.OUTPUT_TOKENS: "0.0000132",
     },
-    # Daybreak Blue: model-card 272K in-Region rates, same as GPT-5.6 Sol above.
+    # Daybreak Blue: same rates as GPT-5.6 Sol above.
     "openai.gpt-daybreak-blue-5.6-sol": {
         Dimension.INPUT_TOKENS: "0.0000055",
-        Dimension.CACHE_WRITE_TOKENS: "0.00000688",
+        Dimension.CACHE_WRITE_TOKENS: "0.000006875",
         Dimension.CACHE_READ_TOKENS: "0.00000055",
         Dimension.OUTPUT_TOKENS: "0.000033",
     },
