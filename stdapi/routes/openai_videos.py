@@ -68,6 +68,12 @@ _VideoId = Annotated[
     str, Path(description="The identifier of the video job.", pattern=VIDEO_ID_PATTERN)
 ]
 
+#: Refusal naming the route a client polls until its video job finishes.
+_VIDEO_NOT_READY_MESSAGE = (
+    f"Video is not ready yet, use GET {SETTINGS.openai_routes_prefix}"
+    "/v1/videos/{video_id} to check status"
+)
+
 #: Flattened form keys of the OpenAI SDK's object-form `input_reference`.
 _REFERENCE_FORM_KEYS = ("input_reference[image_url]", "input_reference[file_id]")
 
@@ -476,8 +482,7 @@ async def get_video_content(
         raise ApiError(msg)
     if job.status != "completed":
         # Upstream semantics: content of an unfinished job is a 404.
-        msg = "Video is not ready yet, use GET /v1/videos/{video_id} to check status"
-        raise ApiError(msg, status=404)
+        raise ApiError(_VIDEO_NOT_READY_MESSAGE, status=404)
     return StreamingResponse(await open_video_content(job), media_type="video/mp4")
 
 

@@ -106,13 +106,15 @@ class ModelPricing(BaseModel):
     description=(
         "Search the catalogue of currently available models and return extended metadata "
         "(modalities, supported API routes, MCP tool names, regions, streaming support, "
-        "Batch API support, legacy status). Supplements the standard `/v1/models` list.\n\n"
+        "Batch API support, legacy status). Supplements the standard "
+        f"`{SETTINGS.openai_routes_prefix}/v1/models` list.\n\n"
         "All filters are optional and combined with **AND** logic — only models matching every "
         "supplied filter are returned, sorted by ID.\n\n"
         "**Agent workflow:**\n"
         "1. Call this tool first to find the right model ID, then pass it to the target endpoint.\n"
         "2. Use `route` with either a route path **or** an MCP tool name — both are accepted "
-        "transparently (e.g. `route=/v1/images/generations` and `route=openai_image_generation` "
+        f"transparently (e.g. `route={SETTINGS.openai_routes_prefix}/v1/images/generations` "
+        "and `route=openai_image_generation` "
         "return the same models).\n"
         "3. **Combine filters for multimodal tasks:** when a tool supports extended input modalities "
         "(e.g. images in `openai_chat_completion`), add `input_modalities=IMAGE` alongside "
@@ -159,9 +161,10 @@ async def search_models(
         str | None,
         Query(
             description=(
-                "Filter to models that support a specific route path "
-                "(e.g. /v1/chat/completions) or MCP tool name (e.g. openai_chat_completion). "
-                "Both formats are accepted transparently."
+                "Filter to models that support a specific route path (e.g. "
+                f"{SETTINGS.openai_routes_prefix}/v1/chat/completions) or MCP tool "
+                "name (e.g. openai_chat_completion). Both formats are accepted "
+                "transparently."
             )
         ),
     ] = None,
