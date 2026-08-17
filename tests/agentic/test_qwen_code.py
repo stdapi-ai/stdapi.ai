@@ -79,11 +79,19 @@ _MODEL_CONFIGS = [
 #: Models whose reasoning text the client can read back and replay.
 #:
 #: DeepSeek is the family whose reasoning arrives as ``reasoning_content`` on the
-#: Converse path today, which is the field Qwen Code mirrors. Qwen3-Next is served
-#: by Bedrock Mantle, which names the same field ``reasoning``, so the two cover
-#: both spellings the gateway has to normalise before the client sees them. The
-#: Mantle entry needs a context window an agent loop fits in: Qwen3-32B's 32K is
-#: smaller than this prompt plus the output the client asks for.
+#: Converse path today, which is the field Qwen Code mirrors. MiniMax M2.5 is
+#: served by Bedrock Mantle, which names the same field ``reasoning``, so the two
+#: cover both spellings the gateway has to normalise before the client sees them.
+#:
+#: The Mantle entry was ``qwen.qwen3-next-80b-a3b-instruct``, which cannot carry
+#: this test: called directly, it answers with ``content``, ``refusal`` and
+#: ``role`` and nothing else -- no reasoning field at any effort, streamed or not
+#: -- so there was never any thinking text for the client to replay. It also
+#: never answers at all when asked through the flat ``reasoning_effort: "high"``
+#: the gateway sends (measured: no event in 300 s, 4/4 runs, while the equivalent
+#: ``reasoning: {"effort": "high"}`` answers the same request in under a second).
+#: Both are upstream conditions. M2.5 emits ``reasoning`` through either spelling,
+#: streamed and not, and already completes agent loops elsewhere in this lane.
 _REASONING_MODEL_CONFIGS = [
     pytest.param(
         ModelConfig(model="deepseek.v3.2", timeout=_TIMEOUT, supports_effort=True),
@@ -91,11 +99,9 @@ _REASONING_MODEL_CONFIGS = [
     ),
     pytest.param(
         ModelConfig(
-            model="qwen.qwen3-next-80b-a3b-instruct",
-            timeout=_TIMEOUT,
-            supports_effort=True,
+            model="minimax.minimax-m2.5", timeout=_TIMEOUT, supports_effort=True
         ),
-        id="qwen3-next-80b",
+        id="minimax-m2.5",
     ),
 ]
 
