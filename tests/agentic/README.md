@@ -223,13 +223,52 @@ CC-METRICS | amazon.nova-2-lite-v1:0 | test_trace_request_pipeline | steps=  7 |
 - `--agentic` (the lane is opt-in; it makes billable Bedrock calls)
 - podman on `PATH`. Inside a toolbox container the local engine cannot create the
   user namespace a rootless container needs, so `--remote` is used automatically
-  against the host's podman socket
+  against the host's podman socket — which `CONTAINER_HOST` has to name
+  (`unix:///run/user/$UID/podman/podman.sock`), since the probe that selects
+  `--remote` falls back to the unusable local engine when it cannot reach one
 - Bedrock credentials, as for the rest of the suite
 - the client overlay, for the nine modules listed below
 
 The CLIs are **never executed on the host**. If podman is unavailable the lane
 skips rather than falling back to a host binary, so a run always reports the tool
 version it actually tested.
+
+## Running the whole lane
+
+```bash
+CONTAINER_HOST=unix:///run/user/1000/podman/podman.sock \
+uv run --with-requirements tests/agentic/requirements.txt \
+  pytest tests/agentic --agentic --durations=30
+```
+
+**A full pass finishes in 15 minutes; 30 is the ceiling.** Every test waits on
+Bedrock rather than on a core, so the lane parallelises: run serially it is six to
+seven hours, and a slow pass means the run was configured wrong before it means
+anything about the tests.
+
+- **Workers are set for you.** `--agentic` defaults `-n` to 24, the count the lane
+  is validated at. Passing `-n` yourself wins. 32 is past the ceiling — pytest's
+  numbered-`tmp_path` machinery starts losing the race for a directory name and
+  errors tests that never ran.
+- **`--dist loadgroup` is required** by the `xdist_group` markers the lane carries;
+  the ini `addopts` already sets it.
+- **The container needs a raised PID ceiling.** 24 workers need more processes than
+  a toolbox container allows by default, and the shortfall arrives as fork failures
+  spread across unrelated clients — which reads as mass test failure. The session
+  refuses to start when the ceiling is too low and prints the exact command:
+
+  ```bash
+  podman update --pids-limit 16384 fedora-toolbox-44
+  ```
+
+  It takes effect immediately and **does not survive a restart of that container**,
+  so it is owed again after every restart.
+- **An aborted session leaks one gateway per worker.** They keep holding processes
+  against that ceiling; the next `--agentic` session terminates the orphans it finds
+  and says so in its header.
+
+Read the run's failures before its clock: a set of failures that appear all at once
+across unrelated clients is resource exhaustion until proven otherwise.
 
 ## In-process clients
 

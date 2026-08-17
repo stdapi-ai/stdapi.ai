@@ -14,8 +14,13 @@ Ref: tests/agentic/_podman.py
 
 from __future__ import annotations
 
+import os
+import re
+import signal
+from contextlib import suppress
 from importlib.metadata import PackageNotFoundError, version
 from importlib.util import find_spec
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -32,7 +37,6 @@ from ._tools import DEFAULT_IMAGE_GROUP, IMAGE_GROUPS, npm_packages
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Mapping
-    from pathlib import Path
 
     from ._tools import AgenticTool
 
@@ -65,6 +69,180 @@ _MISSING_CLIENTS: tuple[str, ...] = tuple(
 
 collect_ignore = list(_MISSING_CLIENTS)
 
+#: Workers the lane is validated at.
+#:
+#: Every test here waits on Bedrock rather than on a core, so the useful figure is
+#: far above the CPU count ``-n auto`` would pick. 32 is past the ceiling: pytest's
+#: numbered-``tmp_path`` machinery starts losing the race for a directory name and
+#: errors tests that never ran.
+_AGENTIC_WORKERS = 24
+
+#: Tasks one worker's own processes need, with headroom.
+#:
+#: A worker runs a pytest process, a gateway, a podman client and their threads.
+#: When the ceiling is too low the shortfall surfaces as fork failures across every
+#: client at once, which reads as mass test failure rather than as exhaustion --
+#: hence the preflight below rather than a note in the README.
+_PIDS_PER_WORKER = 256
+
+#: Argument sequence the lane's own gateway processes are recognisable by.
+_GATEWAY_MARKERS = ("-m", "uvicorn", "stdapi.main:app")
+
+#: Gateways of an aborted session this one terminated, reported in the header.
+_REAPED_GATEWAYS: list[int] = []
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_cmdline_main(config: pytest.Config) -> None:
+    """Default the lane to the worker count it is validated at.
+
+    Runs before pytest-xdist turns ``numprocesses`` into its worker list, and
+    stays out of the ini ``addopts``, which would impose 24 workers on the unit
+    and container suites too.
+
+    A worker re-runs this hook on its own configuration, which carries the same
+    options; setting the count there would have it distribute to 24 workers of its
+    own, and the session dies before the first test.
+
+    Args:
+        config: Configuration of the session.
+    """
+    if not config.getoption("--agentic", default=False):
+        return
+    if hasattr(config, "workerinput"):
+        return
+    if not config.option.numprocesses:
+        config.option.numprocesses = _AGENTIC_WORKERS
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Refuse to start a lane the environment cannot hold, and clear its leftovers.
+
+    Args:
+        config: Configuration of the session.
+
+    Raises:
+        pytest.UsageError: If the PID ceiling is below what the requested worker
+            count needs.
+    """
+    if not config.getoption("--agentic", default=False) or hasattr(
+        config, "workerinput"
+    ):
+        return  # Controller only: a worker would repeat both for nothing.
+    _check_pids_limit(config.option.numprocesses or 1)
+    _REAPED_GATEWAYS.extend(_reap_orphan_gateways())
+
+
+def _pids_limit() -> int | None:
+    """Return this process's cgroup PID ceiling, or None when unlimited or unknown."""
+    try:
+        cgroups = Path("/proc/self/cgroup").read_text("utf-8")
+        match = re.search(r"^0::(\S*)$", cgroups, re.MULTILINE)
+        if match is None:
+            return None
+        value = Path(f"/sys/fs/cgroup{match[1]}/pids.max").read_text("utf-8").strip()
+    except OSError:
+        return None
+    return None if value == "max" else int(value)
+
+
+def _container_name() -> str:
+    """Return the name of the container this process runs in, for the fix command."""
+    try:
+        environ = Path("/run/.containerenv").read_text("utf-8")
+    except OSError:
+        return "<container>"
+    match = re.search(r'^name="(.*)"$', environ, re.MULTILINE)
+    return match[1] if match else "<container>"
+
+
+def _check_pids_limit(workers: int) -> None:
+    """Fail the session when the PID ceiling cannot hold *workers*.
+
+    Args:
+        workers: Number of xdist workers the session will start.
+
+    Raises:
+        pytest.UsageError: If the ceiling is below what those workers need.
+    """
+    limit = _pids_limit()
+    required = workers * _PIDS_PER_WORKER
+    if limit is None or limit >= required:
+        return
+    msg = (
+        f"this environment allows {limit} processes, below the {required} that "
+        f"{workers} agentic workers need. Started under it, the run dies in fork "
+        "failures spread across unrelated clients, which reads as mass test "
+        f"failure. Raise the ceiling with:\n\n"
+        f"    podman update --pids-limit {max(required, 16384)} {_container_name()}\n\n"
+        "It takes effect immediately and is lost when that container restarts, so "
+        "it is owed again after every restart."
+    )
+    raise pytest.UsageError(msg)
+
+
+def _reap_orphan_gateways() -> list[int]:
+    """Terminate gateways a previously aborted session left running.
+
+    A session killed before its fixtures tear down leaks one gateway per worker.
+    They keep holding processes against the ceiling checked above, so the next run
+    starts against a budget the last one is still spending -- one abort left 25 of
+    them behind and poisoned the run after it.
+
+    Only a process reparented to init is touched: a gateway belonging to a session
+    that is still running has that session as its parent.
+
+    Returns:
+        The PIDs terminated.
+    """
+    reaped = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            argv = (entry / "cmdline").read_text("utf-8", "replace").split("\0")
+            status = (entry / "status").read_text("utf-8")
+        except OSError:
+            continue  # Exited between the listing and the read.
+        if not all(marker in argv for marker in _GATEWAY_MARKERS):
+            continue
+        if re.search(r"^PPid:\s*1$", status, re.MULTILINE) is None:
+            continue
+        with suppress(OSError):
+            os.kill(int(entry.name), signal.SIGTERM)
+            reaped.append(int(entry.name))
+    return reaped
+
+
+#: Modules whose tests run for minutes, dispatched ahead of the sub-minute ones.
+#:
+#: xdist hands work out in collection order, so a thirteen-minute test collected
+#: last starts last and sets the run's wall clock on its own while every other
+#: worker idles. Longest-first is what closes that tail.
+_HEAVY_MODULES = (
+    "test_codex.py",
+    "test_claude_code.py",
+    "test_pi.py",
+    "test_hermes.py",
+    "test_qwen_code.py",
+    "test_openclaw.py",
+)
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Dispatch the long-running modules before the short ones.
+
+    Args:
+        config: Configuration of the session.
+        items: Collected items, reordered in place.
+    """
+    if not config.getoption("--agentic", default=False):
+        return
+    rank = {name: index for index, name in enumerate(_HEAVY_MODULES)}
+    items.sort(key=lambda item: rank.get(item.path.name, len(rank)))
+
 
 def pytest_report_header(config: pytest.Config) -> list[str] | None:
     """Report the in-process client versions the session will actually test.
@@ -77,8 +255,9 @@ def pytest_report_header(config: pytest.Config) -> list[str] | None:
         config: Configuration of the session.
 
     Returns:
-        One line for the clients present and one for those missing, or None when
-        the lane is not selected.
+        One line for the clients present, one for those missing, one for any
+        gateway reaped from an aborted session, or None when the lane is not
+        selected.
     """
     if not config.getoption("--agentic", default=False):
         return None
@@ -89,6 +268,11 @@ def pytest_report_header(config: pytest.Config) -> list[str] | None:
         if find_spec(name) is not None and (found := _version(dist))
     }
     lines = []
+    if _REAPED_GATEWAYS:
+        lines.append(
+            f"agentic gateways left by an aborted session, terminated: "
+            f"{len(_REAPED_GATEWAYS)}"
+        )
     if installed:
         lines.append(
             "agentic clients: "
