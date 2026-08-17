@@ -37,7 +37,12 @@ if TYPE_CHECKING:
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 #: Seconds allowed for the server to answer /health after launch.
-_STARTUP_TIMEOUT = 60
+#:
+#: Startup measures 6-14 s even with every worker starting at once, so this is
+#: pure headroom for the outlier: one run crossed a control-plane throttling
+#: cliff, and a session fixture that fails errors *every* test on that worker --
+#: 180 errors from one slow start. Waiting costs nothing when startup is fast.
+_STARTUP_TIMEOUT = 300
 
 #: Settings this module sets itself, dropped from the inherited environment first.
 #:
