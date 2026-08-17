@@ -2920,6 +2920,42 @@ class TestDefaultModelPrices:
         assert price.amount == Decimal("0.07")
         assert price.currency == "USD"
 
+    @pytest.mark.parametrize(
+        ("model_id", "input_rate", "output_rate"),
+        [
+            ("openai.gpt-5.6-cyber", "0.00001375", "0.0000825"),
+            ("openai.gpt-daybreak-blue-5.6-sol", "0.0000055", "0.000033"),
+        ],
+    )
+    def test_daybreak_models_price_at_their_model_card_rate(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        model_id: str,
+        input_rate: str,
+        output_rate: str,
+    ) -> None:
+        """Daybreak Red and Blue resolve a price instead of billing at zero.
+
+        Both are Mantle-only and in-Region in us-east-2, and the OpenAI Mantle
+        rows are absent from the Price List API, so the model-card rate is the
+        only source a deployment has.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-cyber.html
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-daybreak-blue-56-sol.html
+        """
+        index: dict[PriceKey, Price] = {}
+        pricing._apply_default_prices(index)  # noqa: SLF001
+        monkeypatch.setattr(pricing._state, "price_index", index)  # noqa: SLF001
+        prices = {
+            dimension: resolve_price(
+                Service.BEDROCK_MANTLE, model_id, "us-east-2", dimension
+            )
+            for dimension in (Dimension.INPUT_TOKENS, Dimension.OUTPUT_TOKENS)
+        }
+        assert all(price is not None for price in prices.values())
+        assert prices[Dimension.INPUT_TOKENS].amount == Decimal(input_rate)  # type: ignore[union-attr]
+        assert prices[Dimension.OUTPUT_TOKENS].amount == Decimal(output_rate)  # type: ignore[union-attr]
+
     def test_gap_model_prices_identically_on_the_mantle_service(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

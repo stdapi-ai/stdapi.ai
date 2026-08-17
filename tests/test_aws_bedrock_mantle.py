@@ -617,6 +617,8 @@ class TestMantleModelClassResolution:
     probes the wrong prefix first.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+         https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-cyber.html
+         https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-daybreak-blue-56-sol.html
          stdapi/models/chat/_mantle/__init__.py:get_mantle_chat_model
          stdapi/models/chat/_mantle/_default.py:ChatModel._api_paths
     """
@@ -630,6 +632,28 @@ class TestMantleModelClassResolution:
         assert isinstance(model, GptChatModel)
         assert model._api_paths("responses")[0] == "/openai/v1/responses"  # noqa: SLF001
         assert model.native_store_supported() is True
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "openai.gpt-5.6-cyber",
+            "openai.gpt-daybreak-blue-5.6-sol",
+            "openai.gpt-daybreak-red-6-cyber",
+        ],
+    )
+    def test_daybreak_editions_use_the_gpt_class(self, model_id: str) -> None:
+        """Daybreak-qualified GPT IDs resolve to the GPT class, image input included.
+
+        AWS names Daybreak Red ``openai.gpt-5.6-cyber`` but Daybreak Blue
+        ``openai.gpt-daybreak-blue-5.6-sol``, so the qualifier sits where the
+        version number is expected; unmatched, the model falls back to the
+        generic Mantle class and is advertised as text-only.
+        """
+        model = get_mantle_chat_model(model_id)
+        assert isinstance(model, GptChatModel)
+        assert model._api_paths("responses")[0] == "/openai/v1/responses"  # noqa: SLF001
+        assert model.native_store_supported() is True
+        assert model.INPUT_MODALITIES == ("TEXT", "IMAGE")
 
     def test_gpt_oss_is_not_matched_by_the_numbered_gpt_class(self) -> None:
         """gpt-oss models keep resolving to their own class."""

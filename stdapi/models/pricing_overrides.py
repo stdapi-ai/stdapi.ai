@@ -149,6 +149,13 @@ DEFAULT_MODEL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
         Dimension.CACHE_READ_TOKENS: "0.00000055",
         Dimension.OUTPUT_TOKENS: "0.000033",
     },
+    # Daybreak Red: model-card 272K in-Region rates (retrieved 2026-08-17).
+    "openai.gpt-5.6-cyber": {
+        Dimension.INPUT_TOKENS: "0.00001375",
+        Dimension.CACHE_WRITE_TOKENS: "0.00001719",
+        Dimension.CACHE_READ_TOKENS: "0.00000138",
+        Dimension.OUTPUT_TOKENS: "0.0000825",
+    },
     "openai.gpt-5.6-luna": {
         Dimension.INPUT_TOKENS: "0.0000011",
         Dimension.CACHE_WRITE_TOKENS: "0.00000138",
@@ -166,5 +173,12 @@ DEFAULT_MODEL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
         Dimension.CACHE_WRITE_TOKENS: "0.00000344",
         Dimension.CACHE_READ_TOKENS: "0.00000028",
         Dimension.OUTPUT_TOKENS: "0.0000165",
+    },
+    # Daybreak Blue: model-card 272K in-Region rates, same as GPT-5.6 Sol above.
+    "openai.gpt-daybreak-blue-5.6-sol": {
+        Dimension.INPUT_TOKENS: "0.0000055",
+        Dimension.CACHE_WRITE_TOKENS: "0.00000688",
+        Dimension.CACHE_READ_TOKENS: "0.00000055",
+        Dimension.OUTPUT_TOKENS: "0.000033",
     },
 }
