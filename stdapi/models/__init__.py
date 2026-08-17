@@ -67,6 +67,7 @@ from stdapi.input_file import (
 from stdapi.models.capabilities import ROUTE_CAPABILITIES, Capability
 from stdapi.models.deprecation import DEPRECATED_MODELS
 from stdapi.models.pricing_overrides import (
+    DEFAULT_MODEL_GLOBAL_PRICES,
     DEFAULT_MODEL_PRICE_REGIONS,
     DEFAULT_MODEL_PRICES,
     MODEL_KEY_OVERRIDES,
@@ -181,6 +182,9 @@ RERANKING_MODALITY: str = "RERANKING"
 # Keep stdapi.pricing model-agnostic: its model-key table is owned here.
 register_model_key_overrides(MODEL_KEY_OVERRIDES)
 register_default_prices(DEFAULT_MODEL_PRICES, DEFAULT_MODEL_PRICE_REGIONS)
+register_default_prices(
+    DEFAULT_MODEL_GLOBAL_PRICES, DEFAULT_MODEL_PRICE_REGIONS, routing="global"
+)
 
 
 def _request_routing(resolved_model_id: str, latency: str | None) -> Routing:

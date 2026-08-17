@@ -175,7 +175,9 @@ When only one currency is involved, the entry's `cost`/`currency` reports that c
 
 ### Routing-Tier Pricing
 
-AWS prices some models differently per serving profile: the cross-region "global" routing profile is *lower* than the plain/regional rate for some marketplace-listed models (confirmed live: Claude Sonnet 4.5 input tokens at $3.30/M regional vs $3.00/M global), while latency-optimized serving (requested via the `X-Amzn-Bedrock-PerformanceConfig-Latency: optimized` header) is *higher*. stdapi.ai tracks the profile that served each request (`"routing": "global"` or `"latency"`) and prices it at the matching rate, falling back to the regional rate when AWS publishes no distinct one.
+AWS prices some models differently per serving profile: the cross-region "global" routing profile is *lower* than the plain/regional rate (confirmed live: Claude Sonnet 4.5 input tokens at $3.30/M regional vs $3.00/M global; GPT-5.6 Luna, Sol and Terra are each about 9% cheaper on it), while latency-optimized serving (requested via the `X-Amzn-Bedrock-PerformanceConfig-Latency: optimized` header) is *higher*. stdapi.ai tracks the profile that served each request (`"routing": "global"` or `"latency"`) and prices it at the matching rate. A geographic (`us.`/`eu.`/`apac.`) profile is billed at the regional rate, which is what AWS charges for it.
+
+Falling back is normal, not a gap: where AWS publishes no distinct global rate for a model, the request is priced at that model's regional rate rather than left uncosted. This covers models whose rates come from the AWS pricing page or a model card instead of the Price List API, too. Bedrock Mantle offers no cross-region inference at all — a Mantle request is always served in the Region it was sent to, and always billed at the In-Region rate.
 
 ### Service Tiers as a Cost Lever
 

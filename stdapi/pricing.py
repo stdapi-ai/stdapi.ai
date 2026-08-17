@@ -13,8 +13,10 @@ code change here:
 - New model unpriced? Add one line to ``stdapi/models/pricing_overrides.py``
   (workflow in that module's docstring). Model-specific data lives in
   ``stdapi.models``, never here.
-- Model priced only on the AWS pricing page (absent from the Price List
-  API)? Add its page rate to ``DEFAULT_MODEL_PRICES`` in that same module.
+- Model priced only on the AWS pricing page or its model card (absent from
+  the Price List API)? Add its In-Region rate to ``DEFAULT_MODEL_PRICES`` in
+  that same module, and its Global cross-Region rate, where one is
+  published, to ``DEFAULT_MODEL_GLOBAL_PRICES`` beside it.
 - Collision warnings at startup ("Price catalog collision on ...") mean AWS
   introduced a pricing axis or usagetype schema this module doesn't key yet:
   extend :class:`PriceKey` and/or the ingestion resolvers (`_resolve_tier`,
@@ -490,30 +492,46 @@ _DEFAULT_PRICES: dict[PriceKey, Price] = {}
 
 
 def register_default_prices(
-    prices: Mapping[str, Mapping[Dimension, str]], regions: Iterable[str]
+    prices: Mapping[str, Mapping[Dimension, str]],
+    regions: Iterable[str],
+    routing: Routing = "",
 ) -> None:
     """Register built-in default prices for models absent from the Price List API.
 
-    Last-resort rates hand-copied from the AWS pricing page, the only place
-    AWS publishes them. Called by ``stdapi.models`` at import time with its
-    ``pricing_overrides.DEFAULT_MODEL_PRICES`` table, and below for the
-    model-less rates this module mints a synthetic model for. Applied at
-    catalog load only to models with no published row at all (see
+    Last-resort rates hand-copied from the AWS pricing page or the model card,
+    the only places AWS publishes them. Called by ``stdapi.models`` at import
+    time with its ``pricing_overrides`` tables, and below for the model-less
+    rates this module mints a synthetic model for. Applied at catalog load
+    only to models with no published row at all (see
     :func:`_apply_default_prices`); ``cost_price_overrides`` still wins.
+
+    A *routing*-qualified table names only the models AWS publishes a distinct
+    rate for. A model left out of it keeps its plain rate alone, which
+    :func:`resolve_price` relaxes onto -- never leaving the call unpriced.
 
     Args:
         prices: Model ID to per-dimension USD price (exact decimal text).
         regions: Regions the prices apply to, per the pricing page.
+        routing: Serving profile the rates are published for -- "" for the
+            plain/In-Region rate, "global" for the Global cross-Region one.
     """
+    # Only bedrock-runtime offers cross-Region inference, so a Mantle-keyed
+    # routed row could never be resolved. Plain rates key under both: the
+    # pricing page doesn't distinguish invocation APIs, and AWS states the
+    # per-token rate is identical on them, so a Mantle-only model resolves at
+    # runtime too.
+    services = (
+        (Service.BEDROCK,) if routing else (Service.BEDROCK, Service.BEDROCK_MANTLE)
+    )
     for model_id, dimension_prices in prices.items():
         model = resolve_model_key(model_id)
         for dimension, amount in dimension_prices.items():
             for region in regions:
-                # The pricing page doesn't distinguish invocation APIs; key
-                # under both so Mantle-only models resolve at runtime too.
-                for service in (Service.BEDROCK, Service.BEDROCK_MANTLE):
+                for service in services:
                     _DEFAULT_PRICES[
-                        PriceKey(service, model, region, dimension, "standard")
+                        PriceKey(
+                            service, model, region, dimension, "standard", "", routing
+                        )
                     ] = Price(Decimal(amount), "USD")
 
 

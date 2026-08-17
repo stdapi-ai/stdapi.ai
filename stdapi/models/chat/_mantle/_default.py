@@ -419,6 +419,8 @@ class ChatModel(ChatModelBase[Any, Any]):
             service=Service.BEDROCK_MANTLE,
             region=region,
             tier=tier,
+            # This endpoint offers no cross-Region inference: a Mantle call is
+            # always served in-Region and billed at the In-Region rate.
             routing="",
             **extract(usage),
         )

@@ -11,9 +11,13 @@ HOW TO FIX an "unpriced model" (also printed by the coverage test on failure):
   2. Its failure output lists UNPRICED MODELS and CANDIDATE MATCHES: add one
      line below per obvious pair: "<unpriced-model-id>": "<matching-unclaimed-key>",
   3. Re-run the test. If no candidate matches, AWS hasn't published pricing
-     yet -- wait, check https://aws.amazon.com/bedrock/pricing/ for a rate to
-     add to DEFAULT_MODEL_PRICES, or record a confirmed upstream gap in the
-     test's _KNOWN_PRICING_GAPS.
+     yet -- wait, check https://aws.amazon.com/bedrock/pricing/ (or the
+     model's card, which is the only source for the frontier OpenAI models)
+     for a rate to add to DEFAULT_MODEL_PRICES, or record a confirmed
+     upstream gap in the test's _KNOWN_PRICING_GAPS.
+  4. A card quoting a separate "Global CRIS" rate needs that one too, in
+     DEFAULT_MODEL_GLOBAL_PRICES; without it a globally-routed call is
+     reported at the pricier In-Region rate.
 """
 
 from typing import Final
@@ -136,9 +140,11 @@ DEFAULT_MODEL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
     "stability.stable-creative-upscale-v1:0": {Dimension.OUTPUT_IMAGES: "0.60"},
     "stability.stable-fast-upscale-v1:0": {Dimension.OUTPUT_IMAGES: "0.03"},
     "stability.stable-outpaint-v1:0": {Dimension.OUTPUT_IMAGES: "0.06"},
-    # OpenAI Mantle models: model-card In-Region per-1M rates / 1e6 (verified
+    # OpenAI frontier models: model-card In-Region per-1M rates / 1e6 (verified
     # 2026-08-17), absent from the Price List API outside GovCloud. GPT-5.6
     # takes the 272K short-context tier, this table having no context axis.
+    # The cards price Geo cross-Region identically to In-Region, so these also
+    # serve a "us."/"eu." profile; the Global profile has its own table below.
     # Dated aliases share these via MODEL_KEY_OVERRIDES.
     "openai.gpt-5.4": {
         Dimension.INPUT_TOKENS: "0.00000275",
@@ -181,5 +187,33 @@ DEFAULT_MODEL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
         Dimension.CACHE_WRITE_TOKENS: "0.000006875",
         Dimension.CACHE_READ_TOKENS: "0.00000055",
         Dimension.OUTPUT_TOKENS: "0.000033",
+    },
+}
+
+#: Global cross-Region rates for the models above whose card publishes one.
+DEFAULT_MODEL_GLOBAL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
+    # Model-card "Global CRIS" per-1M rates / 1e6 (verified 2026-08-17), ~9%
+    # under In-Region. Reached only through the "global." inference profile on
+    # bedrock-runtime; Bedrock Mantle serves no cross-Region inference at all,
+    # so its calls stay on the In-Region rates above. A model absent here
+    # publishes no Global rate and keeps them too, resolve_price relaxing the
+    # routing axis rather than leaving the call unpriced.
+    "openai.gpt-5.6-luna": {
+        Dimension.INPUT_TOKENS: "0.0000002",
+        Dimension.CACHE_WRITE_TOKENS: "0.00000025",
+        Dimension.CACHE_READ_TOKENS: "0.00000002",
+        Dimension.OUTPUT_TOKENS: "0.0000012",
+    },
+    "openai.gpt-5.6-sol": {
+        Dimension.INPUT_TOKENS: "0.000005",
+        Dimension.CACHE_WRITE_TOKENS: "0.00000625",
+        Dimension.CACHE_READ_TOKENS: "0.0000005",
+        Dimension.OUTPUT_TOKENS: "0.00003",
+    },
+    "openai.gpt-5.6-terra": {
+        Dimension.INPUT_TOKENS: "0.000002",
+        Dimension.CACHE_WRITE_TOKENS: "0.0000025",
+        Dimension.CACHE_READ_TOKENS: "0.0000002",
+        Dimension.OUTPUT_TOKENS: "0.000012",
     },
 }

@@ -2992,13 +2992,14 @@ class TestDefaultModelPrices:
         model_id: str,
         rates: dict[Dimension, str],
     ) -> None:
-        """Every OpenAI Mantle model prices at its card's In-Region rate, to the cent.
+        """Every OpenAI frontier model prices at its card's In-Region rate, to the cent.
 
-        They are Mantle-only and in-Region in us-east-2, and their rows are
-        absent from the Price List API, so the model-card rate is the only
-        source a deployment has: a stale or rounded figure here is reported to
-        the operator as fact, with nothing live to correct it. GPT-5.6 takes
-        the 272K short-context tier, this table having no context axis.
+        All of them serve Bedrock Mantle in us-east-2, which offers no
+        cross-Region inference, and their rows are absent from the Price List
+        API, so the model-card rate is the only source a deployment has: a
+        stale or rounded figure here is reported to the operator as fact, with
+        nothing live to correct it. GPT-5.6 takes the 272K short-context tier,
+        this table having no context axis.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-54.html
              https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html
@@ -3021,6 +3022,150 @@ class TestDefaultModelPrices:
         assert {dimension: price.amount for dimension, price in prices.items()} == {  # type: ignore[union-attr]
             dimension: Decimal(rate) for dimension, rate in rates.items()
         }
+
+    @pytest.mark.parametrize(
+        ("model_id", "rates"),
+        [
+            (
+                "openai.gpt-5.6-luna",
+                {
+                    Dimension.INPUT_TOKENS: "0.0000002",
+                    Dimension.CACHE_WRITE_TOKENS: "0.00000025",
+                    Dimension.CACHE_READ_TOKENS: "0.00000002",
+                    Dimension.OUTPUT_TOKENS: "0.0000012",
+                },
+            ),
+            (
+                "openai.gpt-5.6-sol",
+                {
+                    Dimension.INPUT_TOKENS: "0.000005",
+                    Dimension.CACHE_WRITE_TOKENS: "0.00000625",
+                    Dimension.CACHE_READ_TOKENS: "0.0000005",
+                    Dimension.OUTPUT_TOKENS: "0.00003",
+                },
+            ),
+            (
+                "openai.gpt-5.6-terra",
+                {
+                    Dimension.INPUT_TOKENS: "0.000002",
+                    Dimension.CACHE_WRITE_TOKENS: "0.0000025",
+                    Dimension.CACHE_READ_TOKENS: "0.0000002",
+                    Dimension.OUTPUT_TOKENS: "0.000012",
+                },
+            ),
+        ],
+    )
+    def test_a_globally_routed_call_prices_at_the_global_rate(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        model_id: str,
+        rates: dict[Dimension, str],
+    ) -> None:
+        """A "global." profile bills the card's Global CRIS rate, ~9% under In-Region.
+
+        On bedrock-runtime these models answer only through a cross-Region
+        profile, and the gateway prefers the ``global.`` one, so this is the
+        rate most deployments actually pay. Resolving the In-Region row
+        instead over-reports every call.
+
+        Ref: stdapi/models/pricing_overrides.py:DEFAULT_MODEL_GLOBAL_PRICES
+             stdapi/models/__init__.py:_request_routing
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-luna.html
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-terra.html
+        """
+        index: dict[PriceKey, Price] = {}
+        pricing._apply_default_prices(index)  # noqa: SLF001
+        monkeypatch.setattr(pricing._state, "price_index", index)  # noqa: SLF001
+        prices = {
+            dimension: resolve_price(
+                Service.BEDROCK, model_id, "us-east-1", dimension, routing="global"
+            )
+            for dimension in rates
+        }
+        assert all(price is not None for price in prices.values())
+        assert {dimension: price.amount for dimension, price in prices.items()} == {  # type: ignore[union-attr]
+            dimension: Decimal(rate) for dimension, rate in rates.items()
+        }
+
+    def test_an_in_region_call_still_prices_at_the_in_region_rate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The cheaper Global rate must not displace the plain one.
+
+        A geographic ("us."/"eu.") profile records no routing and is priced
+        In-Region, which is what its model card charges for it.
+
+        Ref: stdapi/models/pricing_overrides.py:DEFAULT_MODEL_PRICES
+        """
+        index: dict[PriceKey, Price] = {}
+        pricing._apply_default_prices(index)  # noqa: SLF001
+        monkeypatch.setattr(pricing._state, "price_index", index)  # noqa: SLF001
+        price = resolve_price(
+            Service.BEDROCK, "openai.gpt-5.6-luna", "us-east-1", Dimension.INPUT_TOKENS
+        )
+        assert price is not None
+        assert price.amount == Decimal("0.00000022")
+
+    def test_a_model_with_no_global_rate_falls_back_instead_of_going_unpriced(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A globally-routed call to a model AWS quotes no Global rate for bills In-Region.
+
+        GPT-5.6 Cyber's card publishes an In-Region row and nothing else.
+        Relaxing the routing axis onto it is the correct answer; returning
+        None would report the call as a catalog gap and cost nothing.
+
+        Ref: stdapi/pricing.py:resolve_price
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-cyber.html
+        """
+        index: dict[PriceKey, Price] = {}
+        pricing._apply_default_prices(index)  # noqa: SLF001
+        monkeypatch.setattr(pricing._state, "price_index", index)  # noqa: SLF001
+        price = resolve_price(
+            Service.BEDROCK,
+            "openai.gpt-5.6-cyber",
+            "us-east-1",
+            Dimension.INPUT_TOKENS,
+            routing="global",
+        )
+        assert price is not None
+        assert price.amount == Decimal("0.00001375")
+
+    def test_a_global_rate_is_never_keyed_under_the_mantle_service(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Bedrock Mantle serves no cross-Region inference, so it gets no Global row.
+
+        AWS's endpoint comparison marks cross-Region inference (geographic and
+        global profiles) unsupported on ``bedrock-mantle``, and every card
+        repeats it: Geo and Global inference IDs are "Not supported" there. A
+        Global row keyed under that service would advertise, through
+        ``/model_pricing``, a rate the endpoint cannot charge.
+
+        Ref: stdapi/pricing.py:register_default_prices
+             stdapi/models/chat/_mantle/_default.py:ChatModel._record_usage
+             https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html
+        """
+        index: dict[PriceKey, Price] = {}
+        pricing._apply_default_prices(index)  # noqa: SLF001
+        monkeypatch.setattr(pricing._state, "price_index", index)  # noqa: SLF001
+        model = pricing.resolve_model_key("openai.gpt-5.6-luna")
+        assert not [
+            key
+            for key in index
+            if key.model == model
+            and key.routing
+            and key.service is Service.BEDROCK_MANTLE
+        ]
+        price = resolve_price(
+            Service.BEDROCK_MANTLE,
+            "openai.gpt-5.6-luna",
+            "us-east-1",
+            Dimension.INPUT_TOKENS,
+        )
+        assert price is not None
+        assert price.amount == Decimal("0.00000022")
 
     def test_gap_model_prices_identically_on_the_mantle_service(
         self, monkeypatch: pytest.MonkeyPatch
@@ -3086,6 +3231,40 @@ class TestDefaultModelPrices:
             "standard",
         )
         assert registry[key] == Price(Decimal("0.000456"), "USD")
+
+    def test_a_routed_registration_keys_the_runtime_service_alone(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A routed table fans out over regions and dimensions, but one service.
+
+        The routing lands on the key rather than on a parallel registry, so
+        the regional fallback carries a Global rate across regions on its own
+        axis instead of backfilling it over an In-Region one.
+
+        Ref: stdapi/pricing.py:register_default_prices
+             stdapi/pricing.py:_apply_regional_fallback
+        """
+        monkeypatch.setattr(pricing, "_DEFAULT_PRICES", {})
+        pricing.register_default_prices(
+            {"test.gap-model": {Dimension.INPUT_TOKENS: "0.000111"}},
+            ["us-east-1", "eu-west-1"],
+            routing="global",
+        )
+
+        registry = pricing._DEFAULT_PRICES  # noqa: SLF001
+        assert len(registry) == 2, "1 service x 2 regions x 1 dimension"
+        assert {key.service for key in registry} == {Service.BEDROCK}
+        assert {key.routing for key in registry} == {"global"}
+        key = PriceKey(
+            Service.BEDROCK,
+            pricing.resolve_model_key("test.gap-model"),
+            "eu-west-1",
+            Dimension.INPUT_TOKENS,
+            "standard",
+            "",
+            "global",
+        )
+        assert registry[key] == Price(Decimal("0.000111"), "USD")
 
     def test_published_row_disables_defaults_for_that_model(self) -> None:
         """Any published row for a model must suppress all its default prices."""

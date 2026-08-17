@@ -1,19 +1,23 @@
 """Drift detection for ``DEFAULT_MODEL_PRICES`` against the sources it was copied from.
 
-``stdapi/models/pricing_overrides.py:DEFAULT_MODEL_PRICES`` is a hand-copied
-table of rates the AWS Price List API does not publish. Nothing in the running
-gateway can notice when AWS changes one of them: the figure is simply reported
-to the operator as fact. It has already happened -- GPT-5.6 Luna shipped at 5x
-the real rate for two releases -- so the table needs a check that reads the
-vendor source and says so.
+``stdapi/models/pricing_overrides.py:DEFAULT_MODEL_PRICES`` and its Global
+cross-Region twin ``DEFAULT_MODEL_GLOBAL_PRICES`` are hand-copied tables of
+rates the AWS Price List API does not publish. Nothing in the running gateway
+can notice when AWS changes one of them: the figure is simply reported to the
+operator as fact. It has already happened -- GPT-5.6 Luna shipped at 5x the
+real rate for two releases -- so the tables need a check that reads the vendor
+source and says so.
 
 Two sources, and they are not interchangeable:
 
 - **Bedrock model cards** (``docs.aws.amazon.com``) for the OpenAI Mantle
   models. Server-rendered documentation with a labelled ``Pricing`` section and
-  a per-1M-token table. The AWS Bedrock pricing page no longer carries per-1M
-  rates for these models at all -- it links out to the cards -- so the card is
-  the *only* AWS source for them.
+  a per-1M-token table, one row per inference option. The AWS Bedrock pricing
+  page no longer carries per-1M rates for these models at all -- it links out to
+  the cards -- so the card is the *only* AWS source for them. The ``In-Region``
+  row prices ``DEFAULT_MODEL_PRICES``; the ``Global CRIS`` row of the *same*
+  table prices ``DEFAULT_MODEL_GLOBAL_PRICES``, and most cards carry no such row
+  at all.
 - **The AWS Bedrock pricing page** for the Stability AI image services, whose
   per-generation rates live in one table keyed by display name.
 
@@ -33,7 +37,13 @@ UNREACHABLE  the source could not be fetched or parsed      reported only
 
 **A vanished price is never removed and never fails.** Usage recorded against a
 delisted, renamed or enrollment-gated model still has to be priced, so the entry
-stays and the run says so out loud.
+stays and the run says so out loud. That covers a Global rate a card stops
+quoting as much as a delisted model: the ``global.`` inference profile keeps
+serving calls that have to be priced somehow.
+
+A model whose card never published a Global rate is **silent**, not vanished:
+most models publish only In-Region, so its absence from
+``DEFAULT_MODEL_GLOBAL_PRICES`` is the correct state rather than a finding.
 
 The live check is opt-in (``--drift``): a vendor changing a price is not a
 regression in this repository, and it must never turn an unrelated run red. It
@@ -43,6 +53,7 @@ deliberately wrong expected value, because a detector nobody has seen fail is
 not known to work.
 
 Ref: stdapi/models/pricing_overrides.py:DEFAULT_MODEL_PRICES
+     stdapi/models/pricing_overrides.py:DEFAULT_MODEL_GLOBAL_PRICES
      stdapi/pricing.py:register_default_prices
      https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards-openai.html
      https://aws.amazon.com/bedrock/pricing/
@@ -59,7 +70,10 @@ from typing import TYPE_CHECKING, Final
 import httpx
 import pytest
 
-from stdapi.models.pricing_overrides import DEFAULT_MODEL_PRICES
+from stdapi.models.pricing_overrides import (
+    DEFAULT_MODEL_GLOBAL_PRICES,
+    DEFAULT_MODEL_PRICES,
+)
 from stdapi.pricing import Dimension
 from tests.conftest import REPO_ROOT
 
@@ -125,6 +139,9 @@ _PER_MILLION_NOTE: Final[str] = "per 1 million tokens"
 
 #: The card row naming the rate that applies in the model's own region.
 _IN_REGION_ROW: Final[str] = "in-region"
+
+#: The card row naming the rate the ``global.`` inference profile is billed at.
+_GLOBAL_ROW: Final[str] = "global cris"
 
 #: Header of the pricing-page table holding the Stability rates.
 _STABILITY_HEADING: Final[str] = "stability ai image services"
@@ -266,6 +283,58 @@ def _short_context_table(section: str) -> str:
     return candidates[0]
 
 
+def _pricing_rows(page: str) -> list[list[str]]:
+    """Return the rows of a card's commercial short-context pricing table.
+
+    Every inference option is a row of this one table, so both rates the tables
+    carry are read from it -- and both are therefore protected from the
+    long-context and GovCloud blocks by the same table selection.
+
+    Args:
+        page: The model card's HTML.
+
+    Returns:
+        The header row followed by one row per inference option.
+
+    Raises:
+        UnreadableSourceError: If the pricing section, its unit note or its
+            short-context table cannot be identified.
+    """
+    section = _PRICING_SECTION.search(page)
+    if section is None:
+        msg = "the card has no Pricing section"
+        raise UnreadableSourceError(msg)
+    body = section.group(1)
+    if _PER_MILLION_NOTE not in _text(body).casefold():
+        msg = f"the Pricing section no longer states rates {_PER_MILLION_NOTE!r}"
+        raise UnreadableSourceError(msg)
+    return _rows(_short_context_table(body))
+
+
+def _row_rates(rows: list[list[str]], label: str) -> dict[Dimension, Decimal] | None:
+    """Return the per-token rates the row labelled *label* states.
+
+    Args:
+        rows: A pricing table, header row first.
+        label: The casefolded inference option naming the wanted row.
+
+    Returns:
+        The rate per token, per dimension, or None when the table has no such
+        row -- which is a published absence for every option but In-Region.
+    """
+    labelled = next(
+        (row for row in rows[1:] if row and row[0].casefold() == label), None
+    )
+    if labelled is None:
+        return None
+    return {
+        dimension: amount / _PER_MILLION
+        for header, cell in zip(rows[0], labelled, strict=False)
+        if (dimension := _card_dimension(header)) is not None
+        and (amount := _money(cell)) is not None
+    }
+
+
 def parse_model_card(page: str) -> dict[Dimension, Decimal]:
     """Return the per-token In-Region rates a Bedrock model card publishes.
 
@@ -279,29 +348,38 @@ def parse_model_card(page: str) -> dict[Dimension, Decimal]:
         UnreadableSourceError: If the pricing section, its unit note, its
             short-context table or its In-Region row cannot be identified.
     """
-    section = _PRICING_SECTION.search(page)
-    if section is None:
-        msg = "the card has no Pricing section"
-        raise UnreadableSourceError(msg)
-    body = section.group(1)
-    if _PER_MILLION_NOTE not in _text(body).casefold():
-        msg = f"the Pricing section no longer states rates {_PER_MILLION_NOTE!r}"
-        raise UnreadableSourceError(msg)
-    rows = _rows(_short_context_table(body))
-    in_region = next(
-        (row for row in rows[1:] if row and row[0].casefold() == _IN_REGION_ROW), None
-    )
-    if not rows or in_region is None:
+    rows = _pricing_rows(page)
+    rates = _row_rates(rows, _IN_REGION_ROW)
+    if rates is None:
         msg = "the pricing table has no In-Region row"
         raise UnreadableSourceError(msg)
-    rates = {
-        dimension: amount / _PER_MILLION
-        for header, cell in zip(rows[0], in_region, strict=False)
-        if (dimension := _card_dimension(header)) is not None
-        and (amount := _money(cell)) is not None
-    }
     if not rates:
         msg = "the In-Region row states no rate"
+        raise UnreadableSourceError(msg)
+    return rates
+
+
+def parse_model_card_global(page: str) -> dict[Dimension, Decimal] | None:
+    """Return the per-token Global cross-Region rates a model card publishes.
+
+    Args:
+        page: The model card's HTML.
+
+    Returns:
+        The rate per token, per dimension, for the ``global.`` inference
+        profile, or None when the card quotes no Global row -- the ordinary
+        case, since most models are priced In-Region only.
+
+    Raises:
+        UnreadableSourceError: If the pricing section, its unit note or its
+            short-context table cannot be identified, or if a Global row is
+            present but prices nothing, which reads as changed columns rather
+            than as a withdrawn rate.
+    """
+    rows = _pricing_rows(page)
+    rates = _row_rates(rows, _GLOBAL_ROW)
+    if rates is not None and not rates:
+        msg = "the Global CRIS row states no rate"
         raise UnreadableSourceError(msg)
     return rates
 
@@ -406,6 +484,49 @@ def _compare(
     return Finding(Outcome.MATCH, model_id, f"{dimension.value}: {expected:f}")
 
 
+def _global_key(model_id: str) -> str:
+    """Return how a model's Global cross-Region entry is named in the report.
+
+    Both tables price the same model, so the report has to say which rate a
+    finding is about for it to be actionable.
+    """
+    return f"{model_id} (Global)"
+
+
+def classify_global(model_id: str, reading: SourceReading) -> list[Finding]:
+    """Compare one model's Global cross-Region entry against what its card said.
+
+    A model priced In-Region only is absent from both sides and reports nothing:
+    that is the state of most models, and reporting it would bury the findings
+    that matter under six lines of noise on every run. A card that stops quoting
+    a Global rate the table carries is a vanished rate like any other -- the
+    entry is kept, since the ``global.`` inference profile still serves calls
+    that have to be priced.
+
+    Args:
+        model_id: The model the entry prices.
+        reading: What the model's card had to say about its Global rate.
+
+    Returns:
+        The findings for *model_id*'s Global rate, empty when neither the table
+        nor the card carries one.
+    """
+    expected = DEFAULT_MODEL_GLOBAL_PRICES.get(model_id)
+    if expected is not None:
+        return classify(_global_key(model_id), expected, reading)
+    if reading.rates is None:
+        return []
+    return [
+        Finding(
+            Outcome.NEW,
+            _global_key(model_id),
+            f"{dimension.value}: {reading.url} publishes {rate}, "
+            f"DEFAULT_MODEL_GLOBAL_PRICES has no entry",
+        )
+        for dimension, rate in reading.rates.items()
+    ]
+
+
 def _card_url(slug: str) -> str:
     """Return the user guide URL of the model card named *slug*."""
     return f"{_USER_GUIDE}{slug}.html"
@@ -423,19 +544,32 @@ def card_is_withdrawn(slug: str, page: str) -> bool:
     return slug not in page and not _H1.search(page)
 
 
-def _read_model_card(client: httpx.Client, slug: str) -> SourceReading:
-    """Fetch and parse a model card, never raising on a source-side problem."""
+def _read_model_card(
+    client: httpx.Client, slug: str
+) -> tuple[SourceReading, SourceReading]:
+    """Fetch a model card once, never raising on a source-side problem.
+
+    Returns:
+        Its In-Region reading and its Global cross-Region one. A card that
+        cannot be read at all makes both unreachable, so a redesigned card never
+        reads as a withdrawn Global rate.
+    """
     url = _card_url(slug)
     try:
         response = client.get(url)
         if response.status_code == httpx.codes.NOT_FOUND:
-            return SourceReading(url)
+            return SourceReading(url), SourceReading(url)
         response.raise_for_status()
-        if card_is_withdrawn(slug, response.text):
-            return SourceReading(url)
-        return SourceReading(url, rates=parse_model_card(response.text))
+        page = response.text
+        if card_is_withdrawn(slug, page):
+            return SourceReading(url), SourceReading(url)
+        return (
+            SourceReading(url, rates=parse_model_card(page)),
+            SourceReading(url, rates=parse_model_card_global(page)),
+        )
     except (httpx.HTTPError, UnreadableSourceError) as exc:
-        return SourceReading(url, problem=f"{type(exc).__name__}: {exc}")
+        problem = f"{type(exc).__name__}: {exc}"
+        return SourceReading(url, problem=problem), SourceReading(url, problem=problem)
 
 
 def stability_readings(
@@ -513,7 +647,7 @@ def unpriced_openai_cards(index: str) -> list[Finding]:
 
 def format_report(findings: list[Finding]) -> str:
     """Render *findings* grouped by outcome, worst first."""
-    lines = ["DEFAULT_MODEL_PRICES vs. the sources it was copied from:", ""]
+    lines = ["The hand-copied price tables vs. the sources they were copied from:", ""]
     for outcome in Outcome:
         selected = [finding for finding in findings if finding.outcome is outcome]
         if not selected:
@@ -527,11 +661,12 @@ def format_report(findings: list[Finding]) -> str:
 #: What to do about a drift, printed with the failure that reports one.
 _FIX: Final[str] = (
     "FIX: the vendor changed a published rate. Update the matching entry in "
-    "DEFAULT_MODEL_PRICES in stdapi/models/pricing_overrides.py to the value "
-    "the source now publishes (a model card states per-1M-token rates: divide "
-    "by 1e6), re-run this test, and note the change in the release entry. "
-    "Never delete an entry whose rate merely stopped being published: usage "
-    "recorded against that model still has to be priced."
+    "stdapi/models/pricing_overrides.py -- DEFAULT_MODEL_PRICES, or "
+    "DEFAULT_MODEL_GLOBAL_PRICES for a model reported as '(Global)' -- to the "
+    "value the source now publishes (a model card states per-1M-token rates: "
+    "divide by 1e6), re-run this test, and note the change in the release "
+    "entry. Never delete an entry whose rate merely stopped being published: "
+    "usage recorded against that model still has to be priced."
 )
 
 
@@ -539,8 +674,9 @@ def _collect(client: httpx.Client) -> list[Finding]:
     """Read every source once and classify the whole table against it."""
     findings: list[Finding] = []
     for model_id, slug in _MODEL_CARD_URLS.items():
-        reading = _read_model_card(client, slug)
-        findings.extend(classify(model_id, DEFAULT_MODEL_PRICES[model_id], reading))
+        in_region, cross_region = _read_model_card(client, slug)
+        findings.extend(classify(model_id, DEFAULT_MODEL_PRICES[model_id], in_region))
+        findings.extend(classify_global(model_id, cross_region))
 
     page: str | None = None
     problem: str | None = None
@@ -586,12 +722,17 @@ def test_default_model_prices_match_their_published_source() -> None:
     checked".
 
     Ref: stdapi/models/pricing_overrides.py:DEFAULT_MODEL_PRICES
+         stdapi/models/pricing_overrides.py:DEFAULT_MODEL_GLOBAL_PRICES
          https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards-openai.html
          https://aws.amazon.com/bedrock/pricing/
     """
     priced = {*_MODEL_CARD_URLS, *_STABILITY_PAGE_NAMES}
     assert priced == set(DEFAULT_MODEL_PRICES), (
         "DEFAULT_MODEL_PRICES gained or lost an entry: give it a source above, "
+        "or this detector silently stops covering it"
+    )
+    assert set(DEFAULT_MODEL_GLOBAL_PRICES) <= set(_MODEL_CARD_URLS), (
+        "DEFAULT_MODEL_GLOBAL_PRICES prices a model with no model card above, "
         "or this detector silently stops covering it"
     )
 
@@ -626,6 +767,18 @@ def test_default_model_prices_match_their_published_source() -> None:
 def gpt_56_cyber_card() -> str:
     """The recorded Pricing section of the GPT-5.6 Cyber model card."""
     return (FIXTURES_DIR / "model_card_openai_gpt_56_cyber_pricing.html").read_text()
+
+
+@pytest.fixture(scope="module")
+def gpt_56_sol_card() -> str:
+    """The recorded Pricing section of the GPT-5.6 Sol model card."""
+    return (FIXTURES_DIR / "model_card_openai_gpt_56_sol_pricing.html").read_text()
+
+
+@pytest.fixture(scope="module")
+def gpt_54_card() -> str:
+    """The recorded Pricing section of the GPT-5.4 model card."""
+    return (FIXTURES_DIR / "model_card_openai_gpt_54_pricing.html").read_text()
 
 
 @pytest.fixture(scope="module")
@@ -671,6 +824,74 @@ class TestModelCardParsing:
         rates = parse_model_card(daybreak_blue_card)
         assert rates[Dimension.INPUT_TOKENS] == Decimal("0.0000055")
         assert rates[Dimension.OUTPUT_TOKENS] == Decimal("0.000033")
+
+    def test_the_global_row_is_read_from_the_short_context_table(
+        self, gpt_56_sol_card: str
+    ) -> None:
+        """A Global rate is the one in the table In-Region was taken from.
+
+        Both context windows carry a Global CRIS row, so a parser reaching for
+        the last matching row anywhere in the section would compare the 1M-tier
+        rate against a table that only ever held the 272K one -- permanent false
+        drift, on four dimensions, on every run.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
+        """
+        assert parse_model_card_global(gpt_56_sol_card) == {
+            Dimension.INPUT_TOKENS: Decimal("0.000005"),
+            Dimension.CACHE_WRITE_TOKENS: Decimal("0.00000625"),
+            Dimension.CACHE_READ_TOKENS: Decimal("0.0000005"),
+            Dimension.OUTPUT_TOKENS: Decimal("0.00003"),
+        }
+
+    def test_a_card_without_a_global_row_publishes_no_global_rate(
+        self, gpt_56_cyber_card: str
+    ) -> None:
+        """Most models are priced In-Region only, which is an absence not a fault."""
+        assert parse_model_card_global(gpt_56_cyber_card) is None
+
+    def test_the_govcloud_block_is_neither_the_commercial_nor_a_global_rate(
+        self, gpt_54_card: str
+    ) -> None:
+        """A card's third table shape must not leak into either rate.
+
+        GPT-5.4 prices an uncaptioned commercial table and a captioned AWS
+        GovCloud one; the GovCloud block is a different partition's rate, and
+        its In-Region row is not a Global rate either.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-54.html
+        """
+        rates = parse_model_card(gpt_54_card)
+        assert rates[Dimension.INPUT_TOKENS] == Decimal("0.00000275")
+        assert rates[Dimension.OUTPUT_TOKENS] == Decimal("0.0000165")
+        assert parse_model_card_global(gpt_54_card) is None
+
+    def test_a_global_row_pricing_nothing_is_unreadable(
+        self, gpt_56_sol_card: str
+    ) -> None:
+        """A Global row whose every cell stopped being money reads as changed columns.
+
+        Guessing here would report four dimensions as vanished on a card that
+        merely renamed its headers, so the parser refuses instead.
+        """
+        card = gpt_56_sol_card.replace(
+            '<tr><td tabindex="-1">Global CRIS</td><td tabindex="-1">$5.00</td>'
+            '<td tabindex="-1">$6.25</td><td tabindex="-1">$0.50</td>'
+            '<td tabindex="-1">$30.00</td></tr>',
+            '<tr><td tabindex="-1">Global CRIS</td><td tabindex="-1">n/a</td>'
+            '<td tabindex="-1">n/a</td><td tabindex="-1">n/a</td>'
+            '<td tabindex="-1">n/a</td></tr>',
+        )
+        with pytest.raises(UnreadableSourceError, match="Global CRIS row states"):
+            parse_model_card_global(card)
+
+    def test_an_ambiguous_section_is_unreadable_for_the_global_rate_too(
+        self, gpt_56_sol_card: str
+    ) -> None:
+        """The Global parser inherits the In-Region parser's table strictness."""
+        card = gpt_56_sol_card.replace("Long Context Window (1M)", "Short Context")
+        with pytest.raises(UnreadableSourceError, match="exactly one"):
+            parse_model_card_global(card)
 
     def test_an_em_dash_is_a_published_absence_not_a_rate(
         self, gpt_56_cyber_card: str
@@ -854,6 +1075,127 @@ class TestGpt56Detection:
             "openai.gpt-5.6-cyber", {Dimension.INPUT_TOKENS: "0.00001375"}, reading
         )
         assert self._outcomes(findings) == {Outcome.MATCH, Outcome.NEW}
+
+
+class TestGlobalDetection:
+    """The same four outcomes, proved on the Global cross-Region table.
+
+    ``DEFAULT_MODEL_GLOBAL_PRICES`` is hand-copied from the same cards and has
+    exactly the staleness the In-Region table has, so it is held to the same
+    standard: the shipped entry is shown matching its card, and a deliberately
+    wrong value is shown reported as a drift naming both values and the source.
+
+    Ref: stdapi/models/pricing_overrides.py:DEFAULT_MODEL_GLOBAL_PRICES
+         https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
+    """
+
+    #: The model both directions are proved on, one of the three priced Globally.
+    MODEL_ID: Final[str] = "openai.gpt-5.6-sol"
+
+    @staticmethod
+    def _reading(card: str) -> SourceReading:
+        """Return the Global reading a served card yields."""
+        return SourceReading(
+            _card_url("model-card-openai-gpt-56-sol"),
+            rates=parse_model_card_global(card),
+        )
+
+    def test_the_shipped_global_table_matches_its_card(
+        self, gpt_56_sol_card: str
+    ) -> None:
+        """Every Global rate the entry carries must be the rate the card publishes."""
+        findings = classify_global(self.MODEL_ID, self._reading(gpt_56_sol_card))
+        assert len(findings) == len(DEFAULT_MODEL_GLOBAL_PRICES[self.MODEL_ID])
+        assert {finding.outcome for finding in findings} == {Outcome.MATCH}
+
+    def test_a_wrong_expected_global_value_is_reported_as_drift(
+        self, gpt_56_sol_card: str
+    ) -> None:
+        """A deliberately wrong Global output rate must be reported, with both values.
+
+        The Global rate is ~9% under In-Region, so the drift this guards against
+        is quiet: copying the In-Region figure into the Global table is invisible
+        in every response the gateway serves.
+        """
+        drifted = {
+            **DEFAULT_MODEL_GLOBAL_PRICES[self.MODEL_ID],
+            Dimension.OUTPUT_TOKENS: "0.000033",  # the In-Region rate, not Global
+        }
+        findings = classify(
+            _global_key(self.MODEL_ID), drifted, self._reading(gpt_56_sol_card)
+        )
+
+        drift = [f for f in findings if f.outcome is Outcome.DRIFT]
+        assert len(drift) == 1
+        assert drift[0].model_id == "openai.gpt-5.6-sol (Global)"
+        url = _card_url("model-card-openai-gpt-56-sol")
+        assert drift[0].detail == (
+            f"output_tokens: table has 0.000033, {url} publishes 0.00003"
+        )
+
+    def test_a_model_priced_in_region_only_reports_nothing(self) -> None:
+        """A card with no Global row, for a model with no entry, is silent.
+
+        Four of the seven priced models are In-Region only; reporting each of
+        them on every run would bury the findings that need a person.
+        """
+        reading = SourceReading(_card_url("model-card-openai-gpt-56-cyber"))
+        assert classify_global("openai.gpt-5.6-cyber", reading) == []
+
+    def test_a_withdrawn_global_rate_keeps_its_entry_without_failing(self) -> None:
+        """A card that stops quoting a Global rate the table carries is vanished.
+
+        The ``global.`` inference profile keeps serving calls whose usage has to
+        be priced, so the entry stays and the run says so.
+        """
+        reading = SourceReading(_card_url("model-card-openai-gpt-56-sol"))
+        findings = classify_global(self.MODEL_ID, reading)
+        assert [finding.outcome for finding in findings] == [Outcome.VANISHED]
+        assert findings[0].model_id == "openai.gpt-5.6-sol (Global)"
+        assert "Keep the entry" in findings[0].detail
+
+    def test_one_withdrawn_global_dimension_is_vanished_rather_than_drift(
+        self, gpt_56_sol_card: str
+    ) -> None:
+        """An em dash in the Global row withdraws that rate, and keeps the entry."""
+        card = gpt_56_sol_card.replace(
+            '<td tabindex="-1">$6.25</td>', '<td tabindex="-1">—</td>', 1
+        )
+        findings = classify_global(self.MODEL_ID, self._reading(card))
+        vanished = [f for f in findings if f.outcome is Outcome.VANISHED]
+        assert len(vanished) == 1
+        assert Dimension.CACHE_WRITE_TOKENS.value in vanished[0].detail
+        assert Outcome.DRIFT not in {finding.outcome for finding in findings}
+
+    def test_an_unreachable_card_is_never_a_global_drift(self) -> None:
+        """A card that could not be read reports unreachable and nothing else."""
+        reading = SourceReading(_card_url("x"), problem="ConnectTimeout")
+        findings = classify_global(self.MODEL_ID, reading)
+        assert [finding.outcome for finding in findings] == [Outcome.UNREACHABLE]
+
+    def test_an_unreachable_card_is_silent_for_a_model_priced_in_region_only(
+        self,
+    ) -> None:
+        """Its In-Region reading already reports the source, so this one must not."""
+        reading = SourceReading(_card_url("x"), problem="ConnectTimeout")
+        assert classify_global("openai.gpt-5.6-cyber", reading) == []
+
+    def test_a_newly_published_global_rate_is_reported(
+        self, gpt_56_sol_card: str
+    ) -> None:
+        """The next Global rate AWS adds must be noticed, not silently unpriced.
+
+        A globally-routed call to a model the table does not cover is billed at
+        the pricier In-Region rate, so the gateway over-reports its cost.
+        """
+        findings = classify_global(
+            "openai.gpt-5.6-cyber", self._reading(gpt_56_sol_card)
+        )
+        assert {finding.outcome for finding in findings} == {Outcome.NEW}
+        assert {finding.model_id for finding in findings} == {
+            "openai.gpt-5.6-cyber (Global)"
+        }
+        assert "DEFAULT_MODEL_GLOBAL_PRICES has no entry" in findings[0].detail
 
 
 class TestNewAtTheSource:
