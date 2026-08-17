@@ -101,103 +101,104 @@ _MODEL_CONFIGS = [
 _PROMPT_REQUEST_PIPELINE = f"""\
 You are working in the stdapi.ai source tree at {SRC_MOUNT}.
 
-Trace the COMPLETE execution path for an incoming POST /v1/responses HTTP request
-from the route handler to the AWS Bedrock Converse API call.
+Trace how an incoming POST /v1/responses request reaches AWS Bedrock. Use shell
+commands to read the source; do not answer from prior knowledge.
 
-Use shell commands to read the actual source files. For each step in the call chain:
-  - Read the file and quote the EXACT function signature
-  - State the file path and describe what the function does in one sentence
+Read these files and no others, with `grep -n` and a `sed -n` line range rather
+than paging through them:
+  1. {SRC_MOUNT}/stdapi/routes/openai_responses.py
+  2. {SRC_MOUNT}/stdapi/models/chat/_adapters/_openai_responses.py
+  3. {SRC_MOUNT}/stdapi/models/chat/_default.py — the function that builds the
+     Bedrock request payload, and that function only
 
-Explore at minimum these layers:
-  1. The file that registers the /v1/responses route
-  2. The create_response handler it calls
-  3. The translate_request adapter function
-  4. The map_input function
-  5. The final Bedrock converse or converse_stream call
-
-List the steps in execution order. Show at least 5 steps with real code quotes.
+Report exactly three steps, in execution order, each with the real code quote:
+  1. The handler registered for /v1/responses
+  2. The function that converts the request body into Bedrock's shape
+  3. The function that assembles the Bedrock payload, and the name of the AWS
+     Bedrock API operation the payload is finally sent to
 """
 
 _PROMPT_STREAMING_PATH = f"""\
 You are working in the stdapi.ai source tree at {SRC_MOUNT}.
 
-Trace the streaming code path for POST /v1/responses with stream=True.
+Trace the streaming path of POST /v1/responses with stream=True. Use shell
+commands to read source files; do not guess, and quote the code you read.
 
-Use shell commands to read source files. Do not guess — quote actual code.
+Read these files and no others, with `grep -n` and a `sed -n` line range rather
+than paging through them:
+  1. {SRC_MOUNT}/stdapi/models/chat/_default.py — the branch taken when the
+     request is streamed, and the lines around it only
+  2. {SRC_MOUNT}/stdapi/models/chat/_adapters/_openai_responses.py — the function
+     that turns the Bedrock stream into the client's own server-sent events
 
-Investigate and document:
-  1. Where create_response branches on stream=True — quote the condition
-  2. The SSE event adapter/generator that formats streaming output
-  3. How Bedrock stream events (contentBlockDelta, messageStop) map to
-     OpenAI SSE event types — quote the mapping code
-  4. The format_stream function — read it and explain its structure
-
-Read at least 3 distinct source files and quote code from each.
+Report exactly three things, with the real code quote for each:
+  1. The streaming branch, and the AWS Bedrock streaming call it makes
+  2. The signature of the function that formats those server-sent events
+  3. One raw Bedrock stream event name and the client event it becomes
 """
 
 _PROMPT_PARAMETER_MAPPING = f"""\
 You are working in the stdapi.ai source tree at {SRC_MOUNT}.
 
-Produce a precise, code-backed mapping of Responses API parameters to AWS Bedrock
-Converse API fields as implemented in stdapi.ai.
+Map Responses API parameters onto the AWS Bedrock Converse request fields, as this
+gateway actually implements it.
 
-Use shell commands to read:
-  1. {SRC_MOUNT}/stdapi/types/openai_responses.py — find ResponseCreateParams fields
-  2. The translate_request function in the adapter — read its full body
-  3. The map_input function — read how input items map to Bedrock messages
+Read one function: _prepare_converse_request in
+{SRC_MOUNT}/stdapi/models/chat/_default.py. Read that function only, not the rest
+of the file, and read no other file — `sed -n` a line range rather than paging
+through it.
 
-For each parameter you find, quote the EXACT line(s) of code that handle it and state:
-  OpenAI param name  →  Bedrock field name  (with code quote)
+Report four of the mappings it performs, each on one line:
+  OpenAI parameter  →  Bedrock request field, with the exact line that assigns it
 
-Document at least 6 parameter mappings. Include: model, instructions, input,
-temperature/inferenceConfig, tools/toolConfig, and stream handling.
+Do not report a mapping you did not see in that function.
 """
 
 _PROMPT_MODEL_OVERRIDES = f"""\
 You are working in the stdapi.ai source tree at {SRC_MOUNT}.
 
-Find ALL model-specific behavior override files in the chat module and document
-the custom logic each one implements.
+Report what three of the gateway's model-specific chat modules override.
 
-You MUST:
-  1. List ALL Python files inside {SRC_MOUNT}/stdapi/models/chat/ using shell commands
-  2. Read _default.py briefly to understand what the base class provides
-  3. For each model-specific file:
-     - Read the file
-     - State which model family it targets
-     - Quote at least one overridden method signature
-     - Explain in 1 sentence what custom behavior it adds
+Read these three files, one shell command each, and read nothing else:
+  1. {SRC_MOUNT}/stdapi/models/chat/amazon_nova_2.py
+  2. {SRC_MOUNT}/stdapi/models/chat/deepseek_v3.py
+  3. {SRC_MOUNT}/stdapi/models/chat/twelvelabs_pegasus.py
 
-Document at least 4 model-specific files with real code quotes.
+Your answer is three sections, one per file, each giving the exact `def` line of
+one method that file overrides, copied from the file, and one sentence on what
+that override changes. A file name without a quoted `def` line is not an answer.
 """
 
 #: Gateway function names that appear only in the files the prompt forces open.
-_PIPELINE_KEYWORDS = ("create_response", "translate_request", "map_input", "_default")
-#: Vocabulary any correct summary of the streaming path uses.
-_STREAMING_KEYWORDS = ("stream", "sse", "event", "format_stream", "converse_stream")
-#: Parameter names that appear only in the mapped source files.
+#: None of them appears in the prompt, so naming one is evidence of a real read.
+_PIPELINE_KEYWORDS = ("create_response", "translate_request", "map_input")
+#: Streaming vocabulary the prompt withholds, so only the source can supply it.
+_STREAMING_KEYWORDS = (
+    "converse_stream",
+    "contentblockdelta",
+    "messagestop",
+    "format_stream",
+)
+#: Bedrock request fields ``_prepare_converse_request`` builds. Bedrock-side names
+#: on purpose: the OpenAI-side ones are recitable without opening anything.
 _PARAMETER_KEYWORDS = (
-    "instructions",
     "inferenceconfig",
-    "temperature",
     "toolconfig",
-    "messages",
+    "additionalmodelrequestfields",
+    "requestmetadata",
 )
-#: Model families and override vocabulary found only in the per-model files.
-_MODEL_FAMILY_KEYWORDS = (
-    "nova",
-    "claude",
-    "deepseek",
-    "mistral",
-    "llama",
-    "qwen",
-    "amazon",
-    "moonshot",
-    "writer",
-    "_default",
-    "override",
-    "model-specific",
+#: Methods the three named modules override; only reading one of them supplies a name.
+_MODEL_OVERRIDE_KEYWORDS = (
+    "_req_configure_reasoning",
+    "_prepare_converse_request",
+    "_resp_map_tool_result",
+    "_build_code_execution_result",
+    "_build_pegasus_body",
+    "_format_converse_stream",
 )
+
+#: Fragment of any quoted signature, which a bare directory listing cannot contain.
+_SIGNATURE_MARKER = "def "
 
 
 @pytest.mark.parametrize("model_config", _MODEL_CONFIGS)
@@ -290,7 +291,13 @@ class TestCodexAnalysis:
         agentic_image: str,
         agentic_workdir: Path,
     ) -> None:
-        """Codex audits the Responses-to-Converse parameter mapping over two shell calls.
+        """Codex audits the Responses-to-Converse parameter mapping from the source.
+
+        The asserted vocabulary is the Bedrock side of the mapping, which appears
+        only inside the function the prompt points at -- the OpenAI side would be
+        recited correctly without opening anything. That is what carries the test:
+        the step floor is one because one ``sed`` range is all the task needs, and
+        a floor above what the task requires fails a correct answer.
 
         Ref: https://developers.openai.com/api/docs/guides/migrate-to-responses
              stdapi/models/chat/_adapters/_openai_responses.py:translate_request
@@ -306,7 +313,7 @@ class TestCodexAnalysis:
         )
         log_metrics(TOOL, result, model_config, "test_audit_parameter_mapping")
         assert_result(
-            result, config=model_config, any_of=_PARAMETER_KEYWORDS, min_steps=2
+            result, config=model_config, any_of=_PARAMETER_KEYWORDS, min_steps=1
         )
 
     def test_enumerate_model_overrides(
@@ -319,9 +326,12 @@ class TestCodexAnalysis:
     ) -> None:
         """Codex enumerates the model-specific chat overrides over at least three shell calls.
 
-        The highest step floor in this module: listing the directory then reading
-        several files keeps the ``function_call`` cycle running long enough to
-        exercise a steadily growing input array.
+        The highest step floor in this module: three separate reads keep the
+        ``function_call`` cycle running long enough to exercise a steadily
+        growing input array. The files are named rather than discovered, so the
+        floor measures the reads rather than a listing the model may treat as the
+        deliverable, and the answer has to carry a quoted signature -- a name a
+        directory listing cannot supply.
 
         Ref: https://developers.openai.com/api/docs/guides/function-calling
              stdapi/models/chat/__init__.py:get_chat_model
@@ -337,7 +347,11 @@ class TestCodexAnalysis:
         )
         log_metrics(TOOL, result, model_config, "test_enumerate_model_overrides")
         assert_result(
-            result, config=model_config, any_of=_MODEL_FAMILY_KEYWORDS, min_steps=3
+            result,
+            config=model_config,
+            contains=_SIGNATURE_MARKER,
+            any_of=_MODEL_OVERRIDE_KEYWORDS,
+            min_steps=3,
         )
 
 

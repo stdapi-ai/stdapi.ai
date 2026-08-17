@@ -158,16 +158,15 @@ def agentic_tool(request: pytest.FixtureRequest) -> AgenticTool:
 _PROMPT_ADAPTER_LAYOUT = f"""\
 You are working in the stdapi.ai source tree at {SRC_MOUNT}.
 
-Identify every chat API adapter the gateway implements and what each one
-translates between.
-
-Use your file tools to read the actual source. Do not guess:
-  1. List every file in {SRC_MOUNT}/stdapi/models/chat/_adapters/
-  2. Read the module docstring of each adapter and quote it
-  3. For each adapter, name the client API it accepts and quote the exact
+Identify which chat API adapters the gateway implements and what they translate
+between. Use your file tools to read the actual source. Do not guess:
+  1. List the files in {SRC_MOUNT}/stdapi/models/chat/_adapters/
+  2. Read the module docstring of two of them and quote it
+  3. For each of those two, name the client API it accepts and quote the exact
      signature of the function that converts a request into Bedrock's shape
 
-Report one section per adapter, with real code quotes.
+Report one section per adapter you read, with real code quotes. Do not read the
+adapters you did not pick.
 """
 
 _PROMPT_ADAPTER_COMMON = f"""\

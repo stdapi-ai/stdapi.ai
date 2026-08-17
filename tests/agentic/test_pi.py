@@ -113,16 +113,15 @@ def agentic_tool(request: pytest.FixtureRequest) -> AgenticTool:
 _PROMPT_ADAPTER_LAYOUT = f"""\
 You are working in the stdapi.ai source tree at {SRC_MOUNT}.
 
-Identify every chat API adapter the gateway implements and what each one
-translates between.
-
-Use shell commands to read the actual source. Do not guess:
-  1. List every file in {SRC_MOUNT}/stdapi/models/chat/_adapters/
-  2. Read the module docstring of each adapter and quote it
-  3. For each adapter, name the client API it accepts and quote the exact
+Identify which chat API adapters the gateway implements and what they translate
+between. Use shell commands to read the actual source. Do not guess:
+  1. List the files in {SRC_MOUNT}/stdapi/models/chat/_adapters/
+  2. Read the module docstring of two of them and quote it
+  3. For each of those two, name the client API it accepts and quote the exact
      signature of the function that converts a request into Bedrock's shape
 
-Report one section per adapter, with real code quotes.
+Report one section per adapter you read, with real code quotes. Do not read the
+adapters you did not pick.
 """
 
 _PROMPT_TOOL_ROUND_TRIP = f"""\
@@ -134,12 +133,10 @@ replayed to Bedrock on the following turn.
 Use shell commands to read source files. Quote actual code, never guess:
   1. Find where a tool result from the client is converted into a Bedrock
      toolResult block — quote the function and its signature
-  2. Find where an assistant tool call is converted into a Bedrock toolUse
-     block — quote it
-  3. Explain what happens when two consecutive messages map to the same
+  2. Explain what happens when two consecutive messages map to the same
      Bedrock role, and quote the code that handles it
 
-Read at least three distinct files and quote code from each.
+Two files are enough. Do not read further once you have both quotes.
 """
 
 #: Vocabulary that appears only in the adapter files the prompt forces open.
@@ -158,6 +155,28 @@ _TOOL_ROUND_TRIP_KEYWORDS = (
     "append_or_merge",
     "tool_call",
     "bedrock",
+)
+
+#: One-file task for the tests whose subject is a request parameter, not a workload.
+#:
+#: The functions listed below are the assertion: they exist only in that file, so
+#: the answer cannot come from the model's own knowledge, and one read is all the
+#: agent loop needs to prove the parameter was accepted end to end.
+_PROMPT_READ_ONE_FILE = f"""\
+Read {SRC_MOUNT}/stdapi/models/chat/_adapters/_common.py and reply with the name
+of every function defined at module level in it, one per line.
+
+Read nothing else, and answer nothing else.
+"""
+
+#: The first function of ``_common.py``, which every correct listing names.
+_COMMON_FIRST_FUNCTION = "append_or_merge"
+
+#: The rest of that file's module-level functions.
+_COMMON_OTHER_FUNCTIONS = (
+    "reject_unsupported_web_search_fields",
+    "resolve_external_web_access",
+    "inference_extras",
 )
 
 
@@ -378,6 +397,11 @@ class TestPiReasoning:
         starts, or returns reasoning text the client cannot separate from the
         answer.
 
+        What is under test is the knob, not the workload -- six runs of a
+        multi-file exploration prove nothing the first tool-use round trip has not
+        -- so the task is the smallest one whose answer still cannot be produced
+        without reading a file through the gateway.
+
         Ref: stdapi/models/chat/deepseek_v3.py:_REASONING_OVERRIDE
         """
         result = run_agent(
@@ -385,7 +409,7 @@ class TestPiReasoning:
             server=agentic_server,
             image=agentic_image,
             config=model_config,
-            prompt=_PROMPT_ADAPTER_LAYOUT,
+            prompt=_PROMPT_READ_ONE_FILE,
             workdir=agentic_workdir,
             test_name=f"{request.node.originalname}[{agentic_tool.id}-{effort}]",
             effort=effort,
@@ -399,9 +423,9 @@ class TestPiReasoning:
         assert_result(
             result,
             config=model_config,
-            contains="adapter",
-            any_of=_ADAPTER_KEYWORDS,
-            min_steps=2,
+            contains=_COMMON_FIRST_FUNCTION,
+            any_of=_COMMON_OTHER_FUNCTIONS,
+            min_steps=1,
         )
 
 

@@ -7,10 +7,13 @@ tool-use round trips -- the CLI's own system prompt, tool definitions, ``tool_us
 blocks and ``tool_result`` replays -- all translated by the gateway for a model that
 is usually not a Claude model at all.
 
-The prompts are written to need roughly ten tool calls across several files. The
-asserted step floor is far lower on purpose: it only rejects answers produced without
-opening the source, because the weaker models legitimately differ in how many turns
-they take.
+Each prompt asks for the smallest exploration that still produces what the test
+asserts -- a bounded number of named files, and an answer whose vocabulary the
+prompt itself withholds. Every extra file demanded is a full model round trip, on
+eleven models, that nothing checks; the wire-format translation this module exists
+to prove is exercised by the first tool-use round trip and by every one after it
+equally. The asserted step floor sits below even that, because the weaker models
+legitimately differ in how many turns they take.
 
 Requires ``--agentic``, podman, and Bedrock credentials.
 
@@ -132,90 +135,122 @@ _MODEL_CONFIGS = [
 _PROMPT_REQUEST_PIPELINE = f"""\
 You are an AI coding assistant with access to the stdapi.ai source at {SRC_MOUNT}.
 
-Your task: Trace the COMPLETE execution path for an incoming POST /v1/chat/completions
-HTTP request from the route handler through to the actual AWS Bedrock Converse API call.
+Your task: trace how an incoming POST /v1/chat/completions request reaches AWS
+Bedrock. Read the source; do not answer from prior knowledge.
 
-You MUST read the actual source files and quote real code — do not rely on prior
-knowledge.  For each step in the call chain you MUST:
-  - Open and read the file containing that step
-  - Copy the EXACT function signature (name + all parameters) as it appears in the code
-  - State the file path and describe what the function does in one sentence
+Read these files and no others:
+  1. {SRC_MOUNT}/stdapi/routes/openai_chat_completions.py
+  2. {SRC_MOUNT}/stdapi/models/chat/_adapters/_openai_chat_completion.py
+  3. {SRC_MOUNT}/stdapi/models/chat/_default.py — grep it for the function that
+     builds the Bedrock request payload, and read that function only
 
-Explore and read at minimum these layers:
-  1. The file that registers the /v1/chat/completions route
-  2. The request handler it calls
-  3. The translate_request adapter (read the file, quote its return type annotation)
-  4. The _prepare_converse_request function (read its full signature + all parameters)
-  5. The line where converse() or converse_stream() is finally called
-
-List the steps in execution order with real code quotes.  Show at least 6 steps.
+Report exactly three steps, in execution order, each with the real code quote:
+  1. The handler registered for /v1/chat/completions
+  2. The function that converts the request body into Bedrock's shape
+  3. The function that assembles the Bedrock payload, and the name of the AWS
+     Bedrock API operation the payload is finally sent to
 """
 
 _PROMPT_STREAMING_PATH = f"""\
 You are an AI coding assistant with access to the stdapi.ai source at {SRC_MOUNT}.
 
-Your task: Trace the streaming code path for POST /v1/chat/completions with stream=True.
+Your task: trace the streaming path of POST /v1/chat/completions with stream=True.
+Read the source; do not guess, and quote the code you read.
 
-You MUST open and read the relevant source files.  Do not guess — quote actual code.
-For each stage of the pipeline, copy the relevant code snippet (a few lines) and
-explain its role.
+Read these files and no others:
+  1. {SRC_MOUNT}/stdapi/models/chat/_default.py — grep it for the branch taken
+     when the request is streamed, and read around it only
+  2. {SRC_MOUNT}/stdapi/models/chat/_adapters/_openai_chat_completion.py — find
+     the function that turns the Bedrock stream into the client's own
+     server-sent events, and read it
 
-Investigate and document all of the following:
-  1. The exact condition in _default.py that branches on stream=True — quote it
-  2. The call to converse_stream (quote the call site and its arguments)
-  3. The SSE event adapter/generator class(es) — find and read those files too
-  4. How each raw Bedrock event type (contentBlockDelta, messageStop, etc.) maps to
-     an OpenAI SSE chunk type — quote the mapping code
-  5. The final streaming response construction
-
-Read at least 3 distinct source files and quote code from each one.
+Report exactly three things, with the real code quote for each:
+  1. The streaming branch, and the AWS Bedrock streaming call it makes
+  2. The signature of the function that formats those server-sent events
+  3. One raw Bedrock stream event name and the client chunk it becomes
 """
 
 _PROMPT_PARAMETER_MAPPING = f"""\
 You are an AI coding assistant with access to the stdapi.ai source at {SRC_MOUNT}.
 
-Your task: Produce a precise, code-backed mapping of OpenAI chat completions API
-parameters to AWS Bedrock Converse API fields as implemented in stdapi.ai.
+Your task: map OpenAI chat completion parameters onto the AWS Bedrock Converse
+request fields, as this gateway actually implements it.
 
-You MUST open and read each of these files before answering:
-  1. The OpenAI types file — find CompletionCreateParams and read ALL its fields
-  2. The translate_request function in the adapter — read its full body
-  3. {SRC_MOUNT}/stdapi/models/chat/_default.py — read _prepare_converse_request in full
+Read one function: _prepare_converse_request in
+{SRC_MOUNT}/stdapi/models/chat/_default.py. Read that function only, not the rest
+of the file, and read no other file.
 
-For each parameter you find, quote the EXACT line(s) of code that handle it and state:
-  • OpenAI parameter name  →  Bedrock Converse field name  (quote the assignment)
+Report four of the mappings it performs, each on one line:
+  • OpenAI parameter  →  Bedrock request field, with the exact line that assigns it
 
-Document at least 10 parameter mappings with real code quotes.  Do not skip any.
-Include: temperature, max_tokens, top_p, stop_sequences, stream, system messages,
-tools/toolConfig, metadata/requestMetadata, and any others you find.
+Do not report a mapping you did not see in that function.
 """
 
 _PROMPT_MODEL_OVERRIDES = f"""\
 You are an AI coding assistant with access to the stdapi.ai source at {SRC_MOUNT}.
 
-Your task: Find ALL model-specific behavior override files in the chat completions
-module and document the custom logic each one implements.
+Your task: report the model-specific behavior overrides in the chat module.
 
-You MUST:
-  1. List ALL Python files inside {SRC_MOUNT}/stdapi/models/chat/ (use Glob or Bash)
-  2. Read _default.py briefly to understand what the base class provides
-  3. For each model-specific file (not _default.py, __init__.py, or _adapters/):
-     - Read the file
-     - State which Bedrock model family it targets
-     - Quote the method signature(s) it overrides
-     - Explain in 1-2 sentences what custom behavior it adds vs the default
+  1. List the Python files directly inside {SRC_MOUNT}/stdapi/models/chat/
+     (use Glob or Bash)
+  2. Pick three of the model-specific ones (not _default.py, __init__.py or
+     _adapters/) and read those three. Read no others.
 
-Document at least 5 model-specific files with real code quotes.
+For each of the three, give its file name, the method signature it overrides, and
+one sentence on what it changes. You are not finished until you have quoted real
+code from three separate files — a list of file names is not an answer.
 """
 
 #: Function names that only appear in the files the pipeline prompts force open.
-_PIPELINE_KEYWORDS = ("translate_request", "_prepare_converse_request", "_default")
-#: Vocabulary any correct summary of the streaming path uses.
-_STREAMING_KEYWORDS = ("stream", "sse", "generator", "event", "converse_stream")
-#: Parameter names that only appear in the mapped source files.
-_PARAMETER_KEYWORDS = ("temperature", "max_tokens", "inferenceconfig", "messages")
-#: Model families named only inside the per-model override files.
-_MODEL_FAMILY_KEYWORDS = ("nova", "claude", "deepseek", "mistral", "llama", "qwen")
+#: None of them appears in the prompt, so naming one is evidence of a real read.
+_PIPELINE_KEYWORDS = ("translate_request", "_prepare_converse_request")
+#: Streaming vocabulary the prompt withholds, so only the source can supply it.
+_STREAMING_KEYWORDS = (
+    "converse_stream",
+    "contentblockdelta",
+    "messagestop",
+    "format_stream",
+)
+#: Bedrock request fields ``_prepare_converse_request`` builds. Bedrock-side names
+#: on purpose: the OpenAI-side ones are recitable without opening anything.
+_PARAMETER_KEYWORDS = (
+    "inferenceconfig",
+    "toolconfig",
+    "additionalmodelrequestfields",
+    "requestmetadata",
+)
+#: Module names that only a listing of the chat package reveals.
+_MODEL_FAMILY_KEYWORDS = (
+    "amazon_nova",
+    "anthropic_claude",
+    "deepseek_v3",
+    "kimi_k25",
+    "mistral_7b",
+    "openai_gpt",
+    "twelvelabs_pegasus",
+)
+
+#: One-file task for the tests whose subject is a request parameter, not a workload.
+#:
+#: The functions listed below are the assertion: they exist only in that file, so
+#: the answer cannot come from the model's own knowledge, and one read is all the
+#: agent loop needs to prove the parameter was accepted end to end.
+_PROMPT_READ_ONE_FILE = f"""\
+Read {SRC_MOUNT}/stdapi/models/chat/_adapters/_common.py and reply with the name
+of every function defined at module level in it, one per line.
+
+Read nothing else, and answer nothing else.
+"""
+
+#: The first function of ``_common.py``, which every correct listing names.
+_COMMON_FIRST_FUNCTION = "append_or_merge"
+
+#: The rest of that file's module-level functions.
+_COMMON_OTHER_FUNCTIONS = (
+    "reject_unsupported_web_search_fields",
+    "resolve_external_web_access",
+    "inference_extras",
+)
 
 
 @pytest.mark.parametrize("model_config", _MODEL_CONFIGS)
@@ -271,9 +306,9 @@ class TestClaudeCodePipeline:
     ) -> None:
         """A streaming-path trace completes over at least two turns and reports SSE vocabulary.
 
-        The keyword set is deliberately broad because the wording of the summary is
-        model-dependent; the load-bearing assertions are the step floor and the
-        autouse model-identity check.
+        The accepted keywords are the streaming identifiers the prompt withholds,
+        so any one of them is evidence the source was read; the summary's wording
+        is model-dependent, which is why any one of them suffices.
 
         Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
              stdapi/models/chat/_adapters/_anthropic_message.py:format_stream
@@ -309,7 +344,11 @@ class TestClaudeCodeAnalysis:
         agentic_image: str,
         agentic_workdir: Path,
     ) -> None:
-        """A three-file parameter audit completes over at least two turns and names real parameters.
+        """A parameter audit completes over at least two turns and names real Bedrock fields.
+
+        The asserted vocabulary is the Bedrock side of the mapping, which appears
+        only inside the function the prompt points at -- the OpenAI side would be
+        recited correctly without opening anything.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
              stdapi/models/chat/_adapters/_anthropic_message.py:translate_request
@@ -338,8 +377,9 @@ class TestClaudeCodeAnalysis:
     ) -> None:
         """A Glob-then-read enumeration of the model override files completes over four turns.
 
-        The longest task in the module -- a directory listing followed by five or
-        more reads -- hence the higher step floor.
+        The longest task in the module -- a directory listing followed by three
+        reads -- hence the higher step floor. The answer must name a module of
+        that package, which only the listing reveals.
 
         Ref: stdapi/models/chat/__init__.py:get_chat_model
         """
@@ -379,11 +419,14 @@ class TestClaudeCodeEffortLevels:
         agentic_image: str,
         agentic_workdir: Path,
     ) -> None:
-        """The parameter audit completes at both low and high effort without changing model.
+        """A one-file read completes at both low and high effort without changing model.
 
-        Reuses the analysis task so the metric lines stay comparable across effort
-        levels. The effort value is asserted to be accepted end-to-end, not to be
-        forwarded to Bedrock as any particular field.
+        What is under test is the flag, not the workload: a run that reaches the
+        model at all has proven the effort value survived the gateway's
+        translation, and the autouse identity check proves it was still this
+        model. The task is therefore the smallest one that still needs a tool-use
+        round trip -- and its answer names functions that exist in one file, so it
+        cannot be produced without that round trip.
 
         Ref: stdapi/types/anthropic_messages.py:ThinkingEffort
         """
@@ -394,7 +437,7 @@ class TestClaudeCodeEffortLevels:
             server=agentic_server,
             image=agentic_image,
             config=model_config,
-            prompt=_PROMPT_PARAMETER_MAPPING,
+            prompt=_PROMPT_READ_ONE_FILE,
             workdir=agentic_workdir,
             test_name=request.node.originalname,
             effort=effort,
@@ -403,5 +446,9 @@ class TestClaudeCodeEffortLevels:
             TOOL, result, model_config, f"test_effort_parameter_mapping[{effort}]"
         )
         assert_result(
-            result, config=model_config, any_of=_PARAMETER_KEYWORDS, min_steps=2
+            result,
+            config=model_config,
+            contains=_COMMON_FIRST_FUNCTION,
+            any_of=_COMMON_OTHER_FUNCTIONS,
+            min_steps=1,
         )
