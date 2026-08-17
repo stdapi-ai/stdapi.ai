@@ -71,6 +71,21 @@ _SERVICE_STOP_TIMEOUT = "10"
 #: Seconds allowed for pulling an image that is not in the local store.
 _PULL_TIMEOUT = 1800
 
+#: Marker of a run whose container never started, so the CLI never executed.
+#:
+#: Under a parallel session the runtime intermittently fails to set up the new
+#: network namespace ("write to /proc/sys/net/ipv4/ping_group_range ... OCI
+#: runtime error"), and podman reports it as an exit code from the container.
+#: Nothing was tested, so it is retried rather than reported as a client failure --
+#: which is what it looked like, two per pass, spread across unrelated clients.
+_OCI_START_ERROR = "OCI runtime error"
+
+#: Attempts allowed for a container that fails to start.
+_START_ATTEMPTS = 3
+
+#: Seconds waited before starting a container again.
+_START_RETRY_DELAY = 2.0
+
 #: Names of the service containers this process started and has not stopped.
 _running_services: set[str] = set()
 
@@ -454,21 +469,33 @@ def run_in_container(
         cmd.append(image)
         cmd.extend(argv)
 
-        try:
-            if stdin is None:
-                return subprocess.run(  # noqa: S603, PLW1510
-                    cmd,
-                    stdin=subprocess.DEVNULL,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                )
-            return subprocess.run(  # noqa: S603, PLW1510
-                cmd, input=stdin, capture_output=True, text=True, timeout=timeout
-            )
-        except subprocess.TimeoutExpired:
-            _remove_container(name)
-            raise
+        for attempt in range(_START_ATTEMPTS):
+            try:
+                if stdin is None:
+                    process = subprocess.run(  # noqa: S603, PLW1510
+                        cmd,
+                        stdin=subprocess.DEVNULL,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                    )
+                else:
+                    process = subprocess.run(  # noqa: S603, PLW1510
+                        cmd,
+                        input=stdin,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                    )
+            except subprocess.TimeoutExpired:
+                _remove_container(name)
+                raise
+            if process.returncode == 0 or _OCI_START_ERROR not in process.stderr:
+                return process
+            if attempt < _START_ATTEMPTS - 1:
+                _remove_container(name)
+                time.sleep(_START_RETRY_DELAY)
+        return process
 
 
 # ---------------------------------------------------------------------------
