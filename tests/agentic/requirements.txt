@@ -32,3 +32,21 @@ livekit-plugins-openai
 # tests/agentic/test_pipecat.py -- the second framework that page names. The
 # `openai` extra is what ships its Realtime service.
 pipecat-ai[openai]
+
+# tests/agentic/test_agno.py -- the only framework that provisions a vector store
+# for itself, through the same client and base URL it chats with.
+agno
+
+# tests/agentic/test_llama_index.py -- its Responses model, which reads hosted
+# tool calls back as its own blocks. The package pulls llama-index-core with it.
+llama-index-llms-openai
+
+# inspect-ai is deliberately NOT here, and tests/agentic/test_inspect_ai.py drives
+# it in a container instead. It depends on aioboto3, whose every release pins
+# aiobotocore to a 2.x version, which pins botocore below this project's
+# `botocore>=1.43.30` floor -- and the lane's gateway runs on the interpreter this
+# overlay is layered onto, so the downgrade breaks routes the gateway serves
+# (`POST /v1/vector_stores` answers 500 on a missing `requestMetadata` shape).
+# Constraining it is not an option either: `inspect-ai>=0.3.255` and
+# `aiobotocore>=3` resolve as unsatisfiable, and dropping that floor makes uv walk
+# inspect-ai back to 0.3.69. See the "inspect" image group in _tools.py.

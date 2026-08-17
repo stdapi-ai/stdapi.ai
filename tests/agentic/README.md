@@ -2,8 +2,9 @@
 
 Real third-party clients — Claude Code, Codex, pi, OpenClaw, Hermes, Qwen Code,
 n8n, Haystack, Open WebUI, wyoming-openai, Docling Serve, LangChain, pydantic-ai,
-litellm, the OpenAI Agents SDK, LiveKit Agents and Pipecat — driven end to end
-against a live stdapi.ai server. They are the only tests that
+litellm, the OpenAI Agents SDK, LiveKit Agents, Pipecat, inspect-ai, Agno and
+LlamaIndex — driven
+end to end against a live stdapi.ai server. They are the only tests that
 exercise a client's own wire behaviour: its system prompt, tool definitions,
 multi-turn tool-call replays, SSE streaming and multipart uploads, all translated
 by the gateway for a model that is usually not the vendor's own.
@@ -19,7 +20,7 @@ by the gateway for a model that is usually not the vendor's own.
 | n8n | twelve routes | All three chat dialects, embeddings, audio ×3, files, images ×2, videos, legacy completions |
 | Haystack | `/cohere/v2/rerank` | The only client that reranks, chained onto embeddings and chat |
 | Open WebUI | chat, audio ×2, images, embeddings, rerank | The documented integration's own environment block, as a service |
-| wyoming-openai | audio ×2 | The only client streaming `/v1/audio/speech` and the only one calling it concurrently |
+| wyoming-openai | audio ×2 | The only client streaming `/v1/audio/speech` and the only one calling it concurrently — and the only one reading a streamed transcription |
 | langchain-openai / langchain-anthropic | `/v1` chat + embeddings, `/anthropic` | Streaming, `bind_tools`, `with_structured_output`, and the embeddings token-array trap, in plain Python |
 | pydantic-ai | `/v1/chat/completions` | Proves a real multi-turn tool loop survives Claude's silent `reasoning_content` replay drop |
 | litellm | `/v1` chat + embeddings | The only client that puts *its own* control parameters in the request body — the client half of `EXTRA_MODEL_PARAMS_DENYLIST` |
@@ -27,6 +28,9 @@ by the gateway for a model that is usually not the vendor's own.
 | OpenAI Agents SDK | `/v1/realtime`, `/v1/responses`, `/v1/conversations`, `/v1/vector_stores` | The vendor's own agent framework: a `RealtimeRunner` voice session, plus the surfaces added with it |
 | LiveKit Agents | `/v1/realtime` | One of the two media frameworks `docs/api_openai_realtime.md` puts in front of this gateway; the one deriving the WebSocket from an HTTP base URL |
 | Pipecat | `/v1/realtime` | The other one, dialling the WebSocket path whole — and the strictest reader of the realtime events on the lane |
+| inspect-ai | `/v1/files` + `/v1/batches`, `/anthropic/v1/messages/batches` | The only client that batches anything, and the only one reaching **both** batch surfaces |
+| Agno | `/v1/responses`, `/v1/files`, `/v1/vector_stores` | The only client that provisions a vector store for itself — the lane's proof of the store *write* path |
+| LlamaIndex | `/v1/responses` | A second independent reader of a `file_search_call` the gateway ran itself |
 
 pi is parametrized over its three providers, so one failure isolates to one
 adapter: the binary, prompt, model and assertions are identical across the three,
@@ -92,6 +96,15 @@ and announces the rate it found to its own client — and it keeps three synthes
 requests in flight at once. Every other client here reads that route in one
 piece, one call at a time.
 
+It is also the lane's only reader of a **streamed transcription**, and here it is
+irreplaceable rather than merely first: no other maintained client with a
+configurable base URL consumes the SSE events of `/v1/audio/transcriptions`, so
+the alternative to this proxy would be a script pretending to be a client. Its
+streaming is an allowlist — a model named in `STT_STREAMING_MODELS` is asked for
+with `stream=True` and every `transcript.text.delta` becomes one Wyoming
+`transcript-chunk` — which makes the non-streaming transcription test the control
+for it, since that path emits no chunk at all.
+
 langchain-openai and pydantic-ai reach no new route either, but they are the
 lane's only pure Python HTTP client libraries: no npm package, no container, no
 podman round trip, just the library talking straight to `agentic_server` in the
@@ -156,6 +169,21 @@ the event is named instead of the timeout. The `openai` package's own types make
 most of those fields optional, which is why `test_openai_agents.py` cannot see
 what this module sees.
 
+inspect-ai is the lane's only client for either **Batch API**, and it reaches
+both from one dataset: `/v1/files` + `/v1/batches` through its OpenAI provider,
+`/v1/messages/batches` through its Anthropic one, with only the provider prefix
+on the model name differing. An evaluation is the workload batching exists for —
+a few hundred independent prompts, no interactivity, a result read later at half
+the price — and no agent, workflow runner or chat library in this lane will ever
+send one. Its `BatchConfig` holds requests back until it has `size` of them, and
+that default is 100, which is also this backend's minimum per model, so a
+hundred-sample dataset submits as exactly one batch. Both tests are `slow` as
+well as `agentic`: the client owns the poll loop, so there is no
+submit-then-cancel shortcut and each run waits out a real Bedrock batch job. It
+is a Python library that nonetheless runs in a container, because it cannot share
+an interpreter with the gateway — see
+[The Batch API client](#the-batch-api-client).
+
 ```bash
 uv run pytest tests/agentic --agentic -s          # whole lane, with metric lines
 uv run pytest tests/agentic --agentic --agentic-rebuild   # refresh the CLIs first
@@ -169,15 +197,18 @@ uv run pytest tests/agentic/test_rag_haystack.py --agentic   # the rerank route
 uv run pytest tests/agentic/test_open_webui.py --agentic   # the documented env block
 uv run pytest tests/agentic/test_docling.py --agentic         # the VLM vision call
 uv run pytest tests/agentic/test_wyoming_audio.py --agentic   # streamed TTS
+uv run pytest tests/agentic/test_inspect_ai.py --agentic --slow   # both batch surfaces
 uv run pytest tests/agentic/test_langchain.py --agentic      # both langchain routes
 uv run pytest tests/agentic/test_pydantic_ai.py --agentic    # the reasoning-replay proof
 uv run pytest tests/agentic/test_litellm.py --agentic        # the control-parameter denylist
 uv run pytest tests/agentic/test_openai_agents.py --agentic   # the realtime voice session
 uv run pytest tests/agentic/test_livekit.py --agentic         # the documented LiveKit recipe
 uv run pytest tests/agentic/test_pipecat.py --agentic         # the documented Pipecat recipe
+uv run pytest tests/agentic/test_agno.py --agentic            # the vector-store write path
+uv run pytest tests/agentic/test_llama_index.py --agentic     # the second file_search reader
 ```
 
-The last seven need the client overlay described under
+The last nine need the client overlay described under
 [In-process clients](#in-process-clients); without it they are dropped from
 collection and the run says so.
 
@@ -194,7 +225,7 @@ CC-METRICS | amazon.nova-2-lite-v1:0 | test_trace_request_pipeline | steps=  7 |
   user namespace a rootless container needs, so `--remote` is used automatically
   against the host's podman socket
 - Bedrock credentials, as for the rest of the suite
-- the client overlay, for the seven modules listed below
+- the client overlay, for the nine modules listed below
 
 The CLIs are **never executed on the host**. If podman is unavailable the lane
 skips rather than falling back to a host binary, so a run always reports the tool
@@ -202,10 +233,10 @@ version it actually tested.
 
 ## In-process clients
 
-Seven clients are Python libraries rather than binaries, so they run in the test
+Nine clients are Python libraries rather than binaries, so they run in the test
 process: `test_langchain.py`, `test_pydantic_ai.py`, `test_wyoming_audio.py`,
-`test_litellm.py`, `test_openai_agents.py`, `test_livekit.py` and
-`test_pipecat.py`. Their packages are listed in
+`test_litellm.py`, `test_openai_agents.py`, `test_livekit.py`, `test_pipecat.py`,
+`test_agno.py` and `test_llama_index.py`. Their packages are listed in
 `requirements.txt` and layered over the project environment at run time:
 
 ```bash
@@ -226,7 +257,7 @@ gateway surfaces here. The versions a session actually resolved are printed in i
 header:
 
 ```
-agentic clients: langchain-anthropic==1.5.3, langchain-openai==1.4.1, litellm==1.95.0, livekit-plugins-openai==1.6.10, openai-agents==0.20.0, pipecat-ai==1.7.0, pydantic-ai-slim==2.23.0, wyoming==1.10.0
+agentic clients: langchain-anthropic==1.5.3, langchain-openai==1.4.1, litellm==1.97.0, livekit-plugins-openai==1.6.10, openai-agents==0.20.0, pipecat-ai==1.7.0, pydantic-ai-slim==2.23.0, wyoming==1.10.0
 ```
 
 `openai-agents` caps `openai` below 3, so the overlay resolves that dependency one
@@ -287,6 +318,13 @@ import name in `_HOST_CLIENTS` in `conftest.py` so a run without the overlay dro
 it from collection rather than failing to import. See
 [In-process clients](#in-process-clients).
 
+**Check what it drags in first.** The overlay is layered onto the interpreter the
+lane's own gateway runs on, so a library that downgrades one of the gateway's own
+dependencies breaks *other* modules rather than its own. When it does, it takes
+an [image group](#image-groups--a-client-the-shared-image-should-not-carry)
+instead, and its client code becomes a committed script the container runs —
+`inspect_eval.py` and `rag_pipeline.py` are the two.
+
 ## Two primitives for clients that do not fit
 
 ### Image groups — a client the shared image should not carry
@@ -300,6 +338,7 @@ IMAGE_GROUPS = {
     "default": ImageGroup(name="default"),
     "rag": ImageGroup(name="rag", containerfile="Containerfile.rag"),
     "hermes": ImageGroup(name="hermes", containerfile="Containerfile.hermes"),
+    "inspect": ImageGroup(name="inspect", containerfile="Containerfile.inspect"),
 }
 
 AgenticTool(id="haystack", npm_package=None, binary="python", image_group="rag")
@@ -312,6 +351,13 @@ pay for it — n8n's `"n8n"` group is the second reason: same `Containerfile`, o
 package list, and a 2.3 GB image nobody else waits for. `agentic_image` resolves
 the group of the tool under test and builds each group at most once per session,
 so a run that touches one group never builds another.
+
+There is a third reason, and `"inspect"` is the one case of it: a Python client
+whose dependencies **cannot coexist with the gateway's**. The client overlay is
+layered onto the interpreter the lane's own server runs on, so a library that
+drags a project dependency backwards breaks routes rather than itself — see
+[The Batch API client](#the-batch-api-client). An image is the isolation the
+overlay cannot give.
 
 `Containerfile.hermes` is the first reason again: `hermes-agent` is a PyPI package,
 so its group starts from a Python base rather than the Node.js one. That base names
@@ -477,7 +523,7 @@ plain `httpx`; there is no `AgenticTool` entry and no browser. Four things bite:
 asyncio client from the `wyoming` package, so nothing parses audio inside the
 container. One Polly model is named in both `TTS_MODELS` and
 `TTS_STREAMING_MODELS`, which is what puts its voice in the proxy's streaming
-program and makes both synthesis paths reachable from one boot. Four things bite:
+program and makes both synthesis paths reachable from one boot. Six things bite:
 
 - **the readiness probe has to speak Wyoming.** See the service-container caveat
   above: a TCP connect proves nothing here, and every test failed with a
@@ -497,11 +543,95 @@ program and makes both synthesis paths reachable from one boot. Four things bite
   lane's autouse identity check has no tool to attribute requests to and the
   explicit route assertion is the only thing tying `amazon.polly-neural` and
   `amazon.transcribe` to the traffic.
+- **transcription streams per *program*, not per event.** Where a synthesis picks
+  its path from the event sent, a `transcribe` picks it from the ASR program its
+  model belongs to — and a name in both `STT_MODELS` and `STT_STREAMING_MODELS`
+  lands in one program only, so one of the two paths would silently become
+  unreachable. Two names for one model is what keeps both: `amazon.transcribe`
+  plain, its alias `gpt-4o-transcribe` streaming. Every request still resolves to
+  `amazon.transcribe` on the server log, which is what the route assertion reads.
+- **the streamed transcription needs a `language`, and needs pauses.** With no
+  language the gateway serves the request from a transcription job and the whole
+  transcript arrives as one delta — the test would then prove SSE framing rather
+  than incremental recognition. And only a *finalised* result becomes a delta, so
+  the recording is four separately synthesised sentences joined across a second
+  of silence; the same text spoken in one go comes back as a single chunk. More
+  than one chunk before the final `transcript` is the assertion.
+
+## The Batch API client
+
+`test_inspect_ai.py` runs one evaluation per batch surface and asserts on the
+**gateway's request log** as well as on the run's own record, because a framework
+that silently fell back to synchronous calls produces an identical record: the
+same answers, the same usage, the same status. The OpenAI run therefore requires
+a `POST /v1/files` carrying `purpose=batch` plus a `POST /v1/batches`, the
+Anthropic one a `POST /anthropic/v1/messages/batches`, and both require the
+synchronous route to have stayed empty.
+
+The evaluation itself is `inspect_eval.py`, committed as real Python — ruff and
+mypy see it, the `inspect` image runs it — and copied verbatim into `/work` per
+run, exactly like the Haystack pipeline: the gateway, the provider, the model and
+the batch's size arrive as environment variables, and the run prints one JSON
+record and writes the same record to `/work/inspect_run.json`, which
+`_tools.py:inspect_record` reads back for the assertions. Which surface is used
+follows from the provider prefix on the model name alone, which is what lets one
+script cover both. Seven things bite:
+
+- **it cannot go in the client overlay, which is why it has an image group.**
+  `inspect-ai` depends on `aioboto3`, and every `aioboto3` release pins
+  `aiobotocore` to an exact 2.x version, which pins `botocore` below this
+  project's `botocore>=1.43.30` floor. The overlay is layered onto the
+  interpreter the lane's *gateway* runs on, so installing it there downgrades
+  botocore underneath the server and `POST /v1/vector_stores` starts answering
+  500 on a missing `requestMetadata` shape — a failure that surfaces in somebody
+  else's module. Constraining it does not help: `inspect-ai>=0.3.255` and
+  `aiobotocore>=3` are unsatisfiable together, and without that floor uv walks
+  inspect-ai back to `0.3.69`. `Containerfile.inspect` gives it an image of its
+  own instead, exactly as `Containerfile.rag` does for Haystack.
+- **`eval()` is a synchronous wrapper that starts its own event loop.**
+  `inspect_eval.py` awaits `eval_async` under `anyio.run` instead — and the
+  framework refuses a second concurrent `eval_async` in one process, which the
+  one-eval-per-container shape makes moot.
+- **the dataset size, the client's batch size and the backend's minimum are one
+  number.** `BatchConfig` holds requests back until it has `size` of them and
+  defaults to 100, which is exactly `MIN_REQUESTS_PER_MODEL`; a smaller dataset
+  waits out the client's send delay and is then refused. The test module imports
+  that constant and hands it to the run, so the harness never restates it.
+- **`max_samples` has to be raised to the batch size.** It defaults to
+  `max_connections` — a handful — so without it only that many samples are ever
+  waiting on the batcher at once, and the batch that eventually goes out is far
+  below the minimum. Batch mode already bypasses the connection limiter, so
+  `max_samples` is the only knob that matters here.
+- **the OpenAI provider batches an unrecognised model name through
+  `/v1/responses`.** It treats a name it does not recognise as a frontier model,
+  and frontier models prefer the Responses API; this gateway's Batch API accepts
+  `/v1/chat/completions` and `/v1/embeddings` only, where upstream's also accepts
+  `/v1/responses` and five more. `model_args={"responses_api": false}` is the
+  client's own option for choosing the endpoint, and the test passes it through
+  `MODEL_ARGS`.
+- **the client enforces no batch timeout of its own.** It polls for as long as
+  the provider takes, so the deadline is the caller's: `ModelConfig.timeout` is
+  raised to an hour, the same one the unit suite gives a batch of the minimum
+  size. That ceiling earns its keep: a batch whose results are *all* errors does
+  not end the run — the framework stops without failing, and the container sits
+  there until the timeout kills it.
+- **the Anthropic provider marks a cache breakpoint unless told not to**, which
+  is why this run also covers the gateway dropping it: batch inference caches
+  nothing, and a submitted `cachePoint` fails every record of the job rather
+  than the one that carried it. Nothing is configured for it here — leaving the
+  client's default on is the point.
+
+Batch inference needs a role and a bucket the gateway is configured with, and the
+agentic server inherits the test process's environment — so a machine without
+them answers `503` rather than failing in a way that names the missing setting.
+A module-scoped fixture probes both list endpoints once and skips on that status,
+which is the same shape as the unit suite's `batches_api` fixture.
 
 ## The pure-Python HTTP clients
 
 `test_langchain.py`, `test_pydantic_ai.py`, `test_litellm.py`,
-`test_openai_agents.py`, `test_livekit.py` and `test_pipecat.py` drive their
+`test_openai_agents.py`, `test_livekit.py`, `test_pipecat.py`, `test_agno.py` and
+`test_llama_index.py` drive their
 libraries in-process against
 `agentic_server`, with no container at all: unlike
 every other module here, they are plain HTTP client libraries, not third-party
@@ -511,14 +641,14 @@ purely so the autouse model-identity check runs for free; its
 `build`/`parse`/`prepare_workdir` are never called, since none of them ever
 requests `agentic_image` or calls `run_agent`. Their packages come from the
 overlay, not from `uv.lock` — see [In-process clients](#in-process-clients).
-Six things bite:
+Seven things bite:
 
 - **the shared podman skip still applies.** `_model_identity_check` checks for
   podman before resolving `agentic_server`, for every module in this directory —
-  including these two. A machine without podman skips them exactly like every
-  container-driven tool, even though neither module would otherwise need it. This
-  is an accepted limitation of the shared fixture, not something either module
-  works around.
+  including these. A machine without podman skips them exactly like every
+  container-driven tool, even though none of these modules would otherwise need
+  it. This is an accepted limitation of the shared fixture, not something any of
+  them works around.
 - **pydantic-ai's `OpenAIChatModel` reads `reasoning_content` back with no
   signature.** It falls back through `reasoning` and `reasoning_content` when no
   provider profile names a custom field, and replays whichever field it read from
@@ -596,7 +726,11 @@ Six things bite:
   Haystack tests add an explicit route assertion on the server log, because several
   of their surfaces resolve a model the identity check cannot see; Open WebUI and
   wyoming-openai drive no registered CLI, so that per-route assertion is the only
-  thing pinning their models.
+  thing pinning their models;
+- **the traffic itself**, where the answer cannot show it: the routes a run had to
+  reach, and the routes it had to leave untouched. inspect-ai's batches and
+  Docling's default pipeline are asserted this way, because a fallback to the
+  ordinary path produces an indistinguishable result.
 
 Models marked `flaky=True` in their `ModelConfig` downgrade *content-quality*
 failures to `xfail`; every other failure signature still fails, so real regressions

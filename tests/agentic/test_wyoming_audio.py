@@ -16,6 +16,19 @@ so a gateway that only ever produced a complete, correct WAV *after* the last
 Polly frame -- or that serialised concurrent synthesis behind a shared resource --
 would pass everywhere else and fail here.
 
+It is also the lane's only client for **streamed transcription**
+(``/v1/audio/transcriptions`` with ``stream=true``), and it is here for that
+route because there is no honest second one: no other maintained client with a
+configurable base URL consumes that route's SSE events. Rather than invent a
+script and call it a client, this module drives the one real application that
+already does -- a proxy whose whole job is to hand a voice assistant the words
+as they are recognised. Streaming is an allowlist there: a model named in
+``STT_STREAMING_MODELS`` is asked for with ``stream=True`` and each
+``transcript.text.delta`` becomes one Wyoming ``transcript-chunk``, while a
+model named only in ``STT_MODELS`` takes the plain path and emits no chunk at
+all. Both are configured here, on two names for the same gateway model, so the
+non-streaming transcription test is the control for the streaming one.
+
 The container is a proxy, not an agent: it speaks the Wyoming protocol on a TCP
 port and OpenAI HTTP to the gateway. The test side is therefore a plain asyncio
 Wyoming client rather than a registered CLI, which is also why the lane's autouse
@@ -42,7 +55,13 @@ from typing import TYPE_CHECKING
 
 import pytest
 import pytest_asyncio
-from wyoming.asr import Transcribe, Transcript
+from wyoming.asr import (
+    Transcribe,
+    Transcript,
+    TranscriptChunk,
+    TranscriptStart,
+    TranscriptStop,
+)
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.client import AsyncTcpClient
 from wyoming.info import Describe, Info
@@ -85,6 +104,22 @@ _EVENT_TIMEOUT = 300.0
 
 #: Speech-to-text model, resolved by the gateway's Transcribe integration.
 _STT_MODEL = "amazon.transcribe"
+
+#: The same model under one of its gateway aliases, named in ``STT_STREAMING_MODELS``.
+#:
+#: The proxy builds one ASR program per name and reads the streaming flag off
+#: the program, so a name in both lists would be reachable on one path only.
+#: Two names for one model give both paths from a single boot, and every request
+#: still resolves to :data:`_STT_MODEL` on the server log.
+_STT_STREAMING_MODEL = "gpt-4o-transcribe"
+
+#: Language sent with the streamed transcription request.
+#:
+#: Naming one is what the incremental path needs: with no language the gateway
+#: serves the request from a transcription job, whose whole transcript arrives
+#: as a single delta -- the test would then prove SSE framing rather than
+#: incremental recognition.
+_STT_LANGUAGE = "en"
 
 #: Text-to-speech model, resolved by the gateway's Polly integration.
 _TTS_MODEL = "amazon.polly-neural"
@@ -138,6 +173,16 @@ _STREAMED_SENTENCES = (
     "Two boats returned before the evening tide.",
     "The keeper logs the weather at eight o'clock.",
 )
+
+#: Words the transcript of those sentences must carry.
+_STREAMED_WORDS = ("beacon", "heron", "boats", "keeper")
+
+#: Seconds of silence left between two separately synthesised sentences.
+#:
+#: A live transcription session finalises a result at a pause and only a
+#: finalised result becomes a delta, so the gap is what makes the recognition
+#: observably incremental instead of one late block of text.
+_SEGMENT_SILENCE_SECONDS = 1.0
 
 #: Synthesis calls the proxy runs at once, from ``handler.py:TTS_CONCURRENT_REQUESTS``.
 _CONCURRENT_REQUESTS = 3
@@ -208,6 +253,11 @@ def _environment(server: AgenticServer, port: int) -> Mapping[str, str]:
     and a ``synthesize-start``/``-chunk``/``-stop`` exchange additionally takes
     the concurrent one, so both are reachable with a single Polly model.
 
+    Transcription is the other way round. Which path a ``transcribe`` takes is
+    decided by the program its model belongs to rather than by the events sent,
+    so the streaming allowlist names an *alias* of the transcription model and
+    ``STT_MODELS`` names it directly -- two programs, one backend.
+
     Args:
         server: Gateway the proxy is pointed at.
         port: Port the Wyoming server listens on, published on the same host port.
@@ -226,6 +276,7 @@ def _environment(server: AgenticServer, port: int) -> Mapping[str, str]:
         "STT_OPENAI_URL": base_url,
         "STT_OPENAI_KEY": api_key,
         "STT_MODELS": _STT_MODEL,
+        "STT_STREAMING_MODELS": _STT_STREAMING_MODEL,
         "STT_BACKEND": _BACKEND,
         "TTS_OPENAI_URL": base_url,
         "TTS_OPENAI_KEY": api_key,
@@ -482,12 +533,15 @@ class TestWyomingInfo:
     async def test_describe_advertises_the_configured_models(
         self, wyoming_client: AsyncTcpClient, wyoming_service: ServiceContainer
     ) -> None:
-        """The proxy offers the gateway's STT model and a streaming TTS voice.
+        """The proxy offers both STT programs and a streaming TTS voice.
 
         This is the configuration the rest of the module depends on and the only
         exchange that costs nothing, so a misspelled model name or a voice that
         never reached the streaming program fails here rather than as an
-        unexplained empty transcript three tests later.
+        unexplained empty transcript three tests later. The two ASR programs are
+        what make the streaming and non-streaming transcription paths reachable
+        from one boot -- were the streaming model to land in the plain program,
+        its test would silently become a second copy of the control.
         """
         await wyoming_client.write_event(Describe().event())
         event = await _next_event(wyoming_client, wyoming_service)
@@ -495,7 +549,16 @@ class TestWyomingInfo:
         info = Info.from_event(event)
 
         asr_models = [model.name for program in info.asr for model in program.models]
-        assert asr_models == [_STT_MODEL], asr_models
+        assert sorted(asr_models) == sorted([_STT_MODEL, _STT_STREAMING_MODEL]), (
+            asr_models
+        )
+        streaming_asr_models = [
+            model.name
+            for program in info.asr
+            if program.supports_transcript_streaming
+            for model in program.models
+        ]
+        assert streaming_asr_models == [_STT_STREAMING_MODEL], streaming_asr_models
 
         streaming_voices = [
             voice.name
@@ -591,6 +654,12 @@ class TestWyomingSynthesis:
         offset transcribes to nothing recognisable even though every event
         looked well formed. Neither half needs a sample file.
 
+        This is also the control for the streaming transcription below: the
+        model named here is outside ``STT_STREAMING_MODELS``, so the proxy asks
+        for the whole transcript at once and emits no ``transcript-chunk``. A
+        gateway that streamed regardless, or a proxy that put both names in one
+        program, is visible as a chunk arriving on this path.
+
         Ref: stdapi/models/audio/amazon_transcribe.py:AmazonTranscribeModel
         """
         log_start = len(agentic_server.logs)
@@ -614,10 +683,16 @@ class TestWyomingSynthesis:
             )
         await wyoming_client.write_event(AudioStop().event())
 
+        chunks: list[str] = []
         while True:
             event = await _next_event(wyoming_client, wyoming_service)
+            if TranscriptChunk.is_type(event.type):
+                chunks.append(TranscriptChunk.from_event(event).text)
             if Transcript.is_type(event.type):
                 break
+        assert not chunks, (
+            f"the plain transcription path emitted {len(chunks)} chunks: {chunks}"
+        )
         text = Transcript.from_event(event).text.lower()
         missing = [word for word in _SPOKEN_WORDS if word not in text]
         assert not missing, f"transcript lost {missing}: {text!r}"
@@ -679,3 +754,142 @@ class TestWyomingStreamingSynthesis:
                 "the gateway never served two synthesis requests at the same "
                 "time, so the pipeline was serialised"
             )
+
+
+class TestWyomingStreamingTranscription:
+    """Words reaching the caller while the recording is still being recognised.
+
+    The proxy asks ``/v1/audio/transcriptions`` for ``stream=true`` when the
+    model is in its streaming allowlist, and turns every
+    ``transcript.text.delta`` it reads into one Wyoming ``transcript-chunk``
+    before the final ``transcript``. Nothing else in this lane consumes that
+    route's SSE events.
+
+    Ref: https://github.com/OHF-Voice/wyoming#event-types
+         https://developers.openai.com/api/docs/guides/speech-to-text
+         stdapi/routes/openai_audio_transcriptions.py:create_transcription
+         stdapi/models/audio/amazon_transcribe.py:AmazonTranscribeModel.stt_stream
+    """
+
+    @pytest_asyncio.fixture(loop_scope="module", scope="module")
+    async def segmented_speech(
+        self, wyoming_service: ServiceContainer, agentic_server: AgenticServer
+    ) -> _Speech:
+        """Synthesise each sentence on its own and join them across a pause.
+
+        Module-scoped: the sentences are spoken once, and the recording they
+        produce is what the transcription test sends back.
+
+        A single synthesis of the same text would arrive as continuous speech,
+        which the recognition finalises in one result and therefore reports as
+        one chunk -- the pauses are what make the round trip incremental.
+
+        Returns:
+            The whole recording, in the format the proxy announced for it.
+        """
+        log_start = len(agentic_server.logs)
+        spoken: list[_Speech] = []
+        async with AsyncTcpClient("127.0.0.1", wyoming_service.port) as client:
+            for sentence in _STREAMED_SENTENCES:
+                await client.write_event(
+                    Synthesize(
+                        text=sentence, voice=SynthesizeVoice(name=_TTS_VOICE)
+                    ).event()
+                )
+                spoken.append(
+                    await _collect_audio(
+                        client,
+                        wyoming_service,
+                        log_start=log_start,
+                        until_stopped=False,
+                    )
+                )
+        first = spoken[0]
+        silence = bytes(
+            int(first.rate * _SEGMENT_SILENCE_SECONDS) * first.width * first.channels
+        )
+        return _Speech(
+            rate=first.rate,
+            width=first.width,
+            channels=first.channels,
+            chunks=tuple(part.audio + silence for part in spoken),
+            stop_timestamp=None,
+            log_start=log_start,
+        )
+
+    async def test_the_transcript_arrives_in_chunks_before_it_is_final(
+        self,
+        segmented_speech: _Speech,
+        wyoming_client: AsyncTcpClient,
+        wyoming_service: ServiceContainer,
+        agentic_server: AgenticServer,
+    ) -> None:
+        """Several chunks land, then one final transcript carrying all of them.
+
+        More than one chunk is the assertion: a gateway that recognised the
+        whole recording first and framed the result as a single SSE delta would
+        produce exactly one chunk and a correct final transcript, which is what
+        the plain path already does and what the job-backed path still does for
+        a request naming no language. The chunk count is therefore the only
+        thing separating streamed recognition from streamed delivery.
+
+        Ref: https://developers.openai.com/api/docs/api-reference/audio/create-transcription
+             stdapi/models/audio/amazon_transcribe.py:_StreamedTranscript
+        """
+        log_start = len(agentic_server.logs)
+        audio = segmented_speech.audio
+        await wyoming_client.write_event(
+            Transcribe(name=_STT_STREAMING_MODEL, language=_STT_LANGUAGE).event()
+        )
+        await wyoming_client.write_event(
+            AudioStart(
+                rate=segmented_speech.rate,
+                width=segmented_speech.width,
+                channels=segmented_speech.channels,
+            ).event()
+        )
+        for offset in range(0, len(audio), _AUDIO_CHUNK_BYTES):
+            await wyoming_client.write_event(
+                AudioChunk(
+                    audio=audio[offset : offset + _AUDIO_CHUNK_BYTES],
+                    rate=segmented_speech.rate,
+                    width=segmented_speech.width,
+                    channels=segmented_speech.channels,
+                ).event()
+            )
+        await wyoming_client.write_event(AudioStop().event())
+
+        order: list[str] = []
+        chunks: list[str] = []
+        final = ""
+        while True:
+            event = await _next_event(wyoming_client, wyoming_service)
+            if TranscriptStart.is_type(event.type):
+                order.append("start")
+            elif TranscriptChunk.is_type(event.type):
+                order.append("chunk")
+                chunks.append(TranscriptChunk.from_event(event).text)
+            elif Transcript.is_type(event.type):
+                order.append("transcript")
+                final = Transcript.from_event(event).text
+            elif TranscriptStop.is_type(event.type):
+                order.append("stop")
+                break
+
+        assert order[0] == "start", order
+        assert order[-2:] == ["transcript", "stop"], order
+        assert len(chunks) > 1, (
+            f"the transcript arrived as {len(chunks)} chunk(s), so the words "
+            f"were recognised in one go: {chunks}"
+        )
+        assert all(chunk for chunk in chunks), f"an empty chunk arrived: {chunks}"
+        joined = "".join(chunks).lower()
+        text = final.lower()
+        missing = [word for word in _STREAMED_WORDS if word not in text]
+        assert not missing, f"final transcript lost {missing}: {text!r}"
+        assert not [word for word in _STREAMED_WORDS if word not in joined], (
+            f"the chunks and the final transcript disagree: {chunks} vs {text!r}"
+        )
+        _assert_route(
+            agentic_server, log_start, "/v1/audio/transcriptions", _STT_MODEL, count=1
+        )

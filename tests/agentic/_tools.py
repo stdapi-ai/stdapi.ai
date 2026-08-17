@@ -21,9 +21,11 @@ Ref: https://platform.claude.com/docs/en/agent-sdk/headless
      https://qwenlm.github.io/qwen-code-docs/en/users/features/headless/
      https://docs.openclaw.ai/cli/onboard
      https://hermes-agent.nousresearch.com/docs/reference/cli-commands
+     https://inspect.aisi.org.uk/models.html
      tests/agentic/Containerfile
      tests/agentic/workflows/
      tests/agentic/rag_pipeline.py
+     tests/agentic/inspect_eval.py
 """
 
 from __future__ import annotations
@@ -75,6 +77,9 @@ RAG_IMAGE_GROUP = "rag"
 #: Group of the Hermes image, whose client is a PyPI package, not an npm one.
 HERMES_IMAGE_GROUP = "hermes"
 
+#: Group of the inspect-ai image, whose client cannot share the lane's overlay.
+INSPECT_IMAGE_GROUP = "inspect"
+
 #: Every container image the lane can build, keyed by group name.
 #:
 #: A tool naming a group absent here fails to resolve an image, which is how a
@@ -87,6 +92,9 @@ IMAGE_GROUPS: Mapping[str, ImageGroup] = {
     ),
     HERMES_IMAGE_GROUP: ImageGroup(
         name=HERMES_IMAGE_GROUP, containerfile="Containerfile.hermes"
+    ),
+    INSPECT_IMAGE_GROUP: ImageGroup(
+        name=INSPECT_IMAGE_GROUP, containerfile="Containerfile.inspect"
     ),
 }
 
@@ -1898,6 +1906,147 @@ QWEN_CODE = AgenticTool(
     attributes_sessions=False,
 )
 
+# inspect-ai, the lane's only client for either Batch API. Its evaluation is a
+# committed script rather than a CLI invocation, for the same reason Haystack's
+# pipeline is: the client is a library, and rendering it per run would make the
+# file unreadable to ruff and mypy.
+
+#: Committed evaluation the container runs, copied into each run's working directory.
+_INSPECT_EVAL = Path(__file__).parent / "inspect_eval.py"
+
+#: Name of that script inside the container's working directory.
+_INSPECT_SCRIPT = "inspect_eval.py"
+
+#: File the evaluation record is written to, beside the script.
+#:
+#: The same object is printed, which is what :func:`_inspect_parse` normalises;
+#: the assertions need every sample in the record rather than the normalised
+#: result, and read this file instead.
+INSPECT_RUN_OUTPUT = "inspect_run.json"
+
+#: Tokens one batched answer may take; every sample asks for a single short line.
+_INSPECT_MAX_TOKENS = 32
+
+#: File the run's stdout is written to before it is printed back.
+#:
+#: The evaluation waits tens of minutes for a batch and prints its progress and
+#: every retry as it goes, but ``subprocess.run(capture_output=True)`` discards
+#: what it buffered when the deadline kills the run -- so a stalled run reported
+#: nothing at all. Writing into the mounted directory first leaves that output on
+#: the host either way.
+_INSPECT_STDOUT = "inspect_stdout.log"
+
+#: File the run's stderr is written to, for the same reason.
+_INSPECT_STDERR = "inspect_stderr.log"
+
+
+def _inspect_prepare(invocation: Invocation) -> None:
+    """Copy the evaluation script into the run's working directory."""
+    (invocation.workdir / _INSPECT_SCRIPT).write_text(
+        _INSPECT_EVAL.read_text(), encoding="utf-8"
+    )
+
+
+def _inspect_build(invocation: Invocation) -> Command:
+    """Build the ``python /work/inspect_eval.py`` command for one invocation.
+
+    The script takes no arguments: the gateway, the provider, the model and the
+    batch's shape all arrive through the environment, which is what keeps the
+    committed file identical for every run. ``INSPECT_PROVIDER``,
+    ``INSPECT_ROUTE``, ``BATCH_SIZE`` and any ``MODEL_ARGS`` come from the test
+    through :attr:`Invocation.extra_env`: the first two are what distinguish the
+    two batch surfaces, and the batch size is the gateway's own minimum, which
+    this module deliberately does not import.
+
+    Both streams are written into the working directory unbuffered and printed
+    back afterwards, so the client's own log survives a run the caller's deadline
+    kills -- the one failure mode a batch that waits an hour actually has. The
+    exit status is carried across the redirection, since it is what the runner
+    reports a failed client by.
+    """
+    return Command(
+        (
+            "sh",
+            "-c",
+            (
+                'python -u "$0" > "$1" 2> "$2"; status=$?; '
+                'cat "$1"; cat "$2" >&2; exit $status'
+            ),
+            f"{WORK_MOUNT}/{_INSPECT_SCRIPT}",
+            f"{WORK_MOUNT}/{_INSPECT_STDOUT}",
+            f"{WORK_MOUNT}/{_INSPECT_STDERR}",
+        ),
+        {
+            "HOME": WORK_MOUNT,
+            "STDAPI_BASE_URL": f"http://127.0.0.1:{invocation.port}",
+            "STDAPI_API_KEY": invocation.api_key,
+            "CHAT_MODEL": invocation.model,
+            # The prompt is the reference every sample asks to have repeated;
+            # the test owns it, because the test is what asserts on it.
+            "MARKER": invocation.prompt,
+            "MAX_TOKENS": str(_INSPECT_MAX_TOKENS),
+            # The framework's live display redraws a terminal it does not have,
+            # which fills the captured output with control sequences.
+            "INSPECT_DISPLAY": "plain",
+            # The script is copied into a directory the test runner owns; a
+            # __pycache__ written next to it would belong to the container's view
+            # of the user.
+            "PYTHONDONTWRITEBYTECODE": "1",
+            **invocation.extra_env,
+        },
+    )
+
+
+def inspect_record(workdir: Path) -> dict[str, object]:
+    """Return the record the evaluation left in the working directory.
+
+    Args:
+        workdir: Per-test directory bind-mounted at :data:`WORK_MOUNT`.
+
+    Returns:
+        The decoded record.
+
+    Raises:
+        ValueError: If the run wrote no record, which is what an evaluation
+            failing before it finished looks like.
+    """
+    # Shared with the Haystack pipeline: both scripts print one JSON object on a
+    # line of its own, which is the whole contract the decoder depends on.
+    return _haystack_decode((workdir / INSPECT_RUN_OUTPUT).read_text())
+
+
+def _inspect_parse(stdout: str) -> AgenticResult:
+    """Normalise one evaluation run.
+
+    ``steps`` counts the samples that came back with an answer, which is the same
+    "counts up with work" contract as Codex's shell calls: a batch that failed
+    part way answers fewer samples than the dataset declares.
+
+    Raises:
+        ValueError: If the script printed no record.
+    """
+    record = _haystack_decode(stdout)
+    samples = record.get("samples")
+    samples = samples if isinstance(samples, list) else []
+    usage = record.get("usage")
+    if not isinstance(usage, dict):
+        usage = {}
+    answered = [
+        str(sample.get("completion") or "")
+        for sample in samples
+        if isinstance(sample, dict) and str(sample.get("completion") or "").strip()
+    ]
+    return AgenticResult(
+        # Every answer, not just the first: the shared assertion looks for the
+        # reference the requests asked to have repeated, and each sample carries
+        # its own.
+        text=" ".join(answered),
+        steps=len(answered),
+        input_tokens=int(usage.get("input_tokens") or 0),
+        output_tokens=int(usage.get("output_tokens") or 0),
+    )
+
+
 HAYSTACK = AgenticTool(
     id="haystack",
     # Its image ships Haystack itself; the Cohere integration is installed by
@@ -1913,6 +2062,23 @@ HAYSTACK = AgenticTool(
     # pipeline's requests can only be attributed positionally.
     attributes_sessions=False,
     image_group=RAG_IMAGE_GROUP,
+)
+
+INSPECT_AI = AgenticTool(
+    id="inspect-ai",
+    # A PyPI package, installed by Containerfile.inspect; nothing for npm to add
+    # to any image.
+    npm_package=None,
+    binary="python",
+    route="/v1",
+    metrics_prefix="IA-METRICS",
+    build=_inspect_build,
+    parse=_inspect_parse,
+    prepare_workdir=_inspect_prepare,
+    # The framework sends no per-run identifier the gateway records, so its
+    # requests can only be attributed positionally.
+    attributes_sessions=False,
+    image_group=INSPECT_IMAGE_GROUP,
 )
 
 #: Every agentic CLI the suite knows how to drive.
@@ -1943,6 +2109,7 @@ AGENTIC_TOOLS: tuple[AgenticTool, ...] = (
     N8N_VIDEOS,
     QWEN_CODE,
     HAYSTACK,
+    INSPECT_AI,
 )
 
 

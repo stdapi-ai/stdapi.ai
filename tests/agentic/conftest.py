@@ -43,7 +43,12 @@ _HOST_CLIENTS: Mapping[str, Mapping[str, str]] = {
         "langchain_openai": "langchain-openai",
         "langchain_anthropic": "langchain-anthropic",
     },
+    "test_agno.py": {"agno": "agno"},
     "test_litellm.py": {"litellm": "litellm"},
+    # The top-level package only: ``find_spec`` on a dotted name imports its
+    # parent, so probing ``llama_index.llms.openai`` raises without the overlay
+    # and takes the whole directory's collection down with it.
+    "test_llama_index.py": {"llama_index": "llama-index-llms-openai"},
     "test_livekit.py": {"livekit": "livekit-plugins-openai"},
     "test_openai_agents.py": {"agents": "openai-agents"},
     "test_pipecat.py": {"pipecat": "pipecat-ai"},

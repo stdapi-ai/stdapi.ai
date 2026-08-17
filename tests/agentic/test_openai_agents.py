@@ -54,7 +54,7 @@ from agents import (
 from agents.memory import OpenAIConversationsSession
 from agents.models.openai_responses import OpenAIResponsesModel
 from agents.realtime import RealtimeAgent, RealtimeRunner
-from openai import AsyncOpenAI, BadRequestError, NotFoundError, OpenAI
+from openai import AsyncOpenAI, NotFoundError, OpenAI
 
 from ._runner import ModelConfig, grounding_requests
 from ._tools import AgenticTool
@@ -702,35 +702,64 @@ class TestVectorStoreRetrieval:
         assert calls, "the agent never searched the vector store"
         assert _PLANTED_NUMBER in result.final_output, result.final_output
 
-    async def test_a_hosted_file_search_tool_is_refused_with_the_way_forward(
+    async def test_the_hosted_file_search_tool_answers_from_the_attached_store(
         self,
         model_config: ModelConfig,
         agentic_server: AgenticServer,
         indexed_store: str,
     ) -> None:
-        """``FileSearchTool`` is refused as a request, not silently dropped.
+        """``FileSearchTool`` searches the store and reports what it searched for.
 
-        Hosted retrieval *is* the request: an answer produced without it would
-        read as grounded in the attached store while coming from the model's own
-        knowledge. The refusal has to reach the SDK as a plain 400 naming the
-        route that does serve the search -- which is what the test above then
-        does -- rather than as a 500 or an ungrounded answer.
+        This is the same answer as the test above, asked for the way an
+        application actually writes it: the store is attached to the agent and
+        the retrieval happens inside the response, so nothing in the SDK's own
+        loop touches the vector store. The ``file_search_call`` item is the
+        proof it happened -- an ungrounded answer carrying the reference number
+        from the model's own knowledge would produce no such item, and a
+        gateway that dropped the tool instead of serving it would answer
+        without one.
 
-        Ref: https://developers.openai.com/api/docs/guides/tools
-             stdapi/models/chat/_adapters/_openai_responses.py:_build_tool_config
+        ``include_search_results`` is set because the passages are opt-in
+        upstream and here alike: without it the item carries ``results=None``,
+        so requesting them is the only way to see what the search returned.
+
+        Ref: https://openai.github.io/openai-agents-python/tools/
+             https://developers.openai.com/api/docs/guides/tools-file-search
+             stdapi/models/chat/_adapters/_openai_responses.py:execute_file_search_calls
         """
         agent = Agent(
             name="reader",
-            instructions="Answer in one short sentence.",
+            instructions=(
+                "Answer only from the maintenance notes in the attached file "
+                "store. Answer in one short sentence."
+            ),
             model=_agent_model(agentic_server, model_config.model),
-            tools=[FileSearchTool(vector_store_ids=[indexed_store])],
+            tools=[
+                FileSearchTool(
+                    vector_store_ids=[indexed_store], include_search_results=True
+                )
+            ],
         )
 
-        with pytest.raises(BadRequestError) as raised:
-            await Runner.run(agent, "Reply with the word OK.")
+        result = await Runner.run(
+            agent, "Which reference number did the crew log for the mirror job?"
+        )
 
-        error = raised.value.body
-        assert isinstance(error, dict)
-        assert error["type"] == "invalid_request_error", error
-        assert "file_search" in str(error["message"]), error
-        assert "vector store" in str(error["message"]).lower(), error
+        items = [item for raw in result.raw_responses for item in raw.output]
+        searches = [item for item in items if item.type == "file_search_call"]
+        assert searches, f"no file_search_call item was produced: {items}"
+        assert all(item.status == "completed" for item in searches), searches
+        assert all(item.queries for item in searches), (
+            f"the searches report no query: {searches}"
+        )
+        assert not [item for item in items if item.type == "function_call"], (
+            f"the hosted search leaked as a client-side function call: {items}"
+        )
+        passages = [
+            result_item for item in searches for result_item in (item.results or ())
+        ]
+        assert passages, f"no passage came back with the search: {searches}"
+        assert any(_PLANTED_NUMBER in (part.text or "") for part in passages), (
+            f"the indexed note was not among the passages: {passages}"
+        )
+        assert _PLANTED_NUMBER in result.final_output, result.final_output

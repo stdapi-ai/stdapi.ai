@@ -1,0 +1,35 @@
+# Image running the inspect-ai evaluation under test in isolation from the host.
+#
+# The "inspect" image group exists for a dependency conflict rather than for size.
+# inspect-ai depends on aioboto3, whose every release pins aiobotocore to a 2.x
+# version, which in turn pins botocore below this project's `botocore>=1.43.30`
+# floor -- and the lane's in-process clients share their interpreter with the
+# gateway under test, so installing it in that overlay downgrades botocore
+# underneath the server. Its own image has no such neighbour.
+#
+# The base image names a minor version because the framework declares a supported
+# range; the framework itself floats, like every other tool in this lane, so a
+# rebuild picks up the current release and an upstream regression surfaces here.
+# --agentic-rebuild re-resolves it. The image tag embeds a hash of this file
+# (see tests/agentic/_podman.py:image_tag).
+FROM docker.io/library/python:3.13-slim
+
+#: Space-separated npm specifiers, always empty here: this group installs no npm
+#: package. Declared so the shared build call (tests/agentic/_podman.py:build_image)
+#: passes --build-arg PACKAGES to every group's build file alike.
+ARG PACKAGES=""
+
+# The evaluation framework, with the OpenAI and Anthropic SDKs it drives the two
+# batch surfaces through. Unpinned for the same reason every CLI here is.
+RUN pip install --no-cache-dir inspect-ai openai anthropic
+
+# Recorded at build time so the test session header can report the exact versions
+# that were installed, in the same shape the Node.js image's "npm ls" output has.
+RUN python -c "import json; from importlib.metadata import version; \
+    print(json.dumps({'dependencies': {name: {'version': version(name)} for name in \
+    ('inspect-ai', 'openai', 'anthropic')}}))" \
+    > /opt/agentic-packages.json
+
+# The tests bind-mount a per-test working directory and run with --userns=keep-id,
+# so the runtime UID is the host user's and never needs to match a baked-in account.
+WORKDIR /work

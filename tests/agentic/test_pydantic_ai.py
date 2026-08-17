@@ -1,4 +1,11 @@
-"""pydantic-ai driven against ``/v1/chat/completions``, focused on reasoning replay.
+"""pydantic-ai driven against ``/v1/chat/completions`` and ``/v1/responses``.
+
+Its ``OpenAIChatModel`` carries the module's central finding, on reasoning replay.
+``OpenAIResponsesModel`` carries two more: it is the only client in this lane that
+reaches ``/v1/conversations`` by naming a conversation on the turn itself rather
+than through a session object, and the only one whose ``file_search`` tool is
+declared under a *renamed* field -- ``FileSearchTool.file_store_ids``, which has to
+arrive as ``vector_store_ids`` on our wire.
 
 pydantic-ai's ``OpenAIChatModel`` reads a model's thinking text back from whichever
 of the ``reasoning``/``reasoning_content`` fields the response actually carries --
@@ -28,16 +35,29 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
-from pydantic_ai import Agent
-from pydantic_ai.messages import ModelResponse, ThinkingPart, ToolCallPart
-from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
+from openai import OpenAI
+from pydantic_ai import Agent, FileSearchTool
+from pydantic_ai.capabilities import AbstractCapability, NativeTool
+from pydantic_ai.messages import (
+    ModelResponse,
+    NativeToolCallPart,
+    ThinkingPart,
+    ToolCallPart,
+)
+from pydantic_ai.models.openai import (
+    OpenAIChatModel,
+    OpenAIChatModelSettings,
+    OpenAIResponsesModel,
+    OpenAIResponsesModelSettings,
+)
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from ._runner import ModelConfig
 from ._tools import AgenticTool
+from ._vector_store import PLANTED_NUMBER, indexed_store
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Mapping, Sequence
 
     from pydantic_ai.messages import ModelMessage
 
@@ -100,7 +120,7 @@ _REASONING_MODEL_CONFIG = pytest.param(
 )
 
 
-def _response_parts[ResponsePart: (ThinkingPart, ToolCallPart)](
+def _response_parts[ResponsePart: (ThinkingPart, ToolCallPart, NativeToolCallPart)](
     messages: Sequence[ModelMessage], part_type: type[ResponsePart]
 ) -> list[ResponsePart]:
     """Return every part of *part_type* across every assistant turn in *messages*.
@@ -281,3 +301,279 @@ class TestToolRoundTripAcrossModels:
         )
         assert tool_calls, "the agent never called the magic_number tool"
         assert "2603" in result.output
+
+
+#: Cheap chat model behind the two ``/v1/responses`` surfaces below.
+_RESPONSES_MODEL_CONFIG = pytest.param(
+    ModelConfig(model="amazon.nova-2-lite-v1:0", timeout=_TIMEOUT), id="nova-2-lite"
+)
+
+
+@pytest.fixture(scope="module")
+def gateway_client(agentic_server: AgenticServer) -> OpenAI:
+    """Synchronous OpenAI SDK client bound to the gateway under test.
+
+    pydantic-ai creates neither a conversation nor a vector store: both are
+    resources an application provisions with the OpenAI SDK and then names on the
+    turn, so the SDK is what stands in for that application here.
+    """
+    return OpenAI(
+        base_url=agentic_server.url("/v1"),
+        api_key=agentic_server.api_key,
+        max_retries=0,
+    )
+
+
+@pytest.fixture(scope="module")
+def note_store(gateway_client: OpenAI) -> Iterator[str]:
+    """A vector store holding one indexed note, deleted with its file at the end.
+
+    Module-scoped: indexing costs a real embedding call per chunk, and the note is
+    the same for every reader of it.
+
+    Yields:
+        The vector store ID.
+    """
+    with indexed_store(gateway_client, "stdapi-agentic-pydantic-ai") as store_id:
+        yield store_id
+
+
+def _responses_agent(
+    server: AgenticServer,
+    config: ModelConfig,
+    capabilities: Sequence[AbstractCapability[None]] = (),
+) -> Agent[None, str]:
+    """Build an agent whose Responses model points at the gateway under test.
+
+    Args:
+        server: Gateway the agent talks to.
+        config: Model under test.
+        capabilities: Native tools the model serves itself, if any.
+
+    Returns:
+        The agent, answering in one sentence.
+    """
+    model = OpenAIResponsesModel(
+        config.model,
+        provider=OpenAIProvider(base_url=server.url("/v1"), api_key=server.api_key),
+    )
+    return Agent(
+        model, instructions="Answer in one short sentence.", capabilities=capabilities
+    )
+
+
+def _logged_requests(
+    server: AgenticServer, log_start: int, method: str, path: str
+) -> list[Mapping[str, object]]:
+    """Return the requests the gateway logged for *method* and *path*.
+
+    Args:
+        server: Gateway the client was pointed at.
+        log_start: Log index captured before the test ran.
+        method: HTTP method to match.
+        path: Exact request path to match.
+
+    Returns:
+        One log entry per matching request, in order.
+    """
+    return [
+        entry
+        for entry in server.log_entries(log_start)
+        if entry.get("type") == "request"
+        and entry.get("method") == method
+        and str(entry.get("path") or "") == path
+    ]
+
+
+def _conversation_ids(messages: Sequence[ModelMessage]) -> list[str]:
+    """Return the conversation ID every assistant turn in *messages* reports.
+
+    Args:
+        messages: Run history, as returned by ``AgentRunResult.all_messages()``.
+
+    Returns:
+        One ID per response the gateway echoed a conversation on, in turn order.
+    """
+    return [
+        found
+        for message in messages
+        if isinstance(message, ModelResponse)
+        and isinstance(
+            found := (message.provider_details or {}).get("conversation_id"), str
+        )
+    ]
+
+
+#: Reference number stored in the conversation, never sent by the client again.
+_STORED_NUMBER = "3517"
+
+#: The item planted server-side, in the shape the conversation items route takes.
+_STORED_ITEM = {
+    "type": "message",
+    "role": "user",
+    "content": [
+        {
+            "type": "input_text",
+            "text": (
+                "Remember this for later: the mirror was recoated under "
+                f"reference number {_STORED_NUMBER}."
+            ),
+        }
+    ],
+}
+
+
+@pytest.mark.parametrize("model_config", [_RESPONSES_MODEL_CONFIG])
+class TestServerSideConversationState:
+    """``openai_conversation_id`` names a gateway conversation on the turn itself.
+
+    pydantic-ai holds no session object and creates no conversation: it sends
+    ``conversation`` on the request and reads the ID back off the response into
+    ``provider_details``, which is what ``'auto'`` then chains on. So the whole
+    round trip depends on the gateway both *serving* the stored items and
+    *echoing* the conversation it served them from -- a response that dropped the
+    echo silently downgrades the next turn to a full-history resend.
+
+    Ref: https://pydantic.dev/docs/ai/models/openai/#using-durable-conversations
+         https://developers.openai.com/api/reference/resources/conversations
+         docs/api_openai_conversations.md
+         stdapi/routes/openai_responses.py:_echo_chaining
+    """
+
+    def test_a_stored_conversation_answers_a_turn_that_never_carried_the_fact(
+        self,
+        model_config: ModelConfig,
+        agentic_server: AgenticServer,
+        gateway_client: OpenAI,
+    ) -> None:
+        """The answer comes from items the gateway stored, not from the input sent.
+
+        The reference number is planted straight into the conversation and never
+        appears in either run's own input, so recalling it can only come from the
+        gateway prepending the stored items. The second run is handed the first
+        run's history with ``'auto'``: it reuses the conversation the response
+        reported, which is what distinguishes real server-side state from
+        ``previous_response_id`` chaining -- and the logged request bodies are
+        asserted for it, because a client resending the whole history would
+        answer just as well.
+
+        Ref: https://developers.openai.com/api/reference/resources/conversations
+             stdapi/routes/openai_conversations.py:add_items
+             stdapi/routes/openai_responses.py:_apply_conversation
+        """
+        log_start = len(agentic_server.logs)
+        conversation = gateway_client.conversations.create()
+        try:
+            gateway_client.conversations.items.create(
+                conversation.id,
+                items=[_STORED_ITEM],  # type: ignore[list-item]
+            )
+            agent = _responses_agent(agentic_server, model_config)
+            first = agent.run_sync(
+                "Which reference number should you remember?",
+                model_settings=OpenAIResponsesModelSettings(
+                    openai_conversation_id=conversation.id
+                ),
+            )
+            second = agent.run_sync(
+                "State that same reference number again.",
+                message_history=first.all_messages(),
+                model_settings=OpenAIResponsesModelSettings(
+                    openai_conversation_id="auto"
+                ),
+            )
+        finally:
+            gateway_client.conversations.delete(conversation.id)
+
+        print(  # noqa: T201
+            f"\n{TOOL.metrics_prefix} | {model_config.model:<30} | "
+            f"test_a_stored_conversation_answers_a_turn_that_never_carried_the_fact "
+            f"| conversation={conversation.id}"
+        )
+        assert _logged_requests(agentic_server, log_start, "POST", "/v1/conversations")
+        assert _logged_requests(
+            agentic_server,
+            log_start,
+            "POST",
+            f"/v1/conversations/{conversation.id}/items",
+        )
+        assert _conversation_ids(first.all_messages()) == [conversation.id], (
+            "the gateway did not report the conversation the first turn named"
+        )
+        assert _conversation_ids(second.all_messages())[-1:] == [conversation.id], (
+            "openai_conversation_id='auto' did not chain on the stored conversation"
+        )
+        turns = _logged_requests(agentic_server, log_start, "POST", "/v1/responses")
+        assert len(turns) == 2, turns
+        for turn in turns:
+            params = turn.get("request_params")
+            assert isinstance(params, dict)
+            assert params.get("conversation") == conversation.id, params
+            assert _STORED_NUMBER not in str(params.get("input")), (
+                "the client sent the stored fact itself, so the answer proves "
+                f"nothing about the conversation: {params}"
+            )
+        assert _STORED_NUMBER in second.output, second.output
+
+
+@pytest.mark.parametrize("model_config", [_RESPONSES_MODEL_CONFIG])
+class TestNativeFileSearchTool:
+    """``FileSearchTool.file_store_ids`` has to reach our wire as ``vector_store_ids``.
+
+    The tool is pydantic-ai's own abstraction over four providers, so its field
+    carries a provider-neutral name and the OpenAI model class renames it on the
+    way out. A rename landing on the wrong key would leave the tool attached to no
+    store at all, which the model answers anyway -- from its own knowledge -- so
+    the logged request body is asserted alongside the answer.
+
+    Ref: https://pydantic.dev/docs/ai/native-tools/#file-search-tool
+         docs/api_openai_responses.md#file-search
+         stdapi/models/chat/_adapters/_openai_responses.py:get_file_search_tool
+    """
+
+    def test_the_agent_answers_from_the_store_it_named(
+        self, model_config: ModelConfig, agentic_server: AgenticServer, note_store: str
+    ) -> None:
+        """The retrieved reference number reaches the answer, through our own search.
+
+        The gateway runs the retrieval itself and reports it as a
+        ``file_search_call`` item; pydantic-ai parses that item with the
+        ``openai`` package's own types into a native tool call carrying the
+        queries, so an item the gateway shapes wrongly is dropped there rather
+        than surfacing as an error.
+
+        Ref: https://developers.openai.com/api/reference/resources/vector_stores
+             stdapi/models/chat/_adapters/_openai_responses.py:execute_file_search_calls
+        """
+        log_start = len(agentic_server.logs)
+        agent = _responses_agent(
+            agentic_server,
+            model_config,
+            [NativeTool(FileSearchTool(file_store_ids=[note_store]))],
+        )
+
+        result = agent.run_sync(
+            "Which reference number did the crew log for the mirror job?"
+        )
+
+        searches = _response_parts(result.all_messages(), NativeToolCallPart)
+        print(  # noqa: T201
+            f"\n{TOOL.metrics_prefix} | {model_config.model:<30} | "
+            f"test_the_agent_answers_from_the_store_it_named "
+            f"| file_search_calls={len(searches):>2}"
+        )
+        turns = _logged_requests(agentic_server, log_start, "POST", "/v1/responses")
+        assert turns, "no request reached the Responses route"
+        params = turns[0].get("request_params")
+        assert isinstance(params, dict)
+        assert [
+            tool for tool in params.get("tools") or () if isinstance(tool, dict)
+        ] == [{"type": "file_search", "vector_store_ids": [note_store]}], (
+            f"file_store_ids did not arrive as vector_store_ids: {params.get('tools')}"
+        )
+        assert searches, (
+            f"the gateway reported no file_search_call the client could read: "
+            f"{result.all_messages()}"
+        )
+        assert all(part.tool_name == "file_search" for part in searches), searches
+        assert PLANTED_NUMBER in result.output, result.output
