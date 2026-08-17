@@ -16,6 +16,7 @@ import base64
 import io
 import time
 from asyncio import Event, wait_for
+from binascii import crc32
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
@@ -291,14 +292,13 @@ class TestOpenAIFiles:
     def test_list_order_desc(self, openai_client: OpenAI) -> None:
         """The default list order is newest first.
 
-        ``order`` defaults to ``desc`` and is defined on ``created_at``. Sorting by
-        file ID would be a gateway-only shortcut: its IDs carry a UUIDv7 prefix, so
-        lexicographic order happens to match creation order, but OpenAI's file IDs
-        are random and never sort. The gateway's ``created_at`` is the S3
-        ``LastModified`` and only second-granular, so two files created in the same
-        second can tie or invert; the assertion is therefore that the page is
-        non-increasing to the second, plus the relative position of the two files
-        this test created, which is exact on both targets.
+        ``order`` defaults to ``desc`` and is defined on ``created_at``. Asserting on
+        file ID order would be a gateway-only shortcut: its IDs carry a UUIDv7 prefix,
+        so lexicographic order matches creation order, but OpenAI's file IDs are random
+        and never sort. ``created_at`` is reported in whole seconds on both targets, so
+        two files created in the same second can tie; the assertion is therefore that
+        the page is non-increasing to the second, plus the relative position of the two
+        files this test created, which is exact on both targets.
 
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/files/_core.py:list_files
@@ -657,6 +657,202 @@ class TestRequireBucketUnit:
             "aws_s3_bucket" in str(warning) for warning in request_log["error_detail"]
         )
         assert request_log["level"] == "warning"
+
+
+#: Buckets the listing stub serves, one per region so the merge is exercised.
+_LISTING_BUCKETS: dict[str, str] = {
+    "listing-bucket-a": "us-east-1",
+    "listing-bucket-b": "eu-west-1",
+}
+
+#: Arbitrary epoch-millisecond base the listing fixtures are minted from.
+_LISTING_BASE_MS: int = 1_700_000_000_000
+
+#: ``(mint offset ms, land offset ms, bucket)`` per stored object, oldest first.
+#: The second entry is the shape that breaks the listing: an identifier minted
+#: early whose bytes land much later — a multipart upload completed part by part,
+#: or a batch result file written when its batch ends.
+_LISTING_OBJECTS: tuple[tuple[int, int, str], ...] = (
+    (1_000, 1_000, "listing-bucket-a"),
+    (2_000, 55_000, "listing-bucket-b"),
+    (3_000, 3_000, "listing-bucket-a"),
+    (4_000, 4_000, "listing-bucket-b"),
+    (5_000, 5_000, "listing-bucket-a"),
+    (6_000, 6_000, "listing-bucket-b"),
+)
+
+
+def _listing_payload(created_ms: int, bucket: str) -> str:
+    """Return a bare file payload minted at *created_ms* and fingerprinted for *bucket*.
+
+    Mirrors ``encode_id_payload``: 16 UUIDv7 bytes opening with the 48-bit
+    millisecond timestamp, then the CRC32 of the bucket name, base32hex-encoded.
+    """
+    return (
+        base64.b32hexencode(
+            created_ms.to_bytes(6, "big")
+            + bytes(10)
+            + crc32(bucket.encode()).to_bytes(4, "big")
+        )
+        .lower()
+        .decode()
+    )
+
+
+class _StubListingS3Client:
+    """In-memory S3 for one bucket: ascending key pages plus a head per object.
+
+    ``LastModified`` is deliberately not the instant the identifier names, which
+    is what makes it usable as an ordering key only by accident.
+    """
+
+    def __init__(self, landed: dict[str, datetime]) -> None:
+        self.landed = landed
+
+    async def list_objects_v2(self, **kwargs: object) -> dict[str, Any]:
+        prefix = cast("str", kwargs["Prefix"])
+        keys = sorted(k for k in self.landed if k.startswith(prefix))
+        if start := kwargs.get("StartAfter") or kwargs.get("ContinuationToken"):
+            keys = [k for k in keys if k > cast("str", start)]
+        page = keys[: cast("int", kwargs["MaxKeys"])]
+        truncated = len(keys) > len(page)
+        return {
+            "Contents": [{"Key": k} for k in page],
+            "IsTruncated": truncated,
+            "NextContinuationToken": page[-1] if truncated else "",
+        }
+
+    async def head_object(self, **kwargs: object) -> dict[str, Any]:
+        return {
+            "ContentDisposition": 'attachment; filename="listed.jsonl"',
+            "ContentType": "application/jsonl",
+            "Metadata": {"purpose": "batch_output", "expires-at": ""},
+            "ContentLength": 7,
+            "LastModified": self.landed[cast("str", kwargs["Key"])],
+        }
+
+
+@pytest.mark.local
+class TestFilesListingOrderUnit:
+    """The listing orders on the same quantity it reports as ``created_at`` (unit, no AWS).
+
+    Issue #162: pages were ordered on the S3 object key while ``created_at`` was
+    reported from S3 ``LastModified``. Those agree only when an object's bytes
+    land in the instant its identifier is minted, so a multipart upload completed
+    later or a batch result file written when its batch ends sorts by one clock
+    and is reported with the other. Every page stayed internally ordered, which
+    is why the defect is only visible once the pages are walked and concatenated.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/files/_core.py:list_files
+         stdapi/files/_core.py:_record_from_head
+    """
+
+    @pytest.fixture
+    def payloads(self, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        """Serve :data:`_LISTING_OBJECTS` from stub buckets, oldest payload first."""
+        prefix = SETTINGS.aws_s3_files_prefix
+        per_bucket: dict[str, dict[str, datetime]] = {b: {} for b in _LISTING_BUCKETS}
+        ordered: list[str] = []
+        for mint_ms, land_ms, bucket in _LISTING_OBJECTS:
+            payload = _listing_payload(_LISTING_BASE_MS + mint_ms, bucket)
+            per_bucket[bucket][f"{prefix}{payload}"] = datetime.fromtimestamp(
+                (_LISTING_BASE_MS + land_ms) / 1000, UTC
+            )
+            ordered.append(payload)
+        stubs = {
+            _LISTING_BUCKETS[bucket]: _StubListingS3Client(landed)
+            for bucket, landed in per_bucket.items()
+        }
+        monkeypatch.setattr(_core, "get_client", lambda _service, region: stubs[region])
+        monkeypatch.setattr(_core, "BUCKET_TO_REGION", dict(_LISTING_BUCKETS))
+        monkeypatch.setattr(
+            _core,
+            "_BUCKET_CRC32",
+            {crc32(bucket.encode()): bucket for bucket in _LISTING_BUCKETS},
+        )
+        monkeypatch.setattr(
+            _core, "_require_bucket", lambda: next(iter(_LISTING_BUCKETS))
+        )
+        return ordered
+
+    async def _walk(self, order: str, limit: int) -> list[FileRecord]:
+        """Return every record, gathered one *limit*-sized page at a time.
+
+        Args:
+            order: ``"asc"`` or ``"desc"``.
+            limit: Page size; below the number of stored objects, so the walk
+                spans several pages.
+        """
+        collected: list[FileRecord] = []
+        after: str | None = None
+        for _ in range(len(_LISTING_OBJECTS) + 1):
+            page, has_more = await _core.list_files(after, None, limit, order, None)
+            collected.extend(page)
+            if not has_more or not page:
+                return collected
+            after = page[-1].file_id
+        pytest.fail("the cursor walk did not terminate")
+
+    async def test_created_at_is_the_instant_the_identifier_names(
+        self, payloads: list[str]
+    ) -> None:
+        """A record's ``created_at`` is its identifier's instant, not when its bytes landed.
+
+        The second stored object landed 53 s after it was minted, so reading the
+        creation time off the object rather than off the identifier is directly
+        observable.
+
+        Ref: stdapi/files/_core.py:_record_from_head
+        """
+        records, _ = await _core.list_files(None, None, 100, "asc", None)
+        by_id = {record.file_id: record for record in records}
+        for (mint_ms, _land_ms, _bucket), payload in zip(
+            _LISTING_OBJECTS, payloads, strict=True
+        ):
+            assert by_id[payload].created_at == datetime.fromtimestamp(
+                (_LISTING_BASE_MS + mint_ms) / 1000, UTC
+            )
+
+    @pytest.mark.parametrize("order", ["asc", "desc"])
+    async def test_pages_concatenate_in_created_at_order(
+        self, payloads: list[str], order: str
+    ) -> None:
+        """Walking every page with the ``after`` cursor yields one ``created_at`` sequence.
+
+        Each page of this fixture is already ordered in isolation — the object
+        that landed late shares no page with the objects it inverts — so sorting
+        a single page cannot satisfy this; only ordering the listing on the
+        quantity it reports can.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/files/_core.py:list_files
+        """
+        records = await self._walk(order, limit=2)
+        assert len(records) == len(_LISTING_OBJECTS)
+        created = [record.created_at for record in records]
+        assert created == sorted(created, reverse=order == "desc"), (
+            f"order={order} must hold across pages, got {created}"
+        )
+
+    @pytest.mark.parametrize("order", ["asc", "desc"])
+    async def test_before_cursor_returns_the_page_ending_at_it(
+        self, payloads: list[str], order: str
+    ) -> None:
+        """``before`` returns the records the listing reaches just ahead of the cursor.
+
+        Anthropic's ``before_id`` is defined against the listing's own direction,
+        so the page it names is the two records preceding the cursor in that
+        direction — the two older ones when ascending, the two newer ones when
+        descending — and never the start of the listing.
+
+        Ref: https://platform.claude.com/docs/en/api/beta/files/list
+             stdapi/files/_core.py:list_files
+        """
+        cursor = payloads[3]
+        expected = payloads[1:3] if order == "asc" else payloads[5:3:-1]
+        records, _ = await _core.list_files(None, cursor, 2, order, None)
+        assert [record.file_id for record in records] == expected
 
 
 class _StubMultipartS3Client:

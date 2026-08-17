@@ -55,8 +55,9 @@ Upload and manage files via an Anthropic-compatible interface. Files are stored 
 | `file` (multipart)       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Required binary form field                                       |
 | `file` (JSON body)       | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents    |
 | **Listing**              |                                          |                                                                  |
-| `after_id` cursor        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Forward cursor: returns files newer than the given ID            |
-| `before_id` cursor       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Backward cursor: returns files older than the given ID           |
+| Listing order            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Most recently created first, by `created_at`                     |
+| `after_id` cursor        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Forward cursor: returns files older than the given ID            |
+| `before_id` cursor       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Backward cursor: returns files newer than the given ID           |
 | `limit`                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 1 – 1 000; default 20                                            |
 | **File size cap**        | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | No artificial limit; S3 object limit (~5 TB)                     |
 | **Messages integration** |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `"source": {"type": "file", "file_id": "..."}` in document/image |
@@ -139,17 +140,17 @@ curl "$BASE/v1/files/file_0190c51c7de7455d9b8c2efe27dfbf67" \
 ### List Files
 
 ```bash
-# Default (oldest first, up to 20 files)
+# Default (newest first, up to 20 files)
 curl "$BASE/v1/files" \
   -H "x-api-key: $ANTHROPIC_API_KEY" \
   -H "anthropic-beta: files-api-2025-04-14"
 
-# Forward pagination: files after a given ID
+# Forward pagination: the page following a given ID (older files)
 curl "$BASE/v1/files?after_id=file_0190c51c7de7455d9b8c2efe27dfbf67&limit=20" \
   -H "x-api-key: $ANTHROPIC_API_KEY" \
   -H "anthropic-beta: files-api-2025-04-14"
 
-# Backward pagination: files before a given ID
+# Backward pagination: the page preceding a given ID (newer files)
 curl "$BASE/v1/files?before_id=file_0190c51c7de7455d9b8c2efe27dfbf67" \
   -H "x-api-key: $ANTHROPIC_API_KEY" \
   -H "anthropic-beta: files-api-2025-04-14"

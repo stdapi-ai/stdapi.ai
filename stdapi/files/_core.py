@@ -2,8 +2,8 @@
 
 Each uploaded file is stored as a single S3 object. File metadata is
 encoded entirely in native S3 object attributes (ContentType,
-ContentDisposition, user Metadata, LastModified, ContentLength),
-so no external database is required.
+ContentDisposition, user Metadata, ContentLength) plus the identifier
+itself, so no external database is required.
 
 File payload format: ``base32hex(uuid7_bytes + crc32_bytes)`` — 20 bytes encoded
 as 32 base32hex characters (no padding).  The first 16 bytes are a UUIDv7 (millisecond-
@@ -104,7 +104,7 @@ class FileRecord:
         content_type: MIME type string, e.g. ``application/pdf``.
         purpose: OpenAI purpose string, or ``""`` if not set.
         size: File size in bytes from S3 ``ContentLength``.
-        created_at: UTC creation time from S3 ``LastModified``.
+        created_at: UTC creation time, read from the UUIDv7 in ``file_id``.
         expires_at: Unix timestamp (seconds) of expiry, or ``None`` if no expiry.
     """
 
@@ -257,8 +257,26 @@ def resolve_file_bucket(payload: str) -> str:
     )
 
 
+def _payload_created_ms(payload: str) -> int:
+    """Return the creation time encoded in *payload*'s UUIDv7, in epoch milliseconds.
+
+    ``0`` when *payload* carries no decodable UUIDv7, which only a stray object
+    stored under the files prefix can produce.
+
+    Args:
+        payload: Bare 32-char base32 file or upload payload.
+    """
+    return int.from_bytes(decode_id_payload(payload)[:6], "big")
+
+
 def _record_from_head(payload: str, head: HeadObjectOutputTypeDef) -> FileRecord:
     """Build a ``FileRecord`` from a ``HeadObject`` response.
+
+    ``created_at`` is read from the identifier rather than from S3
+    ``LastModified``: listing and cursors both order on the identifier, and
+    ``LastModified`` is when the bytes landed, which is later for content whose
+    identifier is minted first — a multipart upload completed part by part, or a
+    batch's result file written when the batch ends.
 
     Args:
         payload: Bare 32-char base32 file payload.
@@ -272,7 +290,9 @@ def _record_from_head(payload: str, head: HeadObjectOutputTypeDef) -> FileRecord
         content_type=head.get("ContentType", "application/octet-stream"),
         purpose=meta.get("purpose", ""),
         size=head["ContentLength"],
-        created_at=head["LastModified"].replace(tzinfo=UTC),
+        created_at=datetime.fromtimestamp(created_ms / 1000, UTC)
+        if (created_ms := _payload_created_ms(payload))
+        else head["LastModified"].replace(tzinfo=UTC),
         expires_at=int(v) if (v := meta.get("expires-at", "")) else None,
     )
 
@@ -645,14 +665,16 @@ async def list_files(
     """List files from all configured S3 buckets with cursor-based pagination.
 
     S3 ``ListObjectsV2`` returns keys in ascending lexicographic order; because
-    file keys use UUIDv7 (timestamp-ordered), ascending key order equals
-    ascending creation-time order.  Keys from multiple buckets are merged and
-    sorted globally before paging.  Expired files are left out of the page and
-    scheduled for deletion, so a page may hold fewer records than *limit*.
+    file keys open with the UUIDv7 that also names each record's ``created_at``,
+    ascending key order is ascending creation-time order.  Keys from multiple
+    buckets are merged and sorted globally before paging.  Expired files are left
+    out of the page, so a page may hold fewer records than *limit*.
 
     Args:
         after: Return files created strictly after this bare payload (exclusive).
-        before: Return files created strictly before this bare payload (Anthropic ``before_id``).
+        before: Return the page ending immediately before this bare payload
+            (Anthropic ``before_id``), so the page is taken from the records
+            nearest the cursor rather than from the start of the listing.
         limit: Maximum records to return.
         order: ``"asc"`` or ``"desc"`` (OpenAI default is ``"desc"``).
         purpose: Filter by purpose; triggers a ``HeadObject`` fan-out to read metadata.
@@ -714,23 +736,24 @@ async def list_files(
     if order == "desc" and after:
         all_keys = [k for k in all_keys if k < file_id_s3_key(after)]
     if before:
-        all_keys = [k for k in all_keys if k < file_id_s3_key(before)]
+        # The cursor's page is the one the listing reaches just ahead of it, so
+        # which side of the cursor to keep follows the listing's direction.
+        cursor = file_id_s3_key(before)
+        all_keys = [
+            k for k in all_keys if (k > cursor if order == "desc" else k < cursor)
+        ]
 
+    ordered = all_keys[::-1] if order == "desc" else all_keys
     if purpose is not None:
         filtered = [
-            r for r in (await _records_for_keys(all_keys)) if r.purpose == purpose
+            r for r in (await _records_for_keys(ordered)) if r.purpose == purpose
         ]
-        return (
-            filtered[-limit:][::-1]
-            if order == "desc"
-            else filtered[-limit:]
-            if before
-            else filtered[:limit]
-        ), len(filtered) > limit
+        return (filtered[-limit:] if before else filtered[:limit]), len(
+            filtered
+        ) > limit
 
-    if order == "desc":
-        return await _fill_page(all_keys[::-1], limit)
-
-    # asc + before_id: ascending slice ending just before the cursor
-    page, has_more = await _fill_page(all_keys[::-1], limit)
-    return page[::-1], has_more
+    if before:
+        # The page ends at the cursor, so it is filled from the far end.
+        page, has_more = await _fill_page(ordered[::-1], limit)
+        return page[::-1], has_more
+    return await _fill_page(ordered, limit)

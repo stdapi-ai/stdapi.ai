@@ -51,6 +51,7 @@ from stdapi.aws_s3 import (
 from stdapi.config import SETTINGS
 from stdapi.files._core import (
     FileRecord,
+    _payload_created_ms,
     _record_from_head,
     _require_bucket,
     _validate_filename,
@@ -183,13 +184,10 @@ def _multipart_meta_key(upload_id: str) -> str:
 def _created_at_from_upload_id(upload_id: str) -> int:
     """Extract the Unix creation timestamp (seconds) from the uuid7 in *upload_id*.
 
-    UUID7's first 48 bits are the millisecond Unix timestamp; the upload_id
-    payload is ``uuid7_bytes (16) + crc32_bytes (4)`` encoded.
-
     Returns:
         Unix timestamp in seconds.
     """
-    return int.from_bytes(decode_id_payload(upload_id[7:])[:6], "big") // 1000
+    return _payload_created_ms(upload_id[7:]) // 1000
 
 
 def _make_part_id(upload_id: str, part_number: int) -> str:

@@ -152,7 +152,10 @@ async def upload(
     "/files",
     summary="List uploaded files (Anthropic format)",
     operation_id="anthropic_file_list",
-    description="Returns a paginated list of uploaded files with metadata (Anthropic Files API).",
+    description=(
+        "Returns a paginated list of uploaded files with metadata, most recently "
+        "created first (Anthropic Files API)."
+    ),
     response_description="A list of file metadata objects.",
     response_model_exclude_none=True,
 )
@@ -187,7 +190,7 @@ async def list_files_endpoint(
     ] = 20,
     _: Annotated[None, Depends(authenticate)] = None,
 ) -> FileListResponse:
-    """List files with cursor-based pagination.
+    """List files with cursor-based pagination, most recently created first.
 
     Returns:
         FileListResponse with paginated file metadata.
@@ -200,7 +203,7 @@ async def list_files_endpoint(
         _strip(after_id) if after_id else None,
         _strip(before_id) if before_id else None,
         limit,
-        "asc",
+        "desc",
         None,
     )
     files = [_to_file_metadata(r) for r in records]

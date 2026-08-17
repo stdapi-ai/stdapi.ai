@@ -324,8 +324,8 @@ The optional `md5` is the hex-encoded MD5 digest of the **whole file** — the p
     "id": "file-0190c51c7de7455d9b8c2efe27dfbf67",
     "object": "file",
     "bytes": 6291456,
-    "created_at": 1745000005,
-    "expires_at": 1745003605,
+    "created_at": 1745000000,
+    "expires_at": 1745003600,
     "filename": "large_dataset.bin",
     "purpose": "assistants",
     "status": "processed"

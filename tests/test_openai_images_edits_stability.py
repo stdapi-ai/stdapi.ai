@@ -4,8 +4,9 @@ Every model here reaches the endpoint through the same edit route, but each one
 consumes a different subset of the OpenAI parameters: some ignore ``prompt``,
 some require a mask, some repurpose ``mask`` as a second input image, and some
 require a provider extra passed through ``extra_body``. The assertions pin the
-gateway-side contract (payload format, response metadata, parameter validation);
-image content is left to the vision judge.
+gateway-side contract (payload format, response metadata, parameter validation).
+Image content is measured on the pixels wherever the claim admits a measurement,
+and left to a vision judge only where it does not.
 
 Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/stable-image-services.html
      https://stdapi.ai/api_openai_images_edits/
@@ -110,6 +111,44 @@ def _within_pixel_budget(png: bytes, max_pixels: int) -> bytes:
         with BytesIO() as out:
             resized.save(out, format="PNG")
             return out.getvalue()
+
+
+#: Hue byte range (0-255 spans 360°) covering the pink/magenta family.
+#: "Pink jacket" is answered anywhere inside it, and which shade in it deserves
+#: the name is exactly what a vision judge argues about — the band is the claim
+#: that can actually be measured.
+_PINK_HUE_RANGE: tuple[int, int] = (198, 248)
+
+#: Saturation and value floors keeping near-grey and near-black pixels uncounted.
+_COLOURED_PIXEL_FLOORS: tuple[int, int] = (90, 64)
+
+#: Share of the frame the recolored region must gain; the sample measures ~0.22.
+_MIN_RECOLORED_SHARE: float = 0.05
+
+
+def _pink_pixel_share(image_bytes: bytes) -> float:
+    """Return the share of an image's pixels sitting in the pink/magenta hue band.
+
+    Args:
+        image_bytes: Encoded image bytes in any format Pillow reads.
+    """
+    low, high = _PINK_HUE_RANGE
+    min_saturation, min_value = _COLOURED_PIXEL_FLOORS
+    with BytesIO(image_bytes) as buffer, Image.open(buffer) as image:
+        # Pillow types the per-band case, but an HSV image flattens to triples.
+        pixels: tuple[tuple[int, int, int], ...] = (
+            image.convert("RGB").convert("HSV").get_flattened_data()  # type: ignore[assignment]
+        )
+        return sum(
+            low <= hue <= high and sat > min_saturation and val > min_value
+            for hue, sat, val in pixels
+        ) / (image.width * image.height)
+
+
+def _dimensions(image_bytes: bytes) -> tuple[int, int]:
+    """Return the ``(width, height)`` of an encoded image."""
+    with BytesIO(image_bytes) as buffer, Image.open(buffer) as image:
+        return image.width, image.height
 
 
 def _rgba_mask_b64() -> str:
@@ -392,14 +431,20 @@ class TestStabilityEditModels:
     """
 
     @pytest.mark.expensive
-    def test_search_recolor(
-        self, openai_client: OpenAI, chat_vision_judge_model: str
-    ) -> None:
+    def test_search_recolor(self, openai_client: OpenAI) -> None:
         """Search-and-recolor recolors the region named by the ``select_prompt`` extra.
 
         ``select_prompt`` has no OpenAI counterpart, so it travels as a provider
         extra: ``prompt`` describes the target colour while ``select_prompt``
         selects what to recolor.
+
+        What the gateway owes is that both parameters reach the model and that
+        the answer is a PNG at the source resolution whose reported ``size``
+        matches the bytes. The colour claim is measured on the pixels rather
+        than put to a vision judge: asked to name a shade, a judge rejects a
+        correct result for landing on the magenta side of pink (issue #163), so
+        the assertion is that the frame gained a substantial pink/magenta region
+        — the sample gains ~22% of it against a 0.005% baseline.
 
         Ref: stdapi/models/image/stability_search_recolor.py:_SearchRecolorJob
         """
@@ -424,42 +469,21 @@ class TestStabilityEditModels:
         data = response.data
         assert data is not None
         assert len(data) == 1
-        b64_json = data[0].b64_json
-        output_data = decoded_png(b64_json)
+        output_data = decoded_png(data[0].b64_json)
 
         # Save output for manual inspection
         (output_dir / "stability_search_recolor_result.jpg").write_bytes(output_data)
 
-        # VLM validation
-        validation_response = openai_client.chat.completions.create(
-            model=chat_vision_judge_model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": (
-                                "Analyze this image of a person wearing a jacket. "
-                                "The jacket should have been recolored to pink. "
-                                "Does the image show a person wearing a pink jacket? "
-                                "If yes, respond with only 'YES'. "
-                                "If no, respond with 'NO' followed by a brief explanation of what failed."
-                            ),
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{b64_json}"},
-                        },
-                    ],
-                }
-            ],
+        width, height = _dimensions(output_data)
+        assert (width, height) == _dimensions(input_image), (
+            "search-and-recolor must answer at the source resolution"
         )
+        assert response.size == f"{width}x{height}"
 
-        vlm_response = validation_response.choices[0].message.content
-        assert vlm_response is not None
-        assert "YES" in vlm_response.upper(), (
-            f"VLM validation failed for search and recolor. Response: {vlm_response}"
+        recolored = _pink_pixel_share(output_data) - _pink_pixel_share(input_image)
+        assert recolored >= _MIN_RECOLORED_SHARE, (
+            f"the selected region was not recolored: the pink/magenta share of the "
+            f"frame grew by {recolored:.3%}, under the {_MIN_RECOLORED_SHARE:.0%} floor"
         )
 
     def test_search_recolor_missing_select_prompt(

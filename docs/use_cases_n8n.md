@@ -393,7 +393,7 @@ n8n calls the `/anthropic/v1/files` endpoints (see [Anthropic Files API](api_ant
     - **Operation:** List Files
     - **Return All / Limit:** control pagination; enable **Return All** or set **Limit** for the first page
 
-    Files are returned in ascending order (oldest first). Use `after_id` / `before_id` cursors for bidirectional pagination.
+    Files are returned most recently created first. Use `after_id` / `before_id` cursors for bidirectional pagination.
 
 !!! example "Delete a file — `Anthropic/Delete File`"
     Permanently deletes a file from S3 by its `file_id`.

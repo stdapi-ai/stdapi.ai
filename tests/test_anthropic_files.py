@@ -152,9 +152,13 @@ class TestAnthropicFiles:
         """Listed entries carry each file's own metadata and the page's edge IDs as cursors.
 
         The listed metadata is rebuilt from the S3 objects rather than replayed from the
-        upload response, so filename and size must survive the round trip.
+        upload response, so filename and size must survive the round trip. The default
+        page is the most recently created files, so two fresh uploads are on it whatever
+        else the workspace already holds — an oldest-first listing would push them off
+        it entirely once there are more than ``limit`` files.
 
-        Ref: stdapi/routes/anthropic_files.py:list_files_endpoint
+        Ref: https://platform.claude.com/docs/en/api/beta/files/list
+             stdapi/routes/anthropic_files.py:list_files_endpoint
         """
         f1 = upload_file("lst1.txt", _TEXT_FILE, "text/plain")
         f2 = upload_file("lst2.txt", _TEXT_FILE, "text/plain")
@@ -167,6 +171,10 @@ class TestAnthropicFiles:
             assert listed.filename == uploaded.filename
             assert listed.size_bytes == len(_TEXT_FILE)
             assert listed.type == "file"
+        ids = [f.id for f in page.data]
+        assert ids.index(f2.id) < ids.index(f1.id), (
+            f"the later upload must be listed first, got {ids}"
+        )
         assert page.first_id == page.data[0].id
         assert page.last_id == page.data[-1].id
 
@@ -174,17 +182,13 @@ class TestAnthropicFiles:
         self,
         anthropic_client: Anthropic,
         upload_file: Callable[[str, bytes, str], FileMetadata],
-        use_official_api: bool,
     ) -> None:
         """``after_id`` excludes the cursor file and keeps the files that follow it in list order.
 
-        The two targets sort the listing in opposite directions: upstream returns files
-        newest first, while the gateway lists them in ascending creation order (S3 keys are
-        UUIDv7, so lexicographic key order equals creation order). The cursor is therefore
-        set on the first of the three uploads in each target's own order, and the other two
-        must follow it.
+        Both targets list newest first, so "after" the newest of three uploads is the
+        two older ones — the same expectation on either lane.
 
-        Ref: https://platform.claude.com/docs/en/build-with-claude/files
+        Ref: https://platform.claude.com/docs/en/api/beta/files/list
              stdapi/files/_core.py:list_files
         """
         files = [upload_file(f"aft{i}.txt", _TEXT_FILE, "text/plain") for i in range(3)]
@@ -198,28 +202,22 @@ class TestAnthropicFiles:
         assert cursor_id not in ids2
 
         # A cursor on the earliest of our uploads in list order must retain the two others.
-        cursor, expected = (
-            (files[2], files[:2]) if use_official_api else (files[0], files[1:])
-        )
-        after_own = anthropic_client.beta.files.list(after_id=cursor.id, limit=1000)
+        after_own = anthropic_client.beta.files.list(after_id=files[2].id, limit=1000)
         ids_after_own = {f.id for f in after_own.data}
-        assert cursor.id not in ids_after_own
-        assert {f.id for f in expected} <= ids_after_own
+        assert files[2].id not in ids_after_own
+        assert {f.id for f in files[:2]} <= ids_after_own
 
     def test_anthropic_list_before_id(
         self,
         anthropic_client: Anthropic,
         upload_file: Callable[[str, bytes, str], FileMetadata],
-        use_official_api: bool,
     ) -> None:
         """``before_id`` excludes the cursor file and keeps the files that precede it in list order.
 
-        Reverse of the ``after_id`` case, and lane-conditional for the same reason: the
-        cursor is the last of the three uploads in each target's own order — the newest one
-        on the gateway (ascending), the oldest one upstream (newest first) — and the two
-        others must precede it.
+        Reverse of the ``after_id`` case: both targets list newest first, so "before"
+        the oldest of three uploads is the two newer ones.
 
-        Ref: https://platform.claude.com/docs/en/build-with-claude/files
+        Ref: https://platform.claude.com/docs/en/api/beta/files/list
              stdapi/files/_core.py:list_files
         """
         files = [upload_file(f"bef{i}.txt", _TEXT_FILE, "text/plain") for i in range(3)]
@@ -231,13 +229,10 @@ class TestAnthropicFiles:
         assert cursor_id not in ids_before
 
         # A cursor on the latest of our uploads in list order must retain the two others.
-        cursor, expected = (
-            (files[0], files[1:]) if use_official_api else (files[2], files[:2])
-        )
-        before_own = anthropic_client.beta.files.list(before_id=cursor.id, limit=1000)
+        before_own = anthropic_client.beta.files.list(before_id=files[0].id, limit=1000)
         ids_before_own = {f.id for f in before_own.data}
-        assert cursor.id not in ids_before_own
-        assert {f.id for f in expected} <= ids_before_own
+        assert files[0].id not in ids_before_own
+        assert {f.id for f in files[1:]} <= ids_before_own
 
     # --- Delete ---
 
