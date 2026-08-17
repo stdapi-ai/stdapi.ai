@@ -11,14 +11,17 @@ Ref: stdapi/monitoring.py:_finalize_usage
 """
 
 from asyncio import create_task, sleep
+from contextvars import copy_context
 from gc import collect
 from json import loads
+from logging import ERROR
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 import pytest
 from botocore.exceptions import ClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
+from opentelemetry.trace import get_current_span
 from pydantic import SecretStr
 from sse_starlette import ServerSentEvent
 from starlette.requests import Request as StarletteRequest
@@ -42,6 +45,7 @@ from stdapi.monitoring import (
     build_metadata,
     log_background_event,
     log_request_event,
+    otel_manager,
     resolve_request_identity,
 )
 from stdapi.pricing import Dimension
@@ -50,9 +54,16 @@ from tests._helpers import make_event_log
 from tests.conftest import set_test_price
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterable, Callable, Generator
+    from collections.abc import (
+        AsyncGenerator,
+        AsyncIterable,
+        Callable,
+        Coroutine,
+        Generator,
+    )
     from typing import Any
 
+    from opentelemetry.trace.span import Span
     from types_aiobotocore_bedrock_runtime.type_defs import ConverseStreamOutputTypeDef
 
     from stdapi.config import LogLevel
@@ -1278,3 +1289,95 @@ class TestRequestIdentity:
 
         assert exc_info.value.status == 401
         assert resolve_request_identity() is None
+
+
+class _NeverResumed:
+    """Awaitable that suspends whoever awaits it and is never resumed."""
+
+    def __await__(self) -> Generator[None]:
+        """Suspend the awaiting coroutine.
+
+        Yields:
+            None
+        """
+        yield
+
+
+def _suspended_request(span: Span) -> Coroutine[None, None, None]:
+    """Build a request coroutine suspended inside *span*'s activation.
+
+    This is the shape a request has while it waits on a backend call: the
+    activation is installed, and the frame holding it is parked on an await.
+
+    Args:
+        span: Span the coroutine activates.
+
+    Returns:
+        The coroutine, not yet started.
+    """
+
+    async def request() -> None:
+        with otel_manager.use_span(span):
+            await _NeverResumed()
+
+    return request()
+
+
+@pytest.mark.skipif(not SETTINGS.otel_enabled, reason="tracing is disabled")
+class TestAbandonedRequestSpan:
+    """Deactivation of a request span when the request is abandoned, not unwound.
+
+    A request coroutine that is collected while suspended is closed with
+    ``GeneratorExit`` by whatever finalizes it, in whatever context that
+    finalizer holds -- never necessarily the one the span was activated in.
+    """
+
+    def test_the_activating_context_keeps_no_span_of_an_abandoned_request(self) -> None:
+        """The context the activation lives in is restored wherever it is closed.
+
+        ``BaseHTTPMiddleware`` runs the downstream call in a child task holding
+        a copy of the middleware's context, so an abandoned request is routinely
+        finalized against a copy rather than the original. Restoring the
+        previous context by token cannot cross that boundary, and what it leaves
+        behind is the ended request span, still current: every span started
+        there afterwards joins the finished request's trace.
+
+        Ref: stdapi/monitoring_otel.py:OpenTelemetryManager.use_span
+        """
+        span = otel_manager.start_span("GET /abandoned", attributes={})
+        middleware = copy_context()
+        request = _suspended_request(span)
+        middleware.run(request.send, None)
+        child = middleware.run(copy_context)
+
+        child.run(request.close)
+
+        assert not child.run(get_current_span).get_span_context().is_valid
+        following = child.run(
+            lambda: otel_manager.start_span("GET /next", attributes={})
+        )
+        assert following.get_span_context().trace_id != span.get_span_context().trace_id
+
+    def test_an_abandoned_request_leaves_an_unrelated_context_alone(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Closing the activation elsewhere writes nothing and reports nothing.
+
+        This is what the agentic lane caught: the finalizer ran in a context
+        that had never seen the activation, and resetting the token there fails,
+        which OpenTelemetry reports as an error traceback on the server's
+        stderr long after the client was answered. Nothing may be written into
+        that context either -- it is tracing work of its own.
+
+        Ref: stdapi/monitoring_otel.py:OpenTelemetryManager.use_span
+        """
+        span = otel_manager.start_span("GET /abandoned", attributes={})
+        request = _suspended_request(span)
+        copy_context().run(request.send, None)
+        unrelated = copy_context()
+
+        with caplog.at_level(ERROR, logger="opentelemetry.context"):
+            unrelated.run(request.close)
+
+        assert not caplog.records
+        assert not unrelated.run(get_current_span).get_span_context().is_valid

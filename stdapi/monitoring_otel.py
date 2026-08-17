@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 from opentelemetry import propagate, trace
+from opentelemetry.context import attach, get_current
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.aiohttp_client import AioHttpClientInstrumentor
 from opentelemetry.instrumentation.botocore import BotocoreInstrumentor
@@ -13,7 +14,7 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
-from opentelemetry.trace import use_span
+from opentelemetry.trace import Status, StatusCode, set_span_in_context
 
 from stdapi.config import SETTINGS
 from stdapi.monitoring_otel_base import OpenTelemetryManager as _OpenTelemetryManager
@@ -88,11 +89,33 @@ class OpenTelemetryManager(_OpenTelemetryManager):
     def use_span(self, span: Span) -> Generator[None]:  # type: ignore[override]
         """Activate *span* as the current span within this context.
 
+        A request collected while suspended, rather than resumed, closes this
+        generator with ``GeneratorExit`` from whichever context its finalizer
+        holds -- not necessarily the one the activation was installed in, since
+        the downstream call runs against a copy of it. Restoring the previous
+        context by value rather than by token keeps that from raising, and the
+        identity guard keeps it from overwriting a context tracing work of its
+        own: the activation is undone where it exists, and nowhere else.
+
         Args:
             span: Span to activate.
 
         Yields:
             None
         """
-        with use_span(span):
+        previous = get_current()
+        attach(activated := set_span_in_context(span, previous))
+        try:
             yield None
+        except Exception as exc:
+            # The exception semantics of opentelemetry.trace.use_span, which this
+            # replaces for the sake of the deactivation above.
+            if span.is_recording():
+                span.record_exception(exc)
+                span.set_status(
+                    Status(StatusCode.ERROR, f"{type(exc).__name__}: {exc}")
+                )
+            raise
+        finally:
+            if get_current() is activated:
+                attach(previous)
