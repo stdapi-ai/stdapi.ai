@@ -7,7 +7,7 @@ from botocore.exceptions import ClientError
 
 from stdapi.api_errors import ApiError
 from stdapi.aws import call_with_region_failover
-from stdapi.aws_bedrock import handle_bedrock_client_error
+from stdapi.aws_bedrock import COMPREHEND_MODERATION_MODEL, handle_bedrock_client_error
 from stdapi.models.moderation import (
     GUARDRAIL_CHECKS_MODERATION_MODEL,
     ModerationModelBase,
@@ -77,7 +77,7 @@ class ModerationModel(ModerationModelBase):
         """Initialize the model for the configured guardrail checks regions.
 
         Args:
-            model_id: Moderation model ID reported in responses and usage records.
+            model_id: Moderation model ID this backend's usage is billed against.
             comprehend_fallback: Whether to degrade to Amazon Comprehend
                 toxicity detection when the ``bedrock:InvokeGuardrailChecks``
                 permission is missing (default-model resolution only).
@@ -96,7 +96,9 @@ class ModerationModel(ModerationModelBase):
             )
             raise ApiError(msg)
         self._fallback = (
-            ComprehendModerationModel(model_id) if comprehend_fallback else None
+            ComprehendModerationModel(COMPREHEND_MODERATION_MODEL)
+            if comprehend_fallback
+            else None
         )
         self._degraded = False
 

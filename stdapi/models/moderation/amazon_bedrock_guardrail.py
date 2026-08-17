@@ -79,7 +79,7 @@ class ModerationModel(ModerationModelBase):
         """Initialize the model for one resolved guardrail.
 
         Args:
-            model_id: Moderation model ID reported in responses and usage records.
+            model_id: Moderation model ID this backend's usage is billed against.
             identifier: Guardrail identifier or ARN.
             version: Guardrail version.
         """

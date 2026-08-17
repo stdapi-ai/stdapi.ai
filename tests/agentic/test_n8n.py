@@ -266,8 +266,10 @@ class TestModerations:
         "model_config",
         [
             pytest.param(
-                ModelConfig(model="amazon.comprehend-toxicity", timeout=_TIMEOUT),
-                id="comprehend-toxicity",
+                ModelConfig(
+                    model="amazon.bedrock-runtime-guardrail-checks", timeout=_TIMEOUT
+                ),
+                id="guardrail-checks",
             )
         ],
     )
@@ -284,9 +286,11 @@ class TestModerations:
 
         The node hard-codes ``omni-moderation-latest``, so this also pins the
         gateway's alias for it: an alias that stopped resolving would surface as a
-        404 from the node rather than as a different verdict.
+        404 from the node rather than as a different verdict. With no guardrail
+        configured, that alias resolves to the inline guardrail checks backend,
+        which is the model the usage record must name.
 
-        Ref: stdapi/routes/_moderation.py
+        Ref: stdapi/routes/openai_moderations.py:create_moderation
         """
         log_start = len(agentic_server.logs)
         result = run_agent(

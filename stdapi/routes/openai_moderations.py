@@ -21,6 +21,7 @@ from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.aws_bedrock import (
     COMPREHEND_MODERATION_MODEL,
+    GUARDRAIL_MODERATION_MODEL,
     is_comprehend_moderation_model,
     resolve_moderation_model,
 )
@@ -154,13 +155,20 @@ async def create_moderation(
     """
     log_request_params(body)
     items = [body.input] if isinstance(body.input, str) else list(body.input)
+    # "model" is echoed back to the client, so it keeps the requested spelling;
+    # each backend is built with its own model ID, which is what usage is billed
+    # against.
     if body.model == GUARDRAIL_CHECKS_MODERATION_MODEL:
         model = body.model
-        moderation_model: ModerationModelBase = GuardrailChecksModerationModel(model)
+        moderation_model: ModerationModelBase = GuardrailChecksModerationModel(
+            GUARDRAIL_CHECKS_MODERATION_MODEL
+        )
     elif (resolved := resolve_moderation_model(body.model)) is not None:
         identifier, version = resolved
         model = body.model or f"{identifier}:{version}"
-        moderation_model = GuardrailModerationModel(model, identifier, version)
+        moderation_model = GuardrailModerationModel(
+            GUARDRAIL_MODERATION_MODEL, identifier, version
+        )
     elif (
         body.model is None or not is_comprehend_moderation_model(body.model)
     ) and guardrail_checks_regions():
@@ -168,11 +176,11 @@ async def create_moderation(
         # alias uses guardrail checks before Comprehend as a last resort.
         model = body.model or GUARDRAIL_CHECKS_MODERATION_MODEL
         moderation_model = GuardrailChecksModerationModel(
-            model, comprehend_fallback=True
+            GUARDRAIL_CHECKS_MODERATION_MODEL, comprehend_fallback=True
         )
     else:
         model = body.model or COMPREHEND_MODERATION_MODEL
-        moderation_model = ComprehendModerationModel(model)
+        moderation_model = ComprehendModerationModel(COMPREHEND_MODERATION_MODEL)
     results: list[Moderation] = []
     for batch in batched(items, _INPUT_BATCH_SIZE, strict=False):
         results.extend(await gather(*map(moderation_model.moderate, batch)))

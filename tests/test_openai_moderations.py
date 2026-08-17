@@ -2383,6 +2383,36 @@ class TestGuardrailChecksModerationsRoute:
         assert entry["text_units"] == 3
         assert "input_images" not in entry
 
+    @pytest.mark.parametrize("model", ["omni-moderation-latest", _CHECKS_MODEL])
+    def test_usage_records_the_backend_model_not_the_requested_alias(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch, model: str
+    ) -> None:
+        """Usage names the model that served the request, whatever the client sent.
+
+        The usage record is what an operator reconciles against the AWS bill and
+        what the cost lookup keys on, so it carries the backend model AWS billed
+        (the price catalog holds no row for a moderation alias). The response
+        still echoes the requested name.
+
+        Ref: https://stdapi.ai/operations_logging_monitoring/#usage-metrics-fields
+             stdapi/routes/openai_moderations.py:create_moderation
+        """
+        from stdapi import monitoring  # noqa: PLC0415
+
+        _stub_checks(monkeypatch, _checks_response([]))
+        written: list[dict[str, Any]] = []
+        monkeypatch.setattr(monitoring, "write_log_event", written.append)
+
+        response = app_client.post(
+            "/v1/moderations", json={"input": "some text", "model": model}
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["model"] == model
+        (request_log,) = [w for w in written if w.get("type") == "request"]
+        (entry,) = request_log["usage"]
+        assert entry["model"] == _CHECKS_MODEL
+
     def test_usage_defaults_to_character_count_without_usage_block(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
