@@ -65,7 +65,7 @@ _HEALTH_POLL_INTERVAL = 1.0
 #: Seconds a health probe waits for an answer before retrying.
 _HEALTH_PROBE_TIMEOUT = 5.0
 
-#: Seconds a service container gets to stop cleanly before it is killed.
+#: Seconds a container gets to stop cleanly before it is killed.
 _SERVICE_STOP_TIMEOUT = "10"
 
 #: Seconds allowed for pulling an image that is not in the local store.
@@ -344,6 +344,24 @@ def installed_versions(tag: str) -> dict[str, str]:
     return {name: info.get("version", "?") for name, info in dependencies.items()}
 
 
+def _remove_container(name: str) -> None:
+    """Force-remove the named container, best effort.
+
+    Args:
+        name: Container name to remove.
+    """
+    argv = podman_argv()
+    if argv is None:
+        return
+    with suppress(OSError, subprocess.SubprocessError):
+        subprocess.run(  # noqa: S603
+            [*argv, "rm", "--force", "--time", _SERVICE_STOP_TIMEOUT, name],
+            capture_output=True,
+            timeout=120,
+            check=False,
+        )
+
+
 def run_in_container(
     *,
     image: str,
@@ -366,6 +384,10 @@ def run_in_container(
 
     ``--userns=keep-id`` maps the host user to the same UID inside, so files the
     CLI writes into *workdir* stay owned by the test runner.
+
+    A run that exceeds *timeout* is removed by name: the timeout kills this
+    podman client and leaves the container up, and an orphaned agent keeps
+    running -- and keeps billing whatever it is calling.
 
     Args:
         image: Image tag to run.
@@ -390,10 +412,15 @@ def run_in_container(
         msg = "podman is required to run agentic tests"
         raise RuntimeError(msg)
 
+    name = f"stdapi-agentic-run-{token_hex(6)}"
     cmd = [
         *podman,
         "run",
         "--rm",
+        # Named so the timeout path below can remove it; "--rm" covers nothing
+        # there, because the signal reaches this client and not the container.
+        "--name",
+        name,
         # Own netns; pasta forwards the container's loopback port to the host's,
         # so the server under test never binds anything but 127.0.0.1.
         f"--network=pasta:-T,{forward_port}" if forward_port else "--network=pasta",
@@ -427,17 +454,21 @@ def run_in_container(
         cmd.append(image)
         cmd.extend(argv)
 
-        if stdin is None:
+        try:
+            if stdin is None:
+                return subprocess.run(  # noqa: S603, PLW1510
+                    cmd,
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
             return subprocess.run(  # noqa: S603, PLW1510
-                cmd,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
+                cmd, input=stdin, capture_output=True, text=True, timeout=timeout
             )
-        return subprocess.run(  # noqa: S603, PLW1510
-            cmd, input=stdin, capture_output=True, text=True, timeout=timeout
-        )
+        except subprocess.TimeoutExpired:
+            _remove_container(name)
+            raise
 
 
 # ---------------------------------------------------------------------------
@@ -571,17 +602,8 @@ def _register_service_cleanup() -> None:
 
 def _stop_all_services() -> None:
     """Force-remove every service container this process still has running."""
-    argv = podman_argv()
-    if argv is None:
-        return
     for name in tuple(_running_services):
-        with suppress(OSError, subprocess.SubprocessError):
-            subprocess.run(  # noqa: S603
-                [*argv, "rm", "--force", "--time", _SERVICE_STOP_TIMEOUT, name],
-                capture_output=True,
-                timeout=120,
-                check=False,
-            )
+        _remove_container(name)
         _running_services.discard(name)
 
 

@@ -1706,9 +1706,9 @@ class TestUnsupportedFeatures:
         ``shell``, ``custom``, ``namespace``, ``tool_search`` and
         ``apply_patch`` are parsed and echoed on the response, but none of them
         reaches the Bedrock tool configuration, so the model can only answer
-        with text.  ``file_search`` is not among them: it is refused, since a
-        dropped one answers from the model's own knowledge while the caller
-        believes the answer comes from the attached stores.
+        with text.  ``file_search`` is not among them: it is served, the
+        attached stores really are searched, and the passages found are what
+        the answer is written from.
 
         Ref: https://developers.openai.com/api/docs/guides/tools
              stdapi/models/chat/_adapters/_openai_responses.py:_build_tool_config
