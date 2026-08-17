@@ -35,6 +35,12 @@ class TestImagesVariationsBasic:
     Ref: stdapi/routes/_images_common.py:build_images_response
     """
 
+    pytestmark = pytest.mark.gateway(
+        "dall-e-2 was the only OpenAI model with a variations endpoint and it "
+        "has been retired: POST /v1/images/variations now answers a Cloudflare "
+        "502 HTML page instead of reaching the API at all"
+    )
+
     @pytest.mark.expensive
     def test_create_variation_basic(
         self, openai_client: OpenAI, sample_image_file: bytes

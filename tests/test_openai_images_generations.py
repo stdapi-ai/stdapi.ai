@@ -170,6 +170,36 @@ _RETIRED_OFFICIAL_IMAGE_MODELS = frozenset({"dall-e-2", "dall-e-3"})
 #: OpenAI image models that reject ``stream``; every other one streams.
 _NON_STREAMING_OFFICIAL_IMAGE_MODELS = frozenset({"dall-e-2", "dall-e-3"})
 
+#: OpenAI image models exposing ``style``. dall-e-3 was the only one, and its
+#: retirement leaves no live official model taking the parameter at all.
+_OFFICIAL_IMAGE_MODELS_WITH_STYLE = frozenset({"dall-e-3"})
+
+
+def _skip_official_image_model_without_style(
+    use_official_api: bool, model: str
+) -> None:
+    """Skip the official lane when the mapped OpenAI image model has no ``style``.
+
+    ``style`` was dall-e-3's parameter alone. With that model retired,
+    ``gpt-image-1`` answers ``Unknown parameter: 'style'`` and the gateway's
+    drop-and-continue handling has no upstream behaviour to be compared with.
+
+    The guard tests the model rather than the lane, so mapping a style-taking
+    official model back in restores the comparison automatically.
+
+    Args:
+        use_official_api: True when the suite targets the official OpenAI API.
+        model: Model id the test sends.
+
+    Ref: https://developers.openai.com/api/reference/resources/images/methods/create
+         tests/conftest.py:MODEL_MAPPINGS
+    """
+    if use_official_api and model not in _OFFICIAL_IMAGE_MODELS_WITH_STYLE:
+        pytest.skip(
+            f"'{model}' has no 'style' parameter and rejects it as "
+            f"unknown_parameter (dall-e-3 was the last official model with one)"
+        )
+
 
 def _skip_retired_official_image_model(
     use_official_api: bool, model: str, parameter: str
@@ -336,7 +366,7 @@ class TestImageGeneration:
         image_generation_model: str,
         image_generation_size: str,
     ) -> None:
-        """A text prompt returns a single image referenced by URL.
+        """A text prompt returns a single image, referenced by URL where the model has one.
 
         ``response_format`` is left unset, and its default is ``url``, so the
         image is uploaded and referenced instead of being inlined as base64;
@@ -344,6 +374,10 @@ class TestImageGeneration:
         because it is recorded on the request log and never echoed back, so an
         unchanged response is the whole observable contract -- and a second
         generation to prove it would buy nothing.
+
+        ``gpt-image-1`` has no ``response_format`` at all and always inlines
+        base64, so on the official lane the default is asserted to be that
+        instead; the one-image-per-request contract holds on both.
 
         Ref: stdapi/routes/_images_common.py:build_images_response
              stdapi/types/openai_images.py:_ImageBaseParams
@@ -362,9 +396,14 @@ class TestImageGeneration:
         assert len(response.data) == 1
 
         image = response.data[0]
-        assert image.url is not None
-        validate_url_format(image.url)
-        assert image.b64_json is None, "the url default must not inline base64 data"
+        if image_returns_base64_only(image_generation_model):
+            assert image.b64_json is not None
+            validate_base64_image(image.b64_json)
+            assert image.url is None, "a base64-only model must not return a URL"
+        else:
+            assert image.url is not None
+            validate_url_format(image.url)
+            assert image.b64_json is None, "the url default must not inline base64 data"
 
     @pytest.mark.expensive
     def test_multiple_images_generation(
@@ -376,7 +415,9 @@ class TestImageGeneration:
         """``n=2`` returns two separately addressable images.
 
         Each image gets its own indexed object, so the two entries never share a
-        URL even when the backend needs one invocation per image.
+        payload even when the backend needs one invocation per image. A model
+        that only ever inlines base64 (``gpt-image-1``) is checked on its two
+        distinct payloads instead of on two distinct URLs.
 
         Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._get_image_url
         """
@@ -391,6 +432,16 @@ class TestImageGeneration:
         validate_timestamp(response.created)
         assert response.data is not None
         assert len(response.data) == 2, f"Expected 2 images, got {len(response.data)}"
+
+        if image_returns_base64_only(image_generation_model):
+            for i, image in enumerate(response.data):
+                assert image.b64_json is not None, f"Missing b64_json for image {i}"
+                validate_base64_image(image.b64_json)
+                assert image.url is None, f"Unexpected URL for image {i}"
+            assert response.data[0].b64_json != response.data[1].b64_json, (
+                "each generated image must be returned as its own payload"
+            )
+            return
 
         for i, image in enumerate(response.data):
             assert image.url is not None, f"Missing URL for image {i}"
@@ -410,8 +461,20 @@ class TestImageGeneration:
     ) -> None:
         """``response_format="b64_json"`` inlines decodable image bytes and no URL.
 
+        Skipped for a model that has no ``response_format`` parameter at all:
+        ``gpt-image-1`` answers ``Unknown parameter: 'response_format'``, so
+        the request never reaches the behaviour under test. The gateway's own
+        models take the parameter and this stays asserted for them.
+
         Ref: stdapi/routes/_images_common.py:build_images_response
+             tests/conftest.py:image_returns_base64_only
         """
+        if image_returns_base64_only(image_generation_model):
+            pytest.skip(
+                f"'{image_generation_model}' has no 'response_format' parameter "
+                f"and rejects it as unknown_parameter"
+            )
+
         response = openai_client.images.generate(
             prompt="A simple drawing",
             model=image_generation_model,
@@ -767,18 +830,47 @@ class TestImageGeneration:
         image_generation_size: str,
         use_official_api: bool,
     ) -> None:
-        """A ``quality`` a model has no control for is ignored, not refused.
+        """A ``quality`` a model has no control for is ignored by the gateway, refused by OpenAI.
 
-        Quality steers the backend; it never decides whether an image can be
-        produced. Refusing over it would break every client that sends OpenAI's
-        default on a model that has no such control, so the gateway drops it
-        with a warning and reports the quality actually produced.
+        The two targets genuinely disagree here, so both are asserted.
 
-        Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._drop_unsupported_quality
+        The gateway widens ``quality`` to a free string because its backends
+        have their own vocabularies (Bedrock's ``premium``/``standard``), which
+        OpenAI's enum cannot express. Quality then steers the backend and never
+        decides whether an image can be produced: refusing over it would break
+        every client sending OpenAI's default on a model with no such control,
+        so an unusable value is dropped with a warning and the quality actually
+        produced is reported.
+
+        OpenAI keeps the closed enum and rejects an unknown value with a 400
+        ``invalid_value`` before generating anything. A client that sends a
+        typo therefore gets an error upstream and a differently-styled image
+        here -- an accepted divergence, not an accident.
+
+        Ref: https://developers.openai.com/api/reference/resources/images/methods/create
+             stdapi/types/openai_images.py:ImageGenerateParams
+             stdapi/models/image/__init__.py:ImageGenerationJobBase._drop_unsupported_quality
         """
         _skip_retired_official_image_model(
             use_official_api, image_generation_model, "quality"
         )
+
+        if use_official_api:
+            with pytest.raises(BadRequestError) as exc_info:
+                openai_client.images.generate(  # type: ignore[call-overload]
+                    prompt="A test image",
+                    model=image_generation_model,
+                    n=1,
+                    size=image_generation_size,
+                    quality="invalid-quality",
+                )
+            validate_error_response(
+                exc_info.value,
+                expected_type="invalid_request_error",
+                expected_param="quality",
+            )
+            assert exc_info.value.code == "invalid_value"
+            return
 
         response = openai_client.images.generate(  # type: ignore[call-overload]
             prompt="A test image",
@@ -804,6 +896,7 @@ class TestImageGeneration:
         openai_client: OpenAI,
         image_generation_model: str,
         image_generation_size: str,
+        use_official_api: bool,
     ) -> None:
         """A ``style`` a model has no control for is ignored, not refused.
 
@@ -812,6 +905,10 @@ class TestImageGeneration:
 
         Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._drop_unsupported_style
         """
+        _skip_official_image_model_without_style(
+            use_official_api, image_generation_model
+        )
+
         response = openai_client.images.generate(  # type: ignore[call-overload]
             prompt="A test image",
             model=image_generation_model,

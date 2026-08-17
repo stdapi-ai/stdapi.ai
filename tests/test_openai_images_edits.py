@@ -48,6 +48,12 @@ class TestImagesEditsBasic:
     """
 
     @pytest.mark.expensive
+    @pytest.mark.gateway(
+        "OpenAI retired dall-e-2, leaving gpt-image-1 as the only model its "
+        "edits endpoint serves; Stability inpaint is Bedrock-only, and its "
+        "white-is-maximum-strength mask polarity and URL response have no "
+        "upstream counterpart"
+    )
     def test_edit_image_with_mask(
         self, openai_client: OpenAI, sample_image_file: bytes, sample_mask_file: bytes
     ) -> None:
@@ -91,6 +97,11 @@ class TestImagesEditsBasic:
         validate_image_usage(response.usage)
 
     @pytest.mark.expensive
+    @pytest.mark.gateway(
+        "gpt-image-1, the only model left on OpenAI's edits endpoint after "
+        "dall-e-2 was retired, rejects response_format outright and always "
+        "answers base64; the Stability inpaint model this pins is Bedrock-only"
+    )
     def test_edit_image_b64_json_with_mask(
         self, openai_client: OpenAI, sample_image_file: bytes, sample_mask_file: bytes
     ) -> None:
@@ -376,6 +387,13 @@ class TestImagesEditsBasic:
         )
 
     @pytest.mark.expensive
+    @pytest.mark.gateway(
+        "the single-event stream asserted here is a property of the "
+        "Bedrock-only Stability inpaint model, which emits no preview frames; "
+        "gpt-image-1, all OpenAI still serves on this endpoint after retiring "
+        "dall-e-2, honours partial_images and emits image_edit.partial_image "
+        "events before the completion"
+    )
     def test_edit_with_streaming(
         self, openai_client: OpenAI, sample_image_file: bytes, sample_mask_file: bytes
     ) -> None:
@@ -409,6 +427,12 @@ class TestImagesEditsBasic:
         assert validate_base64_image(events[-1].b64_json) == "png"
 
     @pytest.mark.expensive
+    @pytest.mark.gateway(
+        "the Bedrock-only Stability inpaint model this pins does not exist "
+        "upstream, and gpt-image-1 -- all OpenAI serves on this endpoint since "
+        "dall-e-2 was retired -- rejects the response_format the assertions "
+        "depend on. OpenAI does accept the images[{file_id}] JSON body itself"
+    )
     def test_edit_with_file_id(
         self, openai_client: OpenAI, sample_image_file: bytes
     ) -> None:
@@ -451,41 +475,59 @@ class TestImagesEditsBasic:
         finally:
             openai_client.files.delete(uploaded.id)
 
-    def test_missing_images_returns_400(self, openai_client: OpenAI) -> None:
-        """A JSON body without an ``images`` array is a validation error naming the field.
+    def test_missing_images_returns_400(
+        self, openai_client: OpenAI, image_generation_model: str, use_official_api: bool
+    ) -> None:
+        """A JSON body without an ``images`` array is a 400 naming that field.
 
-        Ref: stdapi/types/openai_images.py:ImageEditJsonBody
+        The JSON encoding of this endpoint is not a gateway extension: OpenAI
+        accepts it too, and answers ``missing_required_parameter`` on
+        ``param="images"``. The gateway reports its Pydantic location instead,
+        so only the wording is target-specific -- the status, the envelope type
+        and the named field are common to both.
+
+        Ref: https://developers.openai.com/api/reference/resources/images/methods/edit
+             stdapi/types/openai_images.py:ImageEditJsonBody
              stdapi/main.py:handle_validation_exception
         """
         http_client = openai_client._client  # noqa: SLF001
         response = http_client.post(
             f"{openai_client.base_url}images/edits",
-            json={
-                "model": "stability.stable-image-inpaint-v1:0",
-                "prompt": "Make it darker",
-            },
+            json={"model": image_generation_model, "prompt": "Make it darker"},
             headers={"Authorization": f"Bearer {openai_client.api_key}"},
         )
         assert response.status_code == 400
         error = response.json().get("error", {})
         assert error.get("type") == "invalid_request_error"
-        assert error["message"].startswith("Validation error"), error["message"]
         assert "images" in error["message"], error["message"]
+        if use_official_api:
+            assert error["message"] == "Missing required parameter: 'images'."
+            assert error.get("code") == "missing_required_parameter"
+            assert error.get("param") == "images"
+        else:
+            assert error["message"].startswith("Validation error"), error["message"]
 
-    def test_empty_image_ref_returns_400(self, openai_client: OpenAI) -> None:
+    def test_empty_image_ref_returns_400(
+        self, openai_client: OpenAI, image_generation_model: str, use_official_api: bool
+    ) -> None:
         """An ``images`` entry with neither ``file_id`` nor ``image_url`` is rejected.
 
-        The failing element is reported positionally (``images.0``) by the
-        model validator that requires exactly one image source.
+        Both targets reject it with a 400 that points at the offending element
+        by index and demands exactly one image source. They label it
+        differently: OpenAI answers ``image_generation_user_error`` with
+        ``param="images[0]"``, where the gateway answers the generic
+        ``invalid_request_error`` and reports the Pydantic location
+        ``images.0`` in the message.
 
-        Ref: stdapi/types/openai_images.py:ImageInputReferenceParam
+        Ref: https://developers.openai.com/api/reference/resources/images/methods/edit
+             stdapi/types/openai_images.py:ImageInputReferenceParam
              stdapi/main.py:handle_validation_exception
         """
         http_client = openai_client._client  # noqa: SLF001
         response = http_client.post(
             f"{openai_client.base_url}images/edits",
             json={
-                "model": "stability.stable-image-inpaint-v1:0",
+                "model": image_generation_model,
                 "prompt": "Make it darker",
                 "images": [{}],
             },
@@ -493,9 +535,15 @@ class TestImagesEditsBasic:
         )
         assert response.status_code == 400
         error = response.json().get("error", {})
-        assert error.get("type") == "invalid_request_error"
-        assert "images.0" in error["message"], error["message"]
-        assert "file_id" in error["message"], error["message"]
+        if use_official_api:
+            assert error.get("type") == "image_generation_user_error"
+            assert error.get("code") == "mutually_exclusive_parameters"
+            assert error.get("param") == "images[0]"
+            assert "file_id" in error["message"], error["message"]
+        else:
+            assert error.get("type") == "invalid_request_error"
+            assert "images.0" in error["message"], error["message"]
+            assert "file_id" in error["message"], error["message"]
 
 
 @pytest.mark.local
