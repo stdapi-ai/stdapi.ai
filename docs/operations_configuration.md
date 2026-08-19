@@ -173,6 +173,7 @@ This section provides a quick reference of all available configuration options. 
 | [`VECTOR_STORE_EMBEDDING_MODEL`](#vector-store-embedding-model) | `amazon.titan-embed-text-v2:0` | Model embedding the indexed files and the search queries                    |
 | [`VECTOR_STORE_CHUNK_SIZE_TOKENS`](#vector-store-chunk-size-tokens) | `800`   | Default chunk size for files indexed without an explicit `chunking_strategy`                         |
 | [`VECTOR_STORE_CHUNK_OVERLAP_TOKENS`](#vector-store-chunk-overlap-tokens) | `400` | Default chunk overlap; must not exceed half the chunk size                                 |
+| [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](#aws-sqs-vector-store-queue-url) | None    | Amazon SQS queue making vector store indexing survive the server running it; unset keeps it in-process |
 | [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](#aws-bedrock-knowledge-base-ids) | `[]`    | Allowlist of Amazon Bedrock knowledge bases addressed as `vs_kb_...` vector stores; empty disables it |
 | [`AWS_TRANSCRIBE_S3_BUCKET`](#aws-transcribe-s3-bucket) | `AWS_S3_BUCKET` | S3 bucket for temporary audio transcription files; must be in same region as `AWS_TRANSCRIBE_REGION` |
 | [`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN`](#aws-transcribe-output-encryption-key-arn) | None | AWS KMS key encrypting the transcription output objects; unset keeps the bucket's own encryption |
@@ -770,6 +771,30 @@ export VECTOR_STORE_CHUNK_OVERLAP_TOKENS=400
 ```
 
 More overlap keeps a sentence split across two chunks findable from either one, at the cost of more chunks to embed and store.
+
+#### `AWS_SQS_VECTOR_STORE_QUEUE_URL` { #aws-sqs-vector-store-queue-url }
+
+:octicons-package-24: **Purpose**
+:   URL of the [Amazon SQS](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/welcome.html) standard queue that carries vector store indexing work, so a file keeps being indexed when the server that accepted it stops
+
+:octicons-gear-24: **Default**
+:   None — indexing runs in the server that accepted the request, and a file being indexed when that server stops is reported as `failed`
+
+:octicons-alert-24: **Requirement**
+:   Requires [`AWS_S3_VECTORS_BUCKET`](#aws-s3-vectors-bucket). Must be a standard queue (not FIFO), with a [dead-letter queue](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html), and the gateway's role needs the [Durable vector store indexing permissions](operations_iam_permissions.md#durable-vector-store-indexing) on it
+
+```bash
+export AWS_SQS_VECTOR_STORE_QUEUE_URL=https://sqs.us-east-1.amazonaws.com/123456789012/stdapi-ai-indexing
+```
+
+Attaching a file records the work on the queue before answering, and every server reads from that queue: whichever one is still running finishes it. The region comes from the URL, so there is nothing else to configure. Create the queue yourself, in the same account.
+
+The queue only ever carries identifiers — which store, which files, which batch — never file content, so no indexed data is stored a second time.
+
+See [Durable indexing](api_openai_vector_stores.md#durable-indexing) for what a client observes, and [Resilience](operations_resilience.md#vector-store-indexing) for how it behaves during a deployment.
+
+!!! warning "Give the queue a dead-letter queue"
+    A file the gateway cannot index is retried a few times and then reported as `failed`. Without a dead-letter queue its message is dropped at that point; with one it is kept, so you can see what was refused. The gateway reads the queue's own redrive policy at startup and reports a queue that has none as a startup warning.
 
 #### `AWS_BEDROCK_KNOWLEDGE_BASE_IDS` { #aws-bedrock-knowledge-base-ids }
 

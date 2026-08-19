@@ -512,6 +512,7 @@ _LIVE_FIXTURES = frozenset(
         "bedrock_user_role_arn",
         "cognito_sandbox_pool",
         "cohere_client",
+        "indexing_job_queue",
         "live_guardrail",
         "live_server",
         "openai_client",

@@ -19,7 +19,7 @@ Ref: https://platform.openai.com/docs/api-reference/vector-stores
 """
 
 import time
-from asyncio import Event, gather, run, sleep
+from asyncio import CancelledError, Event, create_task, gather, run, sleep
 from dataclasses import replace
 from itertools import count
 from types import SimpleNamespace
@@ -28,14 +28,16 @@ from zlib import crc32
 
 import pytest
 from botocore.exceptions import ClientError
+from botocore.session import get_session as botocore_session
 from fastapi.exceptions import RequestValidationError
 from openai import NotFoundError, OpenAI
 from pydantic import ValidationError
+from pydantic_core import from_json
 
 from stdapi import vector_stores
 from stdapi.api_errors import ApiError
 from stdapi.cleanup import CLEANUPS
-from stdapi.config import SETTINGS
+from stdapi.config import AWS_SESSION, SETTINGS
 from stdapi.models.embedding import EmbeddingResponse
 from stdapi.models.embedding.cohere_embed import EmbeddingModel as CohereEmbeddingModel
 from stdapi.types.openai_vector_stores import (
@@ -45,6 +47,7 @@ from stdapi.types.openai_vector_stores import (
     FileBatchFile,
     StaticChunkingConfig,
 )
+from stdapi.utils import to_json_str, webuuid
 from stdapi.vector_stores import (
     BatchRecord,
     FileCountsRecord,
@@ -60,6 +63,7 @@ from stdapi.vector_stores import (
     drain_indexing,
     engine,
     index_files,
+    jobs,
     list_store_files,
     new_batch_id,
     new_store_id,
@@ -83,6 +87,7 @@ from stdapi.vector_stores.backend import (
     parse_filter,
     unsupported_file_message,
 )
+from stdapi.vector_stores.jobs import MAX_JOB_FILES, IndexFilesJob
 from stdapi.vector_stores.knowledge_base import CAPABILITIES as _KB_CAPABILITIES
 from stdapi.vector_stores.records import batch_key, file_key, read_record, store_key
 from stdapi.vector_stores.s3_vectors import (
@@ -3939,3 +3944,825 @@ class TestUnsupportedFileMessage:
         assert record.last_error is not None
         assert record.last_error.code == "unsupported_file"
         assert "application/x-parquet" in record.last_error.message
+
+
+#: A well-formed queue URL, the one shape the setting accepts.
+_QUEUE_URL = "https://sqs.us-east-1.amazonaws.com/123456789012/stdapi-test-indexing"
+
+
+class _FakeSqsClient:
+    """The queue operations an indexing job uses, in memory.
+
+    Substituted at the AWS client, so the send, the receive, the visibility
+    heartbeat, the delete and the redelivery accounting are the code under
+    test — only the service behind them is stood in for.
+    """
+
+    def __init__(self) -> None:
+        #: Messages waiting to be received, oldest first.
+        self.pending: list[dict[str, Any]] = []
+        #: Messages handed out and not deleted yet, by receipt handle.
+        self.in_flight: dict[str, dict[str, Any]] = {}
+        self.deleted: list[str] = []
+        self.kept_invisible: list[str] = []
+        self.attributes: dict[str, str] = {}
+        #: Raised by the next send, standing in for a denied or broken queue.
+        self.send_error: Exception | None = None
+        self._receipts = count()
+
+    async def send_message(self, **params: Any) -> dict[str, Any]:  # noqa: ANN401
+        if self.send_error is not None:
+            raise self.send_error
+        self.pending.append({"Body": params["MessageBody"], "receives": 0})
+        return {"MessageId": "message"}
+
+    async def receive_message(self, **params: Any) -> dict[str, Any]:  # noqa: ANN401
+        del params
+        if not self.pending:
+            return {}
+        entry = self.pending.pop(0)
+        entry["receives"] += 1
+        receipt = f"receipt-{next(self._receipts)}"
+        self.in_flight[receipt] = entry
+        return {"Messages": [self._message(receipt, entry)]}
+
+    async def delete_message(self, **params: Any) -> dict[str, Any]:  # noqa: ANN401
+        self.in_flight.pop(params["ReceiptHandle"], None)
+        self.deleted.append(params["ReceiptHandle"])
+        return {}
+
+    async def change_message_visibility(self, **params: Any) -> dict[str, Any]:  # noqa: ANN401
+        self.kept_invisible.append(params["ReceiptHandle"])
+        return {}
+
+    async def get_queue_attributes(self, **params: Any) -> dict[str, Any]:  # noqa: ANN401
+        del params
+        return {"Attributes": dict(self.attributes)}
+
+    @staticmethod
+    def _message(receipt: str, entry: dict[str, Any]) -> dict[str, Any]:
+        """Shape one delivery as ``ReceiveMessage`` answers it."""
+        return {
+            "MessageId": "message",
+            "ReceiptHandle": receipt,
+            "Body": entry["Body"],
+            "Attributes": {"ApproximateReceiveCount": str(entry["receives"])},
+        }
+
+    def redeliver(self) -> None:
+        """Return what a killed consumer never deleted, as the timeout does."""
+        self.pending.extend(self.in_flight.values())
+        self.in_flight.clear()
+
+    async def next_message(self) -> dict[str, Any]:
+        """Receive the next message, failing when the queue holds none."""
+        received: list[dict[str, Any]] = (await self.receive_message()).get(
+            "Messages", []
+        )
+        assert received, "the queue holds no message"
+        return received[0]
+
+
+@pytest.fixture
+def indexing_queue(
+    vector_backend: _FakeBackend, monkeypatch: pytest.MonkeyPatch
+) -> _FakeSqsClient:
+    """Configure the indexing queue and serve it from memory.
+
+    Returns:
+        The queue the jobs are published to and consumed from.
+    """
+    del vector_backend
+    client = _FakeSqsClient()
+    monkeypatch.setattr(SETTINGS, "aws_sqs_vector_store_queue_url", _QUEUE_URL)
+    monkeypatch.setattr(jobs, "_client", lambda: client)
+    # What the startup probe reads off the queue is process-global state.
+    monkeypatch.setattr(jobs, "_MAX_RECEIVES", jobs._DEFAULT_MAX_RECEIVES)  # noqa: SLF001
+    monkeypatch.setattr(jobs, "_HAS_DEAD_LETTER_QUEUE", False)
+    return client
+
+
+def _job_body(**overrides: Any) -> str:  # noqa: ANN401
+    """Return a message body, valid unless a case overrides a field."""
+    body: dict[str, Any] = {
+        "type": "vector_store.index_files",
+        "store_id": new_store_id(),
+        "file_ids": [f"file-{0:032d}"],
+        "batch_id": "",
+        "request_id": "test-request",
+    }
+    body.update(overrides)
+    return to_json_str({key: value for key, value in body.items() if value is not None})
+
+
+@pytest.mark.local
+class TestIndexingIsHandedOver:
+    """Where an indexing wave goes once its records are durable.
+
+    The send is the last thing an attach does, and it happens inside the
+    request: every file record, the store counters and the batch record are
+    already written under conditional writes by then, and the file bytes have
+    been durable since they were uploaded, so the job the message names is
+    replayable from the moment it is sent.
+
+    Ref: stdapi/vector_stores/engine.py:attach_files
+         stdapi/vector_stores/jobs.py:enqueue_indexing
+    """
+
+    async def test_without_a_queue_the_attaching_server_indexes(
+        self, vector_backend: _FakeBackend, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The default deployment behaves exactly as it did before the queue.
+
+        No client is constructed either: an unset setting must not reach AWS.
+        """
+
+        def _refuse() -> None:
+            opened = "an unconfigured deployment opened a queue client"
+            raise AssertionError(opened)
+
+        monkeypatch.setattr(jobs, "_client", _refuse)
+        assert SETTINGS.aws_sqs_vector_store_queue_url is None
+        store = await _create_store()
+        file_id = vector_backend.upload(_TEXT_FILE)
+
+        await _attach(store, [file_id])
+
+        assert vector_backend.started == [(store.id, "", (file_id,))]
+
+    async def test_an_attach_publishes_the_wave_instead_of_running_it(
+        self, vector_backend: _FakeBackend, indexing_queue: _FakeSqsClient
+    ) -> None:
+        """With a queue the wave leaves the request, so any server can run it."""
+        store = await _create_store()
+        file_id = vector_backend.upload(_TEXT_FILE)
+        batch_id = new_batch_id()
+
+        await _attach(store, [file_id], batch_id=batch_id)
+
+        assert not vector_backend.started
+        (message,) = indexing_queue.pending
+        job = IndexFilesJob.model_validate_json(message["Body"])
+        assert job.type == "vector_store.index_files"
+        assert job.store_id == store.id
+        assert job.file_ids == [file_id]
+        assert job.batch_id == batch_id
+
+    async def test_the_message_carries_no_caller_content(
+        self, vector_backend: _FakeBackend, indexing_queue: _FakeSqsClient
+    ) -> None:
+        """A job names what to index; it never copies it.
+
+        Anything else would put caller data in a second store at rest, and give
+        a message body worth tampering with.
+        """
+        store = await _create_store()
+        file_id = vector_backend.upload(b"the observatory dome is under maintenance")
+
+        await _attach(store, [file_id])
+
+        body = indexing_queue.pending[0]["Body"]
+        assert "observatory" not in body
+        assert set(from_json(body)) == {
+            "type",
+            "store_id",
+            "file_ids",
+            "batch_id",
+            "request_id",
+        }
+
+    async def test_a_queue_that_refuses_the_send_indexes_here_instead(
+        self, vector_backend: _FakeBackend, indexing_queue: _FakeSqsClient
+    ) -> None:
+        """The attach still succeeds: the files are attached either way.
+
+        Failing the request would be a lie — the records are written — and
+        stranding the wave would leave files nothing ever settles. Running it
+        here is what a deployment without a queue always does.
+        """
+        indexing_queue.send_error = make_client_error("AccessDenied", "SendMessage")
+        store = await _create_store()
+        file_id = vector_backend.upload(_TEXT_FILE)
+
+        await _attach(store, [file_id])
+
+        assert vector_backend.started == [(store.id, "", (file_id,))]
+        assert not indexing_queue.pending
+
+    async def test_a_wave_larger_than_a_message_may_name_is_indexed_here(
+        self, indexing_queue: _FakeSqsClient
+    ) -> None:
+        """One message cannot fan out without bound, so an outsized wave stays.
+
+        Ref: stdapi/vector_stores/jobs.py:MAX_JOB_FILES
+        """
+        oversized = [f"file-{index:032d}" for index in range(MAX_JOB_FILES + 1)]
+
+        assert await jobs.enqueue_indexing(new_store_id(), oversized, "") is False
+        assert not indexing_queue.pending
+
+
+@pytest.mark.local
+class TestAJobMessageIsUntrusted:
+    """What comes off the queue is data, never instruction.
+
+    Only this server's own role may write to the queue, and the message is
+    still validated as if it could not be: the type selects an entry of a
+    mapping built at import, unknown fields are refused, and every identifier
+    is re-parsed before it can name an object key in the records bucket.
+
+    Ref: stdapi/vector_stores/jobs.py:_parse_job
+    """
+
+    def test_a_type_no_handler_answers_for_is_refused(self) -> None:
+        """A job type is looked up, never resolved into code."""
+        handler, job = jobs._parse_job(_job_body(type="vector_store.delete_store"))  # noqa: SLF001
+        assert handler is None
+        assert job is None
+
+    def test_a_body_that_is_not_a_job_object_is_refused(self) -> None:
+        """Anything that is not a JSON object names no handler at all."""
+        assert jobs._parse_job("not json at all") == (None, None)  # noqa: SLF001
+        assert jobs._parse_job('["vector_store.index_files"]') == (None, None)  # noqa: SLF001
+
+    def test_an_unknown_field_is_refused(self) -> None:
+        """``extra="forbid"`` keeps a job to the fields the handler reads."""
+        handler, job = jobs._parse_job(_job_body(bucket="somebody-elses-bucket"))  # noqa: SLF001
+        assert handler is None
+        assert job is None
+
+    @pytest.mark.parametrize(
+        "store_id",
+        [
+            "../../../etc/passwd",
+            "vs_../store",
+            "vs_kb_ABCDE12345",
+            "vs_" + "a" * 26 + "/../other",
+            "vs_" + "z" * 400,
+        ],
+    )
+    def test_a_store_identifier_this_server_would_not_mint_is_refused(
+        self, store_id: str
+    ) -> None:
+        """The store identifier becomes an object key prefix in the records bucket.
+
+        The knowledge-base identifier is in the list on purpose: it is only
+        addressable when the deployment allowlisted it, and the queue must not
+        become a way around that.
+        """
+        with pytest.raises(ValidationError, match="store_id"):
+            IndexFilesJob.model_validate_json(_job_body(store_id=store_id))
+
+    @pytest.mark.parametrize(
+        "file_ids", [["../../secret"], ["file-" + "0" * 32, "not-a-file-id"], []]
+    )
+    def test_a_file_identifier_this_server_would_not_mint_is_refused(
+        self, file_ids: list[str]
+    ) -> None:
+        """Every entry becomes an object key, so every entry is re-parsed."""
+        with pytest.raises(ValidationError, match="file_ids"):
+            IndexFilesJob.model_validate_json(_job_body(file_ids=file_ids))
+
+    def test_more_files_than_a_job_may_name_are_refused(self) -> None:
+        """A message naming a hundred thousand files is a denial of service."""
+        with pytest.raises(ValidationError, match="file_ids"):
+            IndexFilesJob.model_validate_json(
+                _job_body(
+                    file_ids=[
+                        f"file-{index:032d}" for index in range(MAX_JOB_FILES + 1)
+                    ]
+                )
+            )
+
+    def test_a_batch_identifier_this_server_would_not_mint_is_refused(self) -> None:
+        """The batch identifier becomes an object key too."""
+        with pytest.raises(ValidationError, match="batch_id"):
+            IndexFilesJob.model_validate_json(_job_body(batch_id="../batches/other"))
+
+    def test_a_request_identifier_is_kept_to_a_logging_charset(self) -> None:
+        """It is only ever written to a log, and only as itself."""
+        with pytest.raises(ValidationError, match="request_id"):
+            IndexFilesJob.model_validate_json(_job_body(request_id="a\nb: injected"))
+
+    async def test_a_message_no_handler_answers_for_is_taken_off_the_queue(
+        self, indexing_queue: _FakeSqsClient
+    ) -> None:
+        """Keeping it would only buy another delivery of the same rejection."""
+        await jobs._run_job(  # noqa: SLF001
+            {"ReceiptHandle": "poison", "Body": _job_body(type="something.else")}
+        )
+
+        assert indexing_queue.deleted == ["poison"]
+
+
+@pytest.mark.local
+class TestAKilledJobIsFinishedElsewhere:
+    """The requirement the queue exists for.
+
+    A server killed mid-indexing never deletes the message, so the job becomes
+    visible again and the next consumer — in another task, in another
+    availability zone — finishes it. The caller sees one indexing that took
+    longer, not a file it has to attach again.
+
+    Ref: stdapi/vector_stores/jobs.py:_run_job
+    """
+
+    @staticmethod
+    def _blocked_embedding(backend: _FakeBackend) -> tuple[Event, Event]:
+        """Make the first embedding call block until the test releases it.
+
+        Returns:
+            ``(started, release)``: set when the embedding began, and the event
+            the test sets to let it finish.
+        """
+        started = Event()
+        release = Event()
+        embed = backend.model.embed_text
+
+        async def _blocking(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            started.set()
+            await release.wait()
+            return await embed(*args, **kwargs)
+
+        backend.model.embed_text = _blocking  # type: ignore[method-assign]
+        return started, release
+
+    async def test_a_second_consumer_completes_what_a_killed_one_started(
+        self, vector_backend: _FakeBackend, indexing_queue: _FakeSqsClient
+    ) -> None:
+        """The file reaches ``completed`` although the server that took it died.
+
+        The kill is the real one this design assumes: the task disappears
+        between reading the file and writing its outcome, with nothing running
+        to settle anything.
+        """
+        store = await _create_store()
+        file_id = vector_backend.upload(_TEXT_FILE)
+        await _attach(store, [file_id])
+        started, release = self._blocked_embedding(vector_backend)
+
+        killed = create_task(jobs._run_job(await indexing_queue.next_message()))  # noqa: SLF001
+        await started.wait()
+        killed.cancel()
+        with pytest.raises(CancelledError):
+            await killed
+
+        # Nothing settled it, and nothing took it off the queue.
+        assert (await read_file(store.id, file_id)).status == "in_progress"
+        assert not indexing_queue.deleted
+
+        release.set()
+        indexing_queue.redeliver()
+        message = await indexing_queue.next_message()
+        assert message["Attributes"]["ApproximateReceiveCount"] == "2"
+        await jobs._run_job(message)  # noqa: SLF001
+
+        record = await read_file(store.id, file_id)
+        assert record.status == "completed"
+        assert record.chunk_count
+        assert indexing_queue.deleted == [message["ReceiptHandle"]]
+        assert (await read_store(store.id)).file_counts.completed == 1
+
+    async def test_a_replayed_job_neither_re_embeds_nor_re_counts(
+        self, vector_backend: _FakeBackend, indexing_queue: _FakeSqsClient
+    ) -> None:
+        """At-least-once delivery must cost the operator nothing the second time.
+
+        Every terminal state is reached under a compare-and-set write, so a
+        replay finds the file already settled and stops before the embedding
+        call — which is the one that bills.
+        """
+        store = await _create_store()
+        file_id = vector_backend.upload(_TEXT_FILE)
+        await _attach(store, [file_id])
+        body = indexing_queue.pending[0]["Body"]
+
+        await jobs._run_job(await indexing_queue.next_message())  # noqa: SLF001
+        first = await read_store(store.id)
+        waves = len(vector_backend.model.waves)
+
+        await jobs._run_job({"ReceiptHandle": "replay", "Body": body})  # noqa: SLF001
+
+        assert len(vector_backend.model.waves) == waves
+        second = await read_store(store.id)
+        assert second.file_counts.model_dump() == first.file_counts.model_dump()
+        assert second.usage_bytes == first.usage_bytes
+
+    async def test_a_job_is_kept_invisible_for_as_long_as_it_runs(
+        self, vector_backend: _FakeBackend, indexing_queue: _FakeSqsClient
+    ) -> None:
+        """The base visibility is short, so the heartbeat is what holds the job.
+
+        A long base timeout would hide a job a server was killed five seconds
+        into for the whole of it, while the caller polls a file nobody indexes.
+        """
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(jobs, "_HEARTBEAT_SECONDS", 0)
+        try:
+            store = await _create_store()
+            file_id = vector_backend.upload(_TEXT_FILE)
+            await _attach(store, [file_id])
+            started, release = self._blocked_embedding(vector_backend)
+
+            message = await indexing_queue.next_message()
+            running = create_task(jobs._run_job(message))  # noqa: SLF001
+            await started.wait()
+            await sleep(0)
+            release.set()
+            await running
+        finally:
+            monkeypatch.undo()
+
+        assert message["ReceiptHandle"] in indexing_queue.kept_invisible
+        assert (await read_file(store.id, file_id)).status == "completed"
+
+    async def test_a_job_that_waited_out_its_lease_is_still_run(
+        self, vector_backend: _FakeBackend, indexing_queue: _FakeSqsClient
+    ) -> None:
+        """A queued job renews the lease before the store read that would void it.
+
+        Files left ``in_progress`` past their store's lease are settled as
+        abandoned by the next read — and the first thing a job does is read the
+        store, so without the renewal a job would settle the very files it was
+        sent to index.
+
+        Ref: stdapi/vector_stores/engine.py:renew_indexing_lease
+        """
+        store = await _create_store()
+        file_id = vector_backend.upload(_TEXT_FILE)
+        await _attach(store, [file_id])
+        # The lease the attach wrote has run out and the file is old enough to
+        # count as abandoned: exactly a job that waited behind a busy fleet.
+        await update_record(
+            StoreRecord,
+            records.store_key(store.id),
+            lambda stored: setattr(stored, "indexing_expires_at", 0),
+        )
+        await update_record(
+            FileRecord,
+            records.file_key(store.id, file_id),
+            lambda stored: setattr(stored, "created_at", 0),
+        )
+
+        await jobs._run_job(await indexing_queue.next_message())  # noqa: SLF001
+
+        assert (await read_file(store.id, file_id)).status == "completed"
+
+
+@pytest.mark.local
+class TestAJobThatRunsOutOfDeliveries:
+    """A job nobody will run again still owes the caller an answer.
+
+    Without this the queue reintroduces the stranded ``in_progress`` state:
+    a poison file would be retried until the message expires, billing its
+    embeddings every time, and the record would never leave ``in_progress``.
+
+    Ref: stdapi/vector_stores/jobs.py:_give_up
+    """
+
+    async def test_the_files_are_settled_and_the_message_dropped(
+        self,
+        vector_backend: _FakeBackend,
+        indexing_queue: _FakeSqsClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Past the last delivery the wave is failed, never retried again."""
+        monkeypatch.setattr(jobs, "_MAX_RECEIVES", 2)
+        store = await _create_store()
+        file_id = vector_backend.upload(_TEXT_FILE)
+        await _attach(store, [file_id])
+        body = indexing_queue.pending[0]["Body"]
+        waves = len(vector_backend.model.waves)
+
+        await jobs._run_job(  # noqa: SLF001
+            {
+                "ReceiptHandle": "exhausted",
+                "Body": body,
+                "Attributes": {"ApproximateReceiveCount": "3"},
+            }
+        )
+
+        record = await read_file(store.id, file_id)
+        assert record.status == "failed"
+        assert record.last_error is not None
+        assert record.last_error.code == "server_error"
+        assert "interrupted" in record.last_error.message
+        # Nothing was embedded on the way to giving up: the give-up is not a run.
+        assert len(vector_backend.model.waves) == waves
+        assert indexing_queue.deleted == ["exhausted"]
+        assert (await read_store(store.id)).file_counts.failed == 1
+
+    async def test_a_delivery_that_is_not_the_last_still_indexes(
+        self, vector_backend: _FakeBackend, indexing_queue: _FakeSqsClient
+    ) -> None:
+        """A redelivery is the recovery, so it must not be read as a give-up."""
+        store = await _create_store()
+        file_id = vector_backend.upload(_TEXT_FILE)
+        await _attach(store, [file_id])
+        indexing_queue.redeliver()
+        await indexing_queue.next_message()
+        indexing_queue.redeliver()
+
+        message = await indexing_queue.next_message()
+        assert message["Attributes"]["ApproximateReceiveCount"] == "2"
+        await jobs._run_job(message)  # noqa: SLF001
+
+        assert (await read_file(store.id, file_id)).status == "completed"
+
+
+@pytest.mark.local
+class TestTheQueueIsProbedAtStartup:
+    """What the queue promises is read once, never guessed at per message.
+
+    Ref: stdapi/vector_stores/jobs.py:initialize_job_queue
+    """
+
+    async def test_the_redrive_policy_decides_how_many_deliveries_a_job_gets(
+        self, indexing_queue: _FakeSqsClient
+    ) -> None:
+        """The queue's own configuration is the authority, not a constant here."""
+        indexing_queue.attributes["RedrivePolicy"] = to_json_str(
+            {
+                "deadLetterTargetArn": "arn:aws:sqs:us-east-1:123456789012:dlq",
+                "maxReceiveCount": 7,
+            }
+        )
+        start_event: Any = {"level": "info"}
+
+        await jobs.initialize_job_queue(start_event)
+
+        assert jobs._MAX_RECEIVES == 7  # noqa: SLF001
+        assert "server_warnings" not in start_event
+
+    async def test_a_queue_without_a_dead_letter_queue_is_reported(
+        self, indexing_queue: _FakeSqsClient
+    ) -> None:
+        """The operator is told by name what their queue is missing.
+
+        The caller is told nothing: a file that cannot be indexed reports the
+        same error either way.
+        """
+        del indexing_queue
+        start_event: Any = {"level": "info"}
+
+        await jobs.initialize_job_queue(start_event)
+
+        assert start_event["level"] == "warning"
+        (warning,) = start_event["server_warnings"]
+        assert "dead-letter queue" in warning
+        assert jobs._MAX_RECEIVES == jobs._DEFAULT_MAX_RECEIVES  # noqa: SLF001
+
+    async def test_a_queue_that_cannot_be_described_is_reported_and_still_used(
+        self, indexing_queue: _FakeSqsClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One missing read permission must not turn into a refused startup."""
+
+        async def _denied(**params: Any) -> dict[str, Any]:  # noqa: ANN401
+            del params
+            denial = make_client_error("AccessDenied", "GetQueueAttributes")
+            raise denial
+
+        monkeypatch.setattr(indexing_queue, "get_queue_attributes", _denied)
+        start_event: Any = {"level": "info"}
+
+        await jobs.initialize_job_queue(start_event)
+
+        (warning,) = start_event["server_warnings"]
+        assert "sqs:GetQueueAttributes" in warning
+
+    async def test_nothing_is_probed_without_a_queue(self) -> None:
+        """An unconfigured deployment makes no call at all."""
+        start_event: Any = {"level": "info"}
+
+        await jobs.initialize_job_queue(start_event)
+
+        assert start_event == {"level": "info"}
+
+
+@pytest.mark.local
+class TestTheConsumerYieldsToRequests:
+    """Asyncio has no priorities, so the only one a background loop has is to wait.
+
+    Ref: stdapi/vector_stores/jobs.py:_consume
+    """
+
+    async def test_a_busy_server_does_not_ask_the_queue_for_work(
+        self, indexing_queue: _FakeSqsClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Minutes of embedding are not started while clients are waiting."""
+        monkeypatch.setattr(jobs, "requests_in_flight", lambda: jobs._BUSY_REQUESTS + 1)  # noqa: SLF001
+        monkeypatch.setattr(jobs, "_BUSY_WAIT_SECONDS", 0.01)
+        indexing_queue.pending.append({"Body": _job_body(), "receives": 0})
+
+        jobs.open_job_consumer()
+        try:
+            await sleep(0.05)
+            assert indexing_queue.pending
+            assert not indexing_queue.in_flight
+        finally:
+            jobs.close_job_consumer()
+
+    async def test_the_queue_is_left_alone_when_no_queue_is_configured(self) -> None:
+        """Nothing consumes, so nothing constructs a client either."""
+        assert SETTINGS.aws_sqs_vector_store_queue_url is None
+
+        jobs.open_job_consumer()
+        try:
+            assert jobs._CONSUMER is None  # noqa: SLF001
+        finally:
+            jobs.close_job_consumer()
+
+    async def test_the_region_comes_from_the_queue_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A second setting could only disagree with the URL, so there is none."""
+        assert jobs.queue_region() is None
+        monkeypatch.setattr(
+            SETTINGS,
+            "aws_sqs_vector_store_queue_url",
+            "https://sqs.eu-west-3.amazonaws.com/123456789012/indexing",
+        )
+        assert jobs.queue_region() == "eu-west-3"
+
+
+#: Seconds a live delivery stays invisible, so a killed job comes back quickly.
+_LIVE_VISIBILITY_SECONDS = 2
+
+#: Seconds to wait for AWS to hand a killed job back to another consumer.
+_LIVE_REDELIVERY_TIMEOUT = 90.0
+
+
+@pytest.fixture(scope="session")
+def indexing_job_queue() -> Iterator[str]:
+    """A real Amazon SQS queue, with the dead-letter queue the feature requires.
+
+    Session-scoped, and deliberately so: a deleted queue name cannot be created
+    again for 60 seconds, so one queue serves the whole run.
+
+    Yields:
+        The queue URL.
+    """
+    region = SETTINGS.aws_bedrock_regions[0]
+    # Synchronous on purpose: the queue's lifecycle is not this loop's business.
+    client: Any = botocore_session().create_client("sqs", region_name=region)
+    suffix = webuuid()[:16]
+    dead_letter = client.create_queue(QueueName=f"stdapi-test-index-dlq-{suffix}")[
+        "QueueUrl"
+    ]
+    try:
+        arn = client.get_queue_attributes(
+            QueueUrl=dead_letter, AttributeNames=["QueueArn"]
+        )["Attributes"]["QueueArn"]
+        queue = client.create_queue(
+            QueueName=f"stdapi-test-index-{suffix}",
+            Attributes={
+                "RedrivePolicy": to_json_str(
+                    {"deadLetterTargetArn": arn, "maxReceiveCount": 3}
+                ),
+                "MessageRetentionPeriod": "300",
+            },
+        )["QueueUrl"]
+        # A queue is not usable for up to a second after it is created.
+        time.sleep(1.0)
+        try:
+            yield queue
+        finally:
+            client.delete_queue(QueueUrl=queue)
+    finally:
+        client.delete_queue(QueueUrl=dead_letter)
+
+
+@pytest.fixture
+async def live_indexing_queue(
+    vector_backend: _FakeBackend,
+    indexing_job_queue: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[Any]:
+    """Point the indexing jobs at the real queue, on this test's own client.
+
+    Yields:
+        The queue client, for the test to receive with itself.
+    """
+    del vector_backend
+    async with AWS_SESSION.create_client(
+        "sqs", region_name=SETTINGS.aws_bedrock_regions[0]
+    ) as client:
+        monkeypatch.setattr(
+            SETTINGS, "aws_sqs_vector_store_queue_url", indexing_job_queue
+        )
+        monkeypatch.setattr(jobs, "_client", lambda: client)
+        yield client
+
+
+async def _receive_live(
+    client: Any,  # noqa: ANN401
+    queue_url: str,
+    within_seconds: float,
+) -> dict[str, Any]:
+    """Long-poll the real queue until it hands one message over.
+
+    Args:
+        client: The queue client.
+        queue_url: The queue to receive from.
+        within_seconds: How long to keep waiting before failing the test.
+
+    Returns:
+        The delivered message.
+    """
+    deadline = time.monotonic() + within_seconds
+    while True:
+        received: list[dict[str, Any]] = (
+            await client.receive_message(
+                QueueUrl=queue_url,
+                MaxNumberOfMessages=1,
+                WaitTimeSeconds=5,
+                VisibilityTimeout=_LIVE_VISIBILITY_SECONDS,
+                MessageSystemAttributeNames=["ApproximateReceiveCount"],
+            )
+        ).get("Messages", [])
+        if received:
+            return received[0]
+        assert time.monotonic() < deadline, "the queue delivered no message"
+
+
+@pytest.mark.local
+@pytest.mark.gateway("an indexing job is this gateway's own durability mechanism")
+@pytest.mark.xdist_group("vector_store_indexing_queue")
+class TestAKilledJobIsRecoveredLive:
+    """The durability claim, against the queue that has to make it true.
+
+    What no stand-in can answer: whether Amazon SQS really hands a message back
+    to another consumer when the one holding it dies without deleting it, what
+    it reports as the delivery count when it does, and whether the redrive
+    policy this feature depends on is read off a real queue the way the startup
+    probe expects.
+
+    The store behind it is the in-memory one on purpose: the recovery is what
+    is under test here, and the records themselves are exercised against real
+    S3 by ``TestDetachIsDurableLive``.
+
+    Ref: stdapi/vector_stores/jobs.py:_run_job
+         https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html
+    """
+
+    async def test_a_second_consumer_finishes_what_a_killed_one_started(
+        self,
+        vector_backend: _FakeBackend,
+        indexing_job_queue: str,
+        live_indexing_queue: Any,  # noqa: ANN401
+    ) -> None:
+        """A file whose indexing server died is completed by another, not failed.
+
+        This is the whole point of the feature: before it, the caller had to
+        attach the file again.
+        """
+        store = await _create_store()
+        file_id = vector_backend.upload(_TEXT_FILE)
+        await _attach(store, [file_id])
+        started, release = TestAKilledJobIsFinishedElsewhere._blocked_embedding(  # noqa: SLF001
+            vector_backend
+        )
+
+        first = await _receive_live(
+            live_indexing_queue, indexing_job_queue, _LIVE_REDELIVERY_TIMEOUT
+        )
+        assert first["Attributes"]["ApproximateReceiveCount"] == "1"
+        killed = create_task(jobs._run_job(first))  # noqa: SLF001
+        await started.wait()
+        killed.cancel()
+        with pytest.raises(CancelledError):
+            await killed
+        assert (await read_file(store.id, file_id)).status == "in_progress"
+
+        release.set()
+        second = await _receive_live(
+            live_indexing_queue, indexing_job_queue, _LIVE_REDELIVERY_TIMEOUT
+        )
+        assert second["MessageId"] == first["MessageId"]
+        assert second["Attributes"]["ApproximateReceiveCount"] == "2"
+        await jobs._run_job(second)  # noqa: SLF001
+
+        record = await read_file(store.id, file_id)
+        assert record.status == "completed"
+        assert record.chunk_count
+        assert (await read_store(store.id)).file_counts.completed == 1
+
+    async def test_the_startup_probe_reads_the_real_redrive_policy(
+        self,
+        live_indexing_queue: Any,  # noqa: ANN401
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """How many deliveries a job gets comes from the queue, not from a constant.
+
+        Ref: stdapi/vector_stores/jobs.py:initialize_job_queue
+        """
+        del live_indexing_queue
+        monkeypatch.setattr(jobs, "_MAX_RECEIVES", 0)
+        monkeypatch.setattr(jobs, "_HAS_DEAD_LETTER_QUEUE", False)
+        start_event: Any = {"level": "info"}
+
+        await jobs.initialize_job_queue(start_event)
+
+        assert jobs._MAX_RECEIVES == 3  # noqa: SLF001
+        assert jobs._HAS_DEAD_LETTER_QUEUE  # noqa: SLF001
+        assert "server_warnings" not in start_event

@@ -120,10 +120,26 @@ possible answer.
 
 Indexing is bounded server-wide: attaching many files at once never indexes
 more than a couple at a time, so a large attach queues rather than being
-refused. Nothing is lost if the server is replaced while it indexes — a file
-whose indexing was interrupted settles as `failed` with
-`last_error.code="server_error"`, so a poll always terminates. Attach the file
-again to index it.
+refused. A poll always terminates: a file whose indexing was interrupted and
+cannot be resumed settles as `failed` with `last_error.code="server_error"`,
+and attaching it again indexes it.
+
+### Durable Indexing { #durable-indexing }
+
+Whether an interruption costs you anything depends on one deployment setting,
+[`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url):
+
+| Setting | What happens when the server indexing a file is replaced |
+|---|---|
+| Unset (default) | The file settles as `failed`. Attach it again. |
+| Set | Another server picks the work up and finishes it. The file stays `in_progress` a little longer, then settles as `completed`. |
+
+Nothing about the API changes: the same fields, the same statuses, the same
+polling. A file only takes longer to settle. Indexing stays at-least-once and
+never bills twice — work that already completed is not redone.
+
+Ask your administrator which of the two your deployment runs before designing a
+client around it.
 
 ## Supported Files
 
@@ -445,6 +461,12 @@ The model that turns text into vectors is
 It is recorded on each store when the store is created, so changing the setting
 only affects stores created afterwards — existing stores keep answering with the
 model they were built with.
+
+Indexing survives a server being replaced only when
+[`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url)
+names an Amazon SQS queue you created, with the
+[durable indexing permissions](operations_iam_permissions.md#durable-vector-store-indexing)
+on it — see [Durable indexing](#durable-indexing).
 
 [Knowledge base stores](#knowledge-base-stores) need none of the above: they need
 [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration.md#aws-bedrock-knowledge-base-ids),

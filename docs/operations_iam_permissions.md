@@ -383,6 +383,39 @@ Required by the [Vector Stores API](api_openai_vector_stores.md). The indexed co
 
 ---
 
+## :material-tray-arrow-down: Durable Vector Store Indexing (Optional) { #durable-vector-store-indexing }
+
+**Environment Variables**: [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url)
+
+Required to keep indexing a vector store file when the server that accepted it stops. The gateway both writes the work to the [Amazon SQS](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/welcome.html) queue you create and reads it back, so it needs the producer and the consumer actions on that one queue.
+
+??? example "Durable Vector Store Indexing IAM Policy Statements"
+    ```json
+    {
+      "Sid": "VectorStoreIndexingQueue",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:SendMessage",
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:ChangeMessageVisibility",
+        "sqs:GetQueueAttributes"
+      ],
+      "Resource": "arn:aws:sqs:REGION:ACCOUNT_ID:QUEUE_NAME"
+    }
+    ```
+
+    !!! info "Replace the Placeholders"
+        `REGION`, `ACCOUNT_ID` and `QUEUE_NAME` are the three parts of your [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url). Grant this on the queue ARN itself — never on `*`.
+
+    !!! note "The queues are yours to create"
+        The gateway never creates, deletes or reconfigures a queue, so no `sqs:CreateQueue`, `sqs:DeleteQueue` or `sqs:SetQueueAttributes` is granted. `sqs:GetQueueAttributes` is read-only and is what lets the gateway honour your dead-letter queue's redrive policy.
+
+    !!! note "The dead-letter queue needs nothing"
+        Amazon SQS moves an exhausted message itself; the gateway never reads the dead-letter queue, so grant it nothing.
+
+---
+
 ## :material-book-search: Knowledge Base Vector Stores (Optional) { #knowledge-base-vector-stores }
 
 **Environment Variables**: [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration.md#aws-bedrock-knowledge-base-ids)
@@ -1104,6 +1137,7 @@ Required if you configure API authentication. See the [Authentication](operation
 | **Video Generation**                            | Core Bedrock invoke permissions (incl. `bedrock:GetAsyncInvoke`, `bedrock:TagResource`)<br>`bedrock:ListAsyncInvokes` and `bedrock:ListTagsForResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) for job listing<br>File Storage S3 permissions on each regional bucket | `AWS_S3_REGIONAL_BUCKETS`                                                    |
 | **Batch Inference**                             | `bedrock:CreateModelInvocationJob`<br>`bedrock:GetModelInvocationJob`<br>`bedrock:StopModelInvocationJob` (on `arn:aws:bedrock:*:*:model-invocation-job/*`)<br>`iam:PassRole` on the batch service role, scoped with `iam:PassedToService: bedrock.amazonaws.com`<br>File Storage S3 permissions on each bucket a batch uses, plus the service role's own policy (see [Batch Inference](#batch-inference)) | `AWS_BEDROCK_BATCH_ROLE_ARN`                                                 |
 | **Vector Stores**                               | `s3vectors:CreateIndex`<br>`s3vectors:DeleteIndex`<br>`s3vectors:GetIndex`<br>`s3vectors:PutVectors`<br>`s3vectors:GetVectors`<br>`s3vectors:QueryVectors`<br>`s3vectors:DeleteVectors` (on the vector bucket and its indexes)<br>File Storage S3 permissions on `AWS_S3_BUCKET` for the stores' records | `AWS_S3_VECTORS_BUCKET`<br>`AWS_S3_VECTORS_REGION`                           |
+| **Durable Vector Store Indexing**               | `sqs:SendMessage`<br>`sqs:ReceiveMessage`<br>`sqs:DeleteMessage`<br>`sqs:ChangeMessageVisibility`<br>`sqs:GetQueueAttributes` (on the queue ARN only)                                                       | `AWS_SQS_VECTOR_STORE_QUEUE_URL`                                             |
 | **Knowledge Base Vector Stores**                | `bedrock:GetKnowledgeBase`<br>`bedrock:Retrieve`<br>`bedrock:ListDataSources`<br>`bedrock:IngestKnowledgeBaseDocuments`<br>`bedrock:ListKnowledgeBaseDocuments`<br>`bedrock:GetKnowledgeBaseDocuments`<br>`bedrock:DeleteKnowledgeBaseDocuments` (on each allowlisted knowledge base ARN; no `bedrock:ListKnowledgeBases`) | `AWS_BEDROCK_KNOWLEDGE_BASE_IDS`                                             |
 | **KMS Encrypted S3 Buckets**                    | `kms:Decrypt`<br>`kms:GenerateDataKey`<br>with `kms:ViaService` condition                                                                                  | If S3 buckets use KMS encryption                                             |
 | **Text-to-Speech**                              | `polly:SynthesizeSpeech`<br>`polly:DescribeVoices`<br>`polly:StartSpeechSynthesisStream` for generative voices above 3,000 characters<br>`polly:StartSpeechSynthesisTask`, `polly:GetSpeechSynthesisTask` and S3 `PutObject`/`GetObject`/`DeleteObject` on each bucket serving a Polly region, for the other voices above 3,000 characters | `AWS_POLLY_REGION`<br>`AWS_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`           |

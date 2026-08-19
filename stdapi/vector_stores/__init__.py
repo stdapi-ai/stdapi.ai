@@ -15,6 +15,8 @@ the callers:
 - ``records`` — those records in the application bucket, under conditional writes.
 - ``engine`` — everything backend-neutral: identifiers, chunking, indexing,
   counters and search.
+- ``jobs`` — the optional queue that makes an indexing job survive the server
+  that accepted it.
 
 This module is the surface the routes address; nothing outside the package
 imports the modules above directly.

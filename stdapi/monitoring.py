@@ -468,6 +468,23 @@ def _record_edge_headers(
             span_context.set_attribute("aws.cloudfront_request_id", cf_id)
 
 
+#: Logged requests currently being served, maintained by ``log_request_event``.
+_REQUESTS_IN_FLIGHT: int = 0
+
+
+def requests_in_flight() -> int:
+    """Return how many requests this process is serving right now.
+
+    Read by detached background work that must yield to the requests a client
+    is waiting on: asyncio schedules every task equally, so declining to start
+    is the only priority a background loop has.
+
+    Returns:
+        The number of requests between their first and last log event.
+    """
+    return _REQUESTS_IN_FLIGHT
+
+
 @contextmanager
 def log_request_event(request: HTTPConnection) -> Generator[EventLog]:
     """Log a request event with OpenTelemetry tracing.
@@ -539,6 +556,8 @@ def log_request_event(request: HTTPConnection) -> Generator[EventLog]:
                 span_context.set_attribute("client.port", request.client.port)
     _record_edge_headers(log, request, span_context)
     start = perf_counter_ns()
+    global _REQUESTS_IN_FLIGHT  # noqa: PLW0603
+    _REQUESTS_IN_FLIGHT += 1
 
     try:
         with (
@@ -557,6 +576,7 @@ def log_request_event(request: HTTPConnection) -> Generator[EventLog]:
             span_context.set_attribute("error.message", str(exc))
         raise
     finally:
+        _REQUESTS_IN_FLIGHT -= 1
         log["execution_time_ms"] = (perf_counter_ns() - start) // 1000000
         _finalize_usage_safely(log)
         _attach_aws_api_calls(log)
@@ -570,13 +590,25 @@ def log_request_event(request: HTTPConnection) -> Generator[EventLog]:
             model_state_token,
             aws_api_calls_token,
         )
-        if span_context:
-            span_context.set_attribute("http.status_code", log.get("status_code", 200))
-            span_context.set_attribute("duration_ms", log["execution_time_ms"])
-            if log.get("status_code", 200) >= 400:
-                span_context.set_status(Status(StatusCode.ERROR))
-            span_context.end()
+        _end_request_span(span_context, log)
         write_log_event(log)
+
+
+def _end_request_span(span_context: Span | None, log: EventLog) -> None:
+    """Close the request span, carrying the outcome the log ended on.
+
+    Args:
+        span_context: The request's span, when tracing is enabled.
+        log: The finalized request log event.
+    """
+    if span_context is None:
+        return
+    status = log.get("status_code", 200)
+    span_context.set_attribute("http.status_code", status)
+    span_context.set_attribute("duration_ms", log["execution_time_ms"])
+    if status >= 400:
+        span_context.set_status(Status(StatusCode.ERROR))
+    span_context.end()
 
 
 def log_request_params[ParamsT: "BaseModel | dict[str, Any] | list[Any] | None"](

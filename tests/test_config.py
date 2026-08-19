@@ -973,3 +973,96 @@ class TestOAuthDerivedFromCognito:
         )
         assert settings.oauth_authorization_servers == []
         assert settings.oauth_scopes_supported == []
+
+
+class TestVectorStoreIndexingQueue:
+    """The queue that makes vector store indexing survive the server running it.
+
+    The setting is a queue URL and nothing else: the region, the account and
+    the queue name all come from it, so there is no second value an operator
+    can set to disagree with the first.
+
+    Ref: stdapi/config.py:_validate_vector_stores
+         stdapi/vector_stores/jobs.py
+    """
+
+    @staticmethod
+    def _settings(**overrides: Any) -> _Settings:  # noqa: ANN401
+        """Build settings with the buckets the queue requires already set."""
+        return _Settings(
+            **{
+                "aws_s3_bucket": "records",
+                "aws_s3_vectors_bucket": "vectors",
+                **overrides,
+            }
+        )
+
+    def test_no_queue_is_configured_by_default(self) -> None:
+        """An existing deployment keeps indexing in the server that accepted it."""
+        assert _Settings().aws_sqs_vector_store_queue_url is None
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "https://sqs.us-east-1.amazonaws.com/123456789012/stdapi-ai-indexing",
+            "https://sqs.cn-north-1.amazonaws.com.cn/123456789012/queue",
+            "https://sqs.us-gov-west-1.amazonaws.com/123456789012/queue_1-2",
+        ],
+    )
+    def test_a_queue_url_is_accepted_in_every_partition(self, value: str) -> None:
+        """The endpoint suffix differs per partition; the URL shape does not.
+
+        Ref: https://docs.aws.amazon.com/general/latest/gr/sqs-service.html
+        """
+        assert (
+            self._settings(
+                aws_sqs_vector_store_queue_url=value
+            ).aws_sqs_vector_store_queue_url
+            == value
+        )
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "http://sqs.us-east-1.amazonaws.com/123456789012/queue",
+            "https://sqs.us-east-1.amazonaws.com/12345/queue",
+            "https://example.com/123456789012/queue",
+            "https://sqs.us-east-1.amazonaws.com/123456789012/queue/../other",
+            "queue",
+            "https://sqs.us-east-1.amazonaws.com/123456789012/",
+        ],
+    )
+    def test_anything_that_is_not_a_queue_url_is_refused(self, value: str) -> None:
+        """A malformed URL fails startup rather than every send at runtime.
+
+        The URL also decides which region the client is opened in, so an
+        unparseable one has no runtime behaviour to fall back on.
+        """
+        with pytest.raises(ValidationError, match="must be an Amazon SQS queue URL"):
+            self._settings(aws_sqs_vector_store_queue_url=value)
+
+    def test_a_fifo_queue_is_refused(self) -> None:
+        """Deduplication would silently drop a legitimate re-attach.
+
+        A FIFO queue may deduplicate on content for five minutes, so attaching
+        the same files to the same store twice would enqueue one job and index
+        the second attach never — reported as an indexing that never finishes.
+
+        Ref: https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/FIFO-queues-exactly-once-processing.html
+        """
+        with pytest.raises(ValidationError, match="must name a standard queue"):
+            self._settings(
+                aws_sqs_vector_store_queue_url=(
+                    "https://sqs.us-east-1.amazonaws.com/123456789012/indexing.fifo"
+                )
+            )
+
+    def test_a_queue_without_a_vector_bucket_is_refused(self) -> None:
+        """Nothing indexes here without a vector bucket, so nothing would queue."""
+        with pytest.raises(ValidationError, match="requires aws_s3_vectors_bucket"):
+            self._settings(
+                aws_s3_vectors_bucket=None,
+                aws_sqs_vector_store_queue_url=(
+                    "https://sqs.us-east-1.amazonaws.com/123456789012/indexing"
+                ),
+            )

@@ -727,8 +727,28 @@ async def attach_files(
                 file_counts=FileCountsRecord(in_progress=len(records)),
             ),
         )
-    start_indexing(store.id, [r.id for r in records], batch_id)
+    # Last, and still inside the request: every record the job names is durable
+    # by this point, and so are the file bytes, so the job it hands over is
+    # replayable by whichever server picks it up.
+    await _hand_over_indexing(store.id, [r.id for r in records], batch_id)
     return records
+
+
+async def _hand_over_indexing(
+    store_id: str, file_ids: list[str], batch_id: str
+) -> None:
+    """Give the indexing of *file_ids* to the queue, or run it here.
+
+    Args:
+        store_id: A validated vector store identifier.
+        file_ids: The files to index, in order.
+        batch_id: The batch the files belong to, or ``""``.
+    """
+    # Imported here: the queue's handlers call back into this module.
+    from stdapi.vector_stores.jobs import enqueue_indexing  # noqa: PLC0415
+
+    if not await enqueue_indexing(store_id, file_ids, batch_id):
+        start_indexing(store_id, file_ids, batch_id)
 
 
 def start_indexing(store_id: str, file_ids: list[str], batch_id: str) -> None:
@@ -953,6 +973,35 @@ async def _settle_abandoned(store_id: str, file_id: str) -> FileRecord | None:
     return settled
 
 
+async def settle_interrupted(store_id: str, file_ids: Sequence[str]) -> None:
+    """Fail the files of an indexing job that will not be attempted again.
+
+    What a queued job's last delivery owes the caller: a file left
+    ``in_progress`` by a job nobody will run again reads as work still in
+    flight for ever, and re-attaching it is the only way forward.
+
+    Args:
+        store_id: A validated vector store identifier.
+        file_ids: The files the job named.
+    """
+    await gather_bounded(
+        [_settle_abandoned(store_id, file_id) for file_id in file_ids], RECORD_WAVE
+    )
+
+
+async def renew_indexing_lease(store_id: str) -> None:
+    """Hold a store's indexing lease before a queued job starts running.
+
+    A job may wait in the queue longer than the lease attaching its files
+    wrote, and the first thing indexing does is read the store — which is
+    where an expired lease settles those same files as abandoned.
+
+    Args:
+        store_id: A validated vector store identifier.
+    """
+    await _renew_lease(store_id)
+
+
 async def _settle_abandoned_files(store_id: str) -> bool:
     """Fail every file of a store whose indexing no longer has a task.
 
@@ -999,6 +1048,10 @@ async def _index_one_file(
     try:
         record = await _read_file_record(store.id, file_id)
     except ApiError:
+        return "", 0
+    if record.status != "in_progress":
+        # A replayed job: the file already settled, and re-indexing it would
+        # embed and bill its chunks a second time for the same outcome.
         return "", 0
     if batch_id and (await _read_batch_record(store.id, batch_id)).cancel_requested:
         cancelled = await _write_owned(

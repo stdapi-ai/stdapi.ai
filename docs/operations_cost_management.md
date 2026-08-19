@@ -197,6 +197,8 @@ Indexing runs after the response is sent, so its usage is reported on a `backgro
 
 The **storage and request charges of the vector storage itself are not recorded**: like the bytes the [Files API](api_openai_files.md) stores, they appear on your AWS bill and not in the usage log. Read them from AWS Cost Explorer, filtered on Amazon S3 Vectors — the service holding [`AWS_S3_VECTORS_BUCKET`](operations_configuration.md#aws-s3-vectors-bucket).
 
+A deployment that sets [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url) adds Amazon SQS requests to that bill — a handful per attached file, plus one long-poll receive per idle server every 20 seconds. It adds **no embedding cost**: a job replayed after a server was replaced skips whatever already completed, so a file is never embedded twice.
+
 A [knowledge base store](api_openai_vector_stores.md#knowledge-base-stores) is billed differently, because the retrieval happens inside Amazon Bedrock and no embedding call of this server's is involved:
 
 - A **fully managed** knowledge base charges a flat rate per retrieval call, with the document parsing, the embedding and the reranking included in it. Every query of a search is one retrieval, recorded as one `search_units` unit under the model `amazon.bedrock-knowledge-base` and priced from the rate on the [Amazon Bedrock pricing page](https://aws.amazon.com/bedrock/pricing/) — the Price List API publishes no row for it, so that rate is built in and can be replaced through `COST_PRICE_OVERRIDES`.

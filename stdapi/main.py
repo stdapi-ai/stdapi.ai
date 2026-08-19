@@ -86,6 +86,13 @@ from stdapi.routes.core_root import WWW_AUTHENTICATE_CHALLENGE
 from stdapi.server import SERVER_VERSION
 from stdapi.utils import JSONResponse, hide_security_details
 from stdapi.vector_stores.engine import drain_indexing
+from stdapi.vector_stores.jobs import (
+    close_job_consumer,
+    drain_indexing_jobs,
+    initialize_job_queue,
+    open_job_consumer,
+    queue_region,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
@@ -99,6 +106,7 @@ _DRAINED_REGISTRIES: Final = (
     "stream_closes",
     "realtime_readers",
     "file_indexing",
+    "indexing_jobs",
 )
 
 
@@ -128,6 +136,7 @@ async def drain_background_tasks() -> dict[str, int]:
                 drain_stream_closes(timeout),
                 drain_session_stops(timeout),
                 drain_indexing(timeout),
+                drain_indexing_jobs(timeout),
             ),
             strict=True,
         )
@@ -236,6 +245,8 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                     if SETTINGS.aws_s3_vectors_bucket
                     else ()
                 ),
+                # The indexing queue lives in the one region its URL names.
+                *((("sqs", region),) if (region := queue_region()) else ()),
             )
         ):
             # Not botocore clients, but they target the endpoints just resolved above.
@@ -269,6 +280,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                             initialize_transcribe_models(),
                             initialize_moderation_models(),
                             verify_user_role_access(start_event),
+                            initialize_job_queue(start_event),
                             register(start_event),
                             return_exceptions=True,
                         )
@@ -297,11 +309,15 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 start_event["server_start_time_ms"] = (time_ns() - start) // 1000000
                 write_log_event(start_event)
                 open_realtime_sessions()
+                open_job_consumer()
                 try:
                     yield
                 finally:
                     # No graceful drain: a signal kills sockets without a close frame.
                     close_realtime_sessions()
+                    # Stop taking new jobs before draining what is running:
+                    # anything not finished here is redelivered elsewhere.
+                    close_job_consumer()
                     # Drained here, and nowhere else: asking the sessions to
                     # close is what enqueues their teardown, while the AWS
                     # clients and the price catalog that the pending work still

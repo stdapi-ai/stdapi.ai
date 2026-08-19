@@ -411,6 +411,20 @@ flowchart TB
 -   A file left `in_progress` with nothing indexing it any more is settled as `failed`, with `last_error` saying the indexing was interrupted, the next time the file, the store, or its file list is read. Attach the file again to index it — no store is left reporting `in_progress` for good, and no client polls forever.
 -   Deleting a file from a vector store removes its passages from the index **before** the record that names them, so a task lost mid-delete leaves the deletion to be finished by the next read rather than leaving content searchable. Either way the file stops being searchable and stops being listed the moment the API answers.
 
+A task asked to stop finishes what it can before it goes, but that grace period is short by design — ECS sends `SIGKILL` 30 seconds after `SIGTERM` by default — so it is a courtesy, never a guarantee. Anything that must survive a hard kill is covered below.
+
+#### :material-tray-arrow-down: Vector Store Indexing { #vector-store-indexing }
+
+Set [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url) and indexing stops depending on the task that accepted it: **another task finishes the job**.
+
+-   Attaching a file records the work on your Amazon SQS queue **before the response is sent**, once every record it names is already durable in S3. There is no window in which the client has been told the file is attached and the work has not been handed over.
+-   Every task reads that queue, so the fleet you already run is the pool of consumers — no extra service, no extra container-hour, and consumer redundancy across Availability Zones for free.
+-   A task killed mid-job never confirms the message, so Amazon SQS hands it to another task, which finishes it. Work already completed is not redone, so a recovery costs no extra embeddings.
+-   A file the gateway genuinely cannot index is retried a bounded number of times, then reported as `failed` exactly as an unqueued deployment reports it, and its message is kept in your dead-letter queue.
+-   A task busy serving requests does not take jobs off the queue: indexing yields to the clients that are waiting.
+
+Leave the setting unset and the behaviour is exactly the one described above — an interrupted file settles as `failed` and the client attaches it again.
+
 **Multi-AZ spread.** The Terraform module places ECS tasks across all available Availability Zones in the region. If an AZ experiences a partial or full failure, tasks in the remaining AZs continue to process requests without interruption. The default configuration maintains at least one task per Availability Zone, so capacity remains in the other AZs during a task replacement event.
 
 **Auto-scaling.** Task count scales automatically based on CPU utilization, memory utilization, and ALB request count — whichever metric signals pressure first. Fargate Spot is optionally available for cost-sensitive deployments — see [Cost-Optimized Deployment](operations_deploy_advanced.md#cost-optimized-deployment) for the trade-offs.

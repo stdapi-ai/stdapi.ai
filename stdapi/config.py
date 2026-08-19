@@ -98,6 +98,12 @@ _SESSION_TAG_KEY_PATTERN = re.compile(r"^[\w.:/=+\-@ ]{1,128}$")
 #: Allowlist entry naming a knowledge base and, optionally, its data source.
 _KNOWLEDGE_BASE_ENTRY_RE = re.compile(r"^[0-9A-Za-z]{10}(?:/[0-9A-Za-z]{1,64})?$").match
 
+#: Amazon SQS queue URL, capturing the region its endpoint names and the queue name.
+SQS_QUEUE_URL_RE = re.compile(
+    r"^https://sqs\.(?P<region>[a-z0-9-]{1,32})\.[a-z0-9.-]{1,64}"
+    r"/[0-9]{12}/(?P<name>[A-Za-z0-9_-]{1,80}(?:\.fifo)?)$"
+).match
+
 #: Built-in set of ``anthropic_beta`` flags known to be supported by AWS Bedrock.
 _ANTHROPIC_BETA_BEDROCK_FLAGS: frozenset[str] = frozenset(
     {
@@ -1134,6 +1140,32 @@ class _Settings(BaseSettings):
             "files indexed into a vector store without an explicit "
             "chunking_strategy. Must not exceed half of "
             "vector_store_chunk_size_tokens."
+        ),
+    )
+
+    aws_sqs_vector_store_queue_url: str | None = Field(
+        default=None,
+        description=(
+            "URL of the Amazon SQS standard queue that carries vector store "
+            "indexing jobs, making them durable: a job handed to the queue is "
+            "finished by another server instance when the one that accepted it "
+            "stops, instead of being lost with it.\n\n"
+            "Create the queue yourself, in the same AWS account, and give it a "
+            "dead-letter queue: a file the server cannot index is settled as "
+            "failed once its deliveries run out, and without a dead-letter "
+            "queue it would be retried until the message expires. See "
+            "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html\n\n"
+            "The queue only ever carries identifiers — the store, the files and "
+            "the batch a request attached — never file content. Its region is "
+            "read from the URL. FIFO queues are not supported.\n\n"
+            "Requires aws_s3_vectors_bucket, and the sqs:SendMessage, "
+            "sqs:ReceiveMessage, sqs:DeleteMessage, "
+            "sqs:ChangeMessageVisibility and sqs:GetQueueAttributes "
+            "permissions on the queue.\n\n"
+            "Example: "
+            "'https://sqs.us-east-1.amazonaws.com/123456789012/stdapi-ai-indexing'\n\n"
+            "Unset (default): indexing runs in the server that accepted the "
+            "request and is lost if that server stops before it finishes."
         ),
     )
 
@@ -2778,8 +2810,9 @@ class _Settings(BaseSettings):
 
         Raises:
             ValueError: If the vector bucket is set without an application
-                bucket to hold the records, or the default chunk overlap
-                exceeds half the default chunk size.
+                bucket to hold the records, the default chunk overlap exceeds
+                half the default chunk size, or the indexing queue is
+                malformed, of the wrong kind, or set with nothing to index.
         """
         if self.aws_s3_vectors_bucket and not self.aws_s3_bucket:
             msg = (
@@ -2795,6 +2828,30 @@ class _Settings(BaseSettings):
                 "vector_store_chunk_size_tokens."
             )
             raise ValueError(msg)
+        if queue_url := self.aws_sqs_vector_store_queue_url:
+            if not self.aws_s3_vectors_bucket:
+                msg = (
+                    "aws_sqs_vector_store_queue_url requires "
+                    "aws_s3_vectors_bucket: without it no file is indexed here, "
+                    "so the queue would carry nothing."
+                )
+                raise ValueError(msg)
+            queue = SQS_QUEUE_URL_RE(queue_url)
+            if queue is None:
+                msg = (
+                    "aws_sqs_vector_store_queue_url must be an Amazon SQS queue "
+                    "URL of the form "
+                    "'https://sqs.<region>.amazonaws.com/<account-id>/<queue-name>'."
+                )
+                raise ValueError(msg)
+            if queue["name"].endswith(".fifo"):
+                # Content-based deduplication would silently drop a re-attach of
+                # the same files, and ordering buys the indexing nothing.
+                msg = (
+                    "aws_sqs_vector_store_queue_url must name a standard queue: "
+                    "FIFO queues are not supported."
+                )
+                raise ValueError(msg)
 
     @model_validator(mode="after")
     def _validate(self) -> Self:
