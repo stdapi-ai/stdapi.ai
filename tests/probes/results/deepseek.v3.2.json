@@ -4,7 +4,7 @@
  "invoked_id": "deepseek.v3.2",
  "transport": "converse",
  "region": "us-east-1",
- "probed_at": "2026-08-01",
+ "probed_at": "2026-08-19",
  "probes": [
   {
    "name": "baseline",
@@ -102,7 +102,7 @@
    "name": "tool_use",
    "feature": "toolConfig with an auto tool choice",
    "outcome": "supported",
-   "detail": "toolUse: get_weather",
+   "detail": "toolUse: get_weather; leaked control markup into the text block: '<\uff5cDSML\uff5cfunction_calls'",
    "request": {
     "messages": [
      {
@@ -259,7 +259,7 @@
    "name": "reasoning_config_enabled",
    "feature": "additionalModelRequestFields.reasoning_config = {\"type\": \"enabled\"}",
    "outcome": "rejected",
-   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: {\"error\":{\"code\":\"validation_error\",\"message\":\"Failed to deserialize the JSON body into the target type: Invalid 'reasoning_effort': unknown variant `budget_tokens`, expected one of `high`, `low`, `medium`, `minimal`, `none`, `xhigh` at line 1 column 350\",\"param\":null,\"type\":\"invalid_request_error\"}}",
+   "detail": "An error occurred (ValidationException) when calling the Converse operation: The model returned the following errors: {\"error\":{\"code\":\"validation_error\",\"message\":\"Failed to deserialize the JSON body into the target type: Invalid 'reasoning_effort': unknown variant `budget_tokens`, expected one of `high`, `low`, `max`, `medium`, `minimal`, `none`, `xhigh` at line 1 column 350\",\"param\":null,\"type\":\"invalid_request_error\"}}",
    "request": {
     "messages": [
      {
@@ -286,7 +286,7 @@
    "name": "reasoning_effort_high",
    "feature": "additionalModelRequestFields.reasoning_effort = high",
    "outcome": "supported",
-   "detail": "reasoningContent block, 640 chars",
+   "detail": "reasoningContent block, 698 chars",
    "request": {
     "messages": [
      {

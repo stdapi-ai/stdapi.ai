@@ -40,6 +40,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import sys
 from base64 import b64encode
 from dataclasses import dataclass, field
@@ -48,7 +49,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
-    import re
     from collections.abc import Callable, Sequence
 
     from aiobotocore.config import AioConfig
@@ -130,6 +130,9 @@ _PLACE_SCHEMA = json.dumps(
         "additionalProperties": False,
     }
 )
+
+#: Matches a model's own control-token markup, whose delimiter is fullwidth U+FF5C.
+_CONTROL_MARKUP = re.compile("</?\\uff5c[^\\uff5c]{1,40}\\uff5c[\\w.-]*")
 
 #: Tool the model is offered when a probe needs a tool call to happen.
 _WEATHER_TOOL = {
@@ -218,6 +221,26 @@ def _has_reasoning(response: dict[str, Any]) -> str:
     return ""
 
 
+def _leaked_control_markup(response: dict[str, Any]) -> str:
+    """Report control-token markup a response left in its text blocks.
+
+    A serving stack whose tool-call parser does not consume the whole markup
+    block leaves its opening token in the assistant text, which a client then
+    displays as the answer.  The delimiters are fullwidth (U+FF5C), so ordinary
+    prose never matches.
+
+    Args:
+        response: Parsed Converse response.
+
+    Returns:
+        The leaked markup, or an empty string.
+    """
+    for block in _blocks(response):
+        if match := _CONTROL_MARKUP.search(block.get("text") or ""):
+            return match.group(0)
+    return ""
+
+
 def _has_tool_use(response: dict[str, Any]) -> str:
     """Report the tool call a response carries, if any.
 
@@ -229,7 +252,10 @@ def _has_tool_use(response: dict[str, Any]) -> str:
     """
     for block in _blocks(response):
         if "toolUse" in block:
-            return f"toolUse: {block['toolUse'].get('name')}"
+            detail = f"toolUse: {block['toolUse'].get('name')}"
+            if leaked := _leaked_control_markup(response):
+                detail += f"; leaked control markup into the text block: {leaked!r}"
+            return detail
     return ""
 
 

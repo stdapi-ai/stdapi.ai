@@ -83,6 +83,18 @@ class ModelConfig:
     extra_args: tuple[str, ...] = ()
 
 
+#: ``flaky`` reason for ``deepseek.v3.2``: it answers with its own tool-call markup.
+#:
+#: Bedrock's serving path leaves the opening ``<|DSML|function_calls`` token of
+#: DeepSeek's tool-call markup in the text block whenever the model emits a tool
+#: call -- measured at 11 of 12 non-streamed and 6 of 6 streamed turns, on all
+#: three chat routes, from the first turn on, and never on ``deepseek.v3.1`` or
+#: ``deepseek.v3-v1:0``. A turn that ends in a tool call therefore has that marker
+#: as its whole visible answer, which is a content-quality failure and nothing
+#: else: the tool call itself is parsed correctly. See issue #182.
+DEEPSEEK_DSML_LEAK = True
+
+
 def xfail_if_flaky(config: ModelConfig, signature: str) -> None:
     """Downgrade a known-flaky failure signature to an xfail (best effort).
 

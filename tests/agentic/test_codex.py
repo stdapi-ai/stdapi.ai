@@ -65,6 +65,10 @@ _MODEL_CONFIGS = [
         id="kimi-k2.5",
     ),
     pytest.param(
+        # Deliberately not flaky, unlike the same model in test_claude_code.py:
+        # on this route it has failed only transiently, and both failures passed
+        # on the immediate re-run. Two of those are not a measured failure rate,
+        # and the flag permanently blinds every content assertion for the model.
         ModelConfig(model="qwen.qwen3-coder-30b-a3b-v1:0", timeout=_TIMEOUT),
         id="qwen3-coder-30b",
     ),

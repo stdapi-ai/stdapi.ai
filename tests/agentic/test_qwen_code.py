@@ -34,7 +34,13 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from ._runner import ModelConfig, assert_result, log_metrics, run_agent
+from ._runner import (
+    DEEPSEEK_DSML_LEAK,
+    ModelConfig,
+    assert_result,
+    log_metrics,
+    run_agent,
+)
 from ._tools import QWEN_CODE, SRC_MOUNT
 
 if TYPE_CHECKING:
@@ -67,10 +73,18 @@ _MODEL_CONFIGS = [
         ModelConfig(model="amazon.nova-2-lite-v1:0", timeout=_TIMEOUT), id="nova-2-lite"
     ),
     pytest.param(
-        ModelConfig(model="deepseek.v3.2", timeout=_TIMEOUT, supports_effort=True),
+        ModelConfig(
+            model="deepseek.v3.2",
+            timeout=_TIMEOUT,
+            supports_effort=True,
+            flaky=DEEPSEEK_DSML_LEAK,
+        ),
         id="deepseek-v3.2",
     ),
     pytest.param(
+        # Deliberately not flaky, unlike the same model in test_claude_code.py:
+        # this is the client built for it, and its only failures here have passed
+        # on the immediate re-run. See the note in test_codex.py.
         ModelConfig(model="qwen.qwen3-coder-30b-a3b-v1:0", timeout=_TIMEOUT),
         id="qwen3-coder-30b",
     ),
@@ -94,7 +108,12 @@ _MODEL_CONFIGS = [
 #: streamed and not, and already completes agent loops elsewhere in this lane.
 _REASONING_MODEL_CONFIGS = [
     pytest.param(
-        ModelConfig(model="deepseek.v3.2", timeout=_TIMEOUT, supports_effort=True),
+        ModelConfig(
+            model="deepseek.v3.2",
+            timeout=_TIMEOUT,
+            supports_effort=True,
+            flaky=DEEPSEEK_DSML_LEAK,
+        ),
         id="deepseek-v3.2",
     ),
     pytest.param(
@@ -221,12 +240,6 @@ class TestQwenCodeReasoningReplay:
          stdapi/models/chat/_adapters/_openai_chat_completion.py:_map_assistant_reasoning_content
     """
 
-    @pytest.mark.retry(
-        "DeepSeek intermittently ends a turn by writing its own DSML tool-call "
-        "markup as answer text instead of a tool call, which leaves the run with "
-        "no prose answer to assert on",
-        reruns=1,
-    )
     def test_reasoning_content_is_replayed_to_the_gateway(
         self,
         request: pytest.FixtureRequest,
@@ -261,13 +274,6 @@ class TestQwenCodeReasoningReplay:
             model_config,
             "test_reasoning_content_is_replayed_to_the_gateway",
         )
-        assert_result(
-            result,
-            config=model_config,
-            contains="reasoning",
-            any_of=_REASONING_KEYWORDS,
-            min_steps=2,
-        )
 
         requests = [
             params
@@ -295,6 +301,16 @@ class TestQwenCodeReasoningReplay:
         assert replayed, (
             "No logged request carried a prior assistant message with reasoning "
             "content: the client never replayed the gateway's own reasoning text."
+        )
+
+        # Last, because it is the only assertion here a model's own answer can
+        # fail, and it must not cost the replay evidence above.
+        assert_result(
+            result,
+            config=model_config,
+            contains="reasoning",
+            any_of=_REASONING_KEYWORDS,
+            min_steps=2,
         )
 
 

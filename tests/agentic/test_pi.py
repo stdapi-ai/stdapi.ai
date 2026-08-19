@@ -39,7 +39,13 @@ from typing import TYPE_CHECKING, Literal
 import pytest
 from openai import OpenAI
 
-from ._runner import ModelConfig, assert_result, log_metrics, run_agent
+from ._runner import (
+    DEEPSEEK_DSML_LEAK,
+    ModelConfig,
+    assert_result,
+    log_metrics,
+    run_agent,
+)
 from ._server import start_server, stop_server
 from ._tools import (
     PI_CHAT_COMPLETIONS,
@@ -85,7 +91,12 @@ _MODEL_CONFIGS = [
         ModelConfig(model="amazon.nova-2-lite-v1:0", timeout=_TIMEOUT), id="nova-2-lite"
     ),
     pytest.param(
-        ModelConfig(model="deepseek.v3.2", timeout=_TIMEOUT, supports_effort=True),
+        ModelConfig(
+            model="deepseek.v3.2",
+            timeout=_TIMEOUT,
+            supports_effort=True,
+            flaky=DEEPSEEK_DSML_LEAK,
+        ),
         id="deepseek-v3.2",
     ),
 ]
@@ -93,7 +104,12 @@ _MODEL_CONFIGS = [
 #: Reasoning-capable models, exercised additionally with an effort level.
 _REASONING_MODEL_CONFIGS = [
     pytest.param(
-        ModelConfig(model="deepseek.v3.2", timeout=_TIMEOUT, supports_effort=True),
+        ModelConfig(
+            model="deepseek.v3.2",
+            timeout=_TIMEOUT,
+            supports_effort=True,
+            flaky=DEEPSEEK_DSML_LEAK,
+        ),
         id="deepseek-v3.2",
     )
 ]

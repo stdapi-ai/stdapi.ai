@@ -80,6 +80,12 @@ _MODEL_CONFIGS = [
         id="kimi-k2.5",
     ),
     pytest.param(
+        # Declared flaky for this client only: the same model is not flaky in
+        # test_codex.py or test_qwen_code.py, which drive it on its own
+        # OpenAI-shaped routes. Here it has to speak the Anthropic tool protocol
+        # through the gateway's translation with the client's thinking disabled,
+        # which is where the small open-weight models in this list answer
+        # inconsistently -- nine of the eleven entries need the downgrade.
         ModelConfig(
             model="qwen.qwen3-coder-30b-a3b-v1:0", extra_env=_NO_THINKING, flaky=True
         ),
