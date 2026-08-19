@@ -104,6 +104,8 @@ class EventLog(TypedDict):
 
     # "stop" type
     server_uptime_ms: NotRequired[int]
+    # Detached background tasks cancelled unfinished at shutdown, per registry
+    abandoned_background_tasks: NotRequired[dict[str, int]]
 
     # "request" + "request_stream" + "background" type
     execution_time_ms: NotRequired[int]

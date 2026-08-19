@@ -35,7 +35,7 @@ from stdapi.aws_bedrock import (
     set_performance_configuration,
 )
 from stdapi.aws_bedrock_mantle import set_mantle_project
-from stdapi.cleanup import CLEANUPS, run_cleanups_detached
+from stdapi.cleanup import CLEANUPS, drain_tasks, run_cleanups_detached
 from stdapi.config import SETTINGS
 from stdapi.input_file import reset_current_input_files
 from stdapi.models import validate_model
@@ -507,6 +507,18 @@ def close_realtime_sessions() -> None:
     _SHUTTING_DOWN = True
     for session in tuple(_OPEN_SESSIONS):
         session.request_close(*_SHUTDOWN_CLOSE)
+
+
+async def drain_session_stops(timeout: float) -> int:  # noqa: ASYNC109 -- shared drain contract
+    """Await the backend readers still ending after their session's teardown left.
+
+    Args:
+        timeout: Seconds allowed before the unfinished readers are cancelled.
+
+    Returns:
+        Number of readers that had not finished at the deadline.
+    """
+    return await drain_tasks(_STOP_TASKS, timeout)
 
 
 class _Item:

@@ -1,6 +1,6 @@
-"""Request cleanup utilities."""
+"""Request cleanup utilities, and the shutdown drain of detached background work."""
 
-from asyncio import Task, create_task, gather
+from asyncio import Task, create_task, gather, wait
 from contextlib import suppress
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Final
@@ -15,6 +15,9 @@ CLEANUPS: ContextVar[list[Awaitable[None]]] = ContextVar("cleanups")
 
 #: Strong references to detached cleanup tasks, held until completion.
 _DETACHED_TASKS: Final[set[Task[None]]] = set()
+
+#: Seconds a task cancelled at the drain deadline gets to unwind.
+_SETTLE_TIMEOUT: Final = 1.0
 
 
 def schedule_cleanup(*tasks: Awaitable[None]) -> None:
@@ -69,3 +72,46 @@ async def _run_cleanups_logged(request_id: str) -> None:
     """
     with suppress(Exception):
         await run_scheduled_cleanups(request_id)
+
+
+async def drain_tasks(tasks: set[Task[None]], timeout: float) -> int:  # noqa: ASYNC109 -- the deadline must return a count, not cancel the caller
+    """Await a registry of detached tasks, settling what the deadline leaves.
+
+    Best effort by construction: the process may be killed before this returns,
+    so nothing whose correctness matters may depend on it. What is still running
+    at the deadline is settled rather than abandoned — cancelled, given a moment
+    to unwind, and its outcome retrieved — so no task disappears carrying a
+    result nobody read.
+
+    Args:
+        tasks: Registry of detached tasks, drained as it stands on entry.
+        timeout: Seconds allowed before the unfinished tasks are cancelled;
+            ``0`` cancels them immediately.
+
+    Returns:
+        Number of tasks that had not finished at the deadline.
+    """
+    if not (pending := tuple(tasks)):
+        return 0
+    unfinished = (await wait(pending, timeout=timeout))[1]
+    if unfinished:
+        for task in unfinished:
+            task.cancel()
+        await wait(unfinished, timeout=_SETTLE_TIMEOUT)
+    for task in pending:
+        # Read so a task dropped here is never reported as an unhandled error.
+        if task.done() and not task.cancelled():
+            task.exception()
+    return len(unfinished)
+
+
+async def drain_cleanups(timeout: float) -> int:  # noqa: ASYNC109 -- shared drain contract
+    """Await the request cleanups still running detached from their request.
+
+    Args:
+        timeout: Seconds allowed before the unfinished cleanups are cancelled.
+
+    Returns:
+        Number of cleanups that had not finished at the deadline.
+    """
+    return await drain_tasks(_DETACHED_TASKS, timeout)

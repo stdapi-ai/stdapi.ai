@@ -9,8 +9,8 @@ Ref: stdapi/main.py
 
 from __future__ import annotations
 
-from asyncio import CancelledError, Event, wait_for
-from contextlib import asynccontextmanager
+from asyncio import CancelledError, Event, create_task, sleep, wait_for
+from contextlib import asynccontextmanager, contextmanager
 from inspect import signature
 from io import BytesIO
 from json import loads
@@ -29,7 +29,12 @@ from starlette.responses import StreamingResponse
 
 from stdapi import main as stdapi_main
 from stdapi import metering, monitoring
-from stdapi.cleanup import schedule_cleanup
+from stdapi.cleanup import (
+    _DETACHED_TASKS,
+    CLEANUPS,
+    run_cleanups_detached,
+    schedule_cleanup,
+)
 from stdapi.config import AWS_REGION, SETTINGS
 from stdapi.exceptions import (
     InvalidProductError,
@@ -46,7 +51,7 @@ from tests._helpers import make_client_error, make_event_log, make_model_details
 from tests.conftest import REPO_ROOT
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, MutableMapping
+    from collections.abc import AsyncGenerator, Generator, MutableMapping
 
     from fastapi.testclient import TestClient
     from starlette.responses import Response
@@ -894,4 +899,247 @@ class TestWarmedS3Clients:
 
         assert ("s3", "eu-west-3") in warmed, (
             "the accepted bucket's region has no S3 client to reach it with"
+        )
+
+
+#: Loop iterations a started drain is given to finish, if it were not awaiting.
+_DRAIN_YIELDS: int = 20
+
+
+class _NullConnectionManager:
+    """AWS client pool that warms nothing, so the lifespan runs without AWS."""
+
+    def __init__(self, *_clients: tuple[str, str | None]) -> None:
+        """Accept and ignore the requested clients."""
+
+    async def __aenter__(self) -> Self:
+        """Enter without opening anything.
+
+        Returns:
+            This manager.
+        """
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        """Leave without closing anything."""
+
+
+class _RecordingOtel:
+    """Telemetry manager recording only when it is asked to flush."""
+
+    def __init__(self, calls: list[str]) -> None:
+        """Record into the shared call log.
+
+        Args:
+            calls: Ordered log of the shutdown steps observed.
+        """
+        self._calls = calls
+
+    def start_span(self, _name: str, attributes: object = None) -> None:
+        """Return no span context.
+
+        Args:
+            _name: Span name (unused).
+            attributes: Span attributes (unused).
+        """
+
+    @contextmanager
+    def use_span(self, _context: object) -> Generator[None]:
+        """Enter no span.
+
+        Args:
+            _context: Span context (unused).
+
+        Yields:
+            None.
+        """
+        yield
+
+    def flush(self) -> None:
+        """Record the telemetry flush."""
+        self._calls.append("flush")
+
+
+class TestShutdownDrain:
+    """Shutdown waits for the background work requests deliberately left running.
+
+    A stop signal is routine — a deployment, a scale-in, a Spot interruption —
+    and without the drain every task detached from its request is dropped when
+    the process exits, silently. The wait is best effort: it is bounded, and
+    whatever it cannot finish is cancelled and counted rather than abandoned.
+
+    Ref: stdapi/main.py:drain_background_tasks
+         stdapi/cleanup.py:drain_tasks
+         https://stdapi.ai/operations_configuration/#shutdown-drain-timeout
+    """
+
+    @staticmethod
+    def _detach_cleanup(release: Event) -> Event:
+        """Detach one cleanup task that blocks until ``release`` is set.
+
+        The blocking is explicit rather than merely slow, so "the drain waited"
+        cannot be confused with "the work happened to finish first".
+
+        Args:
+            release: Event the cleanup waits on before completing.
+
+        Returns:
+            Event set once the cleanup has run to completion.
+        """
+        finished = Event()
+
+        async def cleanup() -> None:
+            await release.wait()
+            finished.set()
+
+        CLEANUPS.set([])
+        schedule_cleanup(cleanup())
+        run_cleanups_detached("shutdown-drain-test")
+        return finished
+
+    @staticmethod
+    async def _flush_registries() -> None:
+        """Drain what earlier tests detached, so the counts are this test's own."""
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(SETTINGS, "shutdown_drain_timeout", 5.0)
+            assert await stdapi_main.drain_background_tasks() == {}
+
+    async def test_drain_awaits_work_that_is_still_running(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The drain must not return while a detached task is still running.
+
+        Without it the process exits here, and the temporary object the cleanup
+        was going to delete is simply left behind.
+        """
+        await self._flush_registries()
+        monkeypatch.setattr(SETTINGS, "shutdown_drain_timeout", 30.0)
+        release = Event()
+        finished = self._detach_cleanup(release)
+        drain = create_task(stdapi_main.drain_background_tasks())
+        try:
+            for _ in range(_DRAIN_YIELDS):
+                await sleep(0)
+            assert not drain.done(), "the drain returned without awaiting the cleanup"
+            release.set()
+            assert await wait_for(drain, timeout=5) == {}
+        finally:
+            release.set()
+        assert finished.is_set(), "the cleanup did not run to completion"
+
+    async def test_drain_returns_within_its_timeout_and_settles_the_rest(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Work that never finishes is cancelled at the deadline, and counted.
+
+        The deadline is what has to hold: a container runtime kills the process
+        a fixed delay after the stop signal, so a drain that waited for this
+        cleanup would be killed mid-wait instead of reporting the loss.
+        """
+        await self._flush_registries()
+        monkeypatch.setattr(SETTINGS, "shutdown_drain_timeout", 0.05)
+        release = Event()
+        finished = self._detach_cleanup(release)
+        detached = next(iter(_DETACHED_TASKS))
+        assert await wait_for(stdapi_main.drain_background_tasks(), timeout=5) == {
+            "cleanups": 1
+        }
+        assert detached.cancelled(), "the unfinished cleanup was abandoned, not settled"
+        assert not finished.is_set()
+        release.set()
+
+    async def test_a_zero_timeout_cancels_immediately_instead_of_waiting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``0`` is the operator's opt-out: stop as fast as the platform allows."""
+        await self._flush_registries()
+        monkeypatch.setattr(SETTINGS, "shutdown_drain_timeout", 0.0)
+        release = Event()
+        self._detach_cleanup(release)
+        assert await wait_for(stdapi_main.drain_background_tasks(), timeout=5) == {
+            "cleanups": 1
+        }
+        release.set()
+
+    async def test_lifespan_drains_after_the_sessions_close_and_before_the_flush(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The drain sits where its inputs exist and its output can still be exported.
+
+        Closing the realtime sessions is what enqueues their teardown, so the
+        drain follows it; the AWS clients and the price catalog the pending work
+        calls are torn down after it; and the telemetry flush comes last, so the
+        stop event reporting the loss is exported rather than dropped.
+        """
+        await self._flush_registries()
+        calls: list[str] = []
+        events: list[Any] = []
+
+        async def _none(*_args: object, **_kwargs: object) -> None:
+            pass
+
+        real_drain = stdapi_main.drain_background_tasks
+
+        async def recording_drain() -> dict[str, int]:
+            calls.append("drain")
+            return await real_drain()
+
+        async def recording_stop_price_catalog() -> None:
+            calls.append("stop_price_catalog")
+
+        def recording_close_sessions() -> None:
+            calls.append("close_realtime_sessions")
+
+        def recording_write_log_event(event: Any) -> None:  # noqa: ANN401
+            calls.append(f"log:{event['type']}")
+            events.append(event)
+
+        for name in (
+            "initialize_authentication",
+            "initialize_aws_account_info",
+            "initialize_bedrock_models",
+            "initialize_moderation_models",
+            "initialize_polly_models",
+            "initialize_transcribe_models",
+            "measure_region_latencies",
+            "register",
+            "verify_user_role_access",
+        ):
+            monkeypatch.setattr(stdapi_main, name, _none)
+        for name in (
+            "initialize_bidi_clients",
+            "open_realtime_sessions",
+            "start_price_catalog",
+            "update_unified_models_collections",
+        ):
+            monkeypatch.setattr(stdapi_main, name, lambda: None)
+        monkeypatch.setattr(stdapi_main, "AWSConnectionManager", _NullConnectionManager)
+        monkeypatch.setattr(stdapi_main, "otel_manager", _RecordingOtel(calls))
+        monkeypatch.setattr(stdapi_main, "drain_background_tasks", recording_drain)
+        monkeypatch.setattr(
+            stdapi_main, "stop_price_catalog", recording_stop_price_catalog
+        )
+        monkeypatch.setattr(
+            stdapi_main, "close_realtime_sessions", recording_close_sessions
+        )
+        monkeypatch.setattr(stdapi_main, "write_log_event", recording_write_log_event)
+        monkeypatch.setattr(SETTINGS, "shutdown_drain_timeout", 0.05)
+
+        release = Event()
+        async with stdapi_main.lifespan(stdapi_main.app):
+            self._detach_cleanup(release)
+        release.set()
+
+        assert calls == [
+            "log:start",
+            "close_realtime_sessions",
+            "drain",
+            "stop_price_catalog",
+            "log:stop",
+            "flush",
+        ]
+        stop_event = events[-1]
+        assert stop_event["abandoned_background_tasks"] == {"cleanups": 1}
+        assert stop_event["level"] == "warning", (
+            "a silent loss is the failure this reports"
         )

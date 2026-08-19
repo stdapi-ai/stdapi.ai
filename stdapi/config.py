@@ -1870,6 +1870,27 @@ class _Settings(BaseSettings):
         ),
     )
 
+    shutdown_drain_timeout: float = Field(
+        default=10.0,
+        ge=0,
+        description=(
+            "Maximum time in seconds the server waits, once it has been asked to stop, "
+            "for the background work that requests started and did not wait for: "
+            "temporary file cleanups, vector store file indexing, and the release of "
+            "live audio sessions. Whatever is still running when the wait ends is "
+            "cancelled, and counted in the server's stop log event as a warning.\n\n"
+            "This wait is best effort, not a delivery guarantee: a container runtime "
+            "sends SIGKILL a fixed delay after the stop signal (30 seconds by default "
+            "on Amazon ECS), so the server can be killed before the wait ends. Keep "
+            "this value comfortably below that delay; raise it only together with the "
+            "stop timeout of your container runtime, and never past it.\n\n"
+            "Set to 0 to stop as fast as possible, cancelling background work "
+            "immediately.\n\n"
+            "Example: 10 (default), 20 (with a raised container stop timeout), "
+            "0 (no wait)"
+        ),
+    )
+
     model_cache_seconds: int = Field(
         default=900,
         description=(

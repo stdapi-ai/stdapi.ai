@@ -128,6 +128,7 @@ Each event shares core fields and may add type‑specific ones.
 |                                   `event` | background                          | Background operation name                                                                   |
 | `server_start_time_ms`, `server_warnings` | start                               | Startup metrics and warnings                                                                |
 |                        `server_uptime_ms` | stop                                | Uptime at shutdown                                                                          |
+|             `abandoned_background_tasks` | stop                                | Background tasks cancelled unfinished at shutdown, counted per kind; present only when some were, and the event is then `warning` (see [`SHUTDOWN_DRAIN_TIMEOUT`](operations_configuration.md#shutdown-drain-timeout)) |
 
 !!! note "Understanding warnings and errors"
     - For `request` events, default log levels are derived from the final HTTP status: 4xx → `warning`, 5xx → `error`. Unexpected server crashes (like HTTP 500) may appear as `critical`.

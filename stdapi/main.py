@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from re import compile as compile_regex
 from time import time_ns
 from traceback import format_exception
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from botocore.exceptions import BotoCoreError, ClientError, HTTPClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
@@ -43,8 +43,13 @@ from stdapi.aws_bedrock import (
     set_performance_configuration,
 )
 from stdapi.aws_bedrock_mantle import set_mantle_project
-from stdapi.aws_bidi import initialize_bidi_clients
-from stdapi.cleanup import CLEANUPS, run_cleanups_detached, run_scheduled_cleanups
+from stdapi.aws_bidi import drain_stream_closes, initialize_bidi_clients
+from stdapi.cleanup import (
+    CLEANUPS,
+    drain_cleanups,
+    run_cleanups_detached,
+    run_scheduled_cleanups,
+)
 from stdapi.config import SETTINGS
 from stdapi.exceptions import ServerError
 from stdapi.input_file import reset_current_input_files
@@ -70,18 +75,86 @@ from stdapi.pricing import (
     start_price_catalog,
     stop_price_catalog,
 )
-from stdapi.realtime import close_realtime_sessions, open_realtime_sessions
+from stdapi.realtime import (
+    close_realtime_sessions,
+    drain_session_stops,
+    open_realtime_sessions,
+)
 from stdapi.region_routing import measure_region_latencies, quota_retry_after
 from stdapi.routes import discover_routers
 from stdapi.routes.core_root import WWW_AUTHENTICATE_CHALLENGE
 from stdapi.server import SERVER_VERSION
 from stdapi.utils import JSONResponse, hide_security_details
+from stdapi.vector_stores.engine import drain_indexing
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
     from typing import Any
 
     from types_aiobotocore_bedrock.literals import RegionName
+
+#: Detached background registries drained at shutdown, in the order awaited.
+_DRAINED_REGISTRIES: Final = (
+    "cleanups",
+    "stream_closes",
+    "realtime_readers",
+    "file_indexing",
+)
+
+
+async def drain_background_tasks() -> dict[str, int]:
+    """Wait for the background work requests left running, and report the losses.
+
+    Best effort, never a durability guarantee: the platform sends ``SIGKILL`` a
+    fixed delay after ``SIGTERM`` (30 seconds on Amazon ECS by default) and a
+    deployment may not use the published module at all, so a hard kill is a
+    normal event. Nothing whose correctness depends on finishing may rely on
+    this; it only converts the common case from a silent loss into a completed
+    one, and the rest into a counted one.
+
+    Every registry drains concurrently, so ``shutdown_drain_timeout`` is one
+    wall-clock deadline rather than a budget each of them spends in turn.
+
+    Returns:
+        Number of tasks abandoned per registry, empty when everything finished.
+    """
+    timeout = SETTINGS.shutdown_drain_timeout
+    return {
+        name: abandoned
+        for name, abandoned in zip(
+            _DRAINED_REGISTRIES,
+            await gather(
+                drain_cleanups(timeout),
+                drain_stream_closes(timeout),
+                drain_session_stops(timeout),
+                drain_indexing(timeout),
+            ),
+            strict=True,
+        )
+        if abandoned
+    }
+
+
+def write_stop_event(start: int, abandoned: dict[str, int]) -> None:
+    """Report the process stopping, and whatever background work it dropped.
+
+    Args:
+        start: Startup timestamp, in nanoseconds.
+        abandoned: Tasks cancelled unfinished at the drain deadline, per registry.
+    """
+    stop_event = EventLog(
+        type="stop",
+        # Raised so work lost to the deadline reaches an operator at a level
+        # they watch, with the count that was dropped.
+        level="warning" if abandoned else "info",
+        date=SETTINGS.now(),
+        server_id=server.SERVER_NAME,
+        server_version=SERVER_FULL_VERSION,
+        server_uptime_ms=(time_ns() - start) // 1000000,
+    )
+    if abandoned:
+        stop_event["abandoned_background_tasks"] = abandoned
+    write_log_event(stop_event)
 
 
 @asynccontextmanager
@@ -95,6 +168,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
         None once startup is complete; shutdown runs after the yield.
     """
     start = time_ns()
+    abandoned: dict[str, int] = {}
     # Fall back to the configured/default region so a bucket-less deployment
     # still warms one Transcribe client.
     transcribe_regions: list[RegionName | None] = [
@@ -228,6 +302,13 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 finally:
                     # No graceful drain: a signal kills sockets without a close frame.
                     close_realtime_sessions()
+                    # Drained here, and nowhere else: asking the sessions to
+                    # close is what enqueues their teardown, while the AWS
+                    # clients and the price catalog that the pending work still
+                    # calls are only torn down below. Telemetry is flushed after
+                    # this, so the drain's own report is exported rather than
+                    # lost.
+                    abandoned = await drain_background_tasks()
             finally:
                 await stop_price_catalog()
     except (BotoCoreError, ClientError, ServerError) as exception:
@@ -258,16 +339,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
         )
         raise
     finally:
-        write_log_event(
-            EventLog(
-                type="stop",
-                level="info",
-                date=SETTINGS.now(),
-                server_id=server.SERVER_NAME,
-                server_version=SERVER_FULL_VERSION,
-                server_uptime_ms=(time_ns() - start) // 1000000,
-            )
-        )
+        write_stop_event(start, abandoned)
         otel_manager.flush()
 
 

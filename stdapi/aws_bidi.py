@@ -36,6 +36,7 @@ from stdapi.aws import (
     verify_bidi_user_role_policy,
 )
 from stdapi.aws_bedrock import AWS_ERROR_MAP
+from stdapi.cleanup import drain_tasks
 from stdapi.config import AWS_SESSION, SETTINGS
 from stdapi.exceptions import ServerError
 from stdapi.monitoring import log_error_details
@@ -658,6 +659,18 @@ async def _close_session(session: BidiSession[Any, Any]) -> None:
     # Only this second delivery is dropped; the one that triggered it propagates.
     with suppress(CancelledError):
         await shield(task)
+
+
+async def drain_stream_closes(timeout: float) -> int:  # noqa: ASYNC109 -- shared drain contract
+    """Await the stream closes still releasing a connection after their caller left.
+
+    Args:
+        timeout: Seconds allowed before the unfinished closes are cancelled.
+
+    Returns:
+        Number of closes that had not finished at the deadline.
+    """
+    return await drain_tasks(_CLOSE_TASKS, timeout)
 
 
 def _log_region_failover(

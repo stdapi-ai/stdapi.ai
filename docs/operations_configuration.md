@@ -345,6 +345,7 @@ Publishing where tokens come from lets an AI agent authenticate itself — see [
 | [`AWS_BEDROCK_ALLOW_SERVICE_TIER_OVERRIDE`](#aws-bedrock-allow-service-tier-override) | `true` | Allow users to select the service tier per request, overriding the configured one (cost control) |
 | [`MODEL_CACHE_SECONDS`](#model-cache-seconds)                       | `900`                   | Model list cache lifetime in seconds before lazy refresh (default: 15 minutes)             |
 | [`AI_RESPONSE_TIMEOUT`](#ai-response-timeout)                       | `600`                   | Maximum seconds without data from a model before the request times out (default: 10 min)   |
+| [`SHUTDOWN_DRAIN_TIMEOUT`](#shutdown-drain-timeout)                 | `10`                    | Maximum seconds the server waits for background work to finish after being asked to stop   |
 | [`DROP_UNSUPPORTED_SYSTEM_PROMPT`](#drop-unsupported-system-prompt) | `true`                  | Drop system prompts for unsupported models; when `false`, return error instead             |
 | [`ANTHROPIC_BETA_FILTER`](#anthropic-beta-filter)                   | `true`                  | Enable filtering of unsupported `anthropic_beta` flags for Claude models                   |
 | [`ANTHROPIC_BETA_ALLOWLIST`](#anthropic-beta-allowlist)             | None                    | Additional `anthropic_beta` flags to allow beyond built-in Bedrock defaults                |
@@ -4224,6 +4225,41 @@ export AI_RESPONSE_TIMEOUT=900
 
 !!! info "Extended Thinking Models"
     Models with extended reasoning capabilities (such as Claude with `thinking` enabled or high `reasoning_effort`) may spend significant time generating internal reasoning steps before producing output. The default of 600 seconds accommodates these use cases. Standard models without extended thinking typically respond within 60 seconds.
+
+---
+
+## :material-power-plug-off: Shutdown Drain { #shutdown-drain-section }
+
+#### `SHUTDOWN_DRAIN_TIMEOUT` { #shutdown-drain-timeout }
+
+:octicons-package-24: **Purpose**
+:   Maximum time in seconds the server waits for background work to finish after it has been asked to stop
+
+:octicons-database-24: **Type**
+:   Number (seconds, `0` or greater)
+
+:octicons-gear-24: **Default**
+:   `10`
+
+:octicons-workflow-24: **Behavior**
+:   Some work is deliberately started outside the request that asked for it, so the caller is answered without waiting for it: temporary file cleanups, vector store file indexing, and the release of live audio sessions. On a stop signal the server waits up to this long for that work to finish, then cancels whatever is still running. The wait is a single deadline shared by all of it, not a budget per item, and a server with nothing outstanding stops immediately
+
+```bash
+# Default: comfortably inside a 30-second container stop timeout
+export SHUTDOWN_DRAIN_TIMEOUT=10
+
+# Longer wait, with the container stop timeout raised to match
+export SHUTDOWN_DRAIN_TIMEOUT=20
+
+# No wait: cancel background work immediately and stop as fast as possible
+export SHUTDOWN_DRAIN_TIMEOUT=0
+```
+
+!!! warning "Best effort, not a delivery guarantee"
+    A container runtime sends `SIGKILL` a fixed delay after the stop signal — 30 seconds by default on [Amazon ECS](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html#container_definition_timeout) — so the server can be killed before the wait ends, and a deployment may run under an orchestrator that stops it sooner still. Keep this value comfortably below your container stop timeout, and raise it only together with that timeout. Never rely on this wait for anything whose completion matters: retry the operation instead.
+
+!!! tip "When Work Is Lost"
+    Anything cancelled at the deadline is counted in the server's `stop` log event, which is then emitted at `warning` level with one count per kind of work. Deployments that see those counts regularly are stopping the server faster than its work can finish: raise this value and the container stop timeout together, or reduce what each request defers.
 
 ---
 
