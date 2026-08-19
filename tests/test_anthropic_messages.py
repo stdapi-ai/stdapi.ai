@@ -927,6 +927,35 @@ class TestAnthropicMessages:
         assert "405" in text_blocks[0].text
 
     @pytest.mark.gateway("Only Claude models are supported by official API")
+    def test_extended_thinking_budget_on_an_effort_only_model(
+        self, anthropic_client: Anthropic
+    ) -> None:
+        """A token budget still enables thinking on a model that sizes by effort.
+
+        ``budget_tokens`` is required by Anthropic's enabled-thinking object, so it
+        is the only way this route can ask for reasoning at all; a model that
+        cannot size a budget serves the request at its own effort scale rather
+        than refusing it.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+             stdapi/models/chat/amazon_nova_2.py:ChatModel._req_configure_reasoning
+        """
+        response = anthropic_client.messages.create(
+            model=NON_ANTHROPIC_THINKING,
+            max_tokens=2048,
+            messages=[{"role": "user", "content": "What is 15 * 27?"}],
+            thinking={"type": "enabled", "budget_tokens": 1024},
+        )
+
+        assert response.type == "message"
+        thinking_blocks = [b for b in response.content if b.type == "thinking"]
+        text_blocks = [b for b in response.content if b.type == "text"]
+        assert len(thinking_blocks) >= 1
+        assert len(thinking_blocks[0].thinking) > 0
+        assert len(text_blocks) >= 1
+        assert "405" in text_blocks[0].text
+
+    @pytest.mark.gateway("Only Claude models are supported by official API")
     def test_output_config_effort_without_thinking(
         self, anthropic_client: Anthropic
     ) -> None:

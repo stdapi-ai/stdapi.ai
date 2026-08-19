@@ -77,7 +77,7 @@ class ChatModel(_BaseChatModel):
         *,
         enabled: bool,
         reasoning_effort: Effort | None = None,
-        budget_tokens: int | None = None,
+        budget_tokens: int | None = None,  # noqa: ARG002
         max_tokens: int | None = None,  # noqa: ARG002
     ) -> None:
         """Configure Nova reasoning parameters.
@@ -88,13 +88,11 @@ class ChatModel(_BaseChatModel):
             additional_request_fields: Mutated with the ``reasoningConfig`` entry.
             enabled: Whether reasoning is explicitly enabled.
             reasoning_effort: Effort level; defaults to ``"medium"`` when ``None``.
-            budget_tokens: Not supported; raises if set.
+            budget_tokens: Accepted and ignored; Nova sizes reasoning by effort,
+                and on the Anthropic Messages route a budget is the only way a
+                request can ask for reasoning at all.
             max_tokens: Unused.
-
-        Raises:
-            ApiError: If *budget_tokens* is not ``None``.
         """
-        self._validate_no_budget_tokens(budget_tokens)
         if not enabled:
             additional_request_fields["reasoningConfig"] = {"type": "disabled"}
             return

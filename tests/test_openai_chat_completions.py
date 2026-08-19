@@ -2338,12 +2338,11 @@ class TestChatCompletions:
         """Contradictory thinking parameters are each rejected with a naming 400.
 
         ``thinking_budget`` is mutually exclusive with ``reasoning_effort`` (two
-        ways to size the same budget), requires ``enable_thinking=true``, and is
-        refused by models that only accept a categorical effort level such as
-        DeepSeek V3.
+        ways to size the same budget) and requires ``enable_thinking=true``.  Both
+        name a contradiction inside the request, which is why they are refused
+        where a budget a model cannot size is merely ignored.
 
         Ref: stdapi/types/openai_chat_completions.py:CompletionCreateParams._validate_thinking_options
-             stdapi/models/chat/deepseek_v3.py:ChatModel._req_configure_reasoning
         """
         # reasoning_effort + thinking_budget
         with pytest.raises(BadRequestError) as both_budgets:
@@ -2372,19 +2371,6 @@ class TestChatCompletions:
         assert isinstance(thinking_disabled_body, dict)
         assert thinking_disabled_body["type"] == "invalid_request_error"
         assert "enable_thinking" in thinking_disabled_body["message"]
-
-        # thinking_budget unsupported by "deepseek.v3-v1:0"
-        with pytest.raises(BadRequestError) as budget_unsupported:
-            openai_client.chat.completions.create(
-                model="deepseek.v3-v1:0",
-                messages=[{"role": "user", "content": "Reply with OK."}],
-                extra_body={"enable_thinking": True, "thinking_budget": 1100},
-            )
-        assert budget_unsupported.value.status_code == 400
-        budget_unsupported_body = budget_unsupported.value.body
-        assert isinstance(budget_unsupported_body, dict)
-        assert budget_unsupported_body["type"] == "invalid_request_error"
-        assert "thinking_budget" in budget_unsupported_body["message"]
 
     @pytest.mark.slow
     @pytest.mark.gateway(

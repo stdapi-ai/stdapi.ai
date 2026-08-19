@@ -34,7 +34,7 @@ class ChatModel(_BaseChatModel):
         *,
         enabled: bool,
         reasoning_effort: Effort | None = None,
-        budget_tokens: int | None = None,
+        budget_tokens: int | None = None,  # noqa: ARG002
         max_tokens: int | None = None,  # noqa: ARG002
     ) -> None:
         """Configure reasoning parameters for DeepSeek models.
@@ -47,14 +47,12 @@ class ChatModel(_BaseChatModel):
             additional_request_fields: Request fields to modify with reasoning config.
             enabled: Whether reasoning is explicitly enabled.
             reasoning_effort: The reasoning effort level (required for DeepSeek).
-            budget_tokens: Not supported for DeepSeek models.
+            budget_tokens: Accepted and ignored; DeepSeek sizes reasoning by
+                effort, and on the Anthropic Messages route a budget is the only
+                way a request can ask for reasoning at all.
             max_tokens: Not used for Deep Seek models.
-
-        Raises:
-            ApiError: If budget_tokens is provided.
         """
         if enabled:
-            self._validate_no_budget_tokens(budget_tokens)
             additional_request_fields["reasoning_config"] = _REASONING_OVERRIDE.get(
                 reasoning_effort, "high"
             )

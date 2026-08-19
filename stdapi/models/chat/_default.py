@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
 
-from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, PromptCaching
 from stdapi.config import SETTINGS
 from stdapi.input_file import prefetch_all_content_types
@@ -1226,14 +1225,3 @@ class ChatModel(ChatModelBase[Any, Any]):
         if not remaining:
             tool_config.pop("toolChoice", None)
         return tool_config
-
-    @staticmethod
-    def _validate_no_budget_tokens(budget_tokens: int | None) -> None:
-        """Raise if *budget_tokens* is set (unsupported on this model).
-
-        Raises:
-            ApiError: If *budget_tokens* is not ``None``.
-        """
-        if budget_tokens is not None:
-            msg = "This model does not support 'thinking_budget'. Use 'reasoning_effort' instead."
-            raise ApiError(msg)

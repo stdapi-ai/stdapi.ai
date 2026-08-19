@@ -631,6 +631,9 @@ This API supports several approaches to control [Amazon Bedrock reasoning](https
     - **Amazon Nova 2 models**: `reasoning_effort` parameter only
     - **DeepSeek V3 models**: `reasoning_effort` parameter only
 
+    Models listed as effort-only still accept a token budget: it turns reasoning
+    on, and the depth comes from their own effort scale.
+
 #### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI and DeepSeek API-Compatible Reasoning Parameters
 
 Use the `reasoning_effort` parameter with predefined effort levels. This format is shared by the OpenAI and [DeepSeek](https://api-docs.deepseek.com/api/create-chat-completion) Chat Completions APIs and works with all Amazon Bedrock models supporting reasoning.

@@ -40,7 +40,7 @@ class TestDeepseekChatCompletions:
         ``extract_reasoning`` reports ``enabled=True`` for any effort other than
         ``"none"``, and ``_REASONING_OVERRIDE`` folds ``minimal`` onto DeepSeek's
         lowest documented level, ``low`` — DeepSeek has no per-token reasoning budget,
-        so ``thinking_budget`` would be rejected instead.
+        so a ``thinking_budget`` is accepted and the effort scale decides the depth.
 
         Ref: https://developers.openai.com/api/docs/guides/reasoning
              stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_reasoning

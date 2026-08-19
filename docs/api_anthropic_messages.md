@@ -574,6 +574,8 @@ curl -X POST "$BASE/v1/messages" \
 
 `thinking` accepts `{"type": "enabled", "budget_tokens": <n>}` (the budget must be less than `max_tokens`), `{"type": "disabled"}`, or `{"type": "adaptive"}`. Alternatively, control reasoning depth with `output_config.effort` (`low`, `medium`, `high`, `xhigh`, `max`).
 
+On models whose reasoning depth is an effort level rather than a token budget (Amazon Nova 2, DeepSeek V3), `budget_tokens` turns reasoning on and the depth follows that model's own scale. Set `output_config.effort` to choose it.
+
 !!! note "`display` Not Honored"
     The `display` field (`summarized`/`omitted`) is accepted but has no effect: Bedrock's reasoning configuration has no equivalent, so full thinking text is always returned.
 
