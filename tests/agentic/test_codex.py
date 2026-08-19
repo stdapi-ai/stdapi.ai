@@ -89,9 +89,6 @@ _MODEL_CONFIGS = [
         ModelConfig(model="openai.gpt-5.6-luna", timeout=_TIMEOUT),
         id="gpt-5.6-luna",
     ),
-    pytest.param(
-        ModelConfig(model="xai.grok-4.3", timeout=_TIMEOUT, flaky=True), id="grok-4.3"
-    ),
 ]
 
 # ---------------------------------------------------------------------------

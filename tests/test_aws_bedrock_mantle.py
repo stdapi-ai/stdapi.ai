@@ -68,6 +68,7 @@ from stdapi.models.chat._mantle.google_gemma4 import ChatModel as GemmaChatModel
 from stdapi.models.chat._mantle.open_weight import ChatModel as OpenWeightChatModel
 from stdapi.models.chat._mantle.openai_gpt5 import ChatModel as GptChatModel
 from stdapi.models.chat._mantle.openai_gpt_oss import ChatModel as GptOssChatModel
+from stdapi.models.chat._mantle.xai_grok import ChatModel as GrokChatModel
 from stdapi.models.chat.openai_gpt import ChatModel as OpenAiGptChatModel
 from stdapi.monitoring import REQUEST, REQUEST_ID, EventLog
 from stdapi.pricing import Service
@@ -688,6 +689,27 @@ class TestMantleModelClassResolution:
             model._api_paths("chat_completions")[0] == "/v1/chat/completions"  # noqa: SLF001
         )
         assert model.native_store_supported() is False
+
+    @pytest.mark.parametrize(
+        "model_id", ["xai.grok-4.3", "xai.grok-5", "xai.grok-6-fast-reasoning"]
+    )
+    def test_grok_versions_use_the_grok_class(self, model_id: str) -> None:
+        """Grok IDs resolve to the Grok class, on both APIs and with image input.
+
+        The matcher is the bare ``xai.`` prefix, so no version pins it.
+        Unmatched, Grok falls back to the generic Mantle class, which is
+        Responses-only, probes ``/v1`` first and is advertised as text-only.
+        """
+        model = get_mantle_chat_model(model_id)
+        assert isinstance(model, GrokChatModel)
+        assert not isinstance(model, OpenWeightChatModel)
+        assert (
+            model._api_paths("chat_completions")[0]  # noqa: SLF001
+            == "/openai/v1/chat/completions"
+        )
+        assert model._api_paths("responses")[0] == "/openai/v1/responses"  # noqa: SLF001
+        assert model.native_store_supported() is True
+        assert model.INPUT_MODALITIES == ("TEXT", "IMAGE")
 
 
 class TestMantleSystemMessageAsMessages:
