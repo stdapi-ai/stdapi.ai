@@ -145,6 +145,27 @@ async def write_record(key: str, record: BaseModel, *, etag: str | None = None) 
     )
 
 
+async def write_if_unchanged(key: str, record: BaseModel, etag: str) -> bool:
+    """Write a record only while the stored object still carries *etag*.
+
+    Args:
+        key: Object key of the record.
+        record: The record to serialise.
+        etag: Entity tag the stored object must still carry.
+
+    Returns:
+        Whether the record was written; ``False`` when another writer moved the
+        record on, or deleted it, first.
+    """
+    try:
+        await write_record(key, record, etag=etag)
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] in _CONFLICT_CODES | _MISSING_CODES:
+            return False
+        raise
+    return True
+
+
 async def delete_record(key: str) -> None:
     """Delete one bookkeeping record."""
     await records_client().delete_object(Bucket=records_bucket(), Key=key)

@@ -12,6 +12,7 @@ mid-request.
 from asyncio import Task, create_task
 from base64 import b32hexencode
 from contextlib import suppress
+from dataclasses import dataclass
 from re import compile as re_compile
 from typing import TYPE_CHECKING, Final, Literal
 from uuid import uuid7
@@ -19,7 +20,7 @@ from uuid import uuid7
 from botocore.exceptions import BotoCoreError, ClientError
 
 from stdapi.api_errors import ApiError
-from stdapi.cleanup import schedule_cleanup
+from stdapi.cleanup import drain_tasks, schedule_cleanup
 from stdapi.config import SETTINGS
 from stdapi.files import get_file, get_file_content, parse_file_id
 from stdapi.models import validate_model
@@ -61,9 +62,11 @@ from stdapi.vector_stores.records import (
     gather_records,
     read_record,
     records_bucket,
+    store_file_records,
     store_key,
     store_prefix,
     update_record,
+    write_if_unchanged,
     write_record,
 )
 from stdapi.vector_stores.records import list_batch_files as _list_batch_file_records
@@ -80,7 +83,7 @@ from stdapi.vector_stores.registry import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Sequence
+    from collections.abc import AsyncIterator, Callable, Sequence
 
     from stdapi.input_file import InputFileUrl
     from stdapi.types.openai_vector_stores import (
@@ -127,11 +130,40 @@ _REWRITE_WINDOW: Final[int] = 100
 #: Seconds of inactivity before a search refreshes ``last_active_at``.
 _LAST_ACTIVE_REFRESH_SECONDS: Final[int] = 3600
 
-#: Strong references to running indexing tasks, held until they finish.
-_INDEXING_TASKS: Final[set[Task[None]]] = set()
+#: Seconds a file may stay ``in_progress`` with nothing renewing its store's lease.
+_INDEXING_LEASE_SECONDS: Final[int] = 900
+
+#: Seconds before its lease runs out at which an indexing wave renews it.
+_LEASE_MARGIN_SECONDS: Final[int] = 300
+
+#: Why a file whose indexing lost the task running it reports having failed.
+_INTERRUPTED_MESSAGE: Final[str] = (
+    "The file could not be indexed: the indexing was interrupted before it "
+    "finished. Attach the file again to index it."
+)
+
+#: Why a file the server could not index reports having failed.
+_FAILED_MESSAGE: Final[str] = "The file could not be indexed."
 
 #: Records a merged listing reads before paging in memory.
 _LIST_ALL: Final[int] = 1000
+
+
+@dataclass(slots=True, frozen=True)
+class _IndexingWave:
+    """The files one background indexing task answers for.
+
+    Attributes:
+        store_id: The store the files are attached to.
+        file_ids: The files the task indexes, in order.
+    """
+
+    store_id: str
+    file_ids: tuple[str, ...]
+
+
+#: Running indexing tasks and the files they own, held until they finish.
+_INDEXING_TASKS: Final[dict[Task[None], _IndexingWave]] = {}
 
 #: Why a store held elsewhere answers no file batch.
 _NO_BATCH: Final[str] = (
@@ -387,7 +419,32 @@ async def read_store(store_id: str) -> StoreRecord:
     record = current[0]
     if record.expired and not record.index_deleted:
         schedule_cleanup(_release_expired(record))
-    return record
+    return await _recover_store(record)
+
+
+async def _recover_store(store: StoreRecord) -> StoreRecord:
+    """Finish what a task that stopped mid-flight left behind on *store*.
+
+    Nothing sweeps a vector store on a schedule, so a file left ``in_progress``
+    by a task that no longer exists is settled the next time the store is read.
+    It is recognised without a read of its own — the store record's own lease
+    says whether anything is indexing it — so a store with none pays two
+    comparisons.
+
+    Args:
+        store: The store record just read.
+
+    Returns:
+        The store record, re-read when the recovery changed it.
+    """
+    if (
+        not store.file_counts.in_progress
+        or now_utc_timestamp() < store.indexing_expires_at
+        or not await _settle_abandoned_files(store.id)
+    ):
+        return store
+    current = await read_record(StoreRecord, store_key(store.id))
+    return store if current is None else current[0]
 
 
 async def _release_expired(store: StoreRecord) -> None:
@@ -639,6 +696,10 @@ async def attach_files(
             setattr(counts, old.status, max(0, getattr(counts, old.status) - 1))
             stored.usage_bytes = max(0, stored.usage_bytes - old.usage_bytes)
         counts.in_progress += len(records)
+        # The lease the files are indexed under, renewed as the wave advances.
+        stored.indexing_expires_at = max(
+            stored.indexing_expires_at, now + _INDEXING_LEASE_SECONDS
+        )
 
     await update_record(StoreRecord, store_key(store.id), add_pending)
     if batch_id:
@@ -665,8 +726,36 @@ def start_indexing(store_id: str, file_ids: list[str], batch_id: str) -> None:
     task = create_task(
         index_files(store_id, file_ids, batch_id, REQUEST_ID.get("vector_store"))
     )
-    _INDEXING_TASKS.add(task)
-    task.add_done_callback(_INDEXING_TASKS.discard)
+    _INDEXING_TASKS[task] = _IndexingWave(store_id, tuple(file_ids))
+    task.add_done_callback(lambda done: _INDEXING_TASKS.pop(done, None))
+
+
+async def drain_indexing(timeout: float) -> int:  # noqa: ASYNC109 -- shared drain contract
+    """Await the indexing still running, settling what the deadline leaves.
+
+    A file whose task is cut short at the deadline is settled exactly as one
+    whose task was killed is, so a shutdown leaves no record claiming an
+    indexing nobody is doing any more.
+
+    Args:
+        timeout: Seconds allowed before the unfinished indexing is cancelled.
+
+    Returns:
+        Number of indexing tasks that had not finished at the deadline.
+    """
+    if not (waves := dict(_INDEXING_TASKS)):
+        return 0
+    unfinished = await drain_tasks(set(waves), timeout)
+    for task, wave in waves.items():
+        if task.cancelled() or not task.done():
+            await gather_bounded(
+                [
+                    _settle_abandoned(wave.store_id, file_id)
+                    for file_id in wave.file_ids
+                ],
+                RECORD_WAVE,
+            )
+    return unfinished
 
 
 async def index_files(
@@ -689,7 +778,11 @@ async def index_files(
         except (ApiError, BotoCoreError, ClientError, OSError) as exc:
             log_error_details(f"Vector store indexing failed: {exc!r}", level="error")
             return
+        # The lease attaching the files wrote; renewed for as long as this runs.
+        lease = now_utc_timestamp() + _INDEXING_LEASE_SECONDS
         for file_id in file_ids:
+            if now_utc_timestamp() + _LEASE_MARGIN_SECONDS >= lease:
+                lease = await _renew_lease(store_id)
             try:
                 status, usage_bytes = await _index_one_file(store, file_id, batch_id)
             except (ApiError, BotoCoreError, ClientError, OSError) as exc:
@@ -697,21 +790,105 @@ async def index_files(
                 log_error_details(
                     f"Vector store indexing failed: {exc!r}", level="error"
                 )
-                status, usage_bytes = await _fail_file(store_id, file_id), 0
+                status, usage_bytes = await _fail_file(
+                    store_id, file_id, "server_error", _FAILED_MESSAGE
+                )
             if status:
                 await _settle_counters(store_id, batch_id, status, usage_bytes)
 
 
-async def _fail_file(store_id: str, file_id: str) -> str:
-    """Record a server error on a file whose indexing could not finish.
+async def _renew_lease(store_id: str) -> int:
+    """Push back the moment a store's files count as owned by nobody.
+
+    Args:
+        store_id: A validated vector store identifier.
+
+    Returns:
+        When the renewed lease runs out.
+    """
+    lease = now_utc_timestamp() + _INDEXING_LEASE_SECONDS
+
+    def mutate(record: StoreRecord) -> None:
+        """Hold the lease at least until *lease*."""
+        record.indexing_expires_at = max(record.indexing_expires_at, lease)
+
+    with suppress(ApiError, BotoCoreError, ClientError, OSError):
+        await update_record(StoreRecord, store_key(store_id), mutate)
+    return lease
+
+
+async def _write_owned(
+    store_id: str, file_id: str, mutate: Callable[[FileRecord], None]
+) -> FileRecord | None:
+    """Apply *mutate* to a file record the indexing that read it still owns.
+
+    Written only while the stored record is unchanged, so a file cancelled or
+    already settled by another writer is left as it stands rather than
+    resurrected by work that started before.
+
+    Args:
+        store_id: A validated vector store identifier.
+        file_id: The file to write.
+        mutate: Callable applying the change in place.
+
+    Returns:
+        The record as written, or ``None`` when the file is no longer this
+        indexing's to settle.
+    """
+    key = file_key(store_id, file_id)
+    current = await read_record(FileRecord, key)
+    if current is None:
+        return None
+    record, etag = current
+    if record.status != "in_progress":
+        return None
+    mutate(record)
+    return record if await write_if_unchanged(key, record, etag) else None
+
+
+async def _fail_file(
+    store_id: str,
+    file_id: str,
+    code: Literal["server_error", "unsupported_file", "invalid_file"],
+    message: str,
+) -> tuple[str, int]:
+    """Record an error on a file whose indexing could not finish.
 
     Args:
         store_id: A validated vector store identifier.
         file_id: The file that could not be indexed.
+        code: The upstream error code the record reports.
+        message: What the caller reads as the file's error.
 
     Returns:
-        ``"failed"``, or ``""`` when the record could not be written and its
-        counters must therefore stay untouched.
+        ``("failed", 0)``, or ``("", 0)`` when the record was not this
+        indexing's to settle and its counters must stay untouched.
+    """
+
+    def mutate(record: FileRecord) -> None:
+        """Move the file to its failed terminal state."""
+        record.status = "failed"
+        record.usage_bytes = 0
+        record.last_error = FileErrorRecord(code=code, message=message)
+
+    try:
+        settled = await _write_owned(store_id, file_id, mutate)
+    except (ApiError, BotoCoreError, ClientError, OSError) as exc:
+        log_error_details(f"Vector store indexing failed: {exc!r}", level="error")
+        return "", 0
+    return ("failed", 0) if settled is not None else ("", 0)
+
+
+async def _settle_abandoned(store_id: str, file_id: str) -> FileRecord | None:
+    """Fail a file left ``in_progress`` by an indexing nothing is running.
+
+    Args:
+        store_id: A validated vector store identifier.
+        file_id: The file left in progress.
+
+    Returns:
+        The settled record, or ``None`` when it was not this reader's to
+        settle.
     """
 
     def mutate(record: FileRecord) -> None:
@@ -719,23 +896,48 @@ async def _fail_file(store_id: str, file_id: str) -> str:
         record.status = "failed"
         record.usage_bytes = 0
         record.last_error = FileErrorRecord(
-            code="server_error", message="The file could not be indexed."
+            code="server_error", message=_INTERRUPTED_MESSAGE
         )
 
-    try:
-        await update_record(
-            FileRecord, file_key(store_id, file_id), mutate, resource="file"
-        )
-    except (ApiError, BotoCoreError, ClientError, OSError) as exc:
-        log_error_details(f"Vector store indexing failed: {exc!r}", level="error")
-        return ""
-    return "failed"
+    settled = None
+    with suppress(ApiError, BotoCoreError, ClientError, OSError):
+        settled = await _write_owned(store_id, file_id, mutate)
+        if settled is not None:
+            await _settle_counters(store_id, settled.batch_id, "failed", 0)
+    return settled
+
+
+async def _settle_abandoned_files(store_id: str) -> bool:
+    """Fail every file of a store whose indexing no longer has a task.
+
+    Args:
+        store_id: A validated vector store identifier.
+
+    Returns:
+        Whether at least one file was settled.
+    """
+    horizon = now_utc_timestamp() - _INDEXING_LEASE_SECONDS
+    stale = [
+        record
+        for record in await store_file_records(store_id, "in_progress")
+        if record.created_at <= horizon
+    ]
+    if not stale:
+        return False
+    settled = await gather_bounded(
+        [_settle_abandoned(store_id, record.id) for record in stale], RECORD_WAVE
+    )
+    return any(record is not None for record in settled)
 
 
 async def _index_one_file(
     store: StoreRecord, file_id: str, batch_id: str
 ) -> tuple[str, int]:
     """Index one file and write its terminal record.
+
+    Every write of the record goes through :func:`_write_owned`, so a file
+    detached or settled while this ran is left alone and its counters are not
+    moved twice.
 
     Args:
         store: The store record the file belongs to.
@@ -744,7 +946,8 @@ async def _index_one_file(
 
     Returns:
         ``(status, usage_bytes)`` of the settled file, or ``("", 0)`` when the
-        file was detached meanwhile and its counters already released.
+        file was not this indexing's to settle and its counters are answered
+        for elsewhere.
     """
     backend = backend_for(store)
     try:
@@ -752,51 +955,67 @@ async def _index_one_file(
     except ApiError:
         return "", 0
     if batch_id and (await _read_batch_record(store.id, batch_id)).cancel_requested:
-        record.status = "cancelled"
-        await write_record(file_key(store.id, file_id), record)
-        return record.status, 0
+        cancelled = await _write_owned(
+            store.id, file_id, lambda stored: setattr(stored, "status", "cancelled")
+        )
+        return ("cancelled", 0) if cancelled is not None else ("", 0)
     try:
         chunks = await _load_chunks(store, record, backend)
     except _FileIndexingError as exc:
-        record.status = "failed"
-        record.last_error = FileErrorRecord(code=exc.code, message=str(exc))
-        await write_record(file_key(store.id, file_id), record)
-        return record.status, 0
+        return await _fail_file(store.id, file_id, exc.code, str(exc))
     except (ApiError, BotoCoreError, ClientError, OSError) as exc:
         log_error_details(f"Vector store indexing failed: {exc!r}", level="error")
-        record.status = "failed"
-        record.last_error = FileErrorRecord(
-            code="server_error", message="The file could not be indexed."
-        )
-        await write_record(file_key(store.id, file_id), record)
-        return record.status, 0
+        return await _fail_file(store.id, file_id, "server_error", _FAILED_MESSAGE)
+    return await _store_chunks(store, file_id, chunks, backend)
+
+
+async def _store_chunks(
+    store: StoreRecord, file_id: str, chunks: list[str], backend: VectorIndex
+) -> tuple[str, int]:
+    """Embed a file's chunks into the index and complete its record.
+
+    Args:
+        store: The store record the file belongs to.
+        file_id: The file being indexed.
+        chunks: Its chunks, in document order.
+        backend: The backend serving the store.
+
+    Returns:
+        ``(status, usage_bytes)`` of the settled file, or ``("", 0)`` when the
+        file was not this indexing's to settle.
+    """
+
+    def count(stored: FileRecord) -> None:
+        """Record what the vectors about to be written hold."""
+        stored.chunk_count = len(chunks)
+        stored.usage_bytes = sum(len(chunk.encode()) for chunk in chunks)
 
     # Stored before the vectors exist, so a mid-write failure orphans none.
-    record.chunk_count = len(chunks)
-    record.usage_bytes = sum(len(chunk.encode()) for chunk in chunks)
-    await write_record(file_key(store.id, file_id), record)
+    counted = await _write_owned(store.id, file_id, count)
+    if counted is None:
+        return "", 0
     try:
-        await backend.put_vectors(store.id, _embedded_chunks(store, record, chunks))
+        await backend.put_vectors(store.id, _embedded_chunks(store, counted, chunks))
     except (ApiError, BotoCoreError, ClientError) as exc:
         log_error_details(f"Vector store indexing failed: {exc!r}", level="error")
-        record.status = "failed"
-        record.usage_bytes = 0
-        record.last_error = FileErrorRecord(
-            code="server_error", message="The file could not be indexed."
-        )
-        await write_record(file_key(store.id, file_id), record)
-        return record.status, 0
+        return await _fail_file(store.id, file_id, "server_error", _FAILED_MESSAGE)
+
+    def complete(stored: FileRecord) -> None:
+        """Move the file to its completed terminal state."""
+        stored.previous_chunk_count = 0
+        stored.status = "completed"
+
+    settled = await _write_owned(store.id, file_id, complete)
+    if settled is None:
+        return "", 0
     # Chunks beyond the new count would stay searchable with stale text.
-    stale = record.previous_chunk_count
-    record.previous_chunk_count = 0
-    record.status = "completed"
-    await write_record(file_key(store.id, file_id), record)
+    stale = counted.previous_chunk_count
     if stale > len(chunks):
         await backend.delete_vectors(
             store.id,
-            [vector_key(record.id, index) for index in range(len(chunks), stale)],
+            [vector_key(file_id, index) for index in range(len(chunks), stale)],
         )
-    return record.status, record.usage_bytes
+    return settled.status, settled.usage_bytes
 
 
 class _FileIndexingError(Exception):
@@ -928,10 +1147,14 @@ async def _settle_counters(
         counts.in_progress = max(0, counts.in_progress - 1)
         setattr(counts, status, getattr(counts, status) + 1)
 
+    lease = now_utc_timestamp() + _INDEXING_LEASE_SECONDS
+
     def mutate_store(record: StoreRecord) -> None:
-        """Apply the file's outcome to the store counters."""
+        """Apply the file's outcome to the store counters, and hold the lease."""
         mutate(record.file_counts)
         record.usage_bytes += usage_bytes
+        # A file settling is the wave saying it is alive, for whatever is left.
+        record.indexing_expires_at = max(record.indexing_expires_at, lease)
 
     with suppress(ApiError, BotoCoreError, ClientError):
         await update_record(StoreRecord, store_key(store_id), mutate_store)

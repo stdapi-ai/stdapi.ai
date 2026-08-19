@@ -118,6 +118,11 @@ settled — a store still reporting `in_progress` for a file already `completed`
 converges within a moment. Poll the file itself when you need the earliest
 possible answer.
 
+Nothing is lost if the server is replaced while it indexes — a file
+whose indexing was interrupted settles as `failed` with
+`last_error.code="server_error"`, so a poll always terminates. Attach the file
+again to index it.
+
 ## Supported Files
 
 Files must be **text**: plain text, Markdown, source code, CSV, JSON, XML,
@@ -142,7 +147,7 @@ that produces Markdown from PDF and office formats.
 |-------------------|----------------------------------------------------------------|
 | `unsupported_file`| The file is not one this store indexes.                         |
 | `invalid_file`    | The file is text but holds nothing to index, or is too large.   |
-| `server_error`    | Indexing failed; detach the file and attach it again.           |
+| `server_error`    | Indexing failed, or was interrupted; attach the file again.     |
 
 A [knowledge base store](#knowledge-base-stores) indexes more than text — PDF and
 office documents as they stand, and media on a fully managed one. Its own

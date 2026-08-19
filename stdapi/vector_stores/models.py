@@ -40,6 +40,10 @@ class StoreRecord(BaseModel):
     ``embedding_model`` and ``dimensions`` are frozen at creation: an index's
     dimension cannot be changed, so a later change to the configured default
     must not reach an existing store.
+
+    ``indexing_expires_at`` is what a read uses to tell a file still being
+    indexed from one whose task is gone: the moment past which nothing is
+    indexing this store any more.
     """
 
     id: str
@@ -57,6 +61,7 @@ class StoreRecord(BaseModel):
     usage_bytes: int = 0
     index_deleted: bool = False
     external_status: Literal["in_progress", "completed"] | None = None
+    indexing_expires_at: int = 0
 
     @property
     def expires_at(self) -> int | None:

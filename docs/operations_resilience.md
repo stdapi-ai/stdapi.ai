@@ -346,7 +346,7 @@ The Terraform module deploys stdapi.ai following AWS best practices for high ava
   <br>ECS tasks spread across all Availability Zones; a single AZ failure does not interrupt service
 
 - :material-autorenew: __Stateless Service Design__
-  <br>stdapi.ai holds no local state — a failed task is replaced without loss of stored data, since all persistent data lives in S3
+  <br>stdapi.ai keeps no state on disk — a failed task is replaced without loss of stored data, since all persistent data lives in S3
 
 - :material-heart-pulse: __ALB Health Checks__
   <br>Unhealthy tasks drained and replaced within seconds; traffic rerouted to healthy AZs automatically
@@ -404,7 +404,9 @@ flowchart TB
 
 ### :material-view-dashboard-variant: Multi-AZ & ECS Service Resilience
 
-**Stateless by design.** stdapi.ai stores no local state — all persistent data lives in S3. Each ECS Fargate task is fully replaceable: ECS can terminate and relaunch a failed task without any loss of data or request state that the client cannot retry.
+**Stateless by design.** stdapi.ai stores no state on disk — all persistent data lives in S3. Each ECS Fargate task is fully replaceable: ECS can terminate and relaunch a failed task without any loss of stored data, and a request interrupted by a task replacement is one the client can retry.
+
+**Work that outlives its request.** Vector store [indexing](api_openai_vector_stores.md#indexing-is-asynchronous) runs in the background rather than on the request path, so a task replaced while it is in flight interrupts it. Nothing is stranded when that happens: a file left `in_progress` with nothing indexing it any more is settled as `failed`, with `last_error` saying the indexing was interrupted, the next time the file, the store, or its file list is read. Attach the file again to index it — no store is left reporting `in_progress` for good, and no client polls forever.
 
 **Multi-AZ spread.** The Terraform module places ECS tasks across all available Availability Zones in the region. If an AZ experiences a partial or full failure, tasks in the remaining AZs continue to process requests without interruption. The default configuration maintains at least one task per Availability Zone, so capacity remains in the other AZs during a task replacement event.
 

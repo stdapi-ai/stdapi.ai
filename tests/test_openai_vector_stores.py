@@ -19,7 +19,7 @@ Ref: https://platform.openai.com/docs/api-reference/vector-stores
 """
 
 import time
-from asyncio import run
+from asyncio import Event, run, sleep
 from dataclasses import replace
 from itertools import count
 from types import SimpleNamespace
@@ -57,6 +57,7 @@ from stdapi.vector_stores import (
     create_store,
     delete_store,
     detach_file,
+    drain_indexing,
     engine,
     index_files,
     new_batch_id,
@@ -68,6 +69,7 @@ from stdapi.vector_stores import (
     records,
     s3_vectors,
     search,
+    start_indexing,
     touch_store,
     update_file_attributes,
     update_record,
@@ -3149,6 +3151,134 @@ class TestIndexingOffline:
         await _run_cleanups(scheduled_cleanups)
         assert vector_backend.records.objects == {}
         assert vector_backend.vectors.indexes == {}
+
+
+@pytest.mark.local
+class TestAbandonedIndexing:
+    """A file whose indexing lost its task is settled by the next read.
+
+    Issue #179: nothing sweeps these records, so a task killed mid-indexing —
+    ECS sends ``SIGKILL`` 30 s after ``SIGTERM`` — left the file, and the store
+    counting it, ``in_progress`` for good.
+
+    Ref: stdapi/vector_stores/engine.py:_settle_abandoned_files
+    """
+
+    @staticmethod
+    async def _abandon(store_id: str, file_id: str) -> None:
+        """Age a file and its store past the lease, as a killed task leaves them."""
+        await update_record(
+            StoreRecord,
+            store_key(store_id),
+            lambda stored: setattr(stored, "indexing_expires_at", 1),
+        )
+        await update_record(
+            FileRecord,
+            file_key(store_id, file_id),
+            lambda stored: setattr(stored, "created_at", 1),
+            resource="file",
+        )
+
+    async def test_reading_the_store_settles_the_file_and_its_counters(
+        self, vector_backend: _FakeBackend
+    ) -> None:
+        """A store polled after its indexing died reports the file as failed.
+
+        Ref: stdapi/vector_stores/engine.py:_recover_store
+        """
+        store = await _create_store()
+        file_id = vector_backend.upload(_TEXT_FILE)
+        await _attach(store, [file_id])
+        await self._abandon(store.id, file_id)
+
+        settled = await read_store(store.id)
+        assert settled.status == "completed"
+        assert settled.file_counts.in_progress == 0
+        assert settled.file_counts.failed == 1
+        record = await read_file(store.id, file_id)
+        assert record.status == "failed"
+        assert record.last_error is not None
+        assert record.last_error.code == "server_error"
+        assert "interrupted" in record.last_error.message
+
+    async def test_a_live_indexing_is_left_alone(
+        self, vector_backend: _FakeBackend
+    ) -> None:
+        """A file attached moments ago is owned by a task and must not be failed.
+
+        Ref: stdapi/vector_stores/engine.py:_settle_abandoned_files
+        """
+        store = await _create_store()
+        file_id = vector_backend.upload(_TEXT_FILE)
+        await _attach(store, [file_id])
+        # The lease is gone, but the file is younger than one: still being indexed.
+        await update_record(
+            StoreRecord,
+            store_key(store.id),
+            lambda stored: setattr(stored, "indexing_expires_at", 1),
+        )
+
+        assert (await read_store(store.id)).file_counts.in_progress == 1
+        assert (await read_file(store.id, file_id)).status == "in_progress"
+        await index_files(store.id, [file_id], "", "test-request")
+        assert (await read_file(store.id, file_id)).status == "completed"
+
+    async def test_the_file_routes_report_the_settled_status(
+        self, vector_backend: _FakeBackend, app_client: TestClient
+    ) -> None:
+        """Polling the API the documented way stops returning ``in_progress``.
+
+        Ref: https://platform.openai.com/docs/api-reference/vector-stores-files/listFiles
+        """
+        store = await _create_store()
+        file_id = vector_backend.upload(_TEXT_FILE)
+        await _attach(store, [file_id])
+        await self._abandon(store.id, file_id)
+
+        listed = app_client.get(f"/v1/vector_stores/{store.id}/files")
+        assert listed.status_code == 200, listed.text
+        assert [entry["status"] for entry in listed.json()["data"]] == ["failed"]
+        retrieved = app_client.get(f"/v1/vector_stores/{store.id}")
+        assert retrieved.json()["status"] == "completed"
+        assert retrieved.json()["file_counts"]["failed"] == 1
+
+    async def test_the_shutdown_drain_settles_what_it_cancels(
+        self, vector_backend: _FakeBackend, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Indexing cut short by the drain deadline leaves no record in progress.
+
+        Ref: stdapi/vector_stores/engine.py:drain_indexing
+        """
+        store = await _create_store()
+        file_id = vector_backend.upload(_TEXT_FILE)
+        await _attach(store, [file_id])
+        blocked = Event()
+
+        async def _never_embed(*args: Any, **kwargs: Any) -> EmbeddingResponse:  # noqa: ANN401
+            """Hang exactly as an embedding call the deadline interrupts does."""
+            del args, kwargs
+            await blocked.wait()
+            raise AssertionError
+
+        monkeypatch.setattr(vector_backend.model, "embed_text", _never_embed)
+        start_indexing(store.id, [file_id], "")
+        # Let the task reach the embedding call it will never come back from.
+        await sleep(0)
+        await sleep(0)
+
+        assert await drain_indexing(0.0) == 1
+        record = await read_file(store.id, file_id)
+        assert record.status == "failed"
+        assert record.last_error is not None
+        assert "interrupted" in record.last_error.message
+        assert (await read_store(store.id)).file_counts.in_progress == 0
+
+    async def test_draining_nothing_costs_nothing(self) -> None:
+        """A shutdown with no indexing in flight answers without a record read.
+
+        Ref: stdapi/vector_stores/engine.py:drain_indexing
+        """
+        assert await drain_indexing(5.0) == 0
 
 
 @pytest.mark.local
