@@ -41,9 +41,10 @@ class StoreRecord(BaseModel):
     dimension cannot be changed, so a later change to the configured default
     must not reach an existing store.
 
-    ``indexing_expires_at`` is what a read uses to tell a file still being
-    indexed from one whose task is gone: the moment past which nothing is
-    indexing this store any more.
+    ``detaching`` and ``indexing_expires_at`` are what a read uses to finish
+    the work of a task that died: the files whose vectors are still to be
+    reclaimed, and the moment past which nothing is indexing this store any
+    more.
     """
 
     id: str
@@ -61,6 +62,7 @@ class StoreRecord(BaseModel):
     usage_bytes: int = 0
     index_deleted: bool = False
     external_status: Literal["in_progress", "completed"] | None = None
+    detaching: list[str] = Field(default_factory=list)
     indexing_expires_at: int = 0
 
     @property
@@ -104,6 +106,10 @@ class FileRecord(BaseModel):
     that answers for its own files: it keeps the attributes searchable without
     reading them back, and cuts the passages itself. Both are reported as
     unknown rather than as a value this server would be inventing.
+
+    ``detaching`` marks a file the caller has deleted whose vectors are not all
+    gone yet: the record outlives the delete only so the reclaim can be
+    finished, and the API answers for it as it does for a file it never held.
     """
 
     id: str
@@ -118,6 +124,7 @@ class FileRecord(BaseModel):
     max_chunk_size_tokens: int = CHUNK_SIZE_TOKENS_DEFAULT
     chunk_overlap_tokens: int = CHUNK_OVERLAP_TOKENS_DEFAULT
     batch_id: str = ""
+    detaching: bool = False
 
 
 class BatchRecord(BaseModel):

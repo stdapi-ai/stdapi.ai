@@ -425,10 +425,11 @@ async def read_store(store_id: str) -> StoreRecord:
 async def _recover_store(store: StoreRecord) -> StoreRecord:
     """Finish what a task that stopped mid-flight left behind on *store*.
 
-    Nothing sweeps a vector store on a schedule, so a file left ``in_progress``
-    by a task that no longer exists is settled the next time the store is read.
-    It is recognised without a read of its own — the store record's own lease
-    says whether anything is indexing it — so a store with none pays two
+    Nothing sweeps a vector store on a schedule, so the two states a task can
+    be killed in are settled the next time the store is read: the vectors of a
+    detached file that were not all reclaimed, and a file left ``in_progress``
+    by a task that no longer exists. Both are recognised without a read of
+    their own — the store record names them — so a store with neither pays two
     comparisons.
 
     Args:
@@ -437,11 +438,15 @@ async def _recover_store(store: StoreRecord) -> StoreRecord:
     Returns:
         The store record, re-read when the recovery changed it.
     """
+    recovered = False
+    if store.detaching:
+        recovered = await _reclaim_detached(store)
     if (
-        not store.file_counts.in_progress
-        or now_utc_timestamp() < store.indexing_expires_at
-        or not await _settle_abandoned_files(store.id)
+        store.file_counts.in_progress
+        and now_utc_timestamp() >= store.indexing_expires_at
     ):
+        recovered = await _settle_abandoned_files(store.id) or recovered
+    if not recovered:
         return store
     current = await read_record(StoreRecord, store_key(store.id))
     return store if current is None else current[0]
@@ -670,13 +675,18 @@ async def attach_files(
         for entry, source in zip(pending, sources, strict=True)
     ]
     # Re-attaching replaces the record, so its outcome and chunks move with it.
-    replaced = [
+    existing_records = [
         existing[0]
         for existing in await gather_records(
             FileRecord, [file_key(store.id, record.id) for record in records]
         )
         if existing is not None
     ]
+    # A file still being reclaimed would take the record replacing it with it.
+    for existing in existing_records:
+        if existing.detaching:
+            await _reclaim_file(store.id, existing.id)
+    replaced = [existing for existing in existing_records if not existing.detaching]
     # An unfinished replacement still owns the older vectors: take the larger.
     previous = {
         record.id: max(record.chunk_count, record.previous_chunk_count)
@@ -822,9 +832,9 @@ async def _write_owned(
 ) -> FileRecord | None:
     """Apply *mutate* to a file record the indexing that read it still owns.
 
-    Written only while the stored record is unchanged, so a file cancelled or
-    already settled by another writer is left as it stands rather than
-    resurrected by work that started before.
+    Written only while the stored record is unchanged, so a file detached,
+    cancelled or already settled by another writer is left as it stands rather
+    than resurrected by work that started before.
 
     Args:
         store_id: A validated vector store identifier.
@@ -840,7 +850,7 @@ async def _write_owned(
     if current is None:
         return None
     record, etag = current
-    if record.status != "in_progress":
+    if record.detaching or record.status != "in_progress":
         return None
     mutate(record)
     return record if await write_if_unchanged(key, record, etag) else None
@@ -1170,6 +1180,13 @@ async def _settle_counters(
 async def detach_file(store_id: str, file_id: str) -> None:
     """Remove a file and its vectors from a store.
 
+    The record naming the vectors is the only thing that can reclaim them, so
+    it is the last thing to go: the file is marked as detaching, which takes it
+    out of every listing and out of every search, and is deleted once its
+    vectors are. A task killed in between leaves a record to finish from
+    instead of vectors nothing points at, and the next read of the store
+    finishes it.
+
     Args:
         store_id: A validated vector store identifier.
         file_id: The file to remove.
@@ -1182,30 +1199,76 @@ async def detach_file(store_id: str, file_id: str) -> None:
         await external.delete_document(store_id, file_id)
         return
     record = await _read_file_record(store_id, file_id)
-    await delete_record(file_key(store_id, file_id))
+    reclaim = bool(record.chunk_count or record.previous_chunk_count)
+    if reclaim:
+        record = await update_record(
+            FileRecord,
+            file_key(store_id, file_id),
+            lambda stored: setattr(stored, "detaching", True),
+            resource="file",
+        )
 
     def mutate(store: StoreRecord) -> None:
-        """Remove the file from the store counters."""
+        """Release the file from the store counters, and name what it leaves."""
         counts = store.file_counts
         setattr(counts, record.status, max(0, getattr(counts, record.status) - 1))
         store.usage_bytes = max(0, store.usage_bytes - record.usage_bytes)
+        if reclaim and record.id not in store.detaching:
+            store.detaching.append(record.id)
 
     with suppress(ApiError, BotoCoreError, ClientError):
         await update_record(StoreRecord, store_key(store_id), mutate)
-    if record.chunk_count or record.previous_chunk_count:
-        schedule_cleanup(_delete_file_vectors(store_id, record))
+    if not reclaim:
+        await delete_record(file_key(store_id, file_id))
+        return
+    schedule_cleanup(_reclaim_file(store_id, file_id))
 
 
-async def _delete_file_vectors(store_id: str, record: FileRecord) -> None:
-    """Delete every vector of *record* from the store's index.
+async def _reclaim_detached(store: StoreRecord) -> bool:
+    """Reclaim what the files detached from *store* have not finished leaving.
+
+    Args:
+        store: The store record naming them.
+
+    Returns:
+        Whether at least one file was reclaimed.
+    """
+    reclaimed = False
+    for file_id in list(store.detaching):
+        with suppress(ApiError, BotoCoreError, ClientError, OSError):
+            await _reclaim_file(store.id, file_id)
+            reclaimed = True
+    return reclaimed
+
+
+async def _reclaim_file(store_id: str, file_id: str) -> None:
+    """Delete a detached file's vectors, then the record naming them.
 
     A file whose re-indexing failed still owns the vectors of the version
-    before it, so both counts are reclaimed.
+    before it, so both counts are reclaimed. Deleting more keys than the index
+    holds is harmless, which is what makes a second attempt safe.
+
+    Args:
+        store_id: A validated vector store identifier.
+        file_id: The detached file to reclaim.
     """
-    count = max(record.chunk_count, record.previous_chunk_count)
-    await backend_for(store_id).delete_vectors(
-        store_id, [vector_key(record.id, index) for index in range(count)]
-    )
+    key = file_key(store_id, file_id)
+    current = await read_record(FileRecord, key)
+    if current is not None:
+        record = current[0]
+        count = max(record.chunk_count, record.previous_chunk_count)
+        if count:
+            await backend_for(store_id).delete_vectors(
+                store_id, [vector_key(file_id, index) for index in range(count)]
+            )
+        await delete_record(key)
+
+    def mutate(store: StoreRecord) -> None:
+        """Forget a file whose vectors are gone."""
+        store.detaching = [entry for entry in store.detaching if entry != file_id]
+
+    with suppress(ApiError, BotoCoreError, ClientError):
+        await update_record(StoreRecord, store_key(store_id), mutate)
 
 
 async def update_file_attributes(
@@ -1335,8 +1398,13 @@ async def search(
         matches = await backend.query(
             store.id, vectors, max_results=max_num_results, search_filter=filters
         )
+    # A file whose vectors are still being reclaimed is already gone: whatever
+    # the index still answers for it must not reach the caller.
+    detaching = frozenset(store.detaching)
     best: dict[str, SearchResult] = {}
     for match in matches:
+        if match.file_id in detaching:
+            continue
         if score_threshold is not None and match.score < score_threshold:
             continue
         current = best.get(match.key)

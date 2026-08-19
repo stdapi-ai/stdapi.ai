@@ -23,7 +23,7 @@ from asyncio import Event, run, sleep
 from dataclasses import replace
 from itertools import count
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 from zlib import crc32
 
 import pytest
@@ -60,6 +60,7 @@ from stdapi.vector_stores import (
     drain_indexing,
     engine,
     index_files,
+    list_store_files,
     new_batch_id,
     new_store_id,
     read_batch,
@@ -83,7 +84,7 @@ from stdapi.vector_stores.backend import (
     unsupported_file_message,
 )
 from stdapi.vector_stores.knowledge_base import CAPABILITIES as _KB_CAPABILITIES
-from stdapi.vector_stores.records import batch_key, file_key, store_key
+from stdapi.vector_stores.records import batch_key, file_key, read_record, store_key
 from stdapi.vector_stores.s3_vectors import (
     S3VectorsIndex,
     attribute_key,
@@ -100,6 +101,7 @@ if TYPE_CHECKING:
         AsyncIterator,
         Awaitable,
         Callable,
+        Coroutine,
         Iterator,
         Sequence,
     )
@@ -1204,6 +1206,13 @@ async def _run_cleanups(pending: list[Awaitable[None]]) -> None:
         await pending.pop(0)
 
 
+def _abandon_cleanups(pending: list[Awaitable[None]]) -> None:
+    """Drop every scheduled cleanup, as a task killed before running them does."""
+    for cleanup in pending:
+        cast("Coroutine[Any, Any, None]", cleanup).close()
+    pending.clear()
+
+
 def _error_of(response: Any) -> dict[str, Any]:  # noqa: ANN401
     """Return the error envelope of a failed response."""
     payload: dict[str, Any] = response.json()["error"]
@@ -2205,6 +2214,66 @@ class TestIndexingUsage:
             openai_client.files.delete(file_id)
 
 
+@pytest.mark.gateway("the record bucket behind a store is not an upstream concept")
+@pytest.mark.usefixtures("local_test_client", "vector_stores_api")
+class TestDetachIsDurableLive:
+    """Detaching survives a lost task against the real index and record bucket.
+
+    What the in-memory stand-in cannot answer: whether S3 really refuses the
+    conditional write the recovery depends on, and whether the real index
+    accepts a second deletion of vector keys it no longer holds — the reclaim
+    is re-driven on every read, so a delete that is not idempotent would turn
+    each read into an error.
+
+    Ref: stdapi/vector_stores/engine.py:_reclaim_file
+    """
+
+    def test_a_lost_reclaim_is_finished_by_the_next_read(
+        self, empty_store: str, openai_client: OpenAI, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A detach whose background work never ran leaves nothing searchable.
+
+        The search that proves it runs after the reclaim, when the store no
+        longer holds anything to filter the file out with: what answers is the
+        index itself, so an empty page is the vectors really being gone.
+
+        Ref: https://platform.openai.com/docs/api-reference/vector-stores-files/deleteFile
+        """
+        file_id = _upload(openai_client, "observatory.txt", _TEXT_FILE)
+        try:
+            openai_client.vector_stores.files.create(
+                vector_store_id=empty_store, file_id=file_id
+            )
+            _wait_for_file(openai_client, empty_store, file_id)
+            found = openai_client.vector_stores.search(empty_store, query="maintenance")
+            assert [result for result in found.data if result.file_id == file_id]
+
+            # The task is killed the moment the delete is answered.
+            monkeypatch.setattr(
+                engine,
+                "schedule_cleanup",
+                lambda *tasks: _abandon_cleanups(list(tasks)),
+            )
+            openai_client.vector_stores.files.delete(
+                file_id, vector_store_id=empty_store
+            )
+            monkeypatch.undo()
+
+            store = openai_client.vector_stores.retrieve(empty_store)
+            assert store.file_counts.total == 0
+            assert not openai_client.vector_stores.files.list(empty_store).data
+            deadline = time.monotonic() + _LIST_TIMEOUT
+            while openai_client.vector_stores.search(
+                empty_store, query="maintenance"
+            ).data:
+                assert time.monotonic() < deadline, (
+                    "the vectors of a deleted file are still searchable"
+                )
+                time.sleep(2.0)
+        finally:
+            openai_client.files.delete(file_id)
+
+
 @pytest.mark.local
 class TestUnconfiguredDeployment:
     """Without vector storage the routes answer 503, naming nothing internal.
@@ -3151,6 +3220,106 @@ class TestIndexingOffline:
         await _run_cleanups(scheduled_cleanups)
         assert vector_backend.records.objects == {}
         assert vector_backend.vectors.indexes == {}
+
+
+@pytest.mark.local
+class TestDetachIsDurable:
+    """A detached file's vectors go before the record that can reclaim them.
+
+    Issue #177: the record was deleted first and the vectors left to a detached
+    task, so a task killed in between left a document the caller had deleted
+    searchable for good, with nothing left pointing at it. Every test here
+    abandons the scheduled cleanup on purpose: that is the killed task.
+
+    Ref: stdapi/vector_stores/engine.py:detach_file
+    """
+
+    async def test_a_lost_reclaim_leaves_the_vectors_to_a_later_read(
+        self, vector_backend: _FakeBackend, scheduled_cleanups: list[Awaitable[None]]
+    ) -> None:
+        """A detach whose task never ran is finished by the next read of the store.
+
+        Ref: stdapi/vector_stores/engine.py:_reclaim_file
+        """
+        store = await _create_store()
+        file_id = vector_backend.upload(_TEXT_FILE)
+        await _attach(store, [file_id])
+        await index_files(store.id, [file_id], "", "test-request")
+        index = vector_backend.vectors.indexes[index_name(store.id)]
+        assert index
+
+        await detach_file(store.id, file_id)
+        # The task dies here, with the caller already told the file is gone.
+        _abandon_cleanups(scheduled_cleanups)
+        assert index, "the vectors outlived the record that names them"
+
+        recovered = await read_store(store.id)
+        assert vector_backend.vectors.indexes[index_name(store.id)] == {}
+        assert recovered.detaching == []
+        assert file_key(store.id, file_id) not in vector_backend.records.objects
+
+    async def test_a_file_being_reclaimed_answers_as_deleted(
+        self, vector_backend: _FakeBackend, scheduled_cleanups: list[Awaitable[None]]
+    ) -> None:
+        """Between the two deletes the file is searched, listed and read as gone.
+
+        Ref: stdapi/vector_stores/engine.py:search
+        """
+        store = await _create_store()
+        file_id = vector_backend.upload(_TEXT_FILE)
+        await _attach(store, [file_id])
+        await index_files(store.id, [file_id], "", "test-request")
+        await detach_file(store.id, file_id)
+        _abandon_cleanups(scheduled_cleanups)
+
+        # Read raw: reading it through the engine would finish the reclaim.
+        stored = await read_record(StoreRecord, store_key(store.id))
+        assert stored is not None
+        pending = stored[0]
+        assert pending.detaching == [file_id]
+        assert pending.file_counts.total == 0
+        assert vector_backend.vectors.indexes[index_name(store.id)]
+        assert (
+            await search(
+                pending,
+                [_PLANTED],
+                max_num_results=5,
+                filters=None,
+                score_threshold=None,
+            )
+            == []
+        )
+        assert await list_store_files(
+            store.id, after="", before="", limit=10, order="desc", status=""
+        ) == ([], False)
+        with pytest.raises(ApiError) as raised:
+            await read_file(store.id, file_id)
+        assert raised.value.status == 404
+
+    async def test_re_attaching_a_file_being_reclaimed_keeps_the_new_record(
+        self, vector_backend: _FakeBackend, scheduled_cleanups: list[Awaitable[None]]
+    ) -> None:
+        """Attaching a file again finishes its reclaim first, so it is not deleted.
+
+        Ref: stdapi/vector_stores/engine.py:attach_files
+        """
+        store = await _create_store()
+        file_id = vector_backend.upload(_TEXT_FILE)
+        await _attach(store, [file_id])
+        await index_files(store.id, [file_id], "", "test-request")
+        await detach_file(store.id, file_id)
+        _abandon_cleanups(scheduled_cleanups)
+
+        await _attach(store, [file_id])
+        await index_files(store.id, [file_id], "", "test-request")
+        await _run_cleanups(scheduled_cleanups)
+        record = await read_file(store.id, file_id)
+        assert record.status == "completed"
+        assert vector_backend.vectors.indexes[index_name(store.id)]
+        settled = await read_store(store.id)
+        assert settled.detaching == []
+        assert settled.file_counts.completed == 1
+        assert settled.file_counts.total == 1
 
 
 @pytest.mark.local

@@ -225,6 +225,10 @@ async def read_file(store_id: str, file_id: str) -> FileRecord:
         store_id: A validated vector store identifier.
         file_id: A file identifier.
 
+    A file whose vectors are being reclaimed is already detached as far as the
+    caller is concerned: its record only outlives the delete so the reclaim can
+    be finished, and is answered as an unknown file.
+
     Returns:
         The file record.
 
@@ -232,7 +236,7 @@ async def read_file(store_id: str, file_id: str) -> FileRecord:
         ApiError: When the file is not attached to the store (404).
     """
     current = await read_record(FileRecord, file_key(store_id, file_id))
-    if current is None:
+    if current is None or current[0].detaching:
         raise_not_found("file", file_id)
     return current[0]
 
@@ -356,6 +360,9 @@ async def list_stores(
 async def store_file_records(store_id: str, status: str) -> list[FileRecord]:
     """Return every file attached to *store_id*, in no particular order.
 
+    A file whose vectors are being reclaimed is left out: it is detached
+    already, and only its record is still waiting to go.
+
     Args:
         store_id: A validated vector store identifier.
         status: Keep only files with this status, or ``""`` for all.
@@ -370,7 +377,7 @@ async def store_file_records(store_id: str, status: str) -> list[FileRecord]:
         for record in (
             await gather_records(FileRecord, [file_key(store_id, i) for i in ids])
         )
-        if record is not None
+        if record is not None and not record[0].detaching
     ]
     return (
         [record for record in records if record.status == status] if status else records

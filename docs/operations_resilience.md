@@ -406,7 +406,10 @@ flowchart TB
 
 **Stateless by design.** stdapi.ai stores no state on disk — all persistent data lives in S3. Each ECS Fargate task is fully replaceable: ECS can terminate and relaunch a failed task without any loss of stored data, and a request interrupted by a task replacement is one the client can retry.
 
-**Work that outlives its request.** Vector store [indexing](api_openai_vector_stores.md#indexing-is-asynchronous) runs in the background rather than on the request path, so a task replaced while it is in flight interrupts it. Nothing is stranded when that happens: a file left `in_progress` with nothing indexing it any more is settled as `failed`, with `last_error` saying the indexing was interrupted, the next time the file, the store, or its file list is read. Attach the file again to index it — no store is left reporting `in_progress` for good, and no client polls forever.
+**Work that outlives its request.** Vector store [indexing](api_openai_vector_stores.md#indexing-is-asynchronous) runs in the background rather than on the request path, so a task replaced while it is in flight interrupts it. Nothing is stranded when that happens:
+
+-   A file left `in_progress` with nothing indexing it any more is settled as `failed`, with `last_error` saying the indexing was interrupted, the next time the file, the store, or its file list is read. Attach the file again to index it — no store is left reporting `in_progress` for good, and no client polls forever.
+-   Deleting a file from a vector store removes its passages from the index **before** the record that names them, so a task lost mid-delete leaves the deletion to be finished by the next read rather than leaving content searchable. Either way the file stops being searchable and stops being listed the moment the API answers.
 
 **Multi-AZ spread.** The Terraform module places ECS tasks across all available Availability Zones in the region. If an AZ experiences a partial or full failure, tasks in the remaining AZs continue to process requests without interruption. The default configuration maintains at least one task per Availability Zone, so capacity remains in the other AZs during a task replacement event.
 
