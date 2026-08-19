@@ -418,7 +418,13 @@ async def delete_file_endpoint(
     "/files/{file_id}/content",
     summary="Download the raw content of an uploaded file (OpenAI format)",
     operation_id="openai_file_content",
-    description="Returns the raw binary content of a file as a streaming download (OpenAI Files API).",
+    description=(
+        "Returns the raw binary content of a file as a streaming download "
+        "(OpenAI Files API).\n\n"
+        "**MCP / AI agent usage:** text files come back as text and images as "
+        "an image; any other content, and anything too large to carry, comes "
+        "back as a JSON reference holding the URL to download it from."
+    ),
     response_description="The raw file content.",
 )
 async def get_content(

@@ -114,6 +114,9 @@ When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, s
 !!! tip "JSON body support for file and audio tools"
     MCP tools send JSON bodies — they cannot construct `multipart/form-data`. All file upload, audio, and upload-part tools therefore accept the file or audio content as a base64 string, data URI (`data:<mime>;base64,<data>`), HTTPS URL, or S3 URI in the `file` / `data` field instead of a binary attachment — as do the video generation tool's `input_reference` image, the moderation tool's `image_url` input, and the `openai_image_edit`/`openai_image_variation` tools' image inputs (also accepting a bare string in any of these forms, plus a Files API file ID). The full multipart upload workflow (`openai_upload` → `openai_upload_part` → `openai_upload_complete`) is fully MCP-compatible this way.
 
+!!! tip "What the file, video, and audio tools return"
+    An MCP tool result carries text, an image, or audio — never an arbitrary binary stream. Endpoints that answer with bytes therefore adapt to what the protocol can hold: text content comes back as text, an image as an image, and generated speech as audio when `stream_format` is set to `audio`. Anything else — a video, a PDF or archive read back through `openai_file_content` or `anthropic_file_content`, and any payload above 3 MB — comes back as a small JSON object holding the media type and the `url` to download it from over HTTP, so an agent is told where the result is rather than handed bytes it cannot use.
+
 | MCP Tool                         | Endpoint                                    |
 |----------------------------------|---------------------------------------------|
 | **OpenAI Tools**                 |                                             |

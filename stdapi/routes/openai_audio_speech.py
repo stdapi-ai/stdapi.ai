@@ -121,6 +121,9 @@ async def _speech_audio_sse(
         "the length that is accepted. Beyond a few thousand characters the "
         "audio takes proportionally longer to return, except with voices that "
         "stream it as it is spoken.\n\n"
+        "**MCP / AI agent usage:** SSE audio events are the default; set "
+        "`stream_format=audio` to receive the clip as a single audio result "
+        "instead.\n\n"
         "**Find compatible models:** Call `search_models` with `route=openai_audio_speech` "
         "to discover model IDs that support text-to-speech."
     ),

@@ -445,7 +445,9 @@ async def retrieve_video(
     operation_id="openai_video_content",
     description=(
         "Returns the generated MP4 video as a streaming download once the job "
-        "has completed (OpenAI Videos API)."
+        "has completed (OpenAI Videos API).\n\n"
+        "**MCP / AI agent usage:** the video is never returned inline; the tool "
+        "answers with a JSON reference holding the URL to download it from."
     ),
     response_description="The raw MP4 video content.",
     responses={

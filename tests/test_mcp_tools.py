@@ -23,6 +23,7 @@ Ref: stdapi/mcp.py:mount_mcp
 
 from __future__ import annotations
 
+from base64 import b64decode
 from json import loads
 from typing import TYPE_CHECKING, Any
 
@@ -40,6 +41,12 @@ if TYPE_CHECKING:
 
     #: Callable running one tool call over a fresh MCP session.
     type McpCall = Callable[[str, dict[str, Any]], CallToolResult]
+
+#: A 1x1 PNG, the smallest binary file the storage tools can be exercised with.
+_PNG_BASE64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGA"
+    "hKmMIQAAAABJRU5ErkJggg=="
+)
 
 #: These tests speak the streamable-HTTP transport, the only one the SDK mounts here.
 pytestmark = pytest.mark.skipif(
@@ -653,6 +660,34 @@ class TestStorageTools:
         deleted = _json_result(mcp_call("openai_files_delete", {"file_id": file_id}))
         assert deleted["deleted"] is True
 
+    def test_openai_file_content_of_a_non_text_file(self, mcp_call: McpCall) -> None:
+        """A binary file read through the tool comes back usable, not as mojibake.
+
+        ``fastapi_mcp`` decodes every response body as text, which no binary
+        file survives, so the whole file-content tool was text-only. The stored
+        content type decides the result: a PNG the agent can look at comes back
+        as image content, byte for byte.
+
+        Ref: stdapi/mcp.py:_bind_media_results
+             stdapi/routes/openai_files.py:openai_file_content
+        """
+        created = _json_result(
+            mcp_call(
+                "openai_file",
+                {"file": f"data:image/png;base64,{_PNG_BASE64}", "purpose": "vision"},
+            )
+        )
+        file_id = created["id"]
+        try:
+            content = mcp_call("openai_file_content", {"file_id": file_id})
+            assert not content.isError, content.content
+            block = content.content[0]
+            assert block.type == "image"
+            assert block.mimeType == "image/png"
+            assert b64decode(block.data) == b64decode(_PNG_BASE64)
+        finally:
+            mcp_call("openai_files_delete", {"file_id": file_id})
+
     def test_anthropic_file_list(self, mcp_call: McpCall) -> None:
         """The Anthropic file listing is served as a tool.
 
@@ -759,10 +794,14 @@ class TestStorageTools:
     ) -> None:
         """A video generates, polls to completion, downloads, and deletes via tools.
 
+        No MCP content type carries video, so the content tool answers with the
+        URL the finished clip downloads from rather than with its bytes.
+
         Ref: stdapi/routes/openai_videos.py:openai_video_generation
              stdapi/routes/openai_videos.py:openai_video_get
              stdapi/routes/openai_videos.py:openai_video_content
              stdapi/routes/openai_videos.py:openai_video_delete
+             stdapi/mcp.py:_bind_media_results
         """
         from time import monotonic, sleep  # noqa: PLC0415
 
@@ -791,7 +830,9 @@ class TestStorageTools:
             assert video["status"] == "completed", video
             content = mcp_call("openai_video_content", {"video_id": video_id})
             assert not content.isError, content.content
-            assert content.content[0].text  # type: ignore[union-attr]
+            reference = loads(content.content[0].text)  # type: ignore[union-attr]
+            assert reference["content_type"] == "video/mp4"
+            assert reference["url"].endswith(f"/videos/{video_id}/content")
         finally:
             deleted = _json_result(
                 mcp_call("openai_video_delete", {"video_id": video_id})

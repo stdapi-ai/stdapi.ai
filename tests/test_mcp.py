@@ -19,12 +19,18 @@ from typing import TYPE_CHECKING
 
 import pytest
 from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
 from fastapi_mcp import FastApiMCP  # type: ignore[import-untyped]
 from starlette.requests import Request as StarletteRequest
 
 from stdapi import server
 from stdapi.config import SETTINGS
-from stdapi.mcp import _lift_body_limit, _make_stateless
+from stdapi.mcp import (
+    _MCP_MAX_INLINE_BYTES,
+    _bind_media_results,
+    _lift_body_limit,
+    _make_stateless,
+)
 from stdapi.monitoring import REQUEST_ID, log_error_details, log_request_event
 from stdapi.types.openai_audio import (
     AudioTranscriptionJsonBody,
@@ -33,6 +39,7 @@ from stdapi.types.openai_audio import (
 from stdapi.utils import webuuid
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from types import TracebackType
     from typing import Any
 
@@ -991,3 +998,187 @@ class TestCompactJson:
         from stdapi.mcp import _CompactJson  # noqa: PLC0415
 
         assert fastapi_mcp.server.json is _CompactJson
+
+
+# ---------------------------------------------------------------------------
+# Routes answering with bytes rather than JSON
+# ---------------------------------------------------------------------------
+
+
+#: Bodies the throwaway media app serves, per operation ID: media type and payload.
+_MEDIA_BODIES: dict[str, tuple[str, bytes]] = {
+    # The leading null bytes are what json.loads reads as a UTF-32 signature.
+    "media_video": ("video/mp4", b"\x00\x00\x00 ftypisom" + bytes(64)),
+    "media_document": ("application/pdf", b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n"),
+    "media_image": ("image/png", b"\x89PNG\r\n\x1a\n" + bytes(32)),
+    "media_audio": ("audio/mpeg", b"\xff\xfb\x90\x64" + bytes(32)),
+    "media_huge_image": (
+        "image/png",
+        b"\x89PNG\r\n\x1a\n" + bytes(_MCP_MAX_INLINE_BYTES),
+    ),
+    "media_text": ("text/plain", b"hello mcp"),
+}
+
+
+def _media_app(*, bind: bool = True) -> FastAPI:
+    """Build a throwaway app serving one body per :data:`_MEDIA_BODIES` entry.
+
+    Args:
+        bind: Whether to apply :func:`~stdapi.mcp._bind_media_results`, so the
+            same calls can be observed with and without it.
+
+    Returns:
+        The app, ready to serve ``/mcp`` without a handshake.
+    """
+    app = FastAPI()
+
+    def _route(payload: bytes, media_type: str) -> Any:  # noqa: ANN401
+        """Build an endpoint streaming *payload* as *media_type*."""
+
+        async def endpoint() -> StreamingResponse:
+            """Stream the fixed body."""
+
+            async def stream() -> AsyncIterator[bytes]:
+                """Yield the body in one chunk."""
+                yield payload
+
+            return StreamingResponse(stream(), media_type=media_type)
+
+        return endpoint
+
+    for operation_id, (media_type, payload) in _MEDIA_BODIES.items():
+        app.get(f"/{operation_id}", operation_id=operation_id)(
+            _route(payload, media_type)
+        )
+
+    mcp = FastApiMCP(app, name="test", description="test")
+    mcp.mount_http()
+    _make_stateless(mcp)
+    if bind:
+        _bind_media_results(mcp)
+    return app
+
+
+def _call_tool(app: FastAPI, name: str) -> Any:  # noqa: ANN401
+    """Call one tool of *app* over the streamable-HTTP transport.
+
+    Args:
+        app: App exposing the transport in stateless mode.
+        name: Tool to call, with no arguments.
+
+    Returns:
+        The JSON-RPC ``result`` object, carrying ``content`` and ``isError``.
+    """
+    import json  # noqa: PLC0415
+
+    from starlette.testclient import TestClient  # noqa: PLC0415
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": {}},
+            },
+            headers={"Accept": "application/json, text/event-stream"},
+        )
+    assert response.status_code == 200, response.text
+    for line in response.text.splitlines():
+        if line.startswith("data: "):
+            return json.loads(line[len("data: ") :])["result"]
+    return response.json()["result"]
+
+
+@pytest.mark.local
+class TestBinaryToolResults:
+    """A route answering with bytes must still be callable as an MCP tool.
+
+    ``fastapi_mcp`` parses every response as JSON and falls back to its decoded
+    text, neither of which a binary body survives, so every such tool was
+    unusable: video content always, file content for anything that is not text.
+    Media an MCP client can render travels as the content type built for it, and
+    everything else is answered with a reference to its download URL rather than
+    with bytes no agent could use.
+
+    Ref: stdapi/mcp.py:_bind_media_results
+         https://modelcontextprotocol.io/specification/2025-06-18/server/tools
+    """
+
+    @staticmethod
+    def _reference(result: Any) -> Any:  # noqa: ANN401
+        """Assert the call succeeded with a text block, and parse it as JSON."""
+        import json  # noqa: PLC0415
+
+        assert not result["isError"], result["content"]
+        assert result["content"][0]["type"] == "text"
+        return json.loads(result["content"][0]["text"])
+
+    def test_a_video_body_answers_a_download_reference(self) -> None:
+        """The video tool returns the URL to download from, not the MP4 bytes.
+
+        No MCP content type carries video, and a generated clip is far larger
+        than any agent's context, so the reference is the whole capability.
+        """
+        reference = self._reference(_call_tool(_media_app(), "media_video"))
+        assert reference["content_type"] == "video/mp4"
+        assert reference["url"] == "/media_video"
+
+    def test_without_the_binding_the_same_call_fails(self) -> None:
+        """The negative control: unbound, the call errors while decoding the body.
+
+        This is what shipped — the MP4 header's null bytes are read as a UTF-32
+        signature, and decoding them raises before any result is built.
+        """
+        result = _call_tool(_media_app(bind=False), "media_video")
+        assert result["isError"]
+        assert "decode" in result["content"][0]["text"]
+
+    def test_a_non_text_file_body_answers_a_download_reference(self) -> None:
+        """A binary file the client cannot render comes back as a reference too.
+
+        The file-content tools serve whatever was uploaded, so this is the case
+        an agent meets first: a PDF, an archive, anything not text.
+        """
+        reference = self._reference(_call_tool(_media_app(), "media_document"))
+        assert reference["content_type"] == "application/pdf"
+        assert reference["url"] == "/media_document"
+
+    def test_an_image_body_is_returned_as_image_content(self) -> None:
+        """An image small enough to travel reaches the agent as image content."""
+        from base64 import b64decode  # noqa: PLC0415
+
+        result = _call_tool(_media_app(), "media_image")
+        assert not result["isError"], result["content"]
+        block = result["content"][0]
+        assert block["type"] == "image"
+        assert block["mimeType"] == "image/png"
+        assert b64decode(block["data"]) == _MEDIA_BODIES["media_image"][1]
+
+    def test_an_audio_body_is_returned_as_audio_content(self) -> None:
+        """Generated speech reaches the agent as audio content, not as text."""
+        from base64 import b64decode  # noqa: PLC0415
+
+        result = _call_tool(_media_app(), "media_audio")
+        assert not result["isError"], result["content"]
+        block = result["content"][0]
+        assert block["type"] == "audio"
+        assert block["mimeType"] == "audio/mpeg"
+        assert b64decode(block["data"]) == _MEDIA_BODIES["media_audio"][1]
+
+    def test_media_above_the_inline_ceiling_answers_a_reference(self) -> None:
+        """An image too large to inline degrades to a reference rather than failing.
+
+        Base64 inflates a payload by a third, and an MCP client feeds a content
+        block straight to its model, so the ceiling is what keeps a large asset
+        from blowing up the very session that asked for it.
+        """
+        reference = self._reference(_call_tool(_media_app(), "media_huge_image"))
+        assert reference["content_type"] == "image/png"
+
+    def test_a_text_body_is_unchanged(self) -> None:
+        """The control for every case above: text still arrives verbatim."""
+        result = _call_tool(_media_app(), "media_text")
+        assert not result["isError"], result["content"]
+        assert result["content"][0]["text"] == "hello mcp"

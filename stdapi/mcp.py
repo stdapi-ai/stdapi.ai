@@ -5,16 +5,19 @@ and request-ID propagation so that internal MCP → API calls share the same log
 """
 
 from contextlib import suppress
+from contextvars import ContextVar
 from json import JSONDecodeError
 from logging import ERROR, Handler, LogRecord, getLogger
 from traceback import format_exception
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import fastapi_mcp.server  # type: ignore[import-untyped]
 from fastapi import Depends
 from fastapi_mcp import AuthConfig, FastApiMCP
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, QueryParams
 from httpx import Request as HttpxRequest
+from httpx import Response as HttpxResponse
+from mcp.types import AudioContent, ImageContent
 from pydantic_core import to_json
 
 from stdapi import server
@@ -23,8 +26,11 @@ from stdapi.config import SETTINGS, LogLevel
 from stdapi.metering import EDITION_TITLE
 from stdapi.monitoring import REQUEST, REQUEST_ID, log_error_details
 from stdapi.routes.core_root import MCP_SERVER_CARD
+from stdapi.utils import b64encode
 
 if TYPE_CHECKING:
+    from collections.abc import Buffer
+
     from fastapi import FastAPI
     from mcp.types import Tool
 
@@ -33,6 +39,27 @@ _RESPONSES_MARKER = "\n\n### Responses:"
 
 #: Streamable HTTP body ceiling when no input file size is configured.
 _MCP_MAX_BODY_SIZE = 64 * 1024 * 1024
+
+#: Largest response body returned inline as MCP media; base64 inflates it by a third.
+_MCP_MAX_INLINE_BYTES = 3 * 1024 * 1024
+
+#: Media types outside ``text/*`` whose body a text tool result still carries intact.
+_TEXT_MEDIA_TYPES: frozenset[str] = frozenset(
+    {
+        "application/javascript",
+        "application/json",
+        "application/x-json-stream",
+        "application/x-jsonlines",
+        "application/x-ndjson",
+        "application/x-www-form-urlencoded",
+        "application/xml",
+    }
+)
+
+#: Media returned by the tool call in flight, read back once its result is built.
+_INLINE_MEDIA: ContextVar[AudioContent | ImageContent | None] = ContextVar(
+    "_INLINE_MEDIA", default=None
+)
 
 #: Request parameters an MCP client cannot use: streaming modes (tool results are
 #: single messages), token-level tuning, and caller-identity/routing identifiers.
@@ -259,6 +286,135 @@ def _make_stateless(mcp: FastApiMCP) -> None:
     transport._ensure_session_manager_started = start_stateless  # noqa: SLF001
 
 
+def _is_text_body(content_type: str) -> bool:
+    """Tell whether a response body survives being carried as tool result text.
+
+    Args:
+        content_type: Value of the response's ``Content-Type`` header.
+
+    Returns:
+        True for text and text-based structured formats, False for binary ones.
+    """
+    media_type = content_type.partition(";")[0].strip().lower()
+    return (
+        not media_type
+        or media_type.startswith("text/")
+        or media_type in _TEXT_MEDIA_TYPES
+        or media_type.endswith(("+json", "+xml"))
+    )
+
+
+async def _as_media(media_type: str, payload: Buffer) -> AudioContent | ImageContent:
+    """Wrap a binary payload in the MCP content type that carries it.
+
+    Args:
+        media_type: Media type of the payload, an ``image/`` or ``audio/`` one.
+        payload: Raw response body.
+
+    Returns:
+        The image or audio content block for the payload.
+    """
+    data = await b64encode(payload)
+    if media_type.startswith("image/"):
+        return ImageContent(type="image", data=data, mimeType=media_type)
+    return AudioContent(type="audio", data=data, mimeType=media_type)
+
+
+def _as_download_reference(
+    response: HttpxResponse, media_type: str, path: str, query: dict[str, Any]
+) -> HttpxResponse:
+    """Build the JSON body standing in for a body that cannot travel inline.
+
+    Args:
+        response: The answered request, already closed.
+        media_type: Media type of the body being replaced.
+        path: Request path, with its path parameters substituted.
+        query: Request query parameters.
+
+    Returns:
+        A response carrying the reference as JSON.
+    """
+    reference: dict[str, Any] = {
+        "content_type": media_type or "application/octet-stream",
+        "url": f"{path}?{params}" if (params := str(QueryParams(query))) else path,
+        "message": "Content is not returned inline; download it from 'url'.",
+    }
+    if size := response.headers.get("content-length"):
+        reference["size_bytes"] = int(size)
+    return HttpxResponse(
+        response.status_code,
+        headers={"content-type": "application/json"},
+        content=to_json(reference),
+        request=response.request,
+    )
+
+
+def _bind_media_results(mcp: FastApiMCP) -> None:
+    """Make the tools whose route answers with bytes usable by an MCP client.
+
+    ``fastapi_mcp`` parses every response as JSON and falls back to its decoded
+    text, so a binary body either raises while being decoded — an MP4 starts
+    with the null bytes ``json.loads`` reads as a UTF-32 signature — or reaches
+    the agent as mojibake. Images and audio small enough to travel come back as
+    the MCP content types built for them; everything else, video above all,
+    comes back as a JSON reference to the URL it downloads from, and its body is
+    never read, so a large asset is not buffered to be discarded.
+
+    Args:
+        mcp: The FastApiMCP instance whose tool calls are being wrapped.
+    """
+    execute = mcp._execute_api_tool  # noqa: SLF001
+
+    async def request(
+        client: AsyncClient,
+        method: str,
+        path: str,
+        query: dict[str, Any],
+        headers: dict[str, str],
+        body: Any,  # noqa: ANN401
+    ) -> HttpxResponse:
+        """Answer the tool's API call, holding a binary body out of the result."""
+        verb = method.upper()
+        response = await client.send(
+            client.build_request(
+                verb,
+                path,
+                params=query,
+                headers=headers,
+                json=body if verb in {"POST", "PUT", "PATCH"} else None,
+            ),
+            stream=True,
+        )
+        content_type = response.headers.get("content-type", "")
+        if response.status_code >= 400 or _is_text_body(content_type):
+            await response.aread()
+            return response
+        media_type = content_type.partition(";")[0].strip().lower()
+        if media_type.startswith(("image/", "audio/")):
+            payload = bytearray()
+            async for chunk in response.aiter_bytes():
+                payload += chunk
+                if len(payload) > _MCP_MAX_INLINE_BYTES:
+                    break
+            else:
+                _INLINE_MEDIA.set(await _as_media(media_type, payload))
+        await response.aclose()
+        return _as_download_reference(response, media_type, path, query)
+
+    async def execute_api_tool(**kwargs: Any) -> list[Any]:  # noqa: ANN401
+        """Return the media the response carried, or the text result as built."""
+        token = _INLINE_MEDIA.set(None)
+        try:
+            contents = await execute(**kwargs)
+            media = _INLINE_MEDIA.get()
+        finally:
+            _INLINE_MEDIA.reset(token)
+        return [media] if media is not None else contents
+
+    mcp._request = request  # noqa: SLF001
+    mcp._execute_api_tool = execute_api_tool  # noqa: SLF001
+
+
 def mount_mcp(app: FastAPI) -> None:
     """Attach FastApiMCP to *app* and mount the enabled transports.
 
@@ -294,6 +450,7 @@ def mount_mcp(app: FastAPI) -> None:
     _strip_response_docs(mcp.tools)
     _prune_hidden_params(mcp.tools)
     _fix_union_param_types(mcp.tools)
+    _bind_media_results(mcp)
 
     if SETTINGS.enable_mcp_streamable_http:
         mcp.mount_http()
