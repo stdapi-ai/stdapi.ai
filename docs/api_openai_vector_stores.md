@@ -118,7 +118,9 @@ settled — a store still reporting `in_progress` for a file already `completed`
 converges within a moment. Poll the file itself when you need the earliest
 possible answer.
 
-Nothing is lost if the server is replaced while it indexes — a file
+Indexing is bounded server-wide: attaching many files at once never indexes
+more than a couple at a time, so a large attach queues rather than being
+refused. Nothing is lost if the server is replaced while it indexes — a file
 whose indexing was interrupted settles as `failed` with
 `last_error.code="server_error"`, so a poll always terminates. Attach the file
 again to index it.

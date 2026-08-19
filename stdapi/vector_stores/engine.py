@@ -9,7 +9,7 @@ degrades against what that backend declares rather than discovering a gap
 mid-request.
 """
 
-from asyncio import Task, create_task
+from asyncio import Semaphore, Task, create_task, wait_for
 from base64 import b32hexencode
 from contextlib import suppress
 from dataclasses import dataclass
@@ -129,6 +129,12 @@ _REWRITE_WINDOW: Final[int] = 100
 
 #: Seconds of inactivity before a search refreshes ``last_active_at``.
 _LAST_ACTIVE_REFRESH_SECONDS: Final[int] = 3600
+
+#: Files read, chunked and embedded at once, however many requests ask for it.
+_INDEXING_SLOTS: Final[int] = 2
+
+#: Bounds concurrent indexing to :data:`_INDEXING_SLOTS` files server-wide.
+_INDEXING_SEMAPHORE: Final[Semaphore] = Semaphore(_INDEXING_SLOTS)
 
 #: Seconds a file may stay ``in_progress`` with nothing renewing its store's lease.
 _INDEXING_LEASE_SECONDS: Final[int] = 900
@@ -776,6 +782,11 @@ async def index_files(
     Runs its own usage scope so the embeddings it bills are recorded: a usage
     entry written after the originating request's log was finalized is dropped.
 
+    One file is read, chunked and embedded at a time, and the wave holds one of
+    the server's indexing slots while it does: the fan-out is caller-controlled,
+    so what it costs in memory and in embedding calls may not grow with the
+    request rate.
+
     Args:
         store_id: A validated vector store identifier.
         file_ids: The files to index, in order.
@@ -791,8 +802,7 @@ async def index_files(
         # The lease attaching the files wrote; renewed for as long as this runs.
         lease = now_utc_timestamp() + _INDEXING_LEASE_SECONDS
         for file_id in file_ids:
-            if now_utc_timestamp() + _LEASE_MARGIN_SECONDS >= lease:
-                lease = await _renew_lease(store_id)
+            lease = await _hold_slot(store_id, lease)
             try:
                 status, usage_bytes = await _index_one_file(store, file_id, batch_id)
             except (ApiError, BotoCoreError, ClientError, OSError) as exc:
@@ -803,8 +813,34 @@ async def index_files(
                 status, usage_bytes = await _fail_file(
                     store_id, file_id, "server_error", _FAILED_MESSAGE
                 )
+            finally:
+                _INDEXING_SEMAPHORE.release()
             if status:
                 await _settle_counters(store_id, batch_id, status, usage_bytes)
+
+
+async def _hold_slot(store_id: str, lease: int) -> int:
+    """Take an indexing slot, holding the store's lease while waiting for one.
+
+    A file queued behind the slots is still being indexed, so the lease that
+    tells a reader whether anything owns it is renewed for as long as the wait
+    lasts.
+
+    Args:
+        store_id: A validated vector store identifier.
+        lease: When the lease currently held on the store runs out.
+
+    Returns:
+        When the lease held once the slot was taken runs out.
+    """
+    while True:
+        if now_utc_timestamp() + _LEASE_MARGIN_SECONDS >= lease:
+            lease = await _renew_lease(store_id)
+        try:
+            await wait_for(_INDEXING_SEMAPHORE.acquire(), _LEASE_MARGIN_SECONDS)
+        except TimeoutError:
+            continue
+        return lease
 
 
 async def _renew_lease(store_id: str) -> int:

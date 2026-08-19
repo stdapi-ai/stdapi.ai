@@ -19,7 +19,7 @@ Ref: https://platform.openai.com/docs/api-reference/vector-stores
 """
 
 import time
-from asyncio import Event, run, sleep
+from asyncio import Event, gather, run, sleep
 from dataclasses import replace
 from itertools import count
 from types import SimpleNamespace
@@ -3320,6 +3320,54 @@ class TestDetachIsDurable:
         assert settled.detaching == []
         assert settled.file_counts.completed == 1
         assert settled.file_counts.total == 1
+
+
+@pytest.mark.local
+class TestIndexingConcurrencyCap:
+    """Indexing is bounded server-wide, whatever the request rate.
+
+    Issue #178: one wave per attach, each buffering a whole file and running
+    sixteen embedding calls, is a caller-controlled fan-out on a task with a
+    fixed memory limit.
+
+    Ref: stdapi/vector_stores/engine.py:_hold_slot
+    """
+
+    async def test_concurrent_waves_index_no_more_files_than_the_cap(
+        self, vector_backend: _FakeBackend, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Four attaches at once still read and embed only two files at a time.
+
+        Ref: stdapi/vector_stores/engine.py:_INDEXING_SLOTS
+        """
+        store = await _create_store()
+        files = [vector_backend.upload(_TEXT_FILE) for _ in range(4)]
+        await _attach(store, files)
+        embedding = vector_backend.model.embed_text
+        active = 0
+        peak = 0
+
+        async def _slow_embed(*args: Any, **kwargs: Any) -> EmbeddingResponse:  # noqa: ANN401
+            """Embed, holding the slot long enough for the others to pile up."""
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            try:
+                await sleep(0.05)
+                return await embedding(*args, **kwargs)
+            finally:
+                active -= 1
+
+        monkeypatch.setattr(vector_backend.model, "embed_text", _slow_embed)
+        await gather(
+            *(index_files(store.id, [file_id], "", "test-request") for file_id in files)
+        )
+
+        # Four waves, and never four files at once: the cap is what bites.
+        assert peak == engine._INDEXING_SLOTS < len(files)  # noqa: SLF001
+        settled = await read_store(store.id)
+        assert settled.file_counts.completed == 4
+        assert settled.file_counts.in_progress == 0
 
 
 @pytest.mark.local
