@@ -195,6 +195,25 @@ def _clean_price_index() -> Generator[None]:
     _state.price_index = original
 
 
+@pytest.fixture(autouse=True)
+def _keep_bidi_client_pool() -> Generator[None]:
+    """Put back the bidirectional client pool a test's teardown emptied.
+
+    ``AWSConnectionManager`` drops that pool whenever it unwinds, so every test
+    driving the startup or shutdown path empties the one the session lifespan
+    built, and each later bidirectional test fails with ``KeyError``. The
+    clients are only dereferenced there, never closed, so restoring them works.
+    """
+    from sys import modules  # noqa: PLC0415
+
+    bidi = modules.get("stdapi.aws_bidi")
+    pool: dict[str, dict[str, Any]] = getattr(bidi, "_BIDI_CLIENTS", {})
+    snapshot = {service: dict(clients) for service, clients in pool.items()}
+    yield
+    if snapshot and not pool:
+        pool.update(snapshot)
+
+
 _loaded_env_file: str | None = None
 
 
@@ -1112,7 +1131,10 @@ def live_server(use_official_api: bool, server_url: str | None) -> Iterator[str 
     A WebSocket route cannot be exercised through ``TestClient`` as an SDK
     transport: the official client dials the URL itself, with its own WebSocket
     stack. The in-process lane therefore serves the same ASGI app from a real
-    uvicorn on a loopback port, which also runs the app lifespan exactly once.
+    uvicorn on a loopback port, running a second lifespan of it in the same
+    process. That lifespan drops the shared AWS client pool when it unwinds, so
+    the pool the ``test_client`` lifespan built is put back afterwards: any
+    session fixture finalised later still answers through it.
 
     Yields:
         The HTTP base URL to dial, or None when the vendor's own endpoint is the
@@ -1131,8 +1153,10 @@ def live_server(use_official_api: bool, server_url: str | None) -> Iterator[str 
 
     import uvicorn  # noqa: PLC0415
 
+    from stdapi.aws import _CLIENTS  # noqa: PLC0415
     from stdapi.main import app  # noqa: PLC0415
 
+    pool = {service: dict(clients) for service, clients in _CLIENTS.items()}
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     port = int(listener.getsockname()[1])
@@ -1151,6 +1175,8 @@ def live_server(use_official_api: bool, server_url: str | None) -> Iterator[str 
     finally:
         server.should_exit = True
         thread.join(timeout=_LIVE_SERVER_STOP_TIMEOUT)
+        for service, clients in pool.items():
+            _CLIENTS.setdefault(service, {}).update(clients)
 
 
 @pytest.fixture(scope="session")
