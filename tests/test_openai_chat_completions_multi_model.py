@@ -202,6 +202,9 @@ class TestMultiModelChatCompletions:
     """
 
     @pytest.mark.expensive
+    @pytest.mark.retry(
+        "a small model can answer its own word instead of the pinned one"
+    )
     @_BASIC_MODELS
     def test_basic_chat_completion(self, model: str, openai_client: OpenAI) -> None:
         """Every family answers with the same ``chat.completion`` envelope.
