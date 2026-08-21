@@ -45,7 +45,7 @@ Open WebUI is the leading open-source ChatGPT alternative. It provides a feature
 </div>
 
 ```mermaid
-%%{init: {'flowchart': {'htmlLabels': true}} }%%
+%%{init: {'flowchart': {'htmlLabels': true, 'useMaxWidth': false}} }%%
 flowchart LR
   openwebui["<img src='../styles/logo_openwebui.svg' style='height:64px;width:auto;vertical-align:middle;' /> Open WebUI"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
@@ -58,8 +58,8 @@ flowchart LR
 The diagram below is the topology the [Terraform sample](#terraform-deployment) builds: a browser-facing chat application and its AI gateway, both on ECS Fargate, in one VPC you own.
 
 ```mermaid
-%%{init: {'flowchart': {'htmlLabels': true}} }%%
-flowchart LR
+%%{init: {'flowchart': {'htmlLabels': true, 'useMaxWidth': false, 'nodeSpacing': 20, 'rankSpacing': 40}} }%%
+flowchart TB
   user["👤 Your users<br/>(browser)"]
 
   subgraph public["Your VPC · public subnets"]
@@ -69,10 +69,11 @@ flowchart LR
   subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
     openwebui["<img src='../styles/logo_openwebui.svg' style='height:40px;width:auto;vertical-align:middle;' /> Open WebUI<br/>ECS Fargate"]
     stdapi["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
-    tools["SearXNG · Playwright<br/>ECS Fargate"]
-    aurora["Aurora PostgreSQL<br/>Serverless v2 + pgvector"]
-    valkey["ElastiCache Valkey<br/>TLS + auth token"]
-    egress["NAT gateways<br/>one per AZ"]
+    tools["<img src='../styles/logo_searxng.svg' style='height:40px;width:auto;vertical-align:middle;' /> <img src='../styles/logo_playwright.svg' style='height:40px;width:auto;vertical-align:middle;' /><br/>SearXNG · Playwright<br/>ECS Fargate"]
+    aurora["<img src='../styles/logo_amazon_aurora.svg' style='height:40px;width:auto;vertical-align:middle;' /> Aurora PostgreSQL<br/>Serverless v2 + pgvector"]
+    valkey["<img src='../styles/logo_amazon_elasticache.svg' style='height:40px;width:auto;vertical-align:middle;' /> ElastiCache Valkey<br/>TLS + auth token"]
+    egress["<img src='../styles/logo_amazon_vpc.svg' style='height:40px;width:auto;vertical-align:middle;' /> NAT gateways · one per AZ<br/>+ free S3 gateway endpoint"]
+    aurora ~~~ tools
   end
 
   subgraph regional["AWS service endpoints · your account, the regions you configure"]
@@ -81,6 +82,8 @@ flowchart LR
     transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Transcribe"]
     s3["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3<br/>SSE-KMS"]
     cw["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon CloudWatch<br/>logs · metrics · alarms"]
+    bedrock ~~~ transcribe ~~~ cw
+    polly ~~~ s3
   end
 
   user -->|"HTTPS · TLS 1.2+<br/>(HTTP until a domain is set)"| alb
@@ -329,7 +332,7 @@ tofu apply
 | --- | --- |
 | stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
 | ECS Fargate | Four services — Open WebUI, the gateway, SearXNG, Playwright — each sized and auto-scaled independently |
-| Load balancing and networking | One ALB, plus the NAT gateways the private subnets egress through |
+| Load balancing and networking | One ALB, plus the NAT gateways the private subnets egress through — the S3 gateway endpoint alongside them carries no charge |
 | Aurora Serverless v2 | Scales with query load; the sample floors it at 0.5 ACU rather than zero, because auto-pause needs no open connections and the application holds an idle pool |
 | ElastiCache Valkey | A standing node cost |
 | Model and AI-service usage | Amazon Bedrock, Polly and Transcribe at AWS rates, billed to your account with no markup |
@@ -355,7 +358,16 @@ Amazon Bedrock [model invocation logging](operations_compliance.md#amazon-bedroc
 
 ## :material-alert-outline: Known Issues
 
-Open WebUI may list all available models in the chat model selector, including models that do not support chat completions (like image or embedding models). Disable incompatible models in the Open WebUI admin panel.
+!!! warning "The model selector lists every model, not only the chat ones"
+    Open WebUI populates its selector from `GET /v1/models`, and that endpoint
+    answers with every model this deployment serves across every modality — as
+    OpenAI's own does. So embedding, image, speech and moderation models appear
+    beside the chat ones, and picking one fails at the first message.
+
+    Turn off the ones you do not want in the Open WebUI admin panel. To see which
+    models answer which route before choosing, query
+    [`/v1/search_models`](api_search_models.md), which reports each model's
+    capabilities rather than just its name.
 
 !!! note "Per-user cost attribution needs an identifier Open WebUI does not send"
     Open WebUI identifies the signed-in user to its backend with `X-OpenWebUI-User-*` headers (`ENABLE_FORWARD_USER_INFO_HEADERS`), not with the OpenAI `safety_identifier` field. [Per-user attribution](operations_cost_management.md#per-user-attribution) reads that field, or an authenticated caller — neither of which one shared connection provides — so every chat is billed to the deployment's own identity. Where the split matters, give each team its own [model alias](operations_configuration.md#model-aliases-configuration) as a separate Open WebUI connection, and read the totals from Amazon Bedrock model invocation logs.
