@@ -11,6 +11,11 @@ stdapi.ai requires specific AWS IAM permissions to access Amazon Bedrock models 
 !!! tip "Building Your Policy"
     Combine the permission statements below based on the features you need. At minimum, you need the **Bedrock** permissions. Add statements for S3, TTS, STT, and other features as required by your deployment. Only include the statements you need — start with the Bedrock permissions and add others as required (least privilege).
 
+!!! warning "One policy may not hold all of these"
+    A customer managed policy is capped at **6,144 characters**, a limit AWS does not raise through Service Quotas, and whitespace does not count toward it. Enabling most of the features on this page exceeds that in a single document — `CreatePolicy` then fails with `LimitExceeded: Cannot exceed quota for PolicySize: 6144`, naming no statement.
+
+    Attach several policies to the role instead of widening actions to save characters. Splitting by service keeps each one readable and reviewable; the Terraform module ships two for exactly this reason, one for Amazon Bedrock and one for the supporting services. A role takes up to 10 managed policies by default.
+
 !!! info "Terraform Module"
     The official [stdapi-ai Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) provisions the ECS task role with the required permissions automatically. This reference is for custom deployments and policy auditing.
 
