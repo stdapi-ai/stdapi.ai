@@ -35,7 +35,7 @@ from stdapi.routes import anthropic_files
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Iterator
 
-    from anthropic.types.beta import FileMetadata
+    from anthropic.types.beta import BetaFileMetadata as FileMetadata
     from openai import OpenAI
     from starlette.testclient import TestClient
 
