@@ -31,15 +31,15 @@ An AI gateway you run in your own AWS account. Point Claude Code, Open WebUI, n8
 </div>
 <div class="hero2__code">
 <div class="code-card">
-<div class="code-card__title">app.py — the two client-side changes</div>
+<div class="code-card__title">app.py — pointing the SDK at your gateway</div>
 <pre><code><span class="del">- client = OpenAI()</span>
 <span class="add">+ client = OpenAI(base_url=<span class="str">"https://ai.yourco.com/v1"</span>)</span>
 
 response = client.chat.completions.create(
-<span class="del">-     model=<span class="str">"gpt-4o"</span>,</span>
-<span class="add">+     model=<span class="str">"claude-fable-5"</span>,  <span class="cmt"># or any model in the catalogue</span></span>
+    model=<span class="str">"gpt-5.6-sol"</span>,
     messages=messages
 )
+<span class="cmt"># 100+ more models, one catalogue</span>
 <span class="cmt"># same for the Anthropic SDK — point it at /anthropic</span></code></pre>
 </div>
 </div>
