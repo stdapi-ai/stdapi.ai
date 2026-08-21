@@ -109,7 +109,7 @@ Most gateways stop at chat completions. stdapi.ai covers text, retrieval, embedd
 <div class="panel-stats" markdown>
 
 - <code>3</code> API protocols — OpenAI, Anthropic, and Cohere — from one deployment
-- <code>50+</code> endpoints — text, retrieval, images, video, audio, batch, moderation, files
+- <code>80+</code> endpoints — text, retrieval, images, video, audio, batch, moderation, files
 - <code>WS</code> live speech-to-speech on the OpenAI Realtime API — speech in, speech and a transcript out
 
 [:octicons-arrow-right-24: API overview](api_overview.md)
@@ -180,7 +180,7 @@ Agents need no HTTP glue code. stdapi.ai publishes its whole API surface over th
 </div>
 <div class="panel-stats" markdown>
 
-- <code>50+</code> endpoints exposed as named MCP tools, each with generated documentation
+- <code>80+</code> endpoints exposed as named MCP tools, each with generated documentation
 - <code>2</code> transports — Streamable HTTP at /mcp, SSE for older clients
 - <code>0</code> HTTP client code — agents call every endpoint directly
 - <code>auto</code> discovery — agents find every tool through the server card and API catalog
@@ -608,7 +608,7 @@ Media generation, knowledge management and team chatbots are covered too. [:octi
 - :material-brain: __100+ model-probe records__
   <br>Committed observations of what each model actually accepts and rejects.
 
-- :material-robot: __50+ MCP API tools__
+- :material-robot: __80+ MCP API tools__
   <br>Every exposed tool called end to end through the official MCP client.
 
 - :material-shield-check: __95%+ branch coverage__

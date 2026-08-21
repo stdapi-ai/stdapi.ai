@@ -145,7 +145,7 @@ Prefer a hands-off setup? A [managed deployment service](https://aws.amazon.com/
 - **🤖 Integrated MCP server** — Every API endpoint exposed as a Model Context Protocol tool. AI agents connect directly—no HTTP client code required. Streamable HTTP and SSE transports with configurable tool selection.
 - **🔑 Identity per caller** — Accept Amazon Cognito user pool tokens instead of, or alongside, the API key, and publish an OAuth 2.0 protected resource metadata document so an agent discovers how to authenticate on its own.
 
-**Measured, not asserted:** `<1 ms` gateway overhead (0.8 ms of gateway CPU on a 2.5 KB chat request) · **6,000+ automated test cases** run against real AWS services, at **95%+ branch coverage** · **20 third-party clients** driven end to end against a live gateway · **50+ API operations** exposed as MCP tools.
+**Measured, not asserted:** `<1 ms` gateway overhead (0.8 ms of gateway CPU on a 2.5 KB chat request) · **6,000+ automated test cases** run against real AWS services, at **95%+ branch coverage** · **20 third-party clients** driven end to end against a live gateway · **80+ API operations** exposed as MCP tools.
 
 **[See all features →](https://stdapi.ai/features/)** · **[Browse the test suite →](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests)**
 
