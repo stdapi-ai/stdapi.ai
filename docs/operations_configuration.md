@@ -808,13 +808,15 @@ See [Durable indexing](api_openai_vector_stores.md#durable-indexing) for what a 
 :   Empty — no knowledge base is addressable, and a `vs_kb_...` identifier is answered exactly as an unknown vector store is, so the allowlist cannot be probed
 
 :octicons-alert-24: **Requirement**
-:   Each knowledge base must already exist, in the first [`AWS_BEDROCK_REGIONS`](#aws-bedrock-regions) entry, and the gateway's role needs the [Knowledge Base Vector Stores permissions](operations_iam_permissions.md#knowledge-base-vector-stores) on it
+:   Each knowledge base must already exist, in the first [`AWS_BEDROCK_REGIONS`](#aws-bedrock-regions) entry, be a [Bedrock managed](https://docs.aws.amazon.com/bedrock/latest/userguide/kb-build-managed.html) (`MANAGED`) or [customer-managed](https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base-build.html) (`VECTOR`) knowledge base, and the gateway's role needs the [Knowledge Base Vector Stores permissions](operations_iam_permissions.md#knowledge-base-vector-stores) on it
 
 ```bash
 export AWS_BEDROCK_KNOWLEDGE_BASE_IDS=ABCDE12345,FGHIJ67890/KLMNO13579
 ```
 
 Write each entry as `<knowledgeBaseId>`, or as `<knowledgeBaseId>/<dataSourceId>` when the knowledge base has more than one data source; with a single data source the server resolves it itself.
+
+Both kinds of document knowledge base are served, and a store behaves the same on either. A knowledge base [connected to a structured data store](https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base-build-structured.html) (`SQL`) or backed by an Amazon Kendra GenAI index (`KENDRA`) is not a vector store and must not be allowlisted.
 
 The knowledge base itself always stays yours: the server never creates one and never deletes one. It searches it, and manages the documents of its data source. Name, description, creation time and status are read from the knowledge base, and the requests that would change them are refused — see [Knowledge Base Stores](api_openai_vector_stores.md#knowledge-base-stores).
 

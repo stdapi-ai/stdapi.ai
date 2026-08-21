@@ -168,7 +168,7 @@ Most AI coding assistants follow a similar configuration pattern. The exact menu
     Codex declares the built-in `web_search` tool by default, and it is served only where the model can actually search:
 
     - **Amazon Nova 2 and Nova Premier, US regions** — mapped to Amazon Nova's grounding tool, which AWS bills per request on top of tokens (see [Cost Management](operations_cost_management.md)). Leave `web_search` enabled to use it.
-    - **OpenAI GPT-5.x, US regions** — served by the [built-in web search](api_openai_responses.md#openai-gpt-web-search), billed per query on top of tokens. Leave `web_search` enabled to use it.
+    - **OpenAI GPT-5.x, US regions** — served by the [built-in web search](api_openai_responses.md#openai-gpt-web-search), billed per query on top of tokens, **on the Amazon Bedrock Mantle endpoint only**. Models offered on both endpoints resolve to their bedrock-runtime twin by default, which refuses the tool with a `400` naming what to change; route them to Mantle to use it.
     - **EU inference profiles** — the grounding tool is not offered there, so the request is rejected.
     - **Any other model** — no hosted search exists behind it, and the tool reaches the model as an ordinary function the gateway cannot execute, so answers come back ungrounded.
 
