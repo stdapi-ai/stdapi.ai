@@ -412,20 +412,44 @@ class TestMapError:
         assert error.failover is False
 
     def test_permission_error_is_not_a_surface_mismatch(self) -> None:
-        """A 403 'is not enabled' permission error maps to a 500, not a 400."""
+        """A 403 'is not enabled' permission error is the deployment's, not a 400."""
         error = _map_error(
             403, _error_body("Model access is not enabled."), "us-east-1"
         )
         assert type(error) is MantleError
-        assert error.status == 500
+        assert error.status == 503
+        assert error.code == "feature_unavailable"
 
     @pytest.mark.parametrize("status", [401, 403])
-    def test_credential_errors_map_to_server_error(self, status: int) -> None:
-        """Upstream auth failures are never the caller's fault (500, no failover)."""
+    def test_credential_errors_are_answered_as_a_feature_the_deployment_lacks(
+        self, status: int
+    ) -> None:
+        """Upstream auth failures answer 503 ``feature_unavailable``, not 500.
+
+        A denial of the server's own role is a deployment that is missing a
+        permission, which every other backend answers this way -- a 500 asks the
+        caller to retry something no retry can fix. Missing
+        ``bedrock-mantle:CountTokens`` reached a client as "The request could not
+        be completed. Retry the request." with a 500, and reads as an outage.
+
+        Ref: stdapi/api_errors.py:FeatureUnavailableError
+        """
         error = _map_error(status, _error_body("Invalid bearer token"), "us-east-1")
         assert type(error) is MantleError
-        assert error.status == 500
+        assert error.status == 503
+        assert error.code == "feature_unavailable"
         assert error.failover is False
+
+    @pytest.mark.parametrize("status", [401, 403])
+    def test_credential_errors_do_not_take_the_upstream_error_code(
+        self, status: int
+    ) -> None:
+        """An upstream ``code`` must not displace ``feature_unavailable``."""
+        body = dumps(
+            {"error": {"message": "Invalid bearer token", "code": "upstream_code"}}
+        )
+        error = _map_error(status, body, "us-east-1")
+        assert error.code == "feature_unavailable"
 
     @pytest.mark.parametrize("status", [401, 403])
     def test_credential_errors_evict_cached_token(

@@ -429,9 +429,17 @@ def _map_error(status: int, body: str, region: RegionName) -> MantleError:
         from stdapi.monitoring import log_error_details  # noqa: PLC0415
 
         log_error_details(message, level="warning")
+        # 503 feature_unavailable, as every other backend answers a denial of
+        # the server's own role: a 500 tells the caller to retry something no
+        # retry can fix, and "Retry the request" is the opposite of true. The
+        # message stays generic -- the operator reads the real cause, IAM ARN
+        # and action, in the warning logged just above.
         error = MantleError(
-            "The request could not be completed. Retry the request.", status=500
+            "This feature is not available on this deployment.", status=503
         )
+        error.code = "feature_unavailable"
+        # Upstream's own code must not displace it below.
+        details = {}
     else:
         error = MantleError(message, status=status)
     if code := details.get("code"):

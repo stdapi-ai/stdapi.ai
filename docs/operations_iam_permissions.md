@@ -241,7 +241,8 @@ Required for [`AWS_BEDROCK_MANTLE_ENABLED`](operations_configuration.md#bedrock-
         "bedrock-mantle:DeleteInference",
         "bedrock-mantle:ListModels",
         "bedrock-mantle:GetModel",
-        "bedrock-mantle:CancelInference"
+        "bedrock-mantle:CancelInference",
+        "bedrock-mantle:CountTokens"
       ],
       "Resource": "arn:aws:bedrock-mantle:*:*:project/*"
     },
@@ -253,7 +254,9 @@ Required for [`AWS_BEDROCK_MANTLE_ENABLED`](operations_configuration.md#bedrock-
     }
     ```
 
-    `bedrock-mantle:CallWithBearerToken` authorizes the short-term bearer tokens the server derives from its AWS credential chain; it does not support resource scoping. Token counting for Mantle-only models is served by the same endpoint and needs no additional action.
+    `bedrock-mantle:CallWithBearerToken` authorizes the short-term bearer tokens the server derives from its AWS credential chain; it does not support resource scoping.
+
+    `bedrock-mantle:CountTokens` serves [`/anthropic/v1/messages/count_tokens`](api_anthropic_messages.md) for a Mantle-served model: Amazon Bedrock's own `CountTokens` accepts Anthropic models only, so the count is proxied to the Mantle endpoint. Without it that route answers `500`.
 
 ---
 
