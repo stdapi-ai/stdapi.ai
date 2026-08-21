@@ -175,6 +175,7 @@ _REGISTRY: tuple[_Entry, ...] = (
         marks=("Home Assistant",),
         owner="the Open Home Foundation",
         pattern=r"\bHome Assistant\b",
+        assets=("home_assistant",),
     ),
     _Entry(
         label="Kubernetes",
@@ -289,6 +290,13 @@ _REGISTRY: tuple[_Entry, ...] = (
         marks=("PostgreSQL", "Postgres", "the Slonik elephant logo"),
         owner="the PostgreSQL Community Association of Canada",
         pattern=r"\bPostgreSQL\b|\bPostgres\b",
+    ),
+    _Entry(
+        label="Python",
+        marks=("Python",),
+        owner="the Python Software Foundation",
+        pattern=r"\bPython\b",
+        assets=("python",),
     ),
     _Entry(
         label="Playwright, Visual Studio Code",

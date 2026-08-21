@@ -42,7 +42,7 @@ These are three of the most widely used Python frameworks for building LLM-backe
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true}} }%%
 flowchart LR
-  app["Your Python App<br/>(LangChain, pydantic-ai, Agents SDK)"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
+  app["<img src='../styles/logo_python.svg' style='height:64px;width:auto;vertical-align:middle;' /> Your Python App<br/>(LangChain, pydantic-ai, Agents SDK)"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
@@ -222,14 +222,14 @@ The decision that shapes this diagram is where your application process runs rel
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 40, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
 flowchart TB
-  extapp["Your Python App<br/>(outside the VPC)"]
+  extapp["<img src='../styles/logo_python.svg' style='height:40px;width:auto;vertical-align:middle;' /> Your Python App<br/>(outside the VPC)"]
 
   subgraph public["Your VPC · public subnets"]
     alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:40px;width:auto;vertical-align:middle;' /> Application Load Balancer<br/>HTTPS · ACM certificate<br/>WAF (optional)"]
   end
 
   subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
-    intapp["Your Python App<br/>(in-VPC, e.g. ECS Fargate)"]
+    intapp["<img src='../styles/logo_python.svg' style='height:40px;width:auto;vertical-align:middle;' /> Your Python App<br/>(in-VPC, e.g. ECS Fargate)"]
     stdapi["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
     egress["<img src='../styles/logo_amazon_vpc.svg' style='height:40px;width:auto;vertical-align:middle;' /> NAT gateways · one per AZ<br/>+ free S3 gateway endpoint"]
   end

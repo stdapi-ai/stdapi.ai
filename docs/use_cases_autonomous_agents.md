@@ -43,79 +43,18 @@ flowchart LR
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
-## :material-sitemap: Architecture
+## :material-connection: Connect Your Own Instance
 
-The diagram below is the shape the [Hermes](https://github.com/stdapi-ai/samples/tree/main/getting_started_hermes) and [OpenClaw](https://github.com/stdapi-ai/samples/tree/main/getting_started_openclaw) Terraform samples share: the agent CLI and the stdapi.ai gateway run as separate ECS Fargate tasks in the same private app subnets, with only the agent's own web surface reachable — through an Application Load Balancer — from outside the VPC. Hermes exposes that ALB as two listeners (gateway API and dashboard); OpenClaw multiplexes both onto one. The diagram collapses either shape into a single listener box.
+Point Hermes or OpenClaw—wherever you run it—at your stdapi.ai gateway. Nothing below requires the AWS samples in [Part 2](#deploy-the-full-stack-on-aws).
 
-```mermaid
-%%{init: {'flowchart': {'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 40, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
-flowchart TB
-  user["👤 You<br/>(browser · operator)"]
-  internet["Internet<br/>image registry · tool destinations"]
-
-  subgraph public["Your VPC · public subnets"]
-    alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:40px;width:auto;vertical-align:middle;' /> Application Load Balancer<br/>optional HTTPS · ACM cert + Route 53"]
-  end
-
-  subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
-    agent["<img src='../styles/logo_hermes_agent.svg' style='height:40px;width:auto;vertical-align:middle;' /> <img src='../styles/logo_openclaw.svg' style='height:40px;width:auto;vertical-align:middle;' /><br/>Agent CLI<br/>(Hermes or OpenClaw) · ECS Fargate"]
-    stdapi["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
-    egress["<img src='../styles/logo_amazon_vpc.svg' style='height:40px;width:auto;vertical-align:middle;' /> NAT gateways<br/>one per Availability Zone"]
-  end
-
-  subgraph regional["AWS service endpoints · your account, the regions you configure"]
-    bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
-    s3["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3<br/>SSE-KMS"]
-    cw["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon CloudWatch<br/>logs · metrics · alarms"]
-  end
-
-  user -->|"HTTPS (custom domain) or HTTP<br/>from the deploying IP only"| alb
-  alb -->|"HTTP · private subnet"| agent
-  agent -->|"OpenAI/Anthropic-compatible API · API key<br/>Cloud Map private DNS, no public endpoint"| stdapi
-  agent -->|"HTTPS · image pull, plus the tool<br/>destinations you configure"| egress
-  egress --> internet
-  stdapi -->|"HTTPS · SigV4"| egress
-  egress -->|"HTTPS · SigV4"| bedrock
-  egress -->|"HTTPS · SigV4"| s3
-  egress --> cw
-```
-
-Two things are worth reading off the picture. stdapi.ai has no listener of its own: the agent reaches it only through AWS Cloud Map private DNS inside the private subnets, so the ALB never forwards to it — only to the agent's own ports. And the agent's egress is a separate path from the gateway's: image pulls and any tool destinations you configure leave as ordinary internet-bound HTTPS, while the gateway's own calls are SigV4-signed and reach AWS service endpoints only. That second path is one of the compensating controls for the sandboxing warning documented under OpenClaw, above — alongside a task dedicated to nothing but this agent, a task role scoped to what it declares, and a private subnet with no inbound route from the internet.
-
-### What Each AWS Service Does Here
-
-| AWS service | Role in this integration | Where it is configured |
-| --- | --- | --- |
-| **Amazon ECS on AWS Fargate** | Runs the agent CLI and the stdapi.ai gateway as separate tasks, each with its own IAM role | Terraform sample (`module "hermes"`/`module "openclaw"`, `module "stdapi_ai"`) |
-| **Elastic Load Balancing** | Public entry point for the agent's own gateway API and dashboard/Control UI; never forwards to stdapi.ai | Terraform sample (`alb.tf`) |
-| **AWS Certificate Manager & Amazon Route 53** | Optional TLS certificate and DNS record for the ALB, created only when a custom domain is supplied | Terraform sample (`alb_domain_name`, `alb_route53_zone_name`) |
-| **AWS Cloud Map** | Private DNS namespace (`internal`) the agent uses to resolve stdapi.ai without a public endpoint | Terraform sample (`aws_service_discovery_private_dns_namespace "internal"`, `service_discovery_dns_name`) |
-| **Amazon Bedrock** | Serves the model calls the agent's chosen wire dialect sends through stdapi.ai | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
-| **Amazon S3** | The gateway's own bucket for generated and temporary files; KMS-encrypted, versioned, lifecycle-managed | Module baseline (`storage.tf`) |
-| **AWS KMS** | Customer-managed key encrypting the gateway's S3 bucket; a separate key, created by the ECS module, encrypts the agent's EFS volumes and Fargate ephemeral storage | Terraform module baseline |
-| **Amazon EFS** | Persists the agent's own state (config, sessions, workspace) across redeployments. For Hermes it holds *all* state, including every SQLite database, which is why that service runs a single task | Terraform sample (`mount_points` in `hermes.tf`/`openclaw.tf`) |
-| **Amazon CloudWatch** | Container logs, gateway request logs, and, when enabled, EMF usage metrics | [Logging & monitoring](operations_logging_monitoring.md) |
-| **AWS IAM** | Separate least-privilege task roles per ECS task; the gateway's role grants only the Bedrock/AI-service actions it calls | [IAM permissions](operations_iam_permissions.md) |
-
-### Security Measures in This Flow
-
-- **Credential the agent presents** — in these samples the agent authenticates to the gateway with a generated API key baked into its seeded config file (`config.yaml` for Hermes, `openclaw.json` for OpenClaw); an agent that starts with only a URL instead works out where and how to authenticate through the [OAuth 2.0 protected-resource discovery flow](#bootstrapping-authentication) documented above.
-- **Encryption in transit** — HTTPS from the operator's browser to the ALB when a custom domain and ACM certificate are configured, plain HTTP otherwise; plain HTTP from the ALB to the agent container and from the agent to stdapi.ai, both confined to the private subnet; HTTPS with SigV4 from the gateway to Amazon Bedrock.
-- **Encryption at rest** — SSE-KMS on the gateway's S3 bucket, and a separate customer-managed key encrypting the EFS volumes that hold the agent's persistent state.
-- **Least privilege / task-role scoping** — the agent and the gateway each run under their own ECS task role; the gateway's role carries only the Bedrock/AI-service actions it calls, and the agent's task carries none of it — every model call still goes through the gateway. See [IAM permissions](operations_iam_permissions.md).
-- **Content policy** — a [Bedrock guardrail](operations_configuration.md#bedrock-guardrails) configured on the gateway applies to model calls regardless of which wire dialect the agent's provider settings select.
-- **Cost / identity attribution** — [per-user cost attribution](operations_cost_management.md#per-user-attribution) turns a caller's declared identity into a billing boundary only under `AUTHENTICATION_MODE=cognito`; the API-key mode these samples use makes that identifier client-declared, so every call from a shared deployment is billed to the gateway's own identity.
-
-## :material-check-circle: Prerequisites
+### :material-check-circle: Prerequisites
 
 !!! info "What You'll Need"
-    - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md) or [run locally with Docker](operations_getting_started_local.md)
+    - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md) or [run locally with Docker](operations_getting_started_local.md); see [Part 2](#deploy-the-full-stack-on-aws) for a Terraform-deployed option
     - ✓ **Your stdapi.ai URL** - e.g., `https://api.example.com` or `http://localhost:8000` for local
     - ✓ **Your API key** - From Terraform output or configuration (optional for local development)
 
----
-
-## :material-compass-outline: Bootstrapping Authentication
+### :material-compass-outline: Bootstrapping Authentication
 
 An agent handed a key in an environment variable is ready to go. An agent handed only a URL is not — and that is the common case for an MCP client, a marketplace agent, or anything a user points at a gateway it has never seen. stdapi.ai answers that case with the standard OAuth 2.0 discovery flow, so the agent works out the rest by itself:
 
@@ -145,9 +84,7 @@ Full walkthrough and the exact document served: [Authentication Discovery for Ag
 !!! tip "An authenticated agent can be billed as itself"
     Once callers arrive with their own identity, [per-user cost attribution](operations_cost_management.md#per-user-attribution) runs each one's model calls under a short-lived role session of their own, and AWS reports their spend separately in Cost Explorer and the Cost and Usage Report — per agent, per tenant or per end user, from the invoice rather than an estimate. Behind a shared API key the same split is available from the identifier the request declares (`safety_identifier`, or `metadata.user_id` on the Messages API), with the caveat that a caller chooses its own: that is cost metadata, not an authorization boundary.
 
----
-
-## :material-database-search: Giving an Agent Your Own Documents
+### :material-database-search: Giving an Agent Your Own Documents
 
 An agent loop is only as grounded as what it can look up. Two paths reach the same [vector stores](api_openai_vector_stores.md), and neither needs a retrieval feature in the CLI itself:
 
@@ -159,13 +96,9 @@ Building the store itself — parsing, chunking, embedding, filters — is cover
 !!! tip "State the gateway can hold for you"
     An agent that resends its whole history each turn can instead keep the thread server-side with the [Conversations API](api_openai_conversations.md) and continue it by id — useful for long-running or resumable agents, and for handing one session between processes.
 
----
-
-## :material-robot: Hermes
+### :material-robot: Hermes
 
 [Hermes](https://github.com/NousResearch/hermes-agent) (PyPI package `hermes-agent`) is an autonomous agent CLI written in Python.
-
-### :material-connection: Connect Your Own Instance
 
 #### :material-cog: Configuration
 
@@ -217,9 +150,103 @@ prompt_caching:
 
 Only `5m` and `1h` are accepted—any other value is ignored. This pairs directly with stdapi.ai's own Anthropic Messages prompt-caching support: Hermes' breakpoints arrive as standard `cache_control` markers, which stdapi.ai translates into Bedrock cache points, up to the four the Converse API allows per request.
 
-### :material-rocket-launch: Deploy on AWS
+### :material-account-cog: OpenClaw
 
-The sample below is one worked example of a credible AWS deployment, not the only architecture that works. The gateway is a normal HTTP service, and Hermes and stdapi.ai can run anywhere you like — your own ECS or EKS cluster, EC2, another cloud, or a laptop.
+[OpenClaw](https://github.com/openclaw/openclaw) is a personal-assistant CLI (npm package `openclaw`) that also writes code as part of a task. Custom endpoints are registered through its onboarding wizard, not through the `agent` command itself.
+
+```bash
+openclaw onboard \
+  --custom-provider-id stdapi \
+  --custom-base-url https://YOUR_STDAPI_URL/v1 \
+  --custom-model-id anthropic.claude-fable-5 \
+  --custom-compatibility openai \
+  --custom-api-key YOUR_STDAPI_API_KEY
+```
+
+Omit `--custom-api-key` to read the key from `CUSTOM_API_KEY` in the environment instead. Then run the agent with the model qualified by the provider id:
+
+```bash
+openclaw agent --model stdapi/anthropic.claude-fable-5
+```
+
+`--custom-compatibility` is the standout setting here: one flag picks which of stdapi.ai's three chat dialects OpenClaw speaks, and `--custom-base-url` has to match the route serving it:
+
+| `--custom-compatibility` | `--custom-base-url` | API |
+|---|---|---|
+| `openai` | `https://YOUR_STDAPI_URL/v1` | [Chat Completions](api_openai_chat_completions.md) |
+| `openai-responses` | `https://YOUR_STDAPI_URL/v1` | [Responses](api_openai_responses.md) |
+| `anthropic` | `https://YOUR_STDAPI_URL/anthropic` | [Anthropic Messages](api_anthropic_messages.md) |
+
+Re-run `openclaw onboard` with a different `--custom-provider-id` to register more than one route side by side.
+
+## :material-rocket-launch: Deploy the Full Stack on AWS
+
+The samples below are one worked example of a credible AWS deployment, not the only architecture that works. The gateway is a normal HTTPS service, and either agent can run wherever you already operate it.
+
+### :material-sitemap: Architecture
+
+The diagram below is the shape the [Hermes](https://github.com/stdapi-ai/samples/tree/main/getting_started_hermes) and [OpenClaw](https://github.com/stdapi-ai/samples/tree/main/getting_started_openclaw) Terraform samples share: the agent CLI and the stdapi.ai gateway run as separate ECS Fargate tasks in the same private app subnets, with only the agent's own web surface reachable — through an Application Load Balancer — from outside the VPC. Hermes exposes that ALB as two listeners (gateway API and dashboard); OpenClaw multiplexes both onto one. The diagram collapses either shape into a single listener box.
+
+```mermaid
+%%{init: {'flowchart': {'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 40, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
+flowchart TB
+  user["👤 You<br/>(browser · operator)"]
+  internet["Internet<br/>image registry · tool destinations"]
+
+  subgraph public["Your VPC · public subnets"]
+    alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:40px;width:auto;vertical-align:middle;' /> Application Load Balancer<br/>optional HTTPS · ACM cert + Route 53"]
+  end
+
+  subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
+    agent["<img src='../styles/logo_hermes_agent.svg' style='height:40px;width:auto;vertical-align:middle;' /> <img src='../styles/logo_openclaw.svg' style='height:40px;width:auto;vertical-align:middle;' /><br/>Agent CLI<br/>(Hermes or OpenClaw) · ECS Fargate"]
+    stdapi["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
+    egress["<img src='../styles/logo_amazon_vpc.svg' style='height:40px;width:auto;vertical-align:middle;' /> NAT gateways<br/>one per Availability Zone"]
+  end
+
+  subgraph regional["AWS service endpoints · your account, the regions you configure"]
+    bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
+    s3["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3<br/>SSE-KMS"]
+    cw["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon CloudWatch<br/>logs · metrics · alarms"]
+  end
+
+  user -->|"HTTPS (custom domain) or HTTP<br/>from the deploying IP only"| alb
+  alb -->|"HTTP · private subnet"| agent
+  agent -->|"OpenAI/Anthropic-compatible API · API key<br/>Cloud Map private DNS, no public endpoint"| stdapi
+  agent -->|"HTTPS · image pull, plus the tool<br/>destinations you configure"| egress
+  egress --> internet
+  stdapi -->|"HTTPS · SigV4"| egress
+  egress -->|"HTTPS · SigV4"| bedrock
+  egress -->|"HTTPS · SigV4"| s3
+  egress --> cw
+```
+
+Two things are worth reading off the picture. stdapi.ai has no listener of its own: the agent reaches it only through AWS Cloud Map private DNS inside the private subnets, so the ALB never forwards to it — only to the agent's own ports. And the agent's egress is a separate path from the gateway's: image pulls and any tool destinations you configure leave as ordinary internet-bound HTTPS, while the gateway's own calls are SigV4-signed and reach AWS service endpoints only. That second path is one of the compensating controls for the sandboxing warning documented under OpenClaw — alongside a task dedicated to nothing but this agent, a task role scoped to what it declares, and a private subnet with no inbound route from the internet.
+
+#### What Each AWS Service Does Here
+
+| AWS service | Role in this integration | Where it is configured |
+| --- | --- | --- |
+| **Amazon ECS on AWS Fargate** | Runs the agent CLI and the stdapi.ai gateway as separate tasks, each with its own IAM role | Terraform sample (`module "hermes"`/`module "openclaw"`, `module "stdapi_ai"`) |
+| **Elastic Load Balancing** | Public entry point for the agent's own gateway API and dashboard/Control UI; never forwards to stdapi.ai | Terraform sample (`alb.tf`) |
+| **AWS Certificate Manager & Amazon Route 53** | Optional TLS certificate and DNS record for the ALB, created only when a custom domain is supplied | Terraform sample (`alb_domain_name`, `alb_route53_zone_name`) |
+| **AWS Cloud Map** | Private DNS namespace (`internal`) the agent uses to resolve stdapi.ai without a public endpoint | Terraform sample (`aws_service_discovery_private_dns_namespace "internal"`, `service_discovery_dns_name`) |
+| **Amazon Bedrock** | Serves the model calls the agent's chosen wire dialect sends through stdapi.ai | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
+| **Amazon S3** | The gateway's own bucket for generated and temporary files; KMS-encrypted, versioned, lifecycle-managed | Module baseline (`storage.tf`) |
+| **AWS KMS** | Customer-managed key encrypting the gateway's S3 bucket; a separate key, created by the ECS module, encrypts the agent's EFS volumes and Fargate ephemeral storage | Terraform module baseline |
+| **Amazon EFS** | Persists the agent's own state (config, sessions, workspace) across redeployments. For Hermes it holds *all* state, including every SQLite database, which is why that service runs a single task | Terraform sample (`mount_points` in `hermes.tf`/`openclaw.tf`) |
+| **Amazon CloudWatch** | Container logs, gateway request logs, and, when enabled, EMF usage metrics | [Logging & monitoring](operations_logging_monitoring.md) |
+| **AWS IAM** | Separate least-privilege task roles per ECS task; the gateway's role grants only the Bedrock/AI-service actions it calls | [IAM permissions](operations_iam_permissions.md) |
+
+#### Security Measures in This Flow
+
+- **Credential the agent presents** — in these samples the agent authenticates to the gateway with a generated API key baked into its seeded config file (`config.yaml` for Hermes, `openclaw.json` for OpenClaw); an agent that starts with only a URL instead works out where and how to authenticate through the [OAuth 2.0 protected-resource discovery flow](#bootstrapping-authentication) documented above.
+- **Encryption in transit** — HTTPS from the operator's browser to the ALB when a custom domain and ACM certificate are configured, plain HTTP otherwise; plain HTTP from the ALB to the agent container and from the agent to stdapi.ai, both confined to the private subnet; HTTPS with SigV4 from the gateway to Amazon Bedrock.
+- **Encryption at rest** — SSE-KMS on the gateway's S3 bucket, and a separate customer-managed key encrypting the EFS volumes that hold the agent's persistent state.
+- **Least privilege / task-role scoping** — the agent and the gateway each run under their own ECS task role; the gateway's role carries only the Bedrock/AI-service actions it calls, and the agent's task carries none of it — every model call still goes through the gateway. See [IAM permissions](operations_iam_permissions.md).
+- **Content policy** — a [Bedrock guardrail](operations_configuration.md#bedrock-guardrails) configured on the gateway applies to model calls regardless of which wire dialect the agent's provider settings select.
+- **Cost / identity attribution** — [per-user cost attribution](operations_cost_management.md#per-user-attribution) turns a caller's declared identity into a billing boundary only under `AUTHENTICATION_MODE=cognito`; the API-key mode these samples use makes that identifier client-declared, so every call from a shared deployment is billed to the gateway's own identity.
+
+### :material-robot: Hermes
 
 Deploy Hermes + stdapi.ai together on ECS Fargate, with `config.yaml` pre-seeded and ready to run:
 
@@ -271,42 +298,7 @@ fields Model, InputTokens, CachedTokens, CacheWriteTokens
 
 A model whose `cache_reads` stay near zero mid-session points at breakpoints that are not landing — check that Hermes is actually sending `cache_control` markers before assuming the model itself is at fault.
 
----
-
-## :material-account-cog: OpenClaw
-
-[OpenClaw](https://github.com/openclaw/openclaw) is a personal-assistant CLI (npm package `openclaw`) that also writes code as part of a task. Custom endpoints are registered through its onboarding wizard, not through the `agent` command itself.
-
-### :material-connection: Connect Your Own Instance
-
-```bash
-openclaw onboard \
-  --custom-provider-id stdapi \
-  --custom-base-url https://YOUR_STDAPI_URL/v1 \
-  --custom-model-id anthropic.claude-fable-5 \
-  --custom-compatibility openai \
-  --custom-api-key YOUR_STDAPI_API_KEY
-```
-
-Omit `--custom-api-key` to read the key from `CUSTOM_API_KEY` in the environment instead. Then run the agent with the model qualified by the provider id:
-
-```bash
-openclaw agent --model stdapi/anthropic.claude-fable-5
-```
-
-`--custom-compatibility` is the standout setting here: one flag picks which of stdapi.ai's three chat dialects OpenClaw speaks, and `--custom-base-url` has to match the route serving it:
-
-| `--custom-compatibility` | `--custom-base-url` | API |
-|---|---|---|
-| `openai` | `https://YOUR_STDAPI_URL/v1` | [Chat Completions](api_openai_chat_completions.md) |
-| `openai-responses` | `https://YOUR_STDAPI_URL/v1` | [Responses](api_openai_responses.md) |
-| `anthropic` | `https://YOUR_STDAPI_URL/anthropic` | [Anthropic Messages](api_anthropic_messages.md) |
-
-Re-run `openclaw onboard` with a different `--custom-provider-id` to register more than one route side by side.
-
-### :material-rocket-launch: Deploy on AWS
-
-The sample below is one worked example of a credible AWS deployment, not the only architecture that works. The gateway is a normal HTTP service, and OpenClaw and stdapi.ai can run anywhere you like — your own ECS or EKS cluster, EC2, another cloud, or a laptop.
+### :material-account-cog: OpenClaw
 
 Deploy OpenClaw + stdapi.ai together on ECS Fargate, with the provider and default model preconfigured:
 
@@ -359,8 +351,6 @@ fields model_id, execution_time_ms
 ```
 
 A rising p95 here is what an operator notices as a slow agent turn, before it shows up in any cost report.
-
----
 
 ## :material-arrow-right: Next Steps
 
