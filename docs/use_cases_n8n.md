@@ -6,7 +6,7 @@ keywords: n8n AI integration, workflow automation AI, no-code AI automation, AWS
 
 # :material-sitemap: n8n Integration
 
-Connect n8n automation workflows to Amazon Bedrock models through stdapi.ai's OpenAI-compatible or Anthropic-compatible interfaces. Existing OpenAI and Anthropic templates from the n8n marketplace take two client-side changes—point the credential at your stdapi.ai instance, then set the node's model to one your deployment serves, chosen from every provider in the catalogue rather than one vendor's list.
+Connect n8n automation workflows to Amazon Bedrock models through stdapi.ai's OpenAI-compatible or Anthropic-compatible interfaces. Existing OpenAI and Anthropic templates from the n8n marketplace need the credential repointed at your stdapi.ai instance—base URL and API key—and, only where a template's model name isn't one your deployment serves, the node's model changed to one that is, chosen from every provider in the catalogue rather than one vendor's list.
 
 ## :material-information-outline: About n8n
 
@@ -56,80 +56,11 @@ flowchart LR
   stdapi --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Polly"]
 ```
 
-## :material-sitemap: Architecture
+## :material-connection: Connect Your Own Instance
 
-The diagram below is the topology the [Terraform sample](#terraform-deployment) builds: n8n and the stdapi.ai gateway both on ECS Fargate in one VPC you own, with n8n's own workflow state in Aurora PostgreSQL alongside them.
+Point any running n8n instance—self-hosted or n8n Cloud—at your stdapi.ai gateway. Nothing below requires the AWS sample in [Part 2](#deploy-the-full-stack-on-aws).
 
-```mermaid
-%%{init: {'flowchart': {'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 40, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
-flowchart TB
-  user["👤 Your users<br/>(browser)"]
-
-  subgraph public["Your VPC · public subnets"]
-    alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:40px;width:auto;vertical-align:middle;' /> Application Load Balancer<br/>HTTPS · ACM certificate"]
-  end
-
-  subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
-    n8n["<img src='../styles/logo_n8n.svg' style='height:40px;width:auto;vertical-align:middle;' /> n8n<br/>ECS Fargate"]
-    stdapi["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
-    aurora["<img src='../styles/logo_amazon_aurora.svg' style='height:40px;width:auto;vertical-align:middle;' /> Aurora PostgreSQL<br/>n8n workflows · credentials · executions"]
-    egress["<img src='../styles/logo_amazon_vpc.svg' style='height:40px;width:auto;vertical-align:middle;' /> NAT gateways · one per AZ<br/>multi-region Bedrock access"]
-  end
-
-  subgraph regional["AWS service endpoints · your account, the regions you configure"]
-    bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
-    transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Transcribe"]
-    polly["<img src='../styles/logo_amazon_polly.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Polly"]
-    comprehend["<img src='../styles/logo_amazon_comprehend.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Comprehend"]
-    s3["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3<br/>SSE-KMS"]
-    cw["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon CloudWatch<br/>logs · metrics"]
-    bedrock ~~~ polly ~~~ s3
-    transcribe ~~~ comprehend ~~~ cw
-  end
-
-  user -->|"HTTPS · TLS 1.2+"| alb
-  alb -->|"HTTP · private subnet"| n8n
-  n8n -->|"OpenAI + Anthropic dialects · API key<br/>HTTP over Cloud Map private DNS<br/>no public endpoint"| stdapi
-  n8n -->|"TLS, no cert verification<br/>security-group restricted"| aurora
-  stdapi --> egress
-  egress -->|"HTTPS · SigV4"| bedrock
-  egress -->|"HTTPS · SigV4"| transcribe
-  egress -->|"HTTPS · SigV4"| polly
-  egress -->|"HTTPS · SigV4"| comprehend
-  egress -->|"HTTPS · SigV4"| s3
-  egress --> cw
-```
-
-Two properties are worth reading off the picture. n8n is the only service with a public address — the ALB forwards nothing but n8n traffic, and the stdapi.ai gateway has no listener of its own, reachable only through Cloud Map private DNS inside the VPC. Customer data then splits in two: n8n's own workflow definitions, credentials and execution history live in Aurora, inside the account boundary, while whatever a workflow sends to a model passes through the gateway straight to Amazon Bedrock and the other AWS AI services behind it — no third party sits between your workflows and your models.
-
-### What Each AWS Service Does Here
-
-| AWS service | Role in this integration | Where it is configured |
-| --- | --- | --- |
-| **Amazon ECS on AWS Fargate** | Runs n8n and the stdapi.ai gateway as separate services, plus a one-shot "import" task that seeds the credential and sample workflows | Terraform sample (`n8n.tf`, `main.tf`) |
-| **Elastic Load Balancing** | The single public entry point; terminates TLS with an ACM certificate and forwards only to n8n | Terraform sample (`alb.tf`) |
-| **AWS Cloud Map** | Private DNS name that lets n8n reach the gateway without exposing it | Terraform sample (`service_discovery_dns_name`) |
-| **Amazon Bedrock** | Chat, text and image generation, embeddings, video generation | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
-| **Amazon Transcribe** | Speech-to-text, behind `POST /v1/audio/transcriptions` and `/v1/audio/translations` | [Audio Transcription (STT)](#audio-transcription-stt) |
-| **Amazon Polly** | Spoken replies, behind `POST /v1/audio/speech` | [Audio Generation (TTS)](#audio-generation-tts) |
-| **Amazon Comprehend** | Toxicity fallback for `POST /v1/moderations` when no guardrail is configured | [Comprehend Moderation](operations_iam_permissions.md#comprehend-moderation) |
-| **Amazon Aurora PostgreSQL** | n8n's own database — workflow definitions, credentials and execution history; Serverless v2, storage encrypted | Terraform sample (`postgres.tf`) |
-| **Amazon S3** | The gateway's Files API uploads, long text-to-speech input, and generated image/video output | [S3 storage](operations_compliance.md#s3-data-storage) |
-| **AWS KMS** | Two customer-managed keys: one for the gateway's S3 bucket and CloudWatch Logs, another for Aurora storage and the Postgres secret | Terraform sample |
-| **AWS Secrets Manager** | Holds the Aurora master password, read only at deploy time — via the RDS Data API — to provision n8n's database role | Terraform sample (`postgres.tf`) |
-| **Amazon CloudWatch** | Container logs, gateway request logs and, optionally, EMF usage metrics | [Logging & monitoring](operations_logging_monitoring.md) |
-| **AWS IAM** | Separate least-privilege task roles for n8n and the gateway; the gateway's role grants only the AI-service and S3 actions it calls | [IAM permissions](operations_iam_permissions.md) |
-
-### Security Measures in This Flow
-
-- **Authentication** — n8n reaches the gateway with a stdapi.ai [API key](operations_authentication_security.md#api-key-authentication) that Terraform generates (`api_key_create = true`) and seeds directly into n8n's own credential store at first start.
-- **Encryption in transit** — HTTPS with TLS 1.2+ from the browser to the ALB; HTTP from n8n to the gateway, confined to the private subnet and reachable only through Cloud Map private DNS; TLS without certificate verification from n8n to Aurora, a connection that never leaves the VPC and is already restricted by security group; HTTPS with SigV4 from the gateway to each AWS service.
-- **Encryption at rest** — SSE-KMS on the gateway's S3 bucket and CloudWatch Logs; separately, encrypted Aurora storage and the Postgres secret under the VPC module's own KMS key.
-- **Least privilege** — each ECS task assumes its own role; the gateway's role carries no permission for Aurora or its Secrets Manager secret, and n8n's role carries none for Amazon Bedrock, Transcribe, Polly or Comprehend.
-- **Content policy** — a [Bedrock guardrail](operations_configuration.md#bedrock-guardrails) configured on the gateway applies to every route n8n uses, including the mapping [Text Moderation](#text-moderation) already documents for `omni-moderation-latest`.
-- **Data handling** — the gateway is stateless and holds request bodies in memory only, so nothing a workflow sends to a model is persisted outside Amazon Bedrock's own call; n8n's own workflow data — credentials, executions — stays in Aurora inside the account boundary.
-
-## :material-check-circle: Prerequisites
+### :material-check-circle: Prerequisites
 
 !!! info "What You'll Need"
     - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md)
@@ -137,16 +68,14 @@ Two properties are worth reading off the picture. n8n is the only service with a
     - ✓ **Your API key** - From Terraform output or configuration
     - ✓ **n8n instance** - Self-hosted or [n8n Cloud](https://n8n.io/cloud/)
 
----
-
-## :material-cog: Configuration
+### :material-cog: Configuration
 
 !!! note "Model modality"
     In every section below, the selected model must match the operation's modality — chat nodes need a chat model, embedding nodes an embedding model, and so on.
 
-### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI Nodes
+#### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI Nodes
 
-#### :material-key: Set Up Your Credentials
+##### :material-key: Set Up Your Credentials
 
 The foundation of any n8n integration is configuring your API credentials. This one-time setup unlocks all AI capabilities.
 
@@ -165,13 +94,13 @@ The foundation of any n8n integration is configuring your API credentials. This 
 !!! tip "What This Does"
     By setting a custom Base URL, you redirect all OpenAI API calls to your stdapi.ai instance. n8n will use this credential to authenticate and route requests to Amazon Bedrock models instead of OpenAI's servers.
 
-#### :material-cog-outline: Configure Nodes
+##### :material-cog-outline: Configure Nodes
 
 For each node, first select the credentials you previously created in the node parameters. Then, select the model you want to use. If you want to use a model that is not listed, you can enter its ID as an expression in the `Model` parameter.
 
 Operation names below match V2 of the n8n OpenAI node (n8n 1.117.0 and later); older versions use slightly different names (e.g. `Message a model` instead of `Generate a Model Response`).
 
-#### :material-chat-outline: Chat Completions
+##### :material-chat-outline: Chat Completions
 
 Enables: Text generation and conversational AI in workflows.
 
@@ -182,7 +111,7 @@ Enables: Text generation and conversational AI in workflows.
     - Sub-node for AI Agent and chain nodes
     - The **Use Responses API** option works either way: enabled calls `POST /v1/responses` (see [Responses API](api_openai_responses.md)), disabled calls `POST /v1/chat/completions` (see [Chat Completions API](api_openai_chat_completions.md))
 
-#### :material-message-text: Text Generation
+##### :material-message-text: Text Generation
 
 Enables: Text generation using the OpenAI Responses or Chat Completions APIs.
 
@@ -201,7 +130,7 @@ Enables: Text generation using the OpenAI Responses or Chat Completions APIs.
 
     n8n calls `POST /v1/chat/completions` (see [Chat Completions API](api_openai_chat_completions.md)).
 
-#### :material-text-box-outline: Legacy Completions
+##### :material-text-box-outline: Legacy Completions
 
 Enables: raw prompt completion in LangChain-based chains, as an alternative to the chat-based nodes above.
 
@@ -213,7 +142,7 @@ Enables: raw prompt completion in LangChain-based chains, as an alternative to t
 
     n8n calls `POST /v1/completions` (see [Completions API](api_openai_completions.md)).
 
-#### :material-shield-check: Text Moderation
+##### :material-shield-check: Text Moderation
 
 Enables: Content safety classification in workflows.
 
@@ -225,7 +154,7 @@ Enables: Content safety classification in workflows.
 
     n8n calls `POST /v1/moderations` (see [Moderations API](api_openai_moderations.md)).
 
-#### :material-database: Embeddings
+##### :material-database: Embeddings
 
 Enables: Vector embeddings for semantic search and RAG workflows.
 
@@ -236,7 +165,7 @@ Enables: Vector embeddings for semantic search and RAG workflows.
 
     n8n calls `POST /v1/embeddings` (see [Embeddings API](api_openai_embeddings.md)).
 
-#### :material-image-search: Image Analysis
+##### :material-image-search: Image Analysis
 
 Enables: Image understanding and analysis in workflows.
 
@@ -247,7 +176,7 @@ Enables: Image understanding and analysis in workflows.
 
     n8n calls `POST /v1/responses` with image input (see [Responses API](api_openai_responses.md)); the model must support vision.
 
-#### :material-image: Image Generation
+##### :material-image: Image Generation
 
 Enables: Text-to-image creation in workflows.
 
@@ -258,7 +187,7 @@ Enables: Text-to-image creation in workflows.
 
     n8n calls `POST /v1/images/generations` (see [Images Generations API](api_openai_images_generations.md)).
 
-#### :material-image-edit: Image Editing
+##### :material-image-edit: Image Editing
 
 Enables: Image transformation and editing in workflows.
 
@@ -269,7 +198,7 @@ Enables: Image transformation and editing in workflows.
 
     n8n calls `POST /v1/images/edits` (see [Images Edits API](api_openai_images_edits.md)).
 
-#### :material-video: Video Generation
+##### :material-video: Video Generation
 
 Enables: Asynchronous text-to-video generation in workflows.
 
@@ -281,7 +210,7 @@ Enables: Asynchronous text-to-video generation in workflows.
 
     n8n calls `POST /v1/videos` (see [Videos API](api_openai_videos.md)), including status polling and content download.
 
-#### :material-volume-high: Audio Generation (TTS)
+##### :material-volume-high: Audio Generation (TTS)
 
 Enables: Text-to-speech audio generation in workflows.
 
@@ -295,7 +224,7 @@ Enables: Text-to-speech audio generation in workflows.
 
     A single node call takes up to [100,000 characters](api_openai_audio_speech.md#long-input) — 24× the upstream limit — so a whole article or report becomes one audio file instead of a split-and-concatenate branch. Past 3,000 characters the deployment needs a bucket for the serving region; generative voices reach 20,000 without one.
 
-#### :material-microphone: Audio Transcription (STT)
+##### :material-microphone: Audio Transcription (STT)
 
 Enables: Speech-to-text transcription in workflows.
 
@@ -307,7 +236,7 @@ Enables: Speech-to-text transcription in workflows.
 
     n8n calls `POST /v1/audio/transcriptions` (see [Audio Transcriptions API](api_openai_audio_transcriptions.md)).
 
-#### :material-translate: Audio Translation
+##### :material-translate: Audio Translation
 
 Enables: Translating speech in any supported language into English text.
 
@@ -319,7 +248,7 @@ Enables: Translating speech in any supported language into English text.
 
     n8n calls `POST /v1/audio/translations` (see [Audio Translations API](api_openai_audio_translations.md)).
 
-#### :material-file-upload: Files
+##### :material-file-upload: Files
 
 Enables: Upload files once and reference them across multiple chat completion requests without resending the raw bytes each time.
 
@@ -363,7 +292,7 @@ n8n calls the `/v1/files` endpoints (see [Files API](api_openai_files.md)). Set 
 
     Files are returned in descending order (newest first) by default.
 
-#### :material-package-variant-closed: Bulk Runs (Batch API)
+##### :material-package-variant-closed: Bulk Runs (Batch API)
 
 Enables: running thousands of chat completion or embedding requests asynchronously, at the Amazon Bedrock batch price rather than the synchronous one.
 
@@ -377,9 +306,9 @@ Worth the extra nodes when a workflow classifies, enriches or summarizes a large
 
 ---
 
-### ![Anthropic](styles/logo_anthropic.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic Nodes
+#### ![Anthropic](styles/logo_anthropic.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic Nodes
 
-#### :material-key: Set Up Your Credentials
+##### :material-key: Set Up Your Credentials
 
 !!! example "Creating Your stdapi.ai Anthropic Credential"
     **In your n8n interface:**
@@ -396,11 +325,11 @@ Worth the extra nodes when a workflow classifies, enriches or summarizes a large
 !!! tip "Anthropic Base URL"
     By default, all Anthropic-compatible routes are prefixed with `/anthropic`, so the Base URL must end with `/anthropic`. You can customize this prefix using the `ANTHROPIC_ROUTES_PREFIX` configuration variable documented in [Operations Configuration](operations_configuration.md#anthropic-routes-prefix).
 
-#### :material-cog-outline: Configure Nodes
+##### :material-cog-outline: Configure Nodes
 
 For each node, first select the credentials you previously created in the node parameters. Then, select the model you want to use. The model can be selected directly in the `Model` parameter for all supported nodes.
 
-#### :material-chat-outline: Chat Completions
+##### :material-chat-outline: Chat Completions
 
 Enables: Text generation and conversational AI in workflows.
 
@@ -418,7 +347,7 @@ Enables: Text generation and conversational AI in workflows.
 
     n8n calls `POST /anthropic/v1/messages` (see [Anthropic Messages API](api_anthropic_messages.md)).
 
-#### :material-image-search: Image Analysis
+##### :material-image-search: Image Analysis
 
 Enables: Image understanding and analysis in workflows.
 
@@ -429,7 +358,7 @@ Enables: Image understanding and analysis in workflows.
 
     n8n calls `POST /anthropic/v1/messages` with image content (see [Anthropic Messages API](api_anthropic_messages.md)); the model must support vision.
 
-#### :material-file-document: Document Analysis
+##### :material-file-document: Document Analysis
 
 Enables: Document understanding and extraction in workflows.
 
@@ -440,7 +369,7 @@ Enables: Document understanding and extraction in workflows.
 
     n8n calls `POST /anthropic/v1/messages` with document content (see [Anthropic Messages API](api_anthropic_messages.md)); the model must support document processing.
 
-#### :material-file-upload: Files
+##### :material-file-upload: Files
 
 Enables: Upload files once and reference them across multiple Messages requests as document or image sources.
 
@@ -491,11 +420,95 @@ n8n calls the `/anthropic/v1/files` endpoints (see [Anthropic Files API](api_ant
     - **Operation:** Delete File
     - **File ID:** the `file_id` of the file to delete
 
-#### :material-lightbulb-outline: Prompt Resource
+##### :material-lightbulb-outline: Prompt Resource
 
 The Anthropic node's **Prompt** resource (`Generate Prompt`, `Improve Prompt`, `Templatize Prompt`) calls Anthropic's experimental prompt tools endpoints, which are not part of the Amazon Bedrock API surface and are not available through stdapi.ai. Use a `Message a Model` node with prompt-engineering instructions instead.
 
-## :material-rocket-launch: Terraform Deployment
+### :material-alert-outline: Known Issues { #known-limitations }
+
+n8n's Cohere sub-nodes—**Cohere Reranker** (used by vector store nodes for hybrid search) and **Embeddings Cohere**—cannot be pointed at stdapi.ai. Their shared `cohereApi` credential exposes only an API key: its base URL is a hidden field pinned to Cohere's own endpoint, and both nodes build their client from the API key and the model alone, so that URL never reaches the request anyway.
+
+- **Reranking:** use an **HTTP Request** node against `POST /cohere/v2/rerank` (see [Cohere Rerank API](api_cohere_rerank.md)), or a framework with a configurable reranker base URL—see [RAG Pipelines](use_cases_rag.md).
+- **Embeddings:** use the **Embeddings OpenAI** node described [above](#embeddings), which reaches the same Amazon Bedrock models through `/v1/embeddings`; an **HTTP Request** node against `POST /cohere/v2/embed` (see [Cohere Embed API](api_cohere_embed.md)) works too, but its output cannot be fed to a vector store sub-node.
+
+## :material-rocket-launch: Deploy the Full Stack on AWS
+
+The Terraform sample below is one worked example of a credible AWS deployment, not the only architecture that works. stdapi.ai's gateway is a normal HTTP service, and n8n can run wherever you already operate it—your own ECS, EKS, EC2, another cloud, or a laptop. The sample's README documents where you would reasonably diverge from what it builds (networking, worker capacity, database, queue broker).
+
+### :material-sitemap: Architecture
+
+The diagram below is the topology the [sample](#whats-included) builds: n8n and the stdapi.ai gateway both on ECS Fargate in one VPC you own, with n8n's own workflow state in Aurora PostgreSQL alongside them.
+
+```mermaid
+%%{init: {'flowchart': {'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 40, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
+flowchart TB
+  user["👤 Your users<br/>(browser)"]
+
+  subgraph public["Your VPC · public subnets"]
+    alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:40px;width:auto;vertical-align:middle;' /> Application Load Balancer<br/>HTTPS · ACM certificate"]
+  end
+
+  subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
+    n8n["<img src='../styles/logo_n8n.svg' style='height:40px;width:auto;vertical-align:middle;' /> n8n<br/>ECS Fargate"]
+    stdapi["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
+    aurora["<img src='../styles/logo_amazon_aurora.svg' style='height:40px;width:auto;vertical-align:middle;' /> Aurora PostgreSQL<br/>n8n workflows · credentials · executions"]
+    egress["<img src='../styles/logo_amazon_vpc.svg' style='height:40px;width:auto;vertical-align:middle;' /> NAT gateways · one per AZ<br/>multi-region Bedrock access"]
+  end
+
+  subgraph regional["AWS service endpoints · your account, the regions you configure"]
+    bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
+    transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Transcribe"]
+    polly["<img src='../styles/logo_amazon_polly.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Polly"]
+    comprehend["<img src='../styles/logo_amazon_comprehend.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Comprehend"]
+    s3["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3<br/>SSE-KMS"]
+    cw["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon CloudWatch<br/>logs · metrics"]
+    bedrock ~~~ polly ~~~ s3
+    transcribe ~~~ comprehend ~~~ cw
+  end
+
+  user -->|"HTTPS · TLS 1.2+"| alb
+  alb -->|"HTTP · private subnet"| n8n
+  n8n -->|"OpenAI + Anthropic dialects · API key<br/>HTTP over Cloud Map private DNS<br/>no public endpoint"| stdapi
+  n8n -->|"TLS, no cert verification<br/>security-group restricted"| aurora
+  stdapi --> egress
+  egress -->|"HTTPS · SigV4"| bedrock
+  egress -->|"HTTPS · SigV4"| transcribe
+  egress -->|"HTTPS · SigV4"| polly
+  egress -->|"HTTPS · SigV4"| comprehend
+  egress -->|"HTTPS · SigV4"| s3
+  egress --> cw
+```
+
+Two properties are worth reading off the picture. n8n is the only service with a public address — the ALB forwards nothing but n8n traffic, and the stdapi.ai gateway has no listener of its own, reachable only through Cloud Map private DNS inside the VPC. Customer data then splits in two: n8n's own workflow definitions, credentials and execution history live in Aurora, inside the account boundary, while whatever a workflow sends to a model passes through the gateway straight to Amazon Bedrock and the other AWS AI services behind it — no third party sits between your workflows and your models.
+
+#### What Each AWS Service Does Here
+
+| AWS service | Role in this integration | Where it is configured |
+| --- | --- | --- |
+| **Amazon ECS on AWS Fargate** | Runs n8n and the stdapi.ai gateway as separate services, plus a one-shot "import" task that seeds the credential and sample workflows | Terraform sample (`n8n.tf`, `main.tf`) |
+| **Elastic Load Balancing** | The single public entry point; terminates TLS with an ACM certificate and forwards only to n8n | Terraform sample (`alb.tf`) |
+| **AWS Cloud Map** | Private DNS name that lets n8n reach the gateway without exposing it | Terraform sample (`service_discovery_dns_name`) |
+| **Amazon Bedrock** | Chat, text and image generation, embeddings, video generation | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
+| **Amazon Transcribe** | Speech-to-text, behind `POST /v1/audio/transcriptions` and `/v1/audio/translations` | [Audio Transcription (STT)](#audio-transcription-stt) |
+| **Amazon Polly** | Spoken replies, behind `POST /v1/audio/speech` | [Audio Generation (TTS)](#audio-generation-tts) |
+| **Amazon Comprehend** | Toxicity fallback for `POST /v1/moderations` when no guardrail is configured | [Comprehend Moderation](operations_iam_permissions.md#comprehend-moderation) |
+| **Amazon Aurora PostgreSQL** | n8n's own database — workflow definitions, credentials and execution history; Serverless v2, storage encrypted | Terraform sample (`postgres.tf`) |
+| **Amazon S3** | The gateway's Files API uploads, long text-to-speech input, and generated image/video output | [S3 storage](operations_compliance.md#s3-data-storage) |
+| **AWS KMS** | Two customer-managed keys: one for the gateway's S3 bucket and CloudWatch Logs, another for Aurora storage and the Postgres secret | Terraform sample |
+| **AWS Secrets Manager** | Holds the Aurora master password, read only at deploy time — via the RDS Data API — to provision n8n's database role | Terraform sample (`postgres.tf`) |
+| **Amazon CloudWatch** | Container logs, gateway request logs and, optionally, EMF usage metrics | [Logging & monitoring](operations_logging_monitoring.md) |
+| **AWS IAM** | Separate least-privilege task roles for n8n and the gateway; the gateway's role grants only the AI-service and S3 actions it calls | [IAM permissions](operations_iam_permissions.md) |
+
+#### Security Measures in This Flow
+
+- **Authentication** — n8n reaches the gateway with a stdapi.ai [API key](operations_authentication_security.md#api-key-authentication) that Terraform generates (`api_key_create = true`) and seeds directly into n8n's own credential store at first start.
+- **Encryption in transit** — HTTPS with TLS 1.2+ from the browser to the ALB; HTTP from n8n to the gateway, confined to the private subnet and reachable only through Cloud Map private DNS; TLS without certificate verification from n8n to Aurora, a connection that never leaves the VPC and is already restricted by security group; HTTPS with SigV4 from the gateway to each AWS service.
+- **Encryption at rest** — SSE-KMS on the gateway's S3 bucket and CloudWatch Logs; separately, encrypted Aurora storage and the Postgres secret under the VPC module's own KMS key.
+- **Least privilege** — each ECS task assumes its own role; the gateway's role carries no permission for Aurora or its Secrets Manager secret, and n8n's role carries none for Amazon Bedrock, Transcribe, Polly or Comprehend.
+- **Content policy** — a [Bedrock guardrail](operations_configuration.md#bedrock-guardrails) configured on the gateway applies to every route n8n uses, including the mapping [Text Moderation](#text-moderation) already documents for `omni-moderation-latest`.
+- **Data handling** — the gateway is stateless and holds request bodies in memory only, so nothing a workflow sends to a model is persisted outside Amazon Bedrock's own call; n8n's own workflow data — credentials, executions — stays in Aurora inside the account boundary.
+
+### :material-cube-outline: What's Included
 
 Deploy n8n + stdapi.ai together, with a credential and thirteen sample workflows already imported:
 
@@ -510,9 +523,6 @@ Deploy n8n + stdapi.ai together, with a credential and thirteen sample workflows
 - HTTPS-only ALB on your own domain (required — n8n's session cookie needs it)
 - No local image build — the official `n8nio/n8n` image is pulled directly from Docker Hub
 
-!!! warning "Local ECS module source"
-    `module "n8n"` currently points at a local relative path (`../../../terraform-aws-ecs`) instead of the published registry module, because it needs S3 Files mount-point support (used to seed the credential and workflows) that isn't in a tagged release yet. Cloning only the samples repository is not enough for `tofu init` to resolve it — see the sample's README ("Status") for the sibling-checkout layout it currently requires.
-
 **Deploy:**
 
 ```bash
@@ -522,9 +532,7 @@ tofu init
 tofu apply
 ```
 
-## :material-gauge: Operating This Integration
-
-### What It Costs to Run
+### :material-gauge: What It Costs to Run
 
 | Charge | Driver |
 | --- | --- |
@@ -536,7 +544,7 @@ tofu apply
 
 Read a model's price before a workflow sends anything to it with [`GET /model_pricing`](api_model_pricing.md). Setting [`COST_TRACKING=true`](operations_cost_management.md#cost-tracking-real-time-aws-pricing) additionally puts a per-request cost on each usage entry — estimated from published AWS prices, not read back from your invoice.
 
-### What to Watch
+### :material-eye-outline: What to Watch
 
 The gateway writes one structured `request` event per call, carrying the request id, path, status code, `execution_time_ms`, the model that served it (`model_id`), and the token, character and second counts AWS billed. A workflow that fires on a schedule has no one watching its output in real time, so whether its calls are succeeding matters more than for an interactive chat session:
 
@@ -548,13 +556,6 @@ fields model_id, path, status_code
 ```
 
 Turning on [`CLOUDWATCH_METRICS`](operations_logging_monitoring.md#cloudwatch-metrics-emf) republishes the same counts as CloudWatch metrics in the `stdapi` namespace, dimensioned by `Model`, so an alarm can fire on a rising failure count without a scheduled query.
-
-## :material-alert-outline: Known Limitations
-
-n8n's Cohere sub-nodes—**Cohere Reranker** (used by vector store nodes for hybrid search) and **Embeddings Cohere**—cannot be pointed at stdapi.ai. Their shared `cohereApi` credential exposes only an API key: its base URL is a hidden field pinned to Cohere's own endpoint, and both nodes build their client from the API key and the model alone, so that URL never reaches the request anyway.
-
-- **Reranking:** use an **HTTP Request** node against `POST /cohere/v2/rerank` (see [Cohere Rerank API](api_cohere_rerank.md)), or a framework with a configurable reranker base URL—see [RAG Pipelines](use_cases_rag.md).
-- **Embeddings:** use the **Embeddings OpenAI** node described [above](#embeddings), which reaches the same Amazon Bedrock models through `/v1/embeddings`; an **HTTP Request** node against `POST /cohere/v2/embed` (see [Cohere Embed API](api_cohere_embed.md)) works too, but its output cannot be fed to a vector store sub-node.
 
 ## :material-arrow-right: Next Steps
 

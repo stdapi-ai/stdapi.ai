@@ -47,9 +47,93 @@ flowchart LR
   stdapi --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Polly"]
 ```
 
-## :material-sitemap: Architecture
+## :material-connection: Connect Your Own Instance
 
-The diagram below is the topology the [Terraform sample](#terraform-deployment) builds: a public-facing Home Assistant behind an ALB, wyoming-openai as a sidecar in the same ECS task, and the stdapi.ai gateway as a separate, internally-reachable service in the same VPC.
+Point any Home Assistant instance's Wyoming bridge at stdapi.ai — the deployment underneath doesn't matter to Assist.
+
+### :material-check-circle: Prerequisites
+
+!!! info "What You'll Need"
+    - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md) or [run locally with Docker](operations_getting_started_local.md)
+    - ✓ **Your stdapi.ai URL** - reachable from wherever the proxy runs, e.g. `https://api.example.com`
+    - ✓ **Your API key** - From Terraform output or configuration
+    - ✓ **Home Assistant** - With the Assist voice pipeline set up
+    - ✓ **A place to run wyoming-openai** - A container alongside Home Assistant, e.g. as a Home Assistant OS add-on or a standalone container
+
+---
+
+### :material-cog: Configuration
+
+wyoming-openai is configured through environment variables, split into a speech-to-text half and a text-to-speech half. Point both at your stdapi.ai deployment.
+
+!!! example "Environment Variables"
+    ```bash
+    # Speech to text
+    STT_OPENAI_URL=https://YOUR_STDAPI_URL/v1
+    STT_OPENAI_KEY=YOUR_STDAPI_KEY
+    STT_MODELS=amazon.transcribe
+
+    # Text to speech
+    TTS_OPENAI_URL=https://YOUR_STDAPI_URL/v1
+    TTS_OPENAI_KEY=YOUR_STDAPI_KEY
+    TTS_MODELS=amazon.polly-neural
+    TTS_VOICES=alloy
+
+    # Backend selection
+    STT_BACKEND=OPENAI
+    TTS_BACKEND=OPENAI
+    ```
+
+The proxy calls `POST /v1/audio/transcriptions` (see [Audio Transcriptions API](api_openai_audio_transcriptions.md)) for speech to text and `POST /v1/audio/speech` (see [Audio Speech API](api_openai_audio_speech.md)) for text to speech, so `STT_MODELS` must be a speech-to-text-capable model and `TTS_MODELS` a text-to-speech-capable model from the correct family.
+
+!!! tip "Pin the backend"
+    Left unset, wyoming-openai probes a few well-known self-hosted backends before falling back to a generic OpenAI-compatible one. Setting `STT_BACKEND=OPENAI` and `TTS_BACKEND=OPENAI` skips that probing and connects directly.
+
+!!! tip "A cheaper speech-to-text model"
+    `STT_MODELS=amazon.nova-2-sonic-v1:0` transcribes through [Amazon Nova Sonic](api_openai_audio_transcriptions.md#amazon-nova-sonic) instead of Amazon Transcribe: the lowest-cost transcription available here, punctuated and in the language spoken. It answers `json` and `text` only — which is all the proxy asks for — and caps a recording at 10 minutes, well beyond any voice command. Keep `amazon.transcribe` if the same deployment also serves subtitles, timestamps or speaker labels.
+
+#### :material-waveform: Streaming Speech to Text
+
+Enables: recognizing a spoken command phrase by phrase, instead of after the whole utterance has been recorded.
+
+!!! example "Environment Variables"
+    ```bash
+    STT_STREAMING_MODELS=amazon.transcribe
+    ```
+
+Only the models listed there are called in streaming mode, which is what makes the proxy ask stdapi.ai for a [streamed transcription](api_openai_audio_transcriptions.md#streaming). The gateway returns each phrase as it is recognized whenever the request names the language to expect; if the proxy sends none, set [`AWS_TRANSCRIBE_STREAM_LANGUAGES`](operations_configuration.md#aws-transcribe-stream-languages) on stdapi.ai to the languages your satellites actually speak and those requests take the same fast path. Streamed transcription stages nothing, so it works on a deployment with no S3 bucket configured.
+
+!!! note "This is the streaming option to use, not the realtime one"
+    stdapi.ai's [Realtime API](api_openai_realtime.md) serves speech-to-speech sessions, and a transcription-only session is requested through an [ephemeral client secret](api_openai_realtime.md#ephemeral-client-secrets) rather than on the socket — so a client that expects OpenAI's realtime *transcription* socket gets no transcript from it. Assist's pipeline is turn-based anyway: speech to text, then a conversation agent, then text to speech.
+
+#### :material-volume-high: Streaming Text to Speech
+
+Enables: speaking a response as it is generated, instead of waiting for the whole sentence to synthesize.
+
+!!! example "Environment Variables"
+    ```bash
+    TTS_STREAMING_MODELS=amazon.polly-neural
+    ```
+
+Naming the same model in both `TTS_MODELS` and `TTS_STREAMING_MODELS` puts its voice in the proxy's streaming program, so Assist can use it for both a plain synthesis request and a streamed one. The proxy splits a streamed reply into sentences and synthesizes several `/v1/audio/speech` calls concurrently, then replays the audio in the original order.
+
+#### :material-tune-vertical: Voice Mapping
+
+`TTS_VOICES` lists OpenAI-style voice names (`alloy`, `echo`, `fable`, and so on); stdapi.ai maps each one to an Amazon Polly voice of matching gender and language. List one entry per voice you want Assist to offer.
+
+---
+
+### :material-alert-outline: Known Issues
+
+The proxy speaks the Wyoming protocol over its own TCP port, not HTTP—there is no `/health` endpoint to check readiness with a plain web request. Wait for a successful Wyoming `describe` exchange (or check the container logs) rather than polling an HTTP path.
+
+## :material-rocket-launch: Deploy the Full Stack on AWS
+
+The sample below is one worked example of a credible AWS deployment, not the only architecture that works. The gateway is a normal HTTP service, and Home Assistant, wyoming-openai and stdapi.ai itself can run anywhere you like — your own ECS or EKS cluster, EC2, another cloud, or a laptop.
+
+### :material-sitemap: Architecture
+
+The diagram below is the topology the [Terraform sample](#whats-included) builds: a public-facing Home Assistant behind an ALB, wyoming-openai as a sidecar in the same ECS task, and the stdapi.ai gateway as a separate, internally-reachable service in the same VPC.
 
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 40, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
@@ -92,7 +176,7 @@ flowchart TB
 
 The ALB is the only public address in the picture, and it forwards only to Home Assistant — stdapi.ai has no listener of its own and is reached exclusively through AWS Cloud Map private DNS from the wyoming-openai sidecar. A household's state (recorder database, `.storage`, `configuration.yaml`) comes to rest on the single EFS volume mounted into the Home Assistant task, never on the gateway; the gateway itself is stateless and only its egress path crosses the VPC boundary, over HTTPS with SigV4, to Amazon Transcribe and Amazon Polly.
 
-### What Each AWS Service Does Here
+#### What Each AWS Service Does Here
 
 | AWS service | Role in this integration | Where it is configured |
 | --- | --- | --- |
@@ -107,7 +191,7 @@ The ALB is the only public address in the picture, and it forwards only to Home 
 | **Amazon CloudWatch** | Container logs for both ECS services | ECS module and gateway module defaults |
 | **AWS IAM** | Separate task roles; the gateway's role grants only the Transcribe and Polly actions it invokes | [IAM permissions](operations_iam_permissions.md) |
 
-### Security Measures in This Flow
+#### Security Measures in This Flow
 
 - **Authentication** — wyoming-openai calls the gateway with a stdapi.ai [API key](operations_authentication_security.md#api-key-authentication) that Terraform generates (`api_key_create = true`) and injects as `STT_OPENAI_KEY`/`TTS_OPENAI_KEY` container secrets; the sample's ALB security group additionally restricts inbound traffic to the deploying operator's own IP address.
 - **Encryption in transit** — HTTPS from the browser to the ALB when a custom domain and certificate are configured; Wyoming stays inside the ECS task over localhost; HTTPS with SigV4 from the gateway to Amazon Transcribe and Amazon Polly.
@@ -116,79 +200,9 @@ The ALB is the only public address in the picture, and it forwards only to Home 
 - **Content policy** — a [Bedrock guardrail](operations_configuration.md#bedrock-guardrails), if configured on the gateway, checks the text to synthesize as `INPUT` on `/v1/audio/speech` and the produced transcript as `OUTPUT` on `/v1/audio/transcriptions`, through the ApplyGuardrail API rather than a native chat-style integration.
 - **Data handling** — the gateway holds request audio in memory, or briefly in its own S3 bucket when staging a non-streaming transcription job, and does not persist it; Home Assistant's own recordings and conversation history stay on the EFS volume in your account.
 
-## :material-check-circle: Prerequisites
-
-!!! info "What You'll Need"
-    - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md) or [run locally with Docker](operations_getting_started_local.md)
-    - ✓ **Your stdapi.ai URL** - reachable from wherever the proxy runs, e.g. `https://api.example.com`
-    - ✓ **Your API key** - From Terraform output or configuration
-    - ✓ **Home Assistant** - With the Assist voice pipeline set up
-    - ✓ **A place to run wyoming-openai** - A container alongside Home Assistant, e.g. as a Home Assistant OS add-on or a standalone container
-
 ---
 
-## :material-cog: Configuration
-
-wyoming-openai is configured through environment variables, split into a speech-to-text half and a text-to-speech half. Point both at your stdapi.ai deployment.
-
-!!! example "Environment Variables"
-    ```bash
-    # Speech to text
-    STT_OPENAI_URL=https://YOUR_STDAPI_URL/v1
-    STT_OPENAI_KEY=YOUR_STDAPI_KEY
-    STT_MODELS=amazon.transcribe
-
-    # Text to speech
-    TTS_OPENAI_URL=https://YOUR_STDAPI_URL/v1
-    TTS_OPENAI_KEY=YOUR_STDAPI_KEY
-    TTS_MODELS=amazon.polly-neural
-    TTS_VOICES=alloy
-
-    # Backend selection
-    STT_BACKEND=OPENAI
-    TTS_BACKEND=OPENAI
-    ```
-
-The proxy calls `POST /v1/audio/transcriptions` (see [Audio Transcriptions API](api_openai_audio_transcriptions.md)) for speech to text and `POST /v1/audio/speech` (see [Audio Speech API](api_openai_audio_speech.md)) for text to speech, so `STT_MODELS` must be a speech-to-text-capable model and `TTS_MODELS` a text-to-speech-capable model from the correct family.
-
-!!! tip "Pin the backend"
-    Left unset, wyoming-openai probes a few well-known self-hosted backends before falling back to a generic OpenAI-compatible one. Setting `STT_BACKEND=OPENAI` and `TTS_BACKEND=OPENAI` skips that probing and connects directly.
-
-!!! tip "A cheaper speech-to-text model"
-    `STT_MODELS=amazon.nova-2-sonic-v1:0` transcribes through [Amazon Nova Sonic](api_openai_audio_transcriptions.md#amazon-nova-sonic) instead of Amazon Transcribe: the lowest-cost transcription available here, punctuated and in the language spoken. It answers `json` and `text` only — which is all the proxy asks for — and caps a recording at 10 minutes, well beyond any voice command. Keep `amazon.transcribe` if the same deployment also serves subtitles, timestamps or speaker labels.
-
-### :material-waveform: Streaming Speech to Text
-
-Enables: recognizing a spoken command phrase by phrase, instead of after the whole utterance has been recorded.
-
-!!! example "Environment Variables"
-    ```bash
-    STT_STREAMING_MODELS=amazon.transcribe
-    ```
-
-Only the models listed there are called in streaming mode, which is what makes the proxy ask stdapi.ai for a [streamed transcription](api_openai_audio_transcriptions.md#streaming). The gateway returns each phrase as it is recognized whenever the request names the language to expect; if the proxy sends none, set [`AWS_TRANSCRIBE_STREAM_LANGUAGES`](operations_configuration.md#aws-transcribe-stream-languages) on stdapi.ai to the languages your satellites actually speak and those requests take the same fast path. Streamed transcription stages nothing, so it works on a deployment with no S3 bucket configured.
-
-!!! note "This is the streaming option to use, not the realtime one"
-    stdapi.ai's [Realtime API](api_openai_realtime.md) serves speech-to-speech sessions, and a transcription-only session is requested through an [ephemeral client secret](api_openai_realtime.md#ephemeral-client-secrets) rather than on the socket — so a client that expects OpenAI's realtime *transcription* socket gets no transcript from it. Assist's pipeline is turn-based anyway: speech to text, then a conversation agent, then text to speech.
-
-### :material-volume-high: Streaming Text to Speech
-
-Enables: speaking a response as it is generated, instead of waiting for the whole sentence to synthesize.
-
-!!! example "Environment Variables"
-    ```bash
-    TTS_STREAMING_MODELS=amazon.polly-neural
-    ```
-
-Naming the same model in both `TTS_MODELS` and `TTS_STREAMING_MODELS` puts its voice in the proxy's streaming program, so Assist can use it for both a plain synthesis request and a streamed one. The proxy splits a streamed reply into sentences and synthesizes several `/v1/audio/speech` calls concurrently, then replays the audio in the original order.
-
-### :material-tune-vertical: Voice Mapping
-
-`TTS_VOICES` lists OpenAI-style voice names (`alloy`, `echo`, `fable`, and so on); stdapi.ai maps each one to an Amazon Polly voice of matching gender and language. List one entry per voice you want Assist to offer.
-
----
-
-## :material-rocket-launch: Terraform Deployment
+### :material-cube-outline: What's Included
 
 Deploy Home Assistant, wyoming-openai, and stdapi.ai together on ECS Fargate:
 
@@ -203,16 +217,12 @@ Deploy Home Assistant, wyoming-openai, and stdapi.ai together on ECS Fargate:
 - HTTPS-capable ALB on your own domain (needed for microphone access in the browser)
 
 !!! warning "Demonstration sample, not a production Home Assistant deployment"
-    AWS Fargate has no access to a home network: Zigbee/Z-Wave USB dongles, mDNS device discovery, and other LAN-only integrations do not work here, and a Wyoming voice satellite on your home LAN cannot reach this deployment unless you put a VPN between them. Use it to try Assist voice through Amazon Transcribe/Polly, or as a starting point for a self-hosted, cloud-reachable instance you administer through the web UI.
-
-!!! warning "Local ECS module source"
-    `module "home_assistant"` currently points at a local relative path (`../../../terraform-aws-ecs`) instead of the published registry module, because it needs S3 Files mount-point support (used to seed `configuration.yaml`) that isn't in a tagged release yet. This means `terraform-aws-ecs` must be checked out as a sibling of `samples/` before `tofu init` succeeds — see the sample's README for the exact layout.
+    AWS Fargate has no route to your home network, so Zigbee/Z-Wave USB dongles, mDNS device discovery, and other LAN-only integrations do not work here. Use it to try Assist voice through Amazon Transcribe/Polly, or as a starting point for a self-hosted, cloud-reachable instance you administer through the web UI. If you already run Home Assistant at home, the sample's README covers deploying only the cloud-side pieces instead of moving Home Assistant itself.
 
 **Deploy:**
 
 ```bash
 git clone https://github.com/stdapi-ai/samples.git
-git clone https://github.com/JGoutin/terraform-aws-ecs.git
 cd samples/getting_started_home_assistant/terraform
 tofu init
 tofu apply
@@ -222,9 +232,7 @@ Three steps stay manual after `tofu apply`, for reasons specific to Home Assista
 
 ---
 
-## :material-gauge: Operating This Integration
-
-### What It Costs to Run
+### :material-gauge: What It Costs to Run
 
 | Charge | Driver |
 | --- | --- |
@@ -237,7 +245,9 @@ Three steps stay manual after `tofu apply`, for reasons specific to Home Assista
 
 Read a model's price before you send anything to it with [`GET /model_pricing`](api_model_pricing.md). Setting [`COST_TRACKING=true`](operations_cost_management.md#cost-tracking-real-time-aws-pricing) additionally puts a per-request cost on each usage entry — estimated from published AWS prices, not read back from your invoice.
 
-### What to Watch
+---
+
+### :material-eye-outline: What to Watch
 
 The gateway logs Polly usage — `input_characters`, always on the `request` event — and Transcribe usage — `input_seconds`, on `request` normally or on `request_stream` if you turn on `STT_STREAMING_MODELS` — with `execution_time_ms` on every entry. Turning on [`CLOUDWATCH_METRICS`](operations_logging_monitoring.md#cloudwatch-metrics-emf) republishes those counts as EMF metrics in the `stdapi` namespace, dimensioned by `Model`: `Count` for characters, `Seconds` for audio duration.
 
@@ -249,12 +259,6 @@ fields path, execution_time_ms
 ```
 
 A rising p95 on either path is what a household notices as a slow turn, before it shows up in any cost report.
-
----
-
-## :material-alert-outline: Known Issues
-
-The proxy speaks the Wyoming protocol over its own TCP port, not HTTP—there is no `/health` endpoint to check readiness with a plain web request. Wait for a successful Wyoming `describe` exchange (or check the container logs) rather than polling an HTTP path.
 
 ## :material-arrow-right: Next Steps
 

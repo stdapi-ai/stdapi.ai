@@ -6,7 +6,7 @@ keywords: autonomous agent AWS Bedrock, Hermes agent AWS, hermes-agent AWS Bedro
 
 # :material-robot-excited: Autonomous Agent CLIs
 
-Run autonomous agent CLIs against Amazon Bedrock models with stdapi.ai, using the same provider configuration you would point at OpenAI or Anthropic directly—two client-side changes: the base URL, and the model name, which you now pick from every provider in the catalogue rather than one vendor's list.
+Run autonomous agent CLIs against Amazon Bedrock models with stdapi.ai, using the same provider configuration you would point at OpenAI or Anthropic directly — three client-side changes: the base URL, the API key, and the model name, the last only where it differs from what the client already sends, now chosen from every provider in the catalogue rather than one vendor's list.
 
 ## :material-information-outline: About Autonomous Agent CLIs
 
@@ -165,7 +165,9 @@ Building the store itself — parsing, chunking, embedding, filters — is cover
 
 [Hermes](https://github.com/NousResearch/hermes-agent) (PyPI package `hermes-agent`) is an autonomous agent CLI written in Python.
 
-### :material-cog: Configuration
+### :material-connection: Connect Your Own Instance
+
+#### :material-cog: Configuration
 
 The simplest setup points Hermes at stdapi.ai through the same environment variables an OpenAI-compatible client would use:
 
@@ -192,7 +194,7 @@ model:
 
 `key_env` names the environment variable Hermes reads the API key from—set `STDAPI_API_KEY` (or whatever name you choose) to your stdapi.ai key.
 
-### :material-swap-horizontal: Transport Selection
+#### :material-swap-horizontal: Transport Selection
 
 `transport` is the standout setting: it picks which of stdapi.ai's three chat dialects the provider speaks, and `api` has to match the route serving it:
 
@@ -204,7 +206,7 @@ model:
 
 Declare more than one entry under `providers` to reach more than one route side by side.
 
-### :material-cached: Anthropic Prompt-Caching Breakpoints
+#### :material-cached: Anthropic Prompt-Caching Breakpoints
 
 On the `anthropic_messages` transport, Hermes automatically places [prompt-caching](api_anthropic_messages.md#prompt-caching) breakpoints on the system prompt and recent messages when the target model is Claude-named. Choose the cache lifetime with `prompt_caching.cache_ttl`:
 
@@ -215,7 +217,9 @@ prompt_caching:
 
 Only `5m` and `1h` are accepted—any other value is ignored. This pairs directly with stdapi.ai's own Anthropic Messages prompt-caching support: Hermes' breakpoints arrive as standard `cache_control` markers, which stdapi.ai translates into Bedrock cache points, up to the four the Converse API allows per request.
 
-### :material-rocket-launch: Terraform Deployment
+### :material-rocket-launch: Deploy on AWS
+
+The sample below is one worked example of a credible AWS deployment, not the only architecture that works. The gateway is a normal HTTP service, and Hermes and stdapi.ai can run anywhere you like — your own ECS or EKS cluster, EC2, another cloud, or a laptop.
 
 Deploy Hermes + stdapi.ai together on ECS Fargate, with `config.yaml` pre-seeded and ready to run:
 
@@ -231,9 +235,6 @@ Deploy Hermes + stdapi.ai together on ECS Fargate, with `config.yaml` pre-seeded
 - No local image build — the public `nousresearch/hermes-agent` image is pulled anonymously by Fargate
 - ECS Exec enabled for shelling into the container or driving Hermes' interactive CLI directly
 
-!!! warning "Local ECS module source"
-    `module "hermes"` currently points at a local relative path (`../../../terraform-aws-ecs`) instead of the published registry module, because it needs S3 Files mount-point support (used to seed `config.yaml`) that isn't in a tagged release yet. Cloning only the samples repository is not enough for `tofu init` to resolve it — see the sample's README for the sibling-checkout layout it currently requires.
-
 **Deploy:**
 
 ```bash
@@ -243,11 +244,40 @@ tofu init
 tofu apply
 ```
 
+#### :material-gauge: What It Costs to Run
+
+| Charge | Driver |
+| --- | --- |
+| stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
+| ECS Fargate | The Hermes task — pinned to exactly one, see *Single instance by design* in the sample's README — and the gateway task, each sized independently; a short-lived init container re-seeds `config.yaml` on every deployment |
+| Load balancing and networking | One ALB fronting the gateway API and dashboard, plus the NAT gateways the private subnets egress through |
+| Amazon EFS | Standing storage and throughput cost for `/opt/data` — config, SQLite state, sessions, memories, skills |
+| Amazon Bedrock usage | AWS rates, billed to your account with no markup — for a long agent loop, how much of each turn's context is served from a cache read rather than fresh input is the dominant lever; see [Anthropic Prompt-Caching Breakpoints](#anthropic-prompt-caching-breakpoints), above |
+
+Read a model's price before sending anything to it with [`GET /model_pricing`](api_model_pricing.md). Setting [`COST_TRACKING=true`](operations_cost_management.md#cost-tracking-real-time-aws-pricing) additionally puts a per-request cost on each usage entry — estimated from published AWS prices, not read back from your invoice.
+
+#### :material-eye-outline: What to Watch
+
+Hermes and the gateway each log to CloudWatch: Hermes writes its own container logs, and the gateway writes one structured `request` event (or `request_stream` for streamed replies) per call, carrying the request id, path, status code, `execution_time_ms`, and a nested `usage` list with the token counts AWS billed — including `cached_tokens` (cache reads) and `cache_write_tokens` on each entry. Turning on [`CLOUDWATCH_METRICS`](operations_logging_monitoring.md#cloudwatch-metrics-emf) republishes those counts as EMF metrics in the `stdapi` namespace, dimensioned by `Model`.
+
+An agent loop that resends its history every turn should, once the session warms up, read far more input tokens from cache than it pays for fresh:
+
+```sql
+fields Model, InputTokens, CachedTokens, CacheWriteTokens
+| filter _aws.CloudWatchMetrics is not null
+| stats sum(CachedTokens) as cache_reads, sum(InputTokens) as fresh_input, sum(CacheWriteTokens) as cache_writes by Model
+| sort cache_reads desc
+```
+
+A model whose `cache_reads` stay near zero mid-session points at breakpoints that are not landing — check that Hermes is actually sending `cache_control` markers before assuming the model itself is at fault.
+
 ---
 
 ## :material-account-cog: OpenClaw
 
-[OpenClaw](https://github.com/openclaw/openclaw) is a personal-assistant CLI (npm package `openclaw`) that also writes code as part of a task. Custom endpoints are registered through its onboarding wizard, not through the `agent` command itself:
+[OpenClaw](https://github.com/openclaw/openclaw) is a personal-assistant CLI (npm package `openclaw`) that also writes code as part of a task. Custom endpoints are registered through its onboarding wizard, not through the `agent` command itself.
+
+### :material-connection: Connect Your Own Instance
 
 ```bash
 openclaw onboard \
@@ -274,7 +304,9 @@ openclaw agent --model stdapi/anthropic.claude-fable-5
 
 Re-run `openclaw onboard` with a different `--custom-provider-id` to register more than one route side by side.
 
-### :material-rocket-launch: Terraform Deployment
+### :material-rocket-launch: Deploy on AWS
+
+The sample below is one worked example of a credible AWS deployment, not the only architecture that works. The gateway is a normal HTTP service, and OpenClaw and stdapi.ai can run anywhere you like — your own ECS or EKS cluster, EC2, another cloud, or a laptop.
 
 Deploy OpenClaw + stdapi.ai together on ECS Fargate, with the provider and default model preconfigured:
 
@@ -294,9 +326,6 @@ Deploy OpenClaw + stdapi.ai together on ECS Fargate, with the provider and defau
 !!! warning "Device pairing stays manual"
     OpenClaw's Control UI requires pairing a browser device before use, done through a few `aws ecs execute-command` calls after deployment — see the sample's README for the exact commands. This is not automated by Terraform.
 
-!!! warning "Local ECS module source"
-    `module "openclaw"` currently points at a local relative path (`../../../terraform-aws-ecs`) instead of the published registry module, because it needs S3 Files mount-point support (used to seed `openclaw.json`) that isn't in a tagged release yet. Cloning only the samples repository is not enough for `tofu init` to resolve it — see the sample's README for the sibling-checkout layout it currently requires.
-
 **Deploy:**
 
 ```bash
@@ -306,36 +335,30 @@ tofu init
 tofu apply
 ```
 
----
-
-## :material-gauge: Operating This Integration
-
-### What It Costs to Run
+#### :material-gauge: What It Costs to Run
 
 | Charge | Driver |
 | --- | --- |
 | stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
-| ECS Fargate | Two services — the agent CLI and the gateway — each sized independently; the agent's task also runs a short-lived init container on every deployment |
-| Load balancing and networking | One ALB fronting the agent's own web surface, plus the NAT gateways the private subnets egress through |
-| Amazon EFS | Standing storage and throughput cost for the agent's persistent state |
-| Amazon Bedrock usage | AWS rates, billed to your account with no markup — for a long agent loop, how much of each turn's context is served from a cache read rather than fresh input is the dominant lever; see [Anthropic Prompt-Caching Breakpoints](#anthropic-prompt-caching-breakpoints), above |
+| ECS Fargate | The OpenClaw task — pinned to exactly one, see *Single Instance, by Design* in the sample's README — and the gateway task, each sized independently; a short-lived init container seeds `openclaw.json` on first boot only, and runs harmlessly on every later deployment |
+| Load balancing and networking | One ALB fronting the gateway and Control UI, plus the NAT gateways the private subnets egress through |
+| Amazon EFS | Standing storage and throughput cost for OpenClaw's config, auth material and workspace |
+| Amazon Bedrock usage | AWS rates, billed to your account with no markup |
 
 Read a model's price before sending anything to it with [`GET /model_pricing`](api_model_pricing.md). Setting [`COST_TRACKING=true`](operations_cost_management.md#cost-tracking-real-time-aws-pricing) additionally puts a per-request cost on each usage entry — estimated from published AWS prices, not read back from your invoice.
 
-### What to Watch
+#### :material-eye-outline: What to Watch
 
-Both containers log to CloudWatch: the agent CLI writes its own container logs, and the gateway writes one structured `request` event (or `request_stream` for streamed replies) per call, carrying the request id, path, status code, `execution_time_ms`, and a nested `usage` list with the token counts AWS billed — including `cached_tokens` (cache reads) and `cache_write_tokens` on each entry. Turning on [`CLOUDWATCH_METRICS`](operations_logging_monitoring.md#cloudwatch-metrics-emf) republishes those counts as EMF metrics in the `stdapi` namespace, dimensioned by `Model`.
-
-An agent loop that resends its history every turn should, once the session warms up, read far more input tokens from cache than it pays for fresh. The EMF lines carry each quantity as its own metric field, so the two are directly comparable per model:
+OpenClaw and the gateway each write their own container logs to CloudWatch; the gateway additionally writes one structured `request` event per call, carrying the request id, path, status code, `execution_time_ms`, the model that served it, and the token counts AWS billed. Turning on [`CLOUDWATCH_METRICS`](operations_logging_monitoring.md#cloudwatch-metrics-emf) republishes those counts as EMF metrics in the `stdapi` namespace, dimensioned by `Model`.
 
 ```sql
-fields Model, InputTokens, CachedTokens, CacheWriteTokens
-| filter _aws.CloudWatchMetrics is not null
-| stats sum(CachedTokens) as cache_reads, sum(InputTokens) as fresh_input, sum(CacheWriteTokens) as cache_writes by Model
-| sort cache_reads desc
+fields model_id, execution_time_ms
+| filter type = "request" and ispresent(model_id)
+| stats count(*) as calls, pct(execution_time_ms, 95) as p95_ms by model_id
+| sort calls desc
 ```
 
-A model whose `cache_reads` stay near zero mid-session points at breakpoints that are not landing — check that the agent is actually sending `cache_control` markers before assuming the model itself is at fault.
+A rising p95 here is what an operator notices as a slow agent turn, before it shows up in any cost report.
 
 ---
 

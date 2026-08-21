@@ -58,7 +58,182 @@ flowchart LR
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
-## :material-sitemap: Architecture
+## :material-connection: Connect Your Own Instance
+
+Both retrieval modes work against any stdapi.ai deployment, wherever it runs. Nothing below requires the AWS sample in [Part 2](#deploy-the-full-stack-on-aws).
+
+### :material-database-search: Managed Retrieval with Vector Stores { #managed-retrieval }
+
+Upload your files, attach them to a vector store, and search it. Nothing else runs.
+
+!!! example "Index and search"
+    ```python
+    import time
+
+    from openai import OpenAI
+
+    client = OpenAI(base_url="https://YOUR_STDAPI_URL/v1", api_key="YOUR_API_KEY")
+
+    uploaded = client.files.create(file=open("handbook.txt", "rb"), purpose="assistants")
+    store = client.vector_stores.create(name="handbook", file_ids=[uploaded.id])
+
+    # Indexing is asynchronous: wait until the store reports it finished.
+    while client.vector_stores.retrieve(store.id).status == "in_progress":
+        time.sleep(2)
+
+    for result in client.vector_stores.search(
+        store.id, query="How much parental leave do I get?"
+    ):
+        print(result.score, result.filename, result.content[0].text)
+    ```
+
+    Feed the returned passages to a chat model as context and you have a complete RAG loop in a dozen lines. Tag files with `attributes` to scope a search to a department, a product or a language.
+
+Only **text** files can be indexed — convert PDFs and office documents first, with the [document parsing](#document-parsing) stage below. See the [Vector Stores API](api_openai_vector_stores.md) for chunking, filters, expiration and the storage it needs in your account.
+
+!!! tip "Indexing that survives a deployment"
+    A file is indexed by the server that accepted it. Point [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url) at a queue and the job is handed over to it instead, so a bulk ingestion keeps going — and finishes — when that server is replaced mid-way. See [Durable indexing](api_openai_vector_stores.md#durable-indexing).
+
+#### :material-file-search: Let the Model Do the Retrieving { #file-search }
+
+Naming a store as a `file_search` tool on the [Responses API](api_openai_responses.md#file-search) moves the whole loop into a single request: the model decides when to search and with which query, answers from the passages it gets back, and annotates the answer with a citation per file it drew on.
+
+!!! example "One request, retrieval included"
+    ```python
+    response = client.responses.create(
+        model="amazon.nova-2-lite-v1:0",
+        input="How much parental leave do I get?",
+        tools=[{"type": "file_search", "vector_store_ids": [store.id]}],
+    )
+    print(response.output_text)
+    ```
+
+    No retriever to call, no context to assemble, no citation bookkeeping: the searches the turn ran come back as `file_search_call` items when you want to show them, and `include=["file_search_call.results"]` returns the passages themselves. See [File Search](api_openai_responses.md#file-search) for attribute filters, score thresholds and the streamed event order.
+
+#### :material-database-import: Searching a Knowledge Base You Already Run { #knowledge-base }
+
+If your documents are already in an **Amazon Bedrock knowledge base**, keep it where it is. Allowlist it in [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration.md#aws-bedrock-knowledge-base-ids) and it is addressed as the vector store `vs_kb_<knowledgeBaseId>` — searched, listed, read and (on a custom data source) extended with new documents, through the same client code and the same `file_search` tool as above.
+
+The knowledge base stays yours: it is never created and never deleted here, and a request that would reshape it — renaming, an expiry, a chunking strategy — is refused with the reason rather than half-applied. Its retrieval scores are reported as the backend states them, so a `score_threshold` against such a store is refused instead of meaning something else. See [Knowledge Base Stores](api_openai_vector_stores.md#knowledge-base-stores).
+
+### :material-hammer-screwdriver: Assembling Your Own Pipeline { #assembled-pipeline }
+
+The rest of this part wires stdapi.ai into a pipeline you build yourself, with your own vector database and retrieval strategy.
+
+### :material-check-circle: Prerequisites
+
+!!! info "What You'll Need"
+    - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md) or [run locally with Docker](operations_getting_started_local.md)
+    - ✓ **Your stdapi.ai URL** - e.g., `https://api.example.com`
+    - ✓ **Your API key** - From Terraform output or configuration
+    - ✓ **A vector store** - for the assembled pipeline only: stdapi.ai serves embeddings and reranking, and the vectors live in your framework's own store (in-memory, pgvector, Qdrant, and others all work). [Managed retrieval](#managed-retrieval) needs none.
+
+### :material-cog: Configuration
+
+Every RAG framework that speaks the OpenAI and Cohere SDKs follows the same pattern: the embedder and the generator take the OpenAI-compatible `/v1` base URL, and the reranker takes the Cohere-compatible `/cohere` base URL.
+
+#### :material-file-document-outline: Document Parsing { #document-parsing }
+
+Before embedding, a RAG pipeline needs plain text out of PDFs and office documents. [Docling Serve](https://github.com/docling-project/docling-serve) converts them to Markdown/JSON over an HTTP API — deploy it as the ingestion stage in front of the embedder below, not as a standalone gateway showcase.
+
+Docling's default pipeline is classical layout/OCR/table-structure extraction and never calls an LLM. Its optional VLM pipeline additionally routes page images through stdapi.ai to a vision-capable Bedrock model, for documents that benefit from model-assisted layout understanding.
+
+!!! example "Convert a document"
+    ```bash
+    curl -s -X POST "$DOCLING_URL/v1/convert/source" \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "options": {"to_formats": ["md"]},
+        "sources": [{"kind": "http", "url": "https://example.com/document.pdf"}]
+      }' | jq -r '.document.md_content'
+    ```
+
+    Docling Serve's own usage documentation shows `http_sources` here, but the server's OpenAPI schema requires the `sources` array with a `kind` discriminator shown above.
+
+    Feed the returned Markdown into the embedder below to complete the ingestion stage.
+
+See [Part 2](#deploy-the-full-stack-on-aws) for a Terraform-deployed Docling Serve on AWS.
+
+#### :material-vector-polyline: Embeddings
+
+Point your framework's OpenAI-compatible embedder at `/v1` with an embeddings-capable model.
+
+!!! example "Haystack"
+    ```python
+    from haystack.components.embedders import OpenAIDocumentEmbedder, OpenAITextEmbedder
+    from haystack.utils import Secret
+
+    document_embedder = OpenAIDocumentEmbedder(
+        api_key=Secret.from_env_var("STDAPI_API_KEY"),
+        model="amazon.titan-embed-text-v2:0",
+        api_base_url="https://YOUR_STDAPI_URL/v1",
+    )
+    text_embedder = OpenAITextEmbedder(
+        api_key=Secret.from_env_var("STDAPI_API_KEY"),
+        model="amazon.titan-embed-text-v2:0",
+        api_base_url="https://YOUR_STDAPI_URL/v1",
+    )
+    ```
+
+    Embed your corpus with `OpenAIDocumentEmbedder` and each incoming query with `OpenAITextEmbedder`, using the same model for both so the vectors share a space. See [Embeddings API](api_openai_embeddings.md) for supported models.
+
+!!! tip "A first ingestion does not have to run synchronously"
+    Embedding a whole corpus is exactly the shape the [Batch API](api_openai_batches.md) is for: write one `/v1/embeddings` request per passage into a JSONL file, submit it, and collect the vectors when it finishes — at the Amazon Bedrock batch price rather than the synchronous one. Queries stay on the synchronous route, where latency matters.
+
+#### :material-sort-variant: Reranking
+
+Point your framework's Cohere-compatible reranker at `/cohere`, not the full rerank path—the Cohere client appends the operation itself.
+
+!!! example "Haystack"
+    ```python
+    from haystack_integrations.components.rankers.cohere import CohereRanker
+    from haystack.utils import Secret
+
+    ranker = CohereRanker(
+        api_key=Secret.from_env_var("STDAPI_API_KEY"),
+        model="cohere.rerank-v3-5:0",
+        api_base_url="https://YOUR_STDAPI_URL/cohere",
+        top_k=3,
+    )
+    ```
+
+    Requires the `cohere-haystack` integration package alongside `haystack-ai`. Give the ranker the retriever's full candidate set—every retrieved document, not just the top few—so it has something to reorder rather than merely confirm. See [Cohere Rerank API](api_cohere_rerank.md) for supported models.
+
+!!! tip "Regional availability"
+    Amazon Bedrock serves reranking from a subset of regions only. Keep at least one of them in [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions); stdapi.ai fails over to it automatically.
+
+#### :material-chat: Generation
+
+Point your framework's OpenAI-compatible chat generator at `/v1`, answering from the reranked context.
+
+!!! example "Haystack"
+    ```python
+    from haystack.components.generators.chat import OpenAIChatGenerator
+    from haystack.utils import Secret
+
+    generator = OpenAIChatGenerator(
+        api_key=Secret.from_env_var("STDAPI_API_KEY"),
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        api_base_url="https://YOUR_STDAPI_URL/v1",
+    )
+    ```
+
+    Any text/chat-capable model works here; it never needs to match the embedding or reranking model. See [Chat Completions API](api_openai_chat_completions.md) for supported models.
+
+#### :material-toolbox: Other Frameworks
+
+The same two-route pattern—OpenAI-compatible `/v1` for embedding and generation, Cohere-compatible `/cohere` for reranking—applies to any framework built on those SDKs, including LlamaIndex, RAGFlow, and LightRAG. Set the base URL and API key on the framework's OpenAI and Cohere client configuration; the vector store itself (pgvector, Qdrant, or an in-memory store) is unaffected and stores whatever the embedder returns.
+
+Frameworks that drive the Responses API can take the [managed](#managed-retrieval) half instead of a store of their own: given a file and a `file_search` tool, **Agno** uploads it, creates the vector store, waits for the indexing and names the store on the turn — all against the base URL it already chats with.
+
+!!! warning "n8n cannot rerank through stdapi.ai"
+    n8n's Cohere Reranker node has no base URL field—see [n8n Integration: Known Limitations](use_cases_n8n.md#known-limitations) for a workaround.
+
+## :material-rocket-launch: Deploy the Full Stack on AWS
+
+The architecture below is one worked example of a credible AWS deployment for this pipeline, not the only one that works: the gateway is a normal HTTPS service, and the document-parsing and vector-store pieces it depicts can run wherever you already operate workloads.
+
+### :material-sitemap: Architecture
 
 The two modes differ in who runs the pipeline and where its state lives. Managed retrieval puts chunking, embedding, indexing and search inside the gateway, backed by a vector bucket and a durable indexing queue in your account; the assembled pipeline keeps your framework in charge of chunking, indexing and search, and calls stdapi.ai only for the embedding, reranking and generation steps in between.
 
@@ -104,7 +279,7 @@ flowchart TB
 
 Two things are worth reading off the picture. In managed retrieval, your documents and their vectors come to rest inside your account — the general-purpose bucket holds the vector store's records, the S3 Vectors bucket holds the indexed embeddings, and the SQS queue makes an indexing job outlive the task that accepted it: this is the one deployment shape on this page where the gateway is not stateless. In the assembled pipeline the gateway stays exactly as stateless as everywhere else on this site — it holds no vectors at all, which land wherever your own framework's vector database puts them, never in this picture.
 
-### What Each AWS Service Does Here
+#### What Each AWS Service Does Here
 
 | AWS service | Role in this integration | Where it is configured |
 | --- | --- | --- |
@@ -117,7 +292,7 @@ Two things are worth reading off the picture. In managed retrieval, your documen
 | **AWS KMS** | Customer-managed keys encrypting the S3 bucket, the S3 Vectors bucket and the SQS queue, each independently | Terraform sample |
 | **AWS IAM** | Least-privilege task role for the gateway; the Vector Stores, durable indexing and knowledge base permissions are granted only when their feature is enabled | [IAM permissions](operations_iam_permissions.md#vector-stores-optional) |
 
-### Security Measures in This Flow
+#### Security Measures in This Flow
 
 - **Authentication** — every call your application or framework makes to the gateway carries a stdapi.ai [API key](operations_authentication_security.md#api-key-authentication); Docling's optional VLM pipeline authenticates the same way when it calls the gateway for vision inference.
 - **Encryption in transit** — HTTPS from wherever your application or framework runs to the gateway, and HTTPS with SigV4 from the gateway to Amazon Bedrock, Amazon S3, Amazon S3 Vectors and Amazon SQS.
@@ -126,198 +301,13 @@ Two things are worth reading off the picture. In managed retrieval, your documen
 - **Content policy** — a [Bedrock guardrail](operations_configuration.md#bedrock-guardrails) applies to embeddings and reranking through the ApplyGuardrail API rather than Bedrock's native integration, checking each text input before it is embedded or reranked, and its consumed units are reported — unlike the native integration chat routes use.
 - **Data handling** — uploaded files and their [S3 storage](operations_compliance.md#s3-data-storage) stay in your account, and an Amazon Bedrock knowledge base you already operate is [addressed as a vector store](api_openai_vector_stores.md#knowledge-base-stores) — searched and extended, never recreated.
 
-## :material-database-search: Managed Retrieval with Vector Stores { #managed-retrieval }
+### :material-cube-outline: What's Included
 
-Upload your files, attach them to a vector store, and search it. Nothing else runs.
+**📦 [stdapi-ai/samples/getting_started_docling](https://github.com/stdapi-ai/samples/tree/main/getting_started_docling)** is one worked example of the document-parsing stage on AWS — Docling Serve on ECS Fargate, CPU-only, with the VLM pipeline pre-wired to a Bedrock vision model through stdapi.ai. See the sample's [README](https://github.com/stdapi-ai/samples/tree/main/getting_started_docling#readme) for deployment steps.
 
-!!! example "Index and search"
-    ```python
-    import time
+Want the platform instead of the pipeline? This page covers wiring stdapi.ai into a pipeline you assemble yourself. If you would rather run a finished product—a web UI, document parsing, knowledge bases, and grounded chat, with no pipeline code to write—see the **[RAGFlow Integration](use_cases_ragflow.md)** guide, which deploys RAGFlow with all three stages already bound to Amazon Bedrock.
 
-    from openai import OpenAI
-
-    client = OpenAI(base_url="https://YOUR_STDAPI_URL/v1", api_key="YOUR_API_KEY")
-
-    uploaded = client.files.create(file=open("handbook.txt", "rb"), purpose="assistants")
-    store = client.vector_stores.create(name="handbook", file_ids=[uploaded.id])
-
-    # Indexing is asynchronous: wait until the store reports it finished.
-    while client.vector_stores.retrieve(store.id).status == "in_progress":
-        time.sleep(2)
-
-    for result in client.vector_stores.search(
-        store.id, query="How much parental leave do I get?"
-    ):
-        print(result.score, result.filename, result.content[0].text)
-    ```
-
-    Feed the returned passages to a chat model as context and you have a complete RAG loop in a dozen lines. Tag files with `attributes` to scope a search to a department, a product or a language.
-
-Only **text** files can be indexed — convert PDFs and office documents first, with the [document parsing](#document-parsing) stage below. See the [Vector Stores API](api_openai_vector_stores.md) for chunking, filters, expiration and the storage it needs in your account.
-
-!!! tip "Indexing that survives a deployment"
-    A file is indexed by the server that accepted it. Point [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url) at a queue and the job is handed over to it instead, so a bulk ingestion keeps going — and finishes — when that server is replaced mid-way. See [Durable indexing](api_openai_vector_stores.md#durable-indexing).
-
-### :material-file-search: Let the Model Do the Retrieving { #file-search }
-
-Naming a store as a `file_search` tool on the [Responses API](api_openai_responses.md#file-search) moves the whole loop into a single request: the model decides when to search and with which query, answers from the passages it gets back, and annotates the answer with a citation per file it drew on.
-
-!!! example "One request, retrieval included"
-    ```python
-    response = client.responses.create(
-        model="amazon.nova-2-lite-v1:0",
-        input="How much parental leave do I get?",
-        tools=[{"type": "file_search", "vector_store_ids": [store.id]}],
-    )
-    print(response.output_text)
-    ```
-
-    No retriever to call, no context to assemble, no citation bookkeeping: the searches the turn ran come back as `file_search_call` items when you want to show them, and `include=["file_search_call.results"]` returns the passages themselves. See [File Search](api_openai_responses.md#file-search) for attribute filters, score thresholds and the streamed event order.
-
-### :material-database-import: Searching a Knowledge Base You Already Run { #knowledge-base }
-
-If your documents are already in an **Amazon Bedrock knowledge base**, keep it where it is. Allowlist it in [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration.md#aws-bedrock-knowledge-base-ids) and it is addressed as the vector store `vs_kb_<knowledgeBaseId>` — searched, listed, read and (on a custom data source) extended with new documents, through the same client code and the same `file_search` tool as above.
-
-The knowledge base stays yours: it is never created and never deleted here, and a request that would reshape it — renaming, an expiry, a chunking strategy — is refused with the reason rather than half-applied. Its retrieval scores are reported as the backend states them, so a `score_threshold` against such a store is refused instead of meaning something else. See [Knowledge Base Stores](api_openai_vector_stores.md#knowledge-base-stores).
-
----
-
-## :material-hammer-screwdriver: Assembling Your Own Pipeline { #assembled-pipeline }
-
-The rest of this page wires stdapi.ai into a pipeline you build yourself, with your own vector database and retrieval strategy.
-
-## :material-check-circle: Prerequisites
-
-!!! info "What You'll Need"
-    - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md) or [run locally with Docker](operations_getting_started_local.md)
-    - ✓ **Your stdapi.ai URL** - e.g., `https://api.example.com`
-    - ✓ **Your API key** - From Terraform output or configuration
-    - ✓ **A vector store** - for the assembled pipeline only: stdapi.ai serves embeddings and reranking, and the vectors live in your framework's own store (in-memory, pgvector, Qdrant, and others all work). [Managed retrieval](#managed-retrieval) needs none.
-
----
-
-## :material-cog: Configuration
-
-Every RAG framework that speaks the OpenAI and Cohere SDKs follows the same pattern: the embedder and the generator take the OpenAI-compatible `/v1` base URL, and the reranker takes the Cohere-compatible `/cohere` base URL.
-
-### :material-file-document-outline: Document Parsing { #document-parsing }
-
-Before embedding, a RAG pipeline needs plain text out of PDFs and office documents. [Docling Serve](https://github.com/docling-project/docling-serve) converts them to Markdown/JSON over an HTTP API — deploy it as the ingestion stage in front of the embedder below, not as a standalone gateway showcase.
-
-Docling's default pipeline is classical layout/OCR/table-structure extraction and never calls an LLM. Its optional VLM pipeline additionally routes page images through stdapi.ai to a vision-capable Bedrock model, for documents that benefit from model-assisted layout understanding.
-
-!!! example "Convert a document"
-    ```bash
-    curl -s -X POST "$DOCLING_URL/v1/convert/source" \
-      -H 'Content-Type: application/json' \
-      -d '{
-        "options": {"to_formats": ["md"]},
-        "sources": [{"kind": "http", "url": "https://example.com/document.pdf"}]
-      }' | jq -r '.document.md_content'
-    ```
-
-    Docling Serve's own usage documentation shows `http_sources` here, but the server's OpenAPI schema requires the `sources` array with a `kind` discriminator shown above.
-
-    Feed the returned Markdown into the embedder below to complete the ingestion stage.
-
-**📦 [stdapi-ai/samples/getting_started_docling](https://github.com/stdapi-ai/samples/tree/main/getting_started_docling)** deploys Docling Serve on ECS Fargate, CPU-only, with the VLM pipeline pre-wired to a Bedrock vision model through stdapi.ai.
-
-!!! warning "Local ECS module source"
-    `module "docling"` currently points at a local relative path (`../../../terraform-aws-ecs`) instead of the published registry module, because it needs S3 Files/public-image support that isn't in a tagged release yet. Cloning only the samples repository is not enough for `tofu init` to resolve it — you need a sibling checkout of `terraform-aws-ecs` next to `samples/`.
-
-**Deploy:**
-
-```bash
-git clone https://github.com/stdapi-ai/samples.git
-git clone https://github.com/JGoutin/terraform-aws-ecs.git
-cd samples/getting_started_docling/terraform
-tofu init
-tofu apply
-```
-
-### :material-vector-polyline: Embeddings
-
-Point your framework's OpenAI-compatible embedder at `/v1` with an embeddings-capable model.
-
-!!! example "Haystack"
-    ```python
-    from haystack.components.embedders import OpenAIDocumentEmbedder, OpenAITextEmbedder
-    from haystack.utils import Secret
-
-    document_embedder = OpenAIDocumentEmbedder(
-        api_key=Secret.from_env_var("STDAPI_API_KEY"),
-        model="amazon.titan-embed-text-v2:0",
-        api_base_url="https://YOUR_STDAPI_URL/v1",
-    )
-    text_embedder = OpenAITextEmbedder(
-        api_key=Secret.from_env_var("STDAPI_API_KEY"),
-        model="amazon.titan-embed-text-v2:0",
-        api_base_url="https://YOUR_STDAPI_URL/v1",
-    )
-    ```
-
-    Embed your corpus with `OpenAIDocumentEmbedder` and each incoming query with `OpenAITextEmbedder`, using the same model for both so the vectors share a space. See [Embeddings API](api_openai_embeddings.md) for supported models.
-
-!!! tip "A first ingestion does not have to run synchronously"
-    Embedding a whole corpus is exactly the shape the [Batch API](api_openai_batches.md) is for: write one `/v1/embeddings` request per passage into a JSONL file, submit it, and collect the vectors when it finishes — at the Amazon Bedrock batch price rather than the synchronous one. Queries stay on the synchronous route, where latency matters.
-
-### :material-sort-variant: Reranking
-
-Point your framework's Cohere-compatible reranker at `/cohere`, not the full rerank path—the Cohere client appends the operation itself.
-
-!!! example "Haystack"
-    ```python
-    from haystack_integrations.components.rankers.cohere import CohereRanker
-    from haystack.utils import Secret
-
-    ranker = CohereRanker(
-        api_key=Secret.from_env_var("STDAPI_API_KEY"),
-        model="cohere.rerank-v3-5:0",
-        api_base_url="https://YOUR_STDAPI_URL/cohere",
-        top_k=3,
-    )
-    ```
-
-    Requires the `cohere-haystack` integration package alongside `haystack-ai`. Give the ranker the retriever's full candidate set—every retrieved document, not just the top few—so it has something to reorder rather than merely confirm. See [Cohere Rerank API](api_cohere_rerank.md) for supported models.
-
-!!! tip "Regional availability"
-    Amazon Bedrock serves reranking from a subset of regions only. Keep at least one of them in [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions); stdapi.ai fails over to it automatically.
-
-### :material-chat: Generation
-
-Point your framework's OpenAI-compatible chat generator at `/v1`, answering from the reranked context.
-
-!!! example "Haystack"
-    ```python
-    from haystack.components.generators.chat import OpenAIChatGenerator
-    from haystack.utils import Secret
-
-    generator = OpenAIChatGenerator(
-        api_key=Secret.from_env_var("STDAPI_API_KEY"),
-        model="anthropic.claude-haiku-4-5-20251001-v1:0",
-        api_base_url="https://YOUR_STDAPI_URL/v1",
-    )
-    ```
-
-    Any text/chat-capable model works here; it never needs to match the embedding or reranking model. See [Chat Completions API](api_openai_chat_completions.md) for supported models.
-
-### :material-toolbox: Other Frameworks
-
-The same two-route pattern—OpenAI-compatible `/v1` for embedding and generation, Cohere-compatible `/cohere` for reranking—applies to any framework built on those SDKs, including LlamaIndex, RAGFlow, and LightRAG. Set the base URL and API key on the framework's OpenAI and Cohere client configuration; the vector store itself (pgvector, Qdrant, or an in-memory store) is unaffected and stores whatever the embedder returns.
-
-Frameworks that drive the Responses API can take the [managed](#managed-retrieval) half instead of a store of their own: given a file and a `file_search` tool, **Agno** uploads it, creates the vector store, waits for the indexing and names the store on the turn — all against the base URL it already chats with.
-
-!!! tip "Want the platform instead of the pipeline?"
-    This page covers wiring stdapi.ai into a pipeline you assemble yourself. If you would rather run a finished product—a web UI, document parsing, knowledge bases, and grounded chat, with no pipeline code to write—see the [RAGFlow Integration](use_cases_ragflow.md) guide, which deploys RAGFlow with all three stages already bound to Amazon Bedrock.
-
-!!! warning "n8n cannot rerank through stdapi.ai"
-    n8n's Cohere Reranker node has no base URL field—see [n8n Integration: Known Limitations](use_cases_n8n.md#known-limitations) for a workaround.
-
----
-
-## :material-gauge: Operating This Integration
-
-### What It Costs to Run
+### :material-gauge: What It Costs to Run
 
 | Charge | Driver |
 | --- | --- |
@@ -331,7 +321,7 @@ Frameworks that drive the Responses API can take the [managed](#managed-retrieva
 
 Read a model's price before you send anything to it with [`GET /model_pricing`](api_model_pricing.md). Setting [`COST_TRACKING=true`](operations_cost_management.md#cost-tracking-real-time-aws-pricing) additionally puts a per-request cost on each usage entry — estimated from published AWS prices, not read back from your invoice — though the vector bucket's own storage and request charges never appear in it; read those from AWS Cost Explorer instead.
 
-### What to Watch
+### :material-eye-outline: What to Watch
 
 The gateway logs one `request` event per call and, for managed indexing, a separate `background` event named `vector_store_indexing` correlated to it by `id` — group on that field to see how long a file's indexing actually took after the attach call returned. The dead-letter queue behind [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url) is the signal that a document failed to index: a file still failing after its queue's redrive policy exhausts its deliveries lands there instead of being silently dropped, so a non-empty dead-letter queue means a document needs attention. Turning on [`CLOUDWATCH_METRICS`](operations_logging_monitoring.md#cloudwatch-metrics-emf) republishes the same billed quantities as EMF metrics in the `stdapi` namespace, dimensioned by `Model`.
 
@@ -344,8 +334,6 @@ fields @timestamp, event, execution_time_ms, id
 
 Watch the dead-letter queue depth alongside this query — a job that never appears here again after being sent once, with the primary queue's `ApproximateNumberOfMessagesVisible` back at zero, finished; one that keeps reappearing is heading for the dead-letter queue instead.
 
----
-
 ## :material-arrow-right: Next Steps
 
 <div class="grid cards" markdown>
@@ -357,3 +345,4 @@ Watch the dead-letter queue depth alongside this query — a job that never appe
 - :material-api: [**API Overview**](api_overview.md) — Explore supported endpoints
 
 </div>
+</content>

@@ -6,7 +6,7 @@ keywords: AI coding assistant AWS, Cline AWS Bedrock, OpenCode AWS Bedrock, Code
 
 # :material-code-braces: AI Coding Assistants Integration
 
-Connect your favorite AI coding assistants to Amazon Bedrock models through stdapi.ai. Get intelligent code completions, chat assistance, and codebase understanding with powerful AWS models like Claude, Kimi thinking, and Qwen3 Coder Next—no vendor lock-in required.
+Connect your favorite AI coding assistants to Amazon Bedrock models through stdapi.ai—three client-side changes: the base URL, the API key, and — where the name differs from what the assistant already sends — the model name, now picked from every provider in the catalogue rather than one vendor's list. Get intelligent code completions, chat assistance, and codebase understanding with powerful AWS models like Claude, Kimi thinking, and Qwen3 Coder Next—no vendor lock-in required.
 
 ## :material-information-outline: About AI Coding Assistants
 
@@ -51,84 +51,25 @@ flowchart LR
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
-## :material-sitemap: Architecture
+## :material-connection: Connect Your Own Instance
 
-There is no per-developer infrastructure in this integration: every IDE and terminal assistant on the team points at the same shared gateway deployment, the public-facing topology built by the [Terraform samples](https://github.com/stdapi-ai/samples/tree/main/getting_started_production) for a stdapi.ai endpoint reachable from outside the VPC.
+Point any coding assistant—CLI, IDE plugin, or terminal tool—at your stdapi.ai gateway, wherever it runs. Nothing below requires the AWS sample in [Part 2](#deploy-the-gateway-on-aws).
 
-```mermaid
-%%{init: {'flowchart': {'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 40, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
-flowchart TB
-  dev["<img src='../styles/logo_vscode.svg' style='height:40px;width:auto;vertical-align:middle;' /> Developer workstations<br/>IDE / terminal + coding assistant"]
-
-  waf["<img src='../styles/logo_amazon_waf.svg' style='height:40px;width:auto;vertical-align:middle;' /> AWS WAF (optional)<br/>rate limit · anonymous-IP block"]
-
-  subgraph public["Your VPC · public subnets"]
-    alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:40px;width:auto;vertical-align:middle;' /> Application Load Balancer<br/>HTTPS · ACM certificate<br/>custom domain via Route 53"]
-  end
-
-  subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
-    gateway["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai gateway<br/>ECS Fargate · stateless"]
-    egress["<img src='../styles/logo_amazon_vpc.svg' style='height:40px;width:auto;vertical-align:middle;' /> NAT gateways · one per AZ<br/>+ free S3 gateway endpoint"]
-  end
-
-  subgraph regional["AWS service endpoints · your account, the regions you configure"]
-    bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
-    s3["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3<br/>SSE-KMS"]
-    cw["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon CloudWatch<br/>logs · metrics · alarms"]
-    bedrock ~~~ s3
-  end
-
-  dev -->|"HTTPS · TLS 1.2+<br/>API key or Cognito token"| alb
-  waf -.->|"optional · alb_waf_enabled"| alb
-  alb -->|"HTTP · private subnet"| gateway
-  gateway -->|"S3 gateway endpoint<br/>always provisioned"| s3
-  gateway --> egress
-  egress -->|"HTTPS · SigV4"| bedrock
-  egress --> cw
-```
-
-The Application Load Balancer, optionally fronted by AWS WAF, is the only address any developer's machine ever reaches — everything past it lives in private app subnets with no inbound route from the internet. Source code sent for a completion or a chat turn crosses the ALB, reaches the gateway task over the private network, and leaves again over SigV4-signed HTTPS straight to Amazon Bedrock; the gateway container is stateless and keeps no request body or completion on disk once the response is sent.
-
-### What Each AWS Service Does Here
-
-| AWS service | Role in this integration | Where it is configured |
-| --- | --- | --- |
-| **Elastic Load Balancing** | The single public entry point for every developer's IDE or terminal; terminates TLS | `alb_enabled`, `alb_public` |
-| **AWS WAF** | Optional edge protection in front of the ALB — rate limiting and anonymous-IP blocking | `alb_waf_enabled`, `alb_waf_rate_limit`, `alb_waf_block_anonymous_ips` |
-| **AWS Certificate Manager / Route 53** | Issues and DNS-validates the TLS certificate for your own domain, and publishes the record that resolves to it | `alb_domain_name` |
-| **Amazon ECS on AWS Fargate** | Runs the stdapi.ai gateway container in private app subnets, with at least one task per Availability Zone | `autoscaling_min_capacity` |
-| **Amazon Bedrock** | Serves chat completions, tool calling and reasoning for every model the team's assistants call | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
-| **Amazon S3** | Holds the gateway's temporary multimodal objects, KMS-encrypted, reached through the always-provisioned S3 gateway endpoint | `aws_s3_bucket_create` |
-| **AWS KMS** | Customer-managed keys encrypting the S3 bucket(s) | Terraform module |
-| **Amazon CloudWatch** | Container logs, gateway request logs, and optional EMF usage metrics | [Logging & monitoring](operations_logging_monitoring.md) |
-| **AWS IAM** | Least-privilege task role restricted to the model and AI-service actions the gateway actually invokes | [IAM permissions](operations_iam_permissions.md) |
-
-### Security Measures in This Flow
-
-- **Authentication** — see [One Key for the Team, or One Identity per Developer](#one-key-for-the-team-or-one-identity-per-developer) above for the choice between a shared API key and a per-developer credential.
-- **Encryption in transit** — HTTPS from every workstation to the ALB, whose listener supports TLS 1.2 and 1.3; a private-subnet hop from the ALB to the gateway task; SigV4-signed HTTPS from the gateway to Amazon Bedrock.
-- **Encryption at rest** — SSE-KMS on the S3 bucket(s), with automatic key rotation.
-- **Least privilege** — the gateway's task role carries only the model and AI-service actions it calls, and its security group accepts inbound traffic only from the ALB's security group, on the container port.
-- **Content policy** — an optional [Bedrock guardrail](operations_configuration.md#bedrock-guardrails) applies to every route a coding assistant reaches, chat included, and stays in force unless the deployment explicitly allows a per-request override.
-- **Data handling** — the gateway is stateless and holds request bodies in memory only; CloudWatch receives request metadata, not the source code or the model's replies, unless payload logging is explicitly turned on for debugging.
-
-## :material-check-circle: Prerequisites
+### :material-check-circle: Prerequisites
 
 !!! info "What You'll Need"
-    - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md) or [run locally with Docker](operations_getting_started_local.md)
+    - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md) or [run locally with Docker](operations_getting_started_local.md); see [Part 2](#deploy-the-gateway-on-aws) for a Terraform-deployed gateway
     - ✓ **Your stdapi.ai URL** - e.g., `https://api.example.com` or `http://localhost:8000` for local
     - ✓ **Your API key** - From Terraform output or configuration (optional for local development)
     - ✓ **IDE with AI assistant** - VS Code, JetBrains IDEs, Zed, or your preferred editor with an AI coding extension
 
----
-
-## ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI-Compatible Coding Assistants
+### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI-Compatible Coding Assistants
 
 **Popular Tools:** [Cline](https://github.com/cline/cline) | [OpenCode](https://opencode.ai/) | [Pi Agent](https://github.com/earendil-works/pi) | [OpenAI Codex CLI](https://developers.openai.com/codex) | [Qwen Code](https://github.com/QwenLM/qwen-code) | [Zed](https://zed.dev/) | [JetBrains AI Assistant](https://www.jetbrains.com/ai/)
 
 Most IDE coding assistants use the OpenAI-compatible API. Configure them by pointing to stdapi.ai's `/v1` endpoint.
 
-### :material-cog: Configuration
+#### :material-cog: Configuration
 
 Most AI coding assistants follow a similar configuration pattern. The exact menu location and field names may vary, but the core settings remain consistent.
 
@@ -252,7 +193,7 @@ Most AI coding assistants follow a similar configuration pattern. The exact menu
     - **Manual entry**: Use full Bedrock model ID (e.g., `anthropic.claude-fable-5`)
     - **Multi-model setup**: Use fast, cheap models for secondary tasks (autocomplete, summaries) and powerful models for complex generation
 
-### :material-chat-outline: Chat Completions
+#### :material-chat-outline: Chat Completions
 
 All coding assistants use chat completions for interactive conversations, code generation, and explanations.
 
@@ -267,7 +208,7 @@ All coding assistants use chat completions for interactive conversations, code g
 
     The model must be a text/chat-capable model from the correct family for your Bedrock region.
 
-### :material-tools: Tool Calling Support
+#### :material-tools: Tool Calling Support
 
 stdapi.ai fully supports tool calling (function calling) through the chat completions API, which is essential for autonomous and efficient coding agents.
 
@@ -282,7 +223,7 @@ stdapi.ai fully supports tool calling (function calling) through the chat comple
 
     Most modern autonomous agents like Cline or OpenCode rely heavily on tool calling to perform complex, multi-step coding tasks. stdapi.ai's tool calling support (see [Chat Completions API - Tool Calling](api_openai_chat_completions.md#feature-compatibility)) ensures these agents can work at their full potential with Amazon Bedrock models.
 
-### :material-lightning-bolt: Code Completions
+#### :material-lightning-bolt: Code Completions
 
 Some coding assistants support dedicated code completion endpoints for real-time suggestions as you type.
 
@@ -295,19 +236,17 @@ Some coding assistants support dedicated code completion endpoints for real-time
 
     Not all models or assistants support this mode. Chat-based assistants handle completions through the chat API instead.
 
----
-
-## ![Anthropic](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic-Compatible Coding Assistants
+### ![Anthropic](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic-Compatible Coding Assistants
 
 **Popular Tools:** [Claude Code](https://code.claude.com/docs/en/overview) | [OpenCode](https://opencode.ai/) | [Zed](https://zed.dev/) | [Factory Droid](https://factory.ai/)
 
 Tools that use the Anthropic messages API natively can be connected to stdapi.ai's `/anthropic` endpoint, enabling them to use Claude models via Amazon Bedrock.
 
-### Claude Code
+#### Claude Code
 
 Claude Code is Anthropic's agentic coding tool that runs in the terminal.
 
-#### :material-cog: Configuration
+##### :material-cog: Configuration
 
 Create or edit `~/.claude/settings.json`:
 
@@ -335,7 +274,7 @@ Create or edit `~/.claude/settings.json`:
 !!! tip "Beta Flag Compatibility"
     stdapi.ai automatically filters unsupported `anthropic_beta` flags, so Claude Code works without needing `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`. Bedrock-supported flags (like `Interleaved-thinking-2025-05-14` and `token-efficient-tools-2025-02-19`) are preserved while unsupported ones are silently removed. See [`ANTHROPIC_BETA_FILTER`](operations_configuration.md#anthropic-beta-filter) and [`ANTHROPIC_BETA_ALLOWLIST`](operations_configuration.md#anthropic-beta-allowlist) for details.
 
-#### :material-brain: Effort-Based Reasoning
+##### :material-brain: Effort-Based Reasoning
 
 Claude Code supports [effort levels](https://code.claude.com/docs/en/model-config#adjust-effort-level) that control how much reasoning the model applies — lower effort is faster and cheaper; higher effort provides deeper thinking for complex tasks.
 
@@ -367,13 +306,13 @@ export CLAUDE_CODE_EFFORT_LEVEL=high
 
 During a session, use `/effort low`, `/effort medium`, `/effort high`, or `/effort max` to change levels on the fly.
 
-#### :material-key: Declaring Model Capabilities
+##### :material-key: Declaring Model Capabilities
 
 When you pin a non-Claude Bedrock model ID, Claude Code may not recognize it and will silently disable effort and thinking features. Use `ANTHROPIC_DEFAULT_*_MODEL_SUPPORTED_CAPABILITIES` to declare what the model actually supports:
 
 | Capability value       | Enables                                 |
-|------------------------|-----------------------------------------|
-| `effort`               | Effort levels and the `/effort` command |
+|------------------------|------------------------------------------|
+| `effort`               | Effort levels and the `/effort` command  |
 | `max_effort`           | The `max` effort level (Opus 4.6+ only) |
 | `thinking`             | Extended thinking blocks                |
 | `adaptive_thinking`    | Dynamic token budget allocation         |
@@ -406,7 +345,7 @@ When you pin a non-Claude Bedrock model ID, Claude Code may not recognize it and
 }
 ```
 
-#### :material-robot: Using Non-Claude Models
+##### :material-robot: Using Non-Claude Models
 
 Claude Code is optimized for Claude models and enables reasoning by default. When routing non-Claude models through stdapi.ai, incompatible reasoning parameters are silently ignored — no special configuration is needed to avoid API errors.
 
@@ -439,7 +378,7 @@ Common configuration issues with non-Claude models:
 !!! warning "Don't Switch Models Mid-Conversation"
     Avoid switching between Claude models and non-Claude models (like Nova, Kimi, Qwen) within the same conversation. Claude Code and other tools may cache conversation context in a format specific to the model family, and switching can cause errors or unexpected behavior. Start a new conversation when changing model families.
 
-#### :material-format-list-bulleted: Adding a Model to the Picker
+##### :material-format-list-bulleted: Adding a Model to the Picker
 
 Use `ANTHROPIC_CUSTOM_MODEL_OPTION` to add a single custom entry to the `/model` picker without replacing the built-in aliases. Useful for testing a specific Bedrock model ID alongside the standard Claude tiers:
 
@@ -455,15 +394,13 @@ Use `ANTHROPIC_CUSTOM_MODEL_OPTION` to add a single custom entry to the `/model`
 
 Claude Code skips validation for this model ID, so any Bedrock model ID accepted by stdapi.ai works here.
 
-### Other Anthropic-Compatible Tools
+#### Other Anthropic-Compatible Tools
 
 Any tool using the Anthropic SDK or messages API can be configured the same way—set the `ANTHROPIC_BASE_URL` to `https://YOUR_STDAPI_URL/anthropic` and `ANTHROPIC_API_KEY` (or equivalent) to your stdapi.ai API key.
 
 [pi](https://github.com/earendil-works/pi) also speaks this API: register its provider with `api: "anthropic-messages"` and the `/anthropic` base URL, as shown in [the pi configuration above](#configuration).
 
----
-
-## :material-connection: MCP (Model Context Protocol)
+### :material-connection: MCP (Model Context Protocol)
 
 stdapi.ai can act as an MCP server, exposing its API endpoints as tools that MCP-capable clients call directly using the Model Context Protocol. Enable MCP on your stdapi.ai deployment by setting the appropriate environment variable:
 
@@ -472,7 +409,7 @@ stdapi.ai can act as an MCP server, exposing its API endpoints as tools that MCP
 | Streamable HTTP | `/mcp`   | `ENABLE_MCP_STREAMABLE_HTTP=true` | Recommended               |
 | SSE             | `/sse`   | `ENABLE_MCP_SSE=true`             | Legacy, for older clients |
 
-### :material-cog: Configuration
+#### :material-cog: Configuration
 
 Many MCP clients—including Claude Code and Cline—configure servers via a `mcpServers` JSON block:
 
@@ -497,7 +434,7 @@ Many MCP clients—including Claude Code and Cline—configure servers via a `mc
 !!! tip "SSE Transport (Legacy)"
     For older MCP clients that do not support Streamable HTTP, use `"type": "sse"` with the `/sse` endpoint instead. Requires `ENABLE_MCP_SSE=true` on the server.
 
-### :material-filter: Tool Selection
+#### :material-filter: Tool Selection
 
 By default, all tools are exposed. Restrict the tool set for better performance — LLMs work better with fewer choices, and many providers cap active tools per session.
 
@@ -551,17 +488,13 @@ In all cases, file deletion tools (`openai_files_delete`, `anthropic_files_delet
 
 See [Configuration Reference → MCP](operations_configuration.md#mcp-model-context-protocol) for the full tool list and selection guidance.
 
----
-
-## :material-account-key: One Key for the Team, or One Identity per Developer
+### :material-account-key: One Key for the Team, or One Identity per Developer
 
 An assistant configured with the deployment's API key makes every developer's calls indistinguishable on the AWS bill. A deployment can [authenticate callers with Amazon Cognito user pool tokens](operations_configuration.md#cognito-authentication) instead — alongside the API key or in place of it — so each developer reaches the gateway with a credential of their own. With [per-user cost attribution](operations_cost_management.md#per-user-attribution) enabled, their model calls then run under a short-lived role session of their own, and Cost Explorer and the Cost and Usage Report show what each of them spent, from the invoice rather than an estimate.
 
 The assistant needs no feature for this beyond sending the token it was given: whichever field holds the API key today (`ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, a provider entry) carries the access token instead. Renewal is the thing to plan for — an access token expires where an API key does not — so favour a tool that reads its credential from the environment, or from a helper command, on each run over one that stores a key once in a settings file.
 
----
-
-## :material-docker: Running stdapi.ai Locally
+### :material-docker: Running stdapi.ai Locally
 
 stdapi.ai works well when running locally with Docker, making it ideal for your development environment.
 
@@ -580,11 +513,72 @@ stdapi.ai works well when running locally with Docker, making it ideal for your 
     ANTHROPIC_AUTH_TOKEN: your_stdapi_key
     ```
 
----
+## :material-rocket-launch: Deploy the Gateway on AWS
 
-## :material-gauge: Operating This Integration
+There is no application to deploy here, and no per-developer infrastructure either — every IDE and terminal assistant on the team points at the same shared gateway. The Terraform sample below is one worked example of a credible AWS deployment for that gateway, not the only architecture that works — it is a normal HTTPS service, so any deployment that gets a URL and a credential to every developer's machine works the same way.
 
-### What It Costs to Run
+### :material-sitemap: Architecture
+
+The diagram below is the topology the [`getting_started_production` sample](https://github.com/stdapi-ai/samples/tree/main/getting_started_production) builds, putting a public Application Load Balancer in front of the gateway so it is reachable from outside the VPC.
+
+```mermaid
+%%{init: {'flowchart': {'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 40, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
+flowchart TB
+  dev["<img src='../styles/logo_vscode.svg' style='height:40px;width:auto;vertical-align:middle;' /> Developer workstations<br/>IDE / terminal + coding assistant"]
+
+  waf["<img src='../styles/logo_amazon_waf.svg' style='height:40px;width:auto;vertical-align:middle;' /> AWS WAF (optional)<br/>rate limit · anonymous-IP block"]
+
+  subgraph public["Your VPC · public subnets"]
+    alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:40px;width:auto;vertical-align:middle;' /> Application Load Balancer<br/>HTTPS · ACM certificate<br/>custom domain via Route 53"]
+  end
+
+  subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
+    gateway["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai gateway<br/>ECS Fargate · stateless"]
+    egress["<img src='../styles/logo_amazon_vpc.svg' style='height:40px;width:auto;vertical-align:middle;' /> NAT gateways · one per AZ<br/>+ free S3 gateway endpoint"]
+  end
+
+  subgraph regional["AWS service endpoints · your account, the regions you configure"]
+    bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
+    s3["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3<br/>SSE-KMS"]
+    cw["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon CloudWatch<br/>logs · metrics · alarms"]
+    bedrock ~~~ s3
+  end
+
+  dev -->|"HTTPS · TLS 1.2+<br/>API key or Cognito token"| alb
+  waf -.->|"optional · alb_waf_enabled"| alb
+  alb -->|"HTTP · private subnet"| gateway
+  gateway -->|"S3 gateway endpoint<br/>always provisioned"| s3
+  gateway --> egress
+  egress -->|"HTTPS · SigV4"| bedrock
+  egress --> cw
+```
+
+The Application Load Balancer, optionally fronted by AWS WAF, is the only address any developer's machine ever reaches — everything past it lives in private app subnets with no inbound route from the internet. Source code sent for a completion or a chat turn crosses the ALB, reaches the gateway task over the private network, and leaves again over SigV4-signed HTTPS straight to Amazon Bedrock; the gateway container is stateless and keeps no request body or completion on disk once the response is sent.
+
+#### What Each AWS Service Does Here
+
+| AWS service | Role in this integration | Where it is configured |
+| --- | --- | --- |
+| **Elastic Load Balancing** | The single public entry point for every developer's IDE or terminal; terminates TLS | `alb_enabled`, `alb_public` |
+| **AWS WAF** | Optional edge protection in front of the ALB — rate limiting and anonymous-IP blocking | `alb_waf_enabled`, `alb_waf_rate_limit`, `alb_waf_block_anonymous_ips` |
+| **AWS Certificate Manager / Route 53** | Issues and DNS-validates the TLS certificate for your own domain, and publishes the record that resolves to it | `alb_domain_name` |
+| **Amazon ECS on AWS Fargate** | Runs the stdapi.ai gateway container in private app subnets, with at least one task per Availability Zone | `autoscaling_min_capacity` |
+| **Amazon Bedrock** | Serves chat completions, tool calling and reasoning for every model the team's assistants call | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
+| **Amazon S3** | Holds the gateway's temporary multimodal objects, KMS-encrypted, reached through the always-provisioned S3 gateway endpoint | `aws_s3_bucket_create` |
+| **AWS KMS** | Customer-managed keys encrypting the S3 bucket(s) | Terraform module |
+| **Amazon CloudWatch** | Container logs, gateway request logs, and optional EMF usage metrics | [Logging & monitoring](operations_logging_monitoring.md) |
+| **AWS IAM** | Least-privilege task role restricted to the model and AI-service actions the gateway actually invokes | [IAM permissions](operations_iam_permissions.md) |
+
+#### Security Measures in This Flow
+
+- **Authentication** — see [One Key for the Team, or One Identity per Developer](#one-key-for-the-team-or-one-identity-per-developer) above for the choice between a shared API key and a per-developer credential.
+- **Encryption in transit** — HTTPS from every workstation to the ALB, whose listener supports TLS 1.2 and 1.3; a private-subnet hop from the ALB to the gateway task; SigV4-signed HTTPS from the gateway to Amazon Bedrock.
+- **Encryption at rest** — SSE-KMS on the S3 bucket(s), with automatic key rotation.
+- **Least privilege** — the gateway's task role carries only the model and AI-service actions it calls, and its security group accepts inbound traffic only from the ALB's security group, on the container port.
+- **Content policy** — an optional [Bedrock guardrail](operations_configuration.md#bedrock-guardrails) applies to every route a coding assistant reaches, chat included, and stays in force unless the deployment explicitly allows a per-request override.
+- **Data handling** — the gateway is stateless and holds request bodies in memory only; CloudWatch receives request metadata, not the source code or the model's replies, unless payload logging is explicitly turned on for debugging.
+
+### :material-gauge: What It Costs to Run
 
 | Charge | Driver |
 | --- | --- |
@@ -598,7 +592,7 @@ stdapi.ai works well when running locally with Docker, making it ideal for your 
 
 Coding assistants resend large amounts of repeated context — the system prompt, tool definitions, and often the same files — on every turn, which makes prompt caching the main lever on that variable charge; see the caching notes under [Using Non-Claude Models](#using-non-claude-models) above for when `cache_control` helps and when `DISABLE_PROMPT_CACHING=1` is the right call instead. Read a model's price before you send anything to it with [`GET /model_pricing`](api_model_pricing.md). Setting [`COST_TRACKING=true`](operations_cost_management.md#cost-tracking-real-time-aws-pricing) additionally puts a per-request cost on each usage entry — estimated from published AWS prices, not read back from your invoice.
 
-### What to Watch
+### :material-eye-outline: What to Watch
 
 The gateway writes one structured `request` (or `request_stream` for streamed replies) event per call, carrying the request id, path, status code, `execution_time_ms`, the model that served it, and the AWS-billed token counts — including `cached_tokens` and `cache_write_tokens` from Bedrock prompt caching. Turning on [`CLOUDWATCH_METRICS`](operations_logging_monitoring.md#cloudwatch-metrics-emf) republishes those counts as EMF metrics in the `stdapi` namespace, dimensioned by `Model`. On a shared deployment, the useful first question is which developer and which model are driving the traffic:
 
@@ -611,8 +605,6 @@ fields aws_role_session_name, model_id
 
 `aws_role_session_name` is the identity AWS billed the call under, and it is populated by [per-user cost attribution](operations_cost_management.md#per-user-attribution) — which is an enforced boundary only with `AUTHENTICATION_MODE=cognito`. Under a shared API key the field is absent, and the `request_user_id` an assistant declares is a label rather than a boundary; on that setup, group by `model_id` alone and read the per-team split from Cost Explorer instead.
 
----
-
 ## :material-arrow-right: Next Steps
 
 <div class="grid cards" markdown>
@@ -623,3 +615,4 @@ fields aws_role_session_name, model_id
 - :material-cog: [**Configuration Reference**](operations_configuration.md) — Complete list of environment variables
 
 </div>
+</content>

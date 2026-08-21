@@ -50,9 +50,73 @@ flowchart LR
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
-## :material-sitemap: Architecture
+## :material-connection: Connect Your Own Instance
 
-The diagram below is the topology the [Terraform sample](#terraform-deployment) builds: RAGFlow and the stdapi.ai gateway as separate ECS Fargate services in one VPC, with OpenSearch, Aurora and Valkey as the managed stores behind RAGFlow.
+Point any RAGFlow instance's model providers at stdapi.ai — the deployment underneath doesn't matter to RAGFlow.
+
+### :material-check-circle: Prerequisites
+
+!!! info "What You'll Need"
+    - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md)
+    - ✓ **Your stdapi.ai URL** - e.g., `https://api.example.com`
+    - ✓ **Your API key** - From Terraform output or configuration
+    - ✓ **RAGFlow instance** - Running or ready to deploy (see Deployment section below), on **x86_64** — RAGFlow publishes no arm64 image
+    - ✓ **A reranking region** - Bedrock serves `Rerank` from a subset of regions; keep one in [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) and stdapi.ai fails over to it automatically
+
+---
+
+### :material-cog: Configuration
+
+RAGFlow stores model credentials in its own database, added through **Settings → Model providers** in the web UI. Each entry pairs a *provider* (which decides the HTTP client and the URL layout) with an *instance* (a base URL and an API key). Three entries cover the whole pipeline:
+
+| Stage | RAGFlow provider | Base URL | stdapi.ai route |
+| --- | --- | --- | --- |
+| Chat | `OpenAI-API-Compatible` | `https://YOUR_STDAPI_URL/v1` | [`/v1/chat/completions`](api_openai_chat_completions.md) |
+| Rerank | `OpenAI-API-Compatible` | `https://YOUR_STDAPI_URL/cohere/v2` | [`/cohere/v2/rerank`](api_cohere_rerank.md) |
+| Embedding | `OpenAI-API-Compatible` | `https://YOUR_STDAPI_URL/v1` | [`/v1/embeddings`](api_openai_embeddings.md) |
+
+All three use the same stdapi.ai API key. Reranking needs its own entry because RAGFlow derives the request path from the instance's base URL, and reranking is served on the Cohere-compatible routes rather than the OpenAI ones.
+
+Once the entries exist, set them as the tenant defaults under **Settings → Model providers → System model settings**, and RAGFlow uses them for every knowledge base and assistant.
+
+#### :material-database-search: Document Engine
+
+RAGFlow defaults to a self-hosted Elasticsearch as its document and vector store, which **cannot run on AWS Fargate**: Elasticsearch requires the host sysctl `vm.max_map_count=262144`, and Fargate exposes no way to set it. Setting `DOC_ENGINE=opensearch` and pointing RAGFlow at an **Amazon OpenSearch Service** domain removes that constraint entirely — and replaces a container you would have to operate with a managed service.
+
+!!! example "Configuration"
+    Select the engine with an environment variable, and give it the domain in `service_conf.yaml`:
+
+    ```bash
+    DOC_ENGINE=opensearch
+    ```
+
+    ```yaml
+    os:
+      hosts: 'https://YOUR_DOMAIN_ENDPOINT:443'
+      username: 'YOUR_MASTER_USER'
+      password: 'YOUR_MASTER_USER_PASSWORD'
+    ```
+
+    The scheme and port are literals in RAGFlow's shipped template, so a domain endpoint alone is not enough — the file has to be replaced, which is what the sample below does.
+
+Hybrid BM25 + vector retrieval requires OpenSearch 2.10 or later and the `cluster:admin/search/pipeline/put` privilege. RAGFlow creates the search pipeline itself on start-up and silently falls back to vector-only search if the call is refused, so it is worth confirming in the application log which mode you got.
+
+!!! danger "The OpenSearch backend has no upstream CI coverage"
+    RAGFlow's own GitHub workflows exercise the `elasticsearch` and `infinity` engines only. Nothing upstream tests `opensearch`, so a working combination is a property of a specific RAGFlow version rather than a supported contract. Pin an exact image tag and re-validate before upgrading — the sample below pins `v0.26.4`.
+
+---
+
+### :material-alert-outline: Known Issues
+
+RAGFlow `v0.26.4`'s behavior with the `opensearch` document engine carries a few gaps that are properties of the application, not of any particular deployment: **Agent Memory** is unavailable (RAGFlow only wires a message store for the Elasticsearch and Infinity engines), the Agent **"Code"** component is unavailable (it needs a Docker socket and gVisor that `DOC_ENGINE=opensearch` deployments typically don't have), and **Pagerank and the resume parser** branch on Elasticsearch upstream and do not apply here. See [Known Limitations](https://github.com/stdapi-ai/samples/blob/main/getting_started_ragflow/README.md#known-limitations) in the sample's README for the full list, with the code references that back each one.
+
+## :material-rocket-launch: Deploy the Full Stack on AWS
+
+The sample below is one worked example of a credible AWS deployment, not the only architecture that works. The gateway is a normal HTTP service, and RAGFlow and stdapi.ai can run anywhere you like — your own ECS or EKS cluster, EC2, another cloud, or a laptop.
+
+### :material-sitemap: Architecture
+
+The diagram below is the topology the [Terraform sample](#whats-included) builds: RAGFlow and the stdapi.ai gateway as separate ECS Fargate services in one VPC, with OpenSearch, Aurora and Valkey as the managed stores behind RAGFlow.
 
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 40, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
@@ -94,7 +158,7 @@ flowchart TB
 
 Two things are worth reading off the picture. RAGFlow's documents and their vectors come to rest inside the account: source files land in the shared S3 bucket, and their parsed chunks and embeddings land in the OpenSearch domain — neither is reachable outside the VPC. And the gateway holds neither: it serves the `Embed` and `Rerank` calls RAGFlow sends it and returns the result, with no database of its own to persist anything in.
 
-### What Each AWS Service Does Here
+#### What Each AWS Service Does Here
 
 | AWS service | Role in this integration | Where it is configured |
 | --- | --- | --- |
@@ -111,7 +175,7 @@ Two things are worth reading off the picture. RAGFlow's documents and their vect
 | **AWS IAM** | Separate task roles per service; RAGFlow's (`aws_iam_policy.ragflow`) is scoped to its own S3 prefix and its own KMS key actions — it carries no permission for Amazon Bedrock | `ragflow.tf`, [IAM permissions](operations_iam_permissions.md) |
 | **Amazon CloudWatch** | Container logs for every task through the ECS `awslogs` driver, plus the gateway's structured request events | [Logging & Monitoring](operations_logging_monitoring.md) |
 
-### Security Measures in This Flow
+#### Security Measures in This Flow
 
 - **Authentication** — RAGFlow calls the gateway with a stdapi.ai [API key](operations_authentication_security.md#api-key-authentication) that Terraform generates and injects into the container environment; the ALB's security group restricts inbound traffic to the deploying operator's current IP address.
 - **Encryption in transit** — HTTPS from the browser to the ALB when a custom domain is configured (otherwise plain HTTP), private-VPC HTTP from the ALB to RAGFlow, and HTTPS with SigV4 from the gateway to Amazon Bedrock. The OpenSearch and Valkey hops carry their own caveats, covered in [Security Notes](#security-notes) below rather than repeated here.
@@ -120,59 +184,9 @@ Two things are worth reading off the picture. RAGFlow's documents and their vect
 - **Content policy** — a [Bedrock guardrail](operations_configuration.md#bedrock-guardrails) configured on the gateway applies to chat, embeddings and reranking alike, since all three reach Bedrock through the same deployment.
 - **Data handling** — the gateway is stateless and holds request bodies in memory only for the duration of a call; the documents themselves persist in S3 and OpenSearch, inside the account, and no third party sits between RAGFlow's users and the models it calls.
 
-## :material-check-circle: Prerequisites
-
-!!! info "What You'll Need"
-    - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md)
-    - ✓ **Your stdapi.ai URL** - e.g., `https://api.example.com`
-    - ✓ **Your API key** - From Terraform output or configuration
-    - ✓ **RAGFlow instance** - Running or ready to deploy (see Deployment section below), on **x86_64** — RAGFlow publishes no arm64 image
-    - ✓ **A reranking region** - Bedrock serves `Rerank` from a subset of regions; keep one in [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) and stdapi.ai fails over to it automatically
-
 ---
 
-## :material-cog: Configuration
-
-RAGFlow stores model credentials in its own database, added through **Settings → Model providers** in the web UI. Each entry pairs a *provider* (which decides the HTTP client and the URL layout) with an *instance* (a base URL and an API key). Three entries cover the whole pipeline:
-
-| Stage | RAGFlow provider | Base URL | stdapi.ai route |
-| --- | --- | --- | --- |
-| Chat | `OpenAI-API-Compatible` | `https://YOUR_STDAPI_URL/v1` | [`/v1/chat/completions`](api_openai_chat_completions.md) |
-| Rerank | `OpenAI-API-Compatible` | `https://YOUR_STDAPI_URL/cohere/v2` | [`/cohere/v2/rerank`](api_cohere_rerank.md) |
-| Embedding | `OpenAI-API-Compatible` | `https://YOUR_STDAPI_URL/v1` | [`/v1/embeddings`](api_openai_embeddings.md) |
-
-All three use the same stdapi.ai API key. Reranking needs its own entry because RAGFlow derives the request path from the instance's base URL, and reranking is served on the Cohere-compatible routes rather than the OpenAI ones.
-
-Once the entries exist, set them as the tenant defaults under **Settings → Model providers → System model settings**, and RAGFlow uses them for every knowledge base and assistant.
-
-### :material-database-search: Document Engine
-
-RAGFlow defaults to a self-hosted Elasticsearch as its document and vector store, which **cannot run on AWS Fargate**: Elasticsearch requires the host sysctl `vm.max_map_count=262144`, and Fargate exposes no way to set it. Setting `DOC_ENGINE=opensearch` and pointing RAGFlow at an **Amazon OpenSearch Service** domain removes that constraint entirely — and replaces a container you would have to operate with a managed service.
-
-!!! example "Configuration"
-    Select the engine with an environment variable, and give it the domain in `service_conf.yaml`:
-
-    ```bash
-    DOC_ENGINE=opensearch
-    ```
-
-    ```yaml
-    os:
-      hosts: 'https://YOUR_DOMAIN_ENDPOINT:443'
-      username: 'YOUR_MASTER_USER'
-      password: 'YOUR_MASTER_USER_PASSWORD'
-    ```
-
-    The scheme and port are literals in RAGFlow's shipped template, so a domain endpoint alone is not enough — the file has to be replaced, which is what the sample below does.
-
-Hybrid BM25 + vector retrieval requires OpenSearch 2.10 or later and the `cluster:admin/search/pipeline/put` privilege. RAGFlow creates the search pipeline itself on start-up and silently falls back to vector-only search if the call is refused, so it is worth confirming in the application log which mode you got.
-
-!!! danger "The OpenSearch backend has no upstream CI coverage"
-    RAGFlow's own GitHub workflows exercise the `elasticsearch` and `infinity` engines only. Nothing upstream tests `opensearch`, so a working combination is a property of a specific RAGFlow version rather than a supported contract. Pin an exact image tag and re-validate before upgrading — the sample below pins `v0.26.4`.
-
----
-
-## :material-rocket-launch: Terraform Deployment
+### :material-cube-outline: What's Included
 
 Deploy RAGFlow + stdapi.ai together, with the model providers already configured:
 
@@ -190,14 +204,10 @@ Deploy RAGFlow + stdapi.ai together, with the model providers already configured
 
 Every backing service is a managed AWS one; the only container in the task besides RAGFlow itself is the TLS sidecar and a short-lived bootstrap container.
 
-!!! warning "Local ECS module source"
-    `module "ragflow"` currently points at a local relative path (`../../../terraform-aws-ecs`) instead of the published registry module, because the sample needs S3 Files volume support that isn't in a tagged release yet. Cloning only the samples repository is not enough for `tofu init` to resolve it — you need a sibling checkout of `terraform-aws-ecs` next to `samples/`.
-
 **Deploy:**
 
 ```bash
 git clone https://github.com/stdapi-ai/samples.git
-git clone https://github.com/JGoutin/terraform-aws-ecs.git
 cd samples/getting_started_ragflow/terraform
 tofu init
 tofu apply
@@ -205,29 +215,19 @@ tofu apply
 
 Then read the URL and the generated superuser credentials from the Terraform outputs and sign in. There is no signup screen and no model-provider dialog to work through.
 
-### :material-account-check: Zero-Touch Model Configuration
+#### :material-account-check: Zero-Touch Model Configuration
 
 Out of the box, RAGFlow is not usable until an administrator opens the UI and adds a model provider by hand — a knowledge base cannot even be created without an embedding model bound to the tenant. Since RAGFlow v0.26 those credentials live in the database rather than in `service_conf.yaml`, so there is no configuration file to preseed them from either.
 
-The sample closes that gap with a **non-essential bootstrap container** in the same task. It waits for RAGFlow's health endpoint, logs in as the generated superuser, creates the three provider instances from the table above, binds them as the tenant's chat, embedding, and rerank defaults, and exits. Every step is idempotent, so it re-runs harmlessly on each task start.
+The sample closes that gap with a bootstrap container that logs in as the generated superuser, creates the three provider instances from the table above, and binds them as the tenant's chat, embedding, and rerank defaults before the first login — see [How the Model Provider Gets There](https://github.com/stdapi-ai/samples/blob/main/getting_started_ragflow/README.md#how-the-model-provider-gets-there) in the sample's README for exactly how it's wired. The result is the point of the sample: **the first login lands on a working product**, with a knowledge base ready to accept its first document.
 
-The result is the point of the sample: **the first login lands on a working product**, with a knowledge base ready to accept its first document.
+#### :material-shield-alert-outline: Security Notes
 
-!!! tip "Creating a provider instance calls the model"
-    RAGFlow verifies an API key by invoking the model for real, so the bootstrap container retries until the stdapi.ai gateway answers. A failure there is almost always the gateway still starting, and the container's log prints each step and the resulting tenant defaults.
-
-### :material-shield-alert-outline: Security Notes
-
-The sample encrypts every hop and keeps every secret out of plain environment variables, but two application behaviors are worth knowing before you put real documents in it:
-
-- **RAGFlow does not validate the OpenSearch certificate.** Its OpenSearch client hardcodes `verify_certs=False`, with no configuration switch to change it. The connection is still encrypted and the domain still enforces HTTPS and TLS 1.2, but the certificate chain is not checked. The mitigation is placement: the domain has no public endpoint, lives in private subnets, and its security group admits only the RAGFlow task.
-- **RAGFlow's Redis client cannot speak TLS.** It builds the client with no `ssl` parameter, and ElastiCache only offers AUTH tokens on encrypted clusters. Rather than disabling encryption, the task runs a `socat` sidecar that terminates TLS on loopback: the cluster keeps in-transit encryption and its AUTH token, and the plaintext hop never leaves the task's own network namespace.
+The sample encrypts every hop and keeps every secret out of plain environment variables, but two RAGFlow application behaviors are worth knowing before you put real documents in it: it does not validate the OpenSearch server certificate, and its Redis client cannot speak TLS on its own — reached instead through a `socat` TLS sidecar that terminates encryption on loopback. Both are covered in detail, with the exact mitigations, under [Security](https://github.com/stdapi-ai/samples/blob/main/getting_started_ragflow/README.md#security) in the sample's README.
 
 ---
 
-## :material-gauge: Operating This Integration
-
-### What It Costs to Run
+### :material-gauge: What It Costs to Run
 
 | Charge | Driver |
 | --- | --- |
@@ -239,9 +239,11 @@ The sample encrypts every hop and keeps every secret out of plain environment va
 | ElastiCache Valkey | A standing per-node charge: one `cache.t4g.micro` node, no replicas |
 | Model usage | Amazon Bedrock chat, embedding and rerank calls at AWS rates, billed to your account with no markup |
 
-Read a model's price before sending it anything with [`GET /model_pricing`](api_model_pricing.md). Setting [`COST_TRACKING=true`](operations_cost_management.md#cost-tracking-real-time-aws-pricing) adds a per-request cost estimate to each usage entry — estimated from published AWS prices, not read back from your invoice.
+Read a model's price before sending it anything with [`GET /model_pricing`](api_model_pricing.md). Setting [`COST_TRACKING=true`](operations_cost_management.md#cost-tracking-real-time-aws-pricing) adds a per-request cost estimate to each usage entry — estimated from published AWS prices, not read back from your invoice. See [Sizing and cost](https://github.com/stdapi-ai/samples/blob/main/getting_started_ragflow/README.md#sizing-and-cost) in the sample's README for the knobs that move this bill and actual dollar figures at on-demand prices.
 
-### What to Watch
+---
+
+### :material-eye-outline: What to Watch
 
 Every task's containers write their own logs to CloudWatch through the ECS `awslogs` driver; the gateway additionally writes one structured `request` event per call, carrying the request id, path, status code, `execution_time_ms`, the model that served it, and the token or search-unit counts AWS billed. Turning on [`CLOUDWATCH_METRICS`](operations_logging_monitoring.md#cloudwatch-metrics-emf) republishes those counts as EMF metrics in the `stdapi` namespace, dimensioned by `Model`.
 
@@ -255,18 +257,6 @@ fields model_id, execution_time_ms
 ```
 
 Amazon Bedrock [model invocation logging](operations_compliance.md#amazon-bedrock-invocation-logging) is the AWS-side counterpart — off by default, and the record to enable when you need the prompts, chunks and completions themselves rather than metadata.
-
----
-
-## :material-alert-outline: Known Limitations
-
-These are properties of RAGFlow `v0.26.4` on Fargate with the OpenSearch document engine, not of the gateway:
-
-- **Agent Memory is unavailable.** RAGFlow wires a message store for the Elasticsearch and Infinity engines only; with `DOC_ENGINE=opensearch` it stays unset, so the feature raises when used. Startup and every other feature are unaffected.
-- **The Agent "Code" component is unavailable.** It runs user code through RAGFlow's sandbox executor, which needs a Docker socket and gVisor — neither exists on Fargate.
-- **Pagerank and the resume parser** branch on Elasticsearch upstream and do not apply on the OpenSearch backend.
-
----
 
 ## :material-arrow-right: Next Steps
 

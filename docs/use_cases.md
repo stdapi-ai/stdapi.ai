@@ -6,11 +6,11 @@ keywords: AWS Bedrock integration, Open WebUI AWS, ChatGPT alternative, Claude a
 
 # :material-puzzle: Use Cases
 
-Discover how to integrate stdapi.ai with popular AI applications and tools. stdapi.ai's OpenAI, Anthropic, and Cohere-compatible APIs are already spoken by hundreds of applications and tools, and adopting it takes **two client-side changes**: the API endpoint, and the model name — which you now pick from every provider in the catalogue rather than one vendor's list.
+Discover how to integrate stdapi.ai with popular AI applications and tools. stdapi.ai's OpenAI, Anthropic, and Cohere-compatible APIs are already spoken by hundreds of applications and tools, and adopting it takes **three client-side changes**: the base URL, the API key, and — where the name differs from what the client already sends — the model name, now picked from every provider in the catalogue rather than one vendor's list.
 
 **Why use stdapi.ai for integrations?**
 
-- **Two client-side changes** - Update the API endpoint in your application settings, then name a model this deployment serves
+- **Three client-side changes** - Point your application at the new base URL and API key, and update the model name if the one it already sends isn't in this deployment's catalogue
 - **Access 100+ models** - Claude, OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen, GLM, Nova, Llama, Stability AI, and more
 - **Enterprise data control** - The gateway runs in your own AWS account — no third party sits between your users and your models
 - **Pay-per-use pricing** - Pay Amazon Bedrock rates for actual usage, with no markup and no per-seat fees
