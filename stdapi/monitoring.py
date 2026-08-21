@@ -19,6 +19,7 @@ from stdapi.api_errors import ApiError, denied_feature_unavailable
 from stdapi.api_providers import format_http_error
 from stdapi.aws_bedrock import AWS_ERROR_MAP
 from stdapi.config import SETTINGS, LogLevel
+from stdapi.docs_assets import ASSET_PATHS
 from stdapi.metering import SERVER_FULL_VERSION
 from stdapi.usage import (
     IMAGE_SPEC,
@@ -195,22 +196,20 @@ _EDGE_HEADER_MAX_LENGTH = 256
 #: Strips non-printable-ASCII characters from edge correlation header values.
 _EDGE_HEADER_STRIP_RE = re_compile(r"[^\x20-\x7e]")
 
-#: Paths to ignore in logging
-LOGGING_PATHS_IGNORE: frozenset[str] = frozenset(
-    {
-        "/",
-        "/docs",
-        "/favicon.ico",
-        "/health",
-        "/openapi.json",
-        "/ping",
-        "/redoc",
-        "/.well-known/api-catalog",
-        "/.well-known/mcp/server-card.json",
-        "/.well-known/oauth-protected-resource",
-        "/robots.txt",
-    }
-)
+#: Paths to ignore in logging, including the files a documentation page loads with it
+LOGGING_PATHS_IGNORE: frozenset[str] = ASSET_PATHS | {
+    "/",
+    "/docs",
+    "/favicon.ico",
+    "/health",
+    "/openapi.json",
+    "/ping",
+    "/redoc",
+    "/.well-known/api-catalog",
+    "/.well-known/mcp/server-card.json",
+    "/.well-known/oauth-protected-resource",
+    "/robots.txt",
+}
 
 #: Log levels, least to most severe -- derived from LogLevel so the two can't drift apart.
 _SORTED_LOG_LEVELS: tuple[LogLevel, ...] = get_args(LogLevel)

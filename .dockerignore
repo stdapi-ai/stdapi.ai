@@ -7,3 +7,7 @@
 !LICENSE-AGPL
 !LICENSE-COMMERCIAL
 stdapi/**/__pycache__
+# Fetched inside the build instead, so a stale local copy can never be shipped.
+stdapi/docs_assets/*.css
+stdapi/docs_assets/*.js
+stdapi/docs_assets/licenses

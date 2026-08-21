@@ -68,6 +68,7 @@ import pytest
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from stdapi.aws_bedrock import MIME_TYPES_TO_AUDIO_TYPE, MIME_TYPES_TO_DOCUMENT_TYPE
+from stdapi.docs_assets import ASSETS_PATH, BROWSER_ASSETS
 from stdapi.media import _ffmpeg_args
 from stdapi.models.audio.amazon_polly import (
     _FORMAT,
@@ -194,8 +195,26 @@ _PROBE_EXIT_MARKER = "HEALTHCHECK_EXIT "
 #: Marker the probe script prefixes the request its stub server recorded with.
 _PROBE_REQUEST_MARKER = "PROBE_REQUEST "
 
+#: Documentation pages rendered in the image, and the files each one has to load.
+_DOCUMENTATION_PAGES = {
+    "/docs": ("swagger-ui-bundle.js", "swagger-ui.css"),
+    "/redoc": ("redoc.standalone.js",),
+}
+
+#: Hosts FastAPI's own pages reach, and which no page the image serves may name.
+_THIRD_PARTY_HOSTS = (
+    "cdn.jsdelivr.net",
+    "fonts.googleapis.com",
+    "fastapi.tiangolo.com",
+)
+
 #: Directories holding the licence texts of everything the image redistributes.
-_LICENSE_DIRECTORIES = ("/usr/share/licenses/stdapi.ai", "/usr/share/licenses/ffmpeg")
+_LICENSE_DIRECTORIES = (
+    "/usr/share/licenses/stdapi.ai",
+    "/usr/share/licenses/ffmpeg",
+    "/usr/share/licenses/swagger-ui-dist",
+    "/usr/share/licenses/redoc",
+)
 
 #: Distributions whose METADATA declares licence files, one per wheel layout.
 _LICENSED_DISTRIBUTIONS = ("botocore", "fastapi")
@@ -249,6 +268,61 @@ _FAVICON_PROGRAM = (
     "from importlib.resources import files;"
     "print(len((files('stdapi') / 'favicon.svg').read_bytes()))"
 )
+
+#: In-image program reporting the digest of every documentation asset the build fetched.
+_DOCS_ASSET_PROGRAM = """
+import json
+
+from stdapi.docs_assets import LOCAL_ASSETS, digest
+
+print(json.dumps({n: digest(p.read_bytes()) for n, p in LOCAL_ASSETS.items()}))
+"""
+
+#: In-image program rendering a documentation page through the served application.
+_DOCS_PAGE_PROGRAM = """
+import asyncio
+import json
+import os
+import sys
+
+os.environ["ENABLE_DOCS"] = "true"
+os.environ["ENABLE_REDOC"] = "true"
+
+from stdapi.main import app
+
+
+async def render(path):
+    rendered = {"status": 0, "body": bytearray()}
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        if message["type"] == "http.response.start":
+            rendered["status"] = message["status"]
+        elif message["type"] == "http.response.body":
+            rendered["body"].extend(message.get("body", b""))
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"host", b"localhost")],
+        "client": ("127.0.0.1", 1234),
+        "server": ("localhost", 8000),
+    }
+    await app(scope, receive, send)
+    return {"status": rendered["status"], "body": bytes(rendered["body"]).decode()}
+
+
+print(json.dumps({path: asyncio.run(render(path)) for path in sys.argv[1:]}))
+"""
 
 #: In-image program reporting the module files installed beside the application package.
 _LAYOUT_PROGRAM = """
@@ -1622,6 +1696,52 @@ class TestFinalImageRuntime:
         expected = (files("stdapi") / "favicon.svg").read_bytes()
 
         assert int(_image_python(image, _FAVICON_PROGRAM)) == len(expected)
+
+    def test_the_documentation_assets_ship_in_the_image(self, image: str) -> None:
+        """Every pinned Swagger UI and ReDoc file is present, and is its own digest.
+
+        This is the only check that the build's fetch step ran at all: a source
+        checkout has none of these files, and the pages silently fall back to
+        the publisher there. Reading them also proves the runtime user can, and
+        comparing the digests proves the bytes are the reviewed ones rather than
+        whatever a CDN happened to answer with during the build.
+
+        Ref: https://github.com/stdapi-ai/stdapi.ai/issues/185
+             stdapi/docs_assets/__init__.py
+             Dockerfile
+        """
+        fetched = json.loads(_image_python(image, _DOCS_ASSET_PROGRAM))
+
+        assert fetched == {name: asset.sha256 for name, asset in BROWSER_ASSETS.items()}
+
+    def test_the_documentation_pages_load_nothing_from_a_third_party(
+        self, image: str
+    ) -> None:
+        """Both pages render, in a container with no network, naming no outside host.
+
+        The pages are rendered through the served application itself, with the
+        container cut off from every network: whatever they reference, a browser
+        in an air-gapped deployment has to be able to fetch from the gateway.
+        Anything still pointing at a CDN renders as a blank page there.
+
+        Ref: https://github.com/stdapi-ai/stdapi.ai/issues/185
+             stdapi/routes/core_docs.py
+        """
+        pages = json.loads(
+            _image_python(image, _DOCS_PAGE_PROGRAM, *_DOCUMENTATION_PAGES)
+        )
+
+        for path, names in _DOCUMENTATION_PAGES.items():
+            page = pages[path]
+            assert page["status"] == 200, f"'{path}' answered {page['status']}"
+            for name in names:
+                assert f'"{ASSETS_PATH}/{name}"' in page["body"], (
+                    f"'{path}' does not load '{name}' from the gateway"
+                )
+            for host in _THIRD_PARTY_HOSTS:
+                assert host not in page["body"], (
+                    f"'{path}' still reaches '{host}' in the built image"
+                )
 
     def test_the_distribution_metadata_still_resolves(self, image: str) -> None:
         """Every distribution the runtime queries still reports a version.

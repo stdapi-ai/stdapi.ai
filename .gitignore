@@ -10,6 +10,11 @@ coverage.xml
 tests/output/
 .output.txt
 
+# Documentation page assets, fetched by "python -m stdapi.docs_assets"
+stdapi/docs_assets/*.css
+stdapi/docs_assets/*.js
+stdapi/docs_assets/licenses/
+
 # Build generated files
 build/
 dist/

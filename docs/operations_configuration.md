@@ -3334,6 +3334,9 @@ export ENABLE_REDOC=true
     - Better rendering for complex APIs
     - Export to OpenAPI specification
 
+!!! success "Works with no outbound access"
+    Both pages are served entirely by the gateway: the container image ships Swagger UI and ReDoc itself, pinned to an exact release and verified against a recorded SHA-256 during the build, alongside the icon and the schema. A browser that can reach the gateway renders them, with no request to any CDN, font host or other third party — so they work unchanged in an air-gapped VPC, behind an egress allow-list, or under a strict content security policy.
+
 !!! tip "Static Documentation Available"
     ReDoc API documentation is also available as static documentation at [API Reference](api_reference.md) without requiring this endpoint to be enabled.
 

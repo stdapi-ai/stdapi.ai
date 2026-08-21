@@ -258,7 +258,11 @@ Your commercial license activates automatically upon deployment.
 
     - **Python dependencies** — each package keeps its `LICENSE`/`NOTICE`/`COPYING`/`AUTHORS` files (and its `METADATA` and SBOM) inside its own `.dist-info` directory under `/opt/app`.
     - **FFmpeg** — `/usr/share/licenses/ffmpeg/`, alongside a package entry in the APK inventory so image scanners inventory it like any other installed package.
+    - **Swagger UI** (Apache-2.0) — `/usr/share/licenses/swagger-ui-dist/`, holding its `LICENSE`, its `NOTICE` and the bundled-dependency notice its script carries.
+    - **ReDoc** (MIT) — `/usr/share/licenses/redoc/`, holding its `LICENSE` and the bundled-dependency notice its script carries.
     - **stdapi.ai** — `/usr/share/licenses/stdapi.ai/`, holding `LICENSE-AGPL` on the community image.
+
+    Swagger UI and ReDoc are the two documentation UIs served at `/docs` and `/redoc`. The image ships them itself, pinned to an exact release and verified against a recorded SHA-256 at build time, so those pages render with no outbound request at all.
 
 ??? question "How do I update stdapi.ai?"
 

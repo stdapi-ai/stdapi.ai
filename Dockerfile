@@ -60,6 +60,14 @@ WORKDIR /opt/app
 
 COPY stdapi /opt/app/stdapi
 
+# Fetch what the /docs and /redoc pages load in a browser: Swagger UI and ReDoc,
+# pinned to an exact release and each verified against the SHA-256 recorded in
+# stdapi/docs_assets/__init__.py, plus their upstream licence texts.  Without
+# this the pages load them from a CDN at a floating major tag, which an
+# air-gapped deployment cannot reach at all.  A digest mismatch or an
+# unreachable publisher fails the build.
+RUN python -m stdapi.docs_assets
+
 # Single source of truth for the services the server constructs clients for:
 # botocore/data is pruned to this list and the smoke test below instantiates
 # every entry to catch a miss.  The bidirectional stream clients need no entry:
@@ -106,9 +114,12 @@ RUN apk add --no-cache tzdata libmagic && \
 COPY --from=ffmpeg-builder /ffmpeg-out/bin/ffmpeg /usr/bin/ffmpeg
 COPY --from=builder /opt/app /opt/app
 
-# Licences of what the image redistributes: the served application and ffmpeg.
+# Licences of what the image redistributes: the served application, ffmpeg, and
+# the documentation pages' browser assets (Apache-2.0 requires its notice to
+# travel with the redistribution).
 COPY LICENSE-AGPL /usr/share/licenses/stdapi.ai/LICENSE-AGPL
 COPY --from=ffmpeg-builder /ffmpeg-out/licenses /usr/share/licenses/ffmpeg
+COPY --from=builder /opt/app/stdapi/docs_assets/licenses /usr/share/licenses/
 
 # Register the self-built ffmpeg in the APK inventory so scanners see it.
 COPY --from=ffmpeg-builder /ffmpeg-out/apk-entry /tmp/ffmpeg-apk-entry

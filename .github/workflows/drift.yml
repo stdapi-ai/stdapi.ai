@@ -1,25 +1,40 @@
 ---
-name: Price drift detection
+name: Drift detection
 
 on:
   schedule:
-    # Weekly is the right order of magnitude for vendor price changes; Monday
-    # 06:17 UTC lands early in the work week (a Friday find would sit unread
-    # over the weekend) and off both the hour and the day boundary, where
-    # GitHub warns scheduled-workflow load concentrates and delays can follow.
+    # Weekly is the right order of magnitude for a vendor price change or an
+    # upstream release; Monday 06:17 UTC lands early in the work week (a Friday
+    # find would sit unread over the weekend) and off both the hour and the day
+    # boundary, where GitHub warns scheduled-workflow load concentrates and
+    # delays can follow.
     - cron: "17 6 * * 1"
   workflow_dispatch:
 permissions:
   contents: read
 
 concurrency:
-  group: price-drift
+  group: drift
   cancel-in-progress: false
 
 jobs:
+  # One leg per hardcoded upstream fact this repository carries. Each fails only
+  # on its own finding and reports everything else (see the lane's test module),
+  # and each gets its own tracking issue below: a price change and a stale
+  # library pin are different work for different people.
   detect:
-    name: Compare DEFAULT_MODEL_PRICES against its vendor sources
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - key: pricing
+            name: Compare DEFAULT_MODEL_PRICES against its vendor sources
+            tests: tests/test_pricing_drift.py
+          - key: docs-assets
+            name: Compare the pinned documentation assets against npm
+            tests: tests/test_docs_assets_drift.py
     env:
       FORCE_COLOR: "1"
     steps:
@@ -37,71 +52,119 @@ jobs:
         run: uv sync --frozen --group test
 
       # -m drift scopes the run to the lane's one live test, leaving the same
-      # file's offline parser tests (already covered by the Test workflow) out
-      # of this schedule. The lane fails only on an actual DRIFT: an
-      # unreachable source or a vanished/new rate is reported in the output
-      # captured below but never turns this step red (see
-      # tests/test_pricing_drift.py). A source that cannot be compared at all
-      # makes the test skip, which is not a failure either.
-      - name: Run the price drift detector
+      # file's offline classifier tests (already covered by the Test workflow)
+      # out of this schedule. A source that cannot be read is reported in the
+      # captured output but never turns this step red, and a run that could
+      # compare nothing at all skips, which is not a failure either.
+      # Every matrix value reaches the shell through the environment, never
+      # through an expansion the runner splices into the script itself.
+      - name: Run the detector
+        env:
+          TESTS: ${{ matrix.tests }}
         run: |
           set -o pipefail
-          pytest --drift -m drift tests/test_pricing_drift.py -q | tee drift-report.txt
+          mkdir -p report
+          if pytest --drift -m drift "$TESTS" -q \
+              | tee report/drift-report.txt; then
+            echo pass > report/status.txt
+          else
+            echo fail > report/status.txt
+            exit 1
+          fi
 
       - name: Upload the report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: drift-report
-          path: drift-report.txt
+          name: drift-report-${{ matrix.key }}
+          path: report
           if-no-files-found: error
           retention-days: 14
 
   report:
-    name: Open an issue for a real drift
+    name: Open an issue for ${{ matrix.key }}
     needs: detect
+    # Runs for every detector as soon as any one of them failed; the recorded
+    # status below is what tells them apart, since a matrix job cannot condition
+    # itself on its own leg's result.
     if: failure()
     runs-on: ubuntu-latest
     # Scoped to this job alone: only opening the issue needs write access,
     # nothing else in the workflow reads or writes repository content.
     permissions:
       issues: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - key: pricing
+            label: price-drift
+            description: >-
+              DEFAULT_MODEL_PRICES no longer matches its vendor source
+            title: >-
+              Price drift: DEFAULT_MODEL_PRICES no longer matches its vendor
+              source
+          - key: docs-assets
+            label: docs-asset-drift
+            description: >-
+              The pinned Swagger UI or ReDoc release is no longer what upstream
+              publishes
+            title: >-
+              Asset drift: the documentation pages pin a superseded Swagger UI
+              or ReDoc release
     steps:
       - name: Download the report
         uses: actions/download-artifact@v4
         with:
-          name: drift-report
+          name: drift-report-${{ matrix.key }}
+
+      - name: Read whether this detector is the one that failed
+        id: status
+        run: |
+          if [ "$(cat status.txt)" = fail ]; then
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "failed=false" >> "$GITHUB_OUTPUT"
+          fi
 
       # Idempotent by construction: the label is created once (--force makes a
       # second run a no-op) and then used to find an already-open issue, so a
       # second consecutive failing run comments instead of opening a duplicate.
       - name: Ensure the tracking label exists
+        if: steps.status.outputs.failed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LABEL: ${{ matrix.label }}
+          DESCRIPTION: ${{ matrix.description }}
         run: |
-          gh label create price-drift \
+          gh label create "$LABEL" \
             --repo "$GITHUB_REPOSITORY" \
             --color B60205 \
-            --description "DEFAULT_MODEL_PRICES no longer matches its vendor source" \
+            --description "$DESCRIPTION" \
             --force
 
       - name: Open or update the tracking issue
+        if: steps.status.outputs.failed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          LABEL: ${{ matrix.label }}
+          TITLE: ${{ matrix.title }}
         run: |
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" \
-            --label price-drift --state open --json number --jq '.[0].number')
+            --label "$LABEL" --state open --json number \
+            --jq '.[0].number')
           {
-            echo "Detected by the scheduled price drift workflow: $RUN_URL"
+            echo "Detected by the scheduled drift workflow: $RUN_URL"
             echo
             cat drift-report.txt
           } > issue-body.txt
           if [ -n "$existing" ]; then
-            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file issue-body.txt
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" \
+              --body-file issue-body.txt
           else
             gh issue create --repo "$GITHUB_REPOSITORY" \
-              --title "Price drift: DEFAULT_MODEL_PRICES no longer matches its vendor source" \
-              --label price-drift \
+              --title "$TITLE" \
+              --label "$LABEL" \
               --body-file issue-body.txt
           fi
