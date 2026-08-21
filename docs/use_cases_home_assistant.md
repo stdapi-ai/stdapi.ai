@@ -41,7 +41,7 @@ Home Assistant's Assist voice pipeline speaks [Wyoming](https://github.com/OHF-V
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true}} }%%
 flowchart LR
-  ha["<img src='../styles/logo_home_assistant.svg' style='height:64px;width:auto;vertical-align:middle;' /> Home Assistant<br/>Assist"] -->|Wyoming| proxy["wyoming-openai"]
+  ha["<img src='../styles/logo_home_assistant.svg' style='height:64px;width:auto;vertical-align:middle;' /> Home Assistant<br/>Assist"] -->|Wyoming| proxy["<img src='../styles/logo_wyoming.png' style='height:64px;width:auto;vertical-align:middle;' /> wyoming-openai"]
   proxy -->|OpenAI API| stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
   stdapi --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Transcribe"]
   stdapi --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Polly"]
@@ -146,7 +146,7 @@ flowchart TB
 
   subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
     ha["<img src='../styles/logo_home_assistant.svg' style='height:40px;width:auto;vertical-align:middle;' /> Home Assistant<br/>ECS Fargate task"]
-    wyoming["wyoming-openai<br/>sidecar in the same task"]
+    wyoming["<img src='../styles/logo_wyoming.png' style='height:40px;width:auto;vertical-align:middle;' /> wyoming-openai<br/>sidecar in the same task"]
     efs["<img src='../styles/logo_amazon_efs.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon EFS<br/>recorder DB · .storage · configuration.yaml<br/>encrypted · one task only"]
     stdapi["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
     egress["<img src='../styles/logo_amazon_vpc.svg' style='height:40px;width:auto;vertical-align:middle;' /> NAT gateways<br/>one per Availability Zone"]

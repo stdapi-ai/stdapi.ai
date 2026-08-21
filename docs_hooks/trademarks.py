@@ -171,10 +171,10 @@ _REGISTRY: tuple[_Entry, ...] = (
         assets=("hermes_agent",),
     ),
     _Entry(
-        label="Home Assistant",
-        marks=("Home Assistant",),
+        label="Home Assistant, Wyoming",
+        marks=("Home Assistant", "Wyoming"),
         owner="the Open Home Foundation",
-        pattern=r"\bHome Assistant\b",
+        pattern=r"\bHome Assistant\b|\bWyoming\b",
         assets=("home_assistant",),
     ),
     _Entry(
