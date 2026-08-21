@@ -1215,14 +1215,29 @@ def live_server(use_official_api: bool, server_url: str | None) -> Iterator[str 
 
 
 @pytest.fixture(scope="session")
-def async_openai_client(live_server: str | None, api_key: str) -> AsyncOpenAI:
+def async_openai_client(
+    live_server: str | None, server_url: str | None, api_key: str
+) -> AsyncOpenAI:
     """Async OpenAI SDK client bound to a socket-reachable target.
 
     The WebSocket routes need this rather than ``openai_client``, whose in-process
     transport cannot upgrade a connection.
+
+    ``api_key`` is generated per session for the in-process app and means nothing
+    to a deployed gateway, which has its own. Against one, the key is left to the
+    SDK to read from ``OPENAI_API_KEY`` exactly as ``openai_client`` does --
+    passing it here instead overrides that variable and every WebSocket test
+    fails the handshake with ``invalid_api_key``, in the one lane that is the
+    only place these routes run at all.
     """
     if live_server is None:
         return AsyncOpenAI(max_retries=5)
+    if server_url:
+        return AsyncOpenAI(
+            base_url=f"{live_server}/v1",
+            max_retries=0,
+            organization=_OPENAI_ORGANIZATION,
+        )
     return AsyncOpenAI(
         base_url=f"{live_server}/v1",
         api_key=api_key,
