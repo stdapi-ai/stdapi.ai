@@ -10,15 +10,6 @@ hide:
 
 stdapi.ai is an **AI gateway purpose-built for AWS**. It brings full OpenAI, Anthropic, and Cohere API compatibility to Amazon Bedrock and AWS AI services — so the tools, SDKs, and applications your team already uses connect on two client-side changes: the base URL, and the model name.
 
-<div class="grid cards" markdown>
-
-- :material-api: **Two client-side changes, 100+ models** — Drop in as an OpenAI, Anthropic, or Cohere replacement
-- :material-aws: **No third party between your users and your models** — You run the gateway; there is no vendor endpoint in the request path
-- :material-shield-check: **Runs on AWS services in scope** for ISO, SOC, HIPAA, GDPR and FedRAMP
-- :material-rocket-launch: **Two Terraform commands** — Terraform module on AWS Marketplace, 14-day free trial
-
-</div>
-
 ---
 
 ## :material-sitemap: How It Works
@@ -43,98 +34,33 @@ flowchart LR
   stdapi --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:48px;width:auto;vertical-align:middle;' /> Amazon Polly"]
   stdapi --> s3["<img src='../styles/logo_amazon_s3.svg' style='height:48px;width:auto;vertical-align:middle;' /> Amazon S3"]
 ```
-!!! note "Latency overhead"
-    The gateway adds about a millisecond of processing to a typical chat request, and only a few milliseconds to the largest ones. End-to-end latency is dominated by Bedrock model inference time. Streaming responses are passed through immediately with no intermediate buffering.
-
----
-
-## :material-scale-balance: Why stdapi.ai?
-
-<div class="grid cards" markdown>
-
-- :material-puzzle: **Complete API surface**
-  <br>Chat completions are where most gateways stop. stdapi.ai reaches further, bringing the complete OpenAI, Anthropic, and Cohere surface to AWS: chat completions, the Responses API, server-side conversations, embeddings, vector stores and file search, batch inference, image generation and editing, video generation, text-to-speech, live speech-to-speech, speech-to-text, translation, content moderation, reranking, and file storage — all through standard API calls, with no AWS-specific code in your application.
-
-- :material-shield-lock: **Your data, your account**
-  <br>The gateway runs on infrastructure you own, so no third party sits between your users and your models. Amazon Bedrock never retains or trains on your prompts. The software supply chain is hardened end-to-end — distributed as a validated container image with no public package registry exposure.
-
-- :material-chart-multiple: **Quota headroom across regions**
-  <br>Bedrock quotas are per region, so every region you enable adds its own — and eligible failures retry in another enabled region.
-
-- :material-star-four-points: **Bedrock-native capabilities, zero custom code**
-  <br>Prompt caching, extended thinking, guardrails, service tiers, cross-region inference profiles, batch inference, system tools (Nova web grounding, code interpreter), SSML for speech synthesis — exposed through standard OpenAI and Anthropic APIs.
-
-</div>
-
 ---
 
 ## :material-api: API Compatibility
 
-Your existing applications, SDKs, and tools connect on two client-side changes: the base URL, and the model name. No plugins, no custom integration code.
+### 80+ endpoints, all three protocols, every one on an AWS service
 
-### Supported Endpoints
+Not a chat proxy with a few extras: the OpenAI, Anthropic and Cohere surfaces are served in full, each endpoint backed by an AWS service running in your account.
 
-**OpenAI-Compatible:**
+| What your application calls it for                                                      | AWS service behind it                                            |
+|-----------------------------------------------------------------------------------------|------------------------------------------------------------------|
+| Chat completions, Responses, Messages, legacy completions, token counting                 | Amazon Bedrock Converse API · Bedrock Mantle                     |
+| [Server-side conversations](api_openai_conversations.md) and stored responses             | Amazon Bedrock Sessions · Bedrock Mantle                         |
+| [Embeddings](api_cohere_embed.md) and [reranking](api_cohere_rerank.md)                   | Amazon Bedrock embedding and rerank models                       |
+| [Vector stores and file search](api_openai_vector_stores.md)                              | Amazon S3 Vectors · Amazon Bedrock Knowledge Bases               |
+| [Batch inference](api_openai_batches.md)                                                  | Amazon Bedrock batch inference                                   |
+| Image generation, editing and variations                                                  | Amazon Bedrock image models                                      |
+| [Video generation](api_openai_videos.md)                                                  | Amazon Bedrock video models                                      |
+| Text-to-speech                                                                            | Amazon Polly                                                     |
+| Transcription and speech translation                                                      | Amazon Transcribe · Amazon Translate · Amazon Nova Sonic         |
+| [Live speech-to-speech](api_openai_realtime.md)                                           | Amazon Bedrock                                                   |
+| [Content moderation](api_openai_moderations.md)                                           | Amazon Bedrock Guardrails · Amazon Comprehend                    |
+| Files and multipart uploads                                                               | Amazon S3                                                        |
+| [Model discovery](api_search_models.md) and [pricing](api_model_pricing.md)                | Amazon Bedrock · AWS Price List                                  |
 
-| Endpoint                                       | Capability                                                              | AWS Backend                               |
-|------------------------------------------------|-------------------------------------------------------------------------|-------------------------------------------|
-| `/v1/chat/completions`                         | Conversational AI, tool calling, multi-modal                            | Amazon Bedrock Converse API · Bedrock Mantle |
-| `/v1/completions`                              | Simple prompt-to-text                                                   | Amazon Bedrock Converse API · Bedrock Mantle |
-| `/v1/responses`                                | Conversational AI with tool calling, [file search](api_openai_responses.md#file-search), streaming, and server-side storage | Amazon Bedrock Converse API · Bedrock Mantle |
-| `/v1/responses/input_tokens`                   | Count input tokens without generating a response                        | Amazon Bedrock CountTokens API               |
-| `/v1/responses/compact`                        | Compact a conversation into a reusable summary item                     | Amazon Bedrock Converse API                  |
-| `/v1/responses/{id}`                           | Retrieve, continue (`previous_response_id`), or delete stored responses | Amazon Bedrock Sessions · Bedrock Mantle     |
-| `/v1/chat/completions/{id}`                    | Retrieve, list, update, or delete stored chat completions               | Amazon Bedrock Sessions                      |
-| [`/v1/conversations`](api_openai_conversations.md) | Server-side multi-turn state: conversation items, metadata, pagination | Amazon Bedrock Sessions                   |
-| `/v1/embeddings`                               | Vector embeddings for search & RAG                                      | Amazon Bedrock Embedding Models              |
-| [`/v1/moderations`](api_openai_moderations.md) | Content safety classification                                           | Amazon Bedrock Guardrails, Amazon Comprehend |
-| `/v1/images/generations`                       | Text-to-image generation                                                | Amazon Bedrock Image Models                  |
-| `/v1/images/edits`                             | Image editing, inpainting & transformations                             | Amazon Bedrock Image Models                  |
-| `/v1/images/variations`                        | Image variations                                                        | Amazon Bedrock Image Models                  |
-| [`/v1/videos`](api_openai_videos.md)           | Asynchronous text/image-to-video generation                             | Amazon Bedrock Video Models                  |
-| `/v1/audio/speech`                             | Text-to-speech with SSML support                                        | Amazon Polly                              |
-| `/v1/audio/transcriptions`                     | Speech-to-text with speaker diarization                                 | Amazon Transcribe, Amazon Nova Sonic      |
-| `/v1/audio/translations`                       | Speech-to-English translation                                           | Amazon Transcribe + Amazon Translate, Amazon Nova Sonic |
-| [`/v1/realtime`](api_openai_realtime.md)       | Live, bidirectional speech-to-speech over WebSocket                     | Amazon Bedrock                               |
-| `/v1/realtime/client_secrets`                  | Mint a short-lived, browser-safe client secret for a realtime session   | Amazon Bedrock                               |
-| `/v1/models`                                   | Model discovery & listing                                               | Amazon Bedrock                               |
-| `/v1/files`                                    | File upload, listing, metadata, download, deletion                      | Amazon S3                                 |
-| `/v1/uploads`                                  | Multipart upload sessions for large files                               | Amazon S3                                 |
-| [`/v1/vector_stores`](api_openai_vector_stores.md) | Managed semantic search over your own files, or over [a knowledge base you already run](api_openai_vector_stores.md#knowledge-base-stores) | Amazon S3 Vectors, Amazon Bedrock embeddings and Knowledge Bases |
-| [`/v1/batches`](api_openai_batches.md)         | Asynchronous bulk chat or embedding requests at the discounted batch price | Amazon Bedrock batch inference               |
+Anthropic and Cohere routes live under `/anthropic` and `/cohere`, so all three protocols are served side by side without colliding on `/v1`; both prefixes can be changed to a path your clients already send ([Anthropic](operations_configuration.md#anthropic-routes-prefix), [Cohere](operations_configuration.md#cohere-routes-prefix)).
 
-**Anthropic-Compatible:**
-
-| Endpoint                    | Capability                                         | AWS Backend                               |
-|-----------------------------|----------------------------------------------------|-------------------------------------------|
-| `/v1/messages`              | Conversational AI, tool calling, multi-modal       | Amazon Bedrock Converse API · Bedrock Mantle |
-| `/v1/messages/count_tokens` | Count tokens without sending a message             | Amazon Bedrock CountTokens API               |
-| `/v1/models`                | Model discovery & listing                          | Amazon Bedrock                               |
-| `/v1/models/{model_id}`     | Model details                                      | Amazon Bedrock                               |
-| `/v1/files`                 | File upload, listing, metadata, download, deletion | Amazon S3                                 |
-| [`/v1/messages/batches`](api_anthropic_batches.md) | Asynchronous bulk messages at the discounted batch price | Amazon Bedrock batch inference   |
-
-!!! note "Route prefix"
-    Anthropic-compatible routes are prefixed with `/anthropic` by default (e.g., `/anthropic/v1/messages`). The prefix is configurable via `ANTHROPIC_ROUTES_PREFIX`.
-
-**Cohere-Compatible:**
-
-| Endpoint     | Capability                                   | AWS Backend                  |
-|--------------|----------------------------------------------|------------------------------|
-| [`/v2/rerank`](api_cohere_rerank.md) | Document reranking by relevance to a query   | Amazon Bedrock Rerank API       |
-| [`/v1/rerank`](api_cohere_rerank.md#cohere-v1-rerank-api-legacy) | Legacy v1 document reranking                 | Amazon Bedrock Rerank API       |
-| [`/v2/embed`](api_cohere_embed.md)  | Vector embeddings for search & RAG           | Amazon Bedrock Embedding Models |
-| [`/v1/embed`](api_cohere_embed.md#cohere-v1-embed-api-legacy)  | Legacy v1 vector embeddings for search & RAG | Amazon Bedrock Embedding Models |
-
-!!! note "Route prefix"
-    Cohere-compatible routes are prefixed with `/cohere` by default (e.g., `/cohere/v2/rerank`). The prefix is configurable via `COHERE_ROUTES_PREFIX`.
-
-**stdapi.ai Native:**
-
-| Endpoint                     | Capability                                                                | AWS Backend                          |
-|------------------------------|---------------------------------------------------------------------------|--------------------------------------|
-| `/search_models`             | Search models by capability: modality, route, MCP tool, region, streaming, batch support | Internal                             |
-| [`/model_pricing`](api_model_pricing.md) | Exact AWS unit prices per model: tokens, tiers, cache TTLs, routing, specs | AWS Price List                       |
+[:octicons-arrow-right-24: Every endpoint, with its parameters](api_overview.md)
 
 ### Parameter Coverage
 
@@ -198,11 +124,10 @@ Access every model available on Amazon Bedrock through a single, consistent API 
 
 ### Model Management
 
-- **Automatic model discovery** — Scans configured regions at startup; no manual model list to maintain
-- **Model aliases** — Map custom names to Bedrock model IDs; Claude and OpenAI names resolve automatically
-- **Configured aliases** — An alias can also carry a [service tier, a guardrail, metadata and model parameters](operations_configuration.md#model-aliases-configuration), so one model is published under several names with different policies
+- **Automatic model discovery** — Configured regions are scanned at startup, so there is no model list to maintain by hand and nothing to keep in step with Bedrock's catalogue
+- **Aliases** — A model is published under whichever names you choose, with Claude and OpenAI names resolving on their own; an alias can carry [its own service tier, guardrail, metadata and parameters](operations_configuration.md#model-aliases-configuration), so one model serves several policies under several names
 - **Deprecated model failover** — Requests to retired models transparently redirect to their replacements
-- **Legacy model filtering** — Optionally hide deprecated models from the models list
+- **Retired models kept out of the way** — Models AWS has deprecated do not appear in the list your users pick from, so nobody builds on a model that is about to be withdrawn — and a workload that still depends on one can [keep it listed](operations_configuration.md#bedrock-legacy)
 - **Capability discovery** — The [catalogue](api_search_models.md) advertises what each model can actually do — modality, route, streaming, speech to speech, transcription and translation, the search surfaces, and Batch API support — filterable over HTTP and through the same tool an agent reads before it calls anything
 
 ---
@@ -211,58 +136,35 @@ Access every model available on Amazon Bedrock through a single, consistent API 
 
 ### :material-chat: Text & Conversational AI
 
-- All message roles: system, developer, user, assistant, tool
-- Multi-turn conversations with full history
-- [Server-side conversations](api_openai_conversations.md) — a thread is kept server-side and continued by id instead of resending the history, with its items listed and managed, and a response attached to it through the Responses API `conversation` parameter
-- Tool / function calling with parallel execution
-- Structured JSON output (JSON object and JSON schema modes)
-- Streaming via Server-Sent Events with real-time token delivery
-- Reasoning content blocks (`thinking`, `reasoning_content`) for supported models
-- Web search results as context (`search_result` content blocks)
+- All message roles — system, developer, user, assistant, tool — with multi-turn history, parallel tool calling, and structured JSON output in both object and schema modes
+- [Server-side conversations](api_openai_conversations.md) — a thread is kept server-side and continued by id instead of resending the history, its items listed and managed, and a response attached to it through the Responses API `conversation` parameter; a long thread can be [compacted](api_openai_responses.md#conversation-compaction) into a reusable summary item rather than replayed in full
+- Token counting before a call, so a prompt can be sized against a model's window without paying to generate
+- Streaming over Server-Sent Events with tokens delivered as they arrive; reasoning content blocks (`thinking`, `reasoning_content`) on the models that produce them, and web search results as context (`search_result` blocks)
 - Image, document, audio and video attachments on multimodal models — see [Attachment Size](#attachment-size) for how large ones are carried
 
 ### :material-image: Images
 
-**Generation** — Text-to-image with:
-
-- Multiple output formats: PNG, JPEG, WebP with adjustable quality and compression
-- Flexible sizes and aspect ratios
-- Streaming generation with partial image previews
-- Style presets (model-specific)
-
-**Editing** — Inpainting and transformation:
-
-- Mask-based inpainting (define edit regions precisely)
-- Image-to-image transformation (style, structure conditioning)
-- Background removal, object search & replace, object recolor
-- Creative and conservative upscaling
-
-**Variations** — Create alternative versions of existing images
-
-**JSON body format** — Reference images via Files API `file_id` or URL instead of re-uploading
+- **Generation** — Text-to-image in PNG, JPEG or WebP, at the size, aspect ratio, quality and compression asked for, with model-specific style presets and partial previews streamed while it renders
+- **Editing** — Mask-based inpainting over a region you define, image-to-image transformation on style or structure, background removal, object search-and-replace, object recolor, and creative or conservative upscaling
+- **Variations** — Alternative versions of an existing image
+- **Nothing re-uploaded** — An input image is referenced by Files API `file_id` or by URL rather than sent again with every call
 
 ### :material-microphone: Audio
 
 **Text-to-Speech (Amazon Polly):**
 
-- 60+ voices across 30+ languages
-- Multiple engine tiers: Standard, Neural, Long-Form, Generative
-- SSML support — control pronunciation, emphasis, pauses, prosody
-- Output formats: MP3, PCM, Opus, AAC, FLAC, OGG Vorbis
-- Speed control (0.2× to 2.0×)
-- Automatic language detection via Amazon Comprehend
+- 60+ voices across 30+ languages, on the Standard, Neural, Long-Form and Generative engines, with the language detected automatically by Amazon Comprehend
+- SSML control over pronunciation, emphasis, pauses and prosody, at 0.2× to 2.0× speed
+- MP3, PCM, Opus, AAC, FLAC and OGG Vorbis output
 - Long input — up to 100,000 characters per request, 24× OpenAI's limit ([20,000 with a generative voice, which speaks it as the audio is delivered; an S3 bucket beyond that](api_openai_audio_speech.md#long-input))
 
 **Speech-to-Text (Amazon Transcribe):**
 
-- 100+ languages
-- Speaker diarization — automatic speaker separation and labeling
-- Word-level and segment-level timestamps
-- Subtitle export: SRT and VTT formats
+- 100+ languages, detected automatically when the request does not name one
+- Speaker diarization, word-level and segment-level timestamps, and SRT/VTT subtitle export
 - Vocabulary customization and custom language models — including per-language sets, so a request identifying between several languages applies the right resources to each one
-- Automatic language detection
-- [Streamed results](api_openai_audio_transcriptions.md#streaming) — `stream=true` returns each phrase as it is recognized instead of after the whole recording, whenever the request names the language to expect. It stages nothing, so a deployment with no storage bucket configured serves it
-- [Output encryption with a key you name](operations_configuration.md#aws-transcribe-output-encryption-key-arn) — the job's identifiers travel as the KMS encryption context, so a key policy can be scoped to this workload rather than to the whole bucket
+- [Streamed results](api_openai_audio_transcriptions.md#streaming) — each phrase comes back as it is recognized instead of after the whole recording, whenever the request names the language to expect. Nothing is staged on the way, so it needs no storage bucket at all
+- [Transcripts encrypted with your own KMS key](operations_configuration.md#aws-transcribe-output-encryption-key-arn) — the job's identifiers travel as the KMS encryption context, so a key policy can be scoped to this workload rather than to the whole bucket
 
 **Speech Translation** — Transcribe audio and translate to English in a single request. The supported language pairs are read once at startup, so a pair that cannot be served is refused as a request problem instead of failing after the audio has been transcribed
 
@@ -277,27 +179,22 @@ Access every model available on Amazon Bedrock through a single, consistent API 
 
 - Bidirectional audio over a single WebSocket, OpenAI Realtime API compatible — `session.update`, `input_audio_buffer.append`/`commit`, `response.create` and their server-side events
 - Ephemeral, browser-safe client secrets — signed and stateless, so any instance behind a load balancer verifies one minted by any other
-- 24 kHz PCM by default, or G.711 (`audio/pcmu`, `audio/pcma`) at 8 kHz for telephony interoperability
-- Server-side voice activity detection by default, or manual turn control, with barge-in on the item the caller spoke over
-- A configured guardrail is applied per turn; a written item sent with `conversation.item.create` is checked before it reaches the model, while a spoken answer is checked once complete — see [guardrail coverage](api_openai_realtime.md#guardrail-coverage)
-- A session lasts at most 8 minutes and calls no tools: `tools`, `tool_choice` and the turn-detection tuning fields are accepted and ignored. The [feature compatibility table](api_openai_realtime.md#feature-compatibility) lists every event the session does not emit
-- WebSocket is the only transport served — upstream's `POST /v1/realtime/calls` (WebRTC, SIP) is not available. Browsers connect to the same WebSocket with an ephemeral secret; for WebRTC or telephony, LiveKit Agents and Pipecat terminate the media themselves and reach this API on the base URL and model name — see [Transports](api_openai_realtime.md#transports)
+- 24 kHz PCM, or G.711 (`audio/pcmu`, `audio/pcma`) at 8 kHz for telephony; server-side voice activity detection or manual turn control, with barge-in on the item the caller spoke over
+- A configured guardrail is applied per turn — a written item is checked before it reaches the model, a spoken answer once it is complete ([guardrail coverage](api_openai_realtime.md#guardrail-coverage))
+- **Its limits, up front** — a session lasts at most 8 minutes and calls no tools (`tools`, `tool_choice` and the turn-detection tuning fields are accepted and ignored), and WebSocket is the only transport: upstream's `POST /v1/realtime/calls` (WebRTC, SIP) is not served. Browsers connect to the same WebSocket with an ephemeral secret, and for WebRTC or telephony LiveKit Agents and Pipecat terminate the media themselves and reach this API on the base URL and model name — see [transports](api_openai_realtime.md#transports) and the [feature compatibility table](api_openai_realtime.md#feature-compatibility)
 
 ### :material-file-document: Documents & Files
 
-- PDF input with optional citation support (precise source references in responses)
-- Plain text and structured content blocks as context
-- File storage via the Files API — upload once, reference by ID across multiple requests
-- Multipart uploads for large files via the Uploads API (S3 native multipart), with a declared checksum verified against the assembled file — a mismatch is refused before the file exists
-- File expiry with configurable TTL (1 hour – 30 days)
-- Large PDFs and other documents are carried by reference where the model supports it — see [Attachment Size](#attachment-size)
+- PDF input with optional citations — the answer points back at the exact source passage
+- Plain text and structured content blocks as context; a large PDF or document is carried by reference on a model that reads it from storage — see [Attachment Size](#attachment-size)
+- Upload once and reference by ID across requests, with expiry anywhere from 1 hour to 30 days
+- Multipart uploads for large files, backed by S3's own multipart, with the checksum the client declared verified against the assembled file — a mismatch is refused before the file exists
 
 ### :material-video: Video
 
-- Text-to-video and image-to-video generation (Amazon Nova Reel, Luma Ray 2) via the OpenAI Videos API
-- Asynchronous job workflow — create, list, poll, download, delete — with stateless job tracking
-- Video input in chat completions for supported models (e.g., Amazon Nova) — long clips follow the [Attachment Size](#attachment-size) policy
-- S3 URLs as direct video input for multimodal embeddings
+- Text-to-video and image-to-video generation (Amazon Nova Reel, Luma Ray 2) through the OpenAI Videos API, as an asynchronous job — create, list, poll, download, delete — tracked without a database of its own
+- Video as chat input on the models that read it (Amazon Nova among them); long clips follow the [Attachment Size](#attachment-size) policy
+- `s3://` URLs as direct video input for multimodal embeddings
 
 ### :material-paperclip: Attachment Size
 
@@ -309,15 +206,11 @@ On chat completions, messages and responses served by Amazon Bedrock (Bedrock Ma
 | Above it, model reads that kind of attachment from storage | Staged in your S3 bucket and referenced; the request is answered normally |
 | Above it, model reads it inline only     | Refused with `413`, stating the size that model accepts                          |
 
-Two limits apply: the largest single attachment, and the largest total of attachments in one request. Models differ in both, and in which kinds they read from storage, so the same attachment can be inline for one model and staged for another; nothing in the request changes either way. The Amazon Nova families read images, documents and video from storage and TwelveLabs Pegasus reads video, while every other model reads its attachments from inside the request.
+Two limits apply — the largest single attachment, and the largest total in one request — and models differ in both, and in which kinds they read from storage: the Amazon Nova families read images, documents and video that way and TwelveLabs Pegasus reads video, while the rest read attachments from inside the request. So the same file can be inline for one model and staged for another, with nothing in the request changing either way.
 
-An attachment already in S3 — an `s3://` URI, or a Files API ID sent in a `file_id` field — skips the measurement on a model that reads that kind from storage: it is referenced as it stands, whatever its size. Every other attachment is measured, including one referenced through the `file-id:` URI scheme: above the model's inline capacity it is staged and referenced when the model reads that kind from storage, and refused with `413` when the model reads that kind inline only.
+An attachment already in S3 — an `s3://` URI, or a Files API ID in a `file_id` field — skips measurement entirely on a model that reads that kind from storage, and is referenced as it stands whatever its size. Everything else is measured against the size the source declares (the payload length, or an HTTPS URL's `Content-Length`; a URL declaring none is sent inline whatever its real size), under a [ceiling](operations_configuration.md#max-input-file-size) that applies inline or staged.
 
-Staging needs an [S3 bucket for the region serving the request](operations_configuration.md#aws-s3-regional-buckets), and a request whose attachment was staged is served by that one region rather than failing over to another — exactly like a request that names an `s3://` input itself.
-
-Measurement uses the size the source declares — the payload length, or the `Content-Length` of an HTTPS URL; a URL that declares none is sent inline whatever its real size. [`MAX_INPUT_FILE_SIZE`](operations_configuration.md#max-input-file-size) caps every attachment read or staged for a model, inline or not.
-
-Bedrock Mantle-served models, image editing and variations, transcription and the embeddings routes keep their own input handling and are not covered by this policy.
+Staging uses [a bucket in the region serving the request](operations_configuration.md#aws-s3-regional-buckets), which then answers it rather than failing over to another — exactly like a request naming an `s3://` input itself. Bedrock Mantle-served models, image editing and variations, transcription and the embeddings routes keep their own input handling and are not covered by this policy.
 
 ### :material-vector-polyline: Embeddings
 
@@ -334,12 +227,20 @@ There is no embedding pipeline, chunker or vector database to run alongside the 
 - **Search by meaning, with the passages** — Each result carries its file, its text, its score and the attributes stored with it
 - **Attribute filters** — Tag a file with up to 16 attributes and restrict a search to the ones that match
 - **File batches and expiration policies** — Attach many files under a single identifier; expire a store after a number of days without a search
-- **Held in your own account** — Documents, passages and vectors live in an [Amazon S3 vector bucket](operations_configuration.md#aws-s3-vectors-bucket) you create
-- **[Durable indexing](api_openai_vector_stores.md#durable-indexing)** — Optionally hand indexing to an Amazon SQS queue you create, so a file keeps being indexed and finishes even when the server that accepted it is replaced. Off by default; with no queue configured, indexing runs exactly where it ran before
+- **Held in your own account** — Documents, passages and vectors live in an [Amazon S3 vector bucket](operations_configuration.md#aws-s3-vectors-bucket) in your account, not in an index somebody else runs
+- **[Indexing survives the server that started it](api_openai_vector_stores.md#durable-indexing)** — Carried by an Amazon SQS queue and finished by whichever server is still running, so a deployment, a scale-in or a Spot interruption leaves an attached file `completed` rather than `failed`, and nobody is asked to upload it again. The queue carries identifiers, never file content; indexing is at-least-once and never bills twice, because completed work is not redone; and a file still failing when its deliveries run out is kept in a dead-letter queue rather than dropped
 
-#### Your existing knowledge base, as a vector store
+#### Point it at the knowledge base you already run
 
-A store can equally be [an Amazon Bedrock knowledge base you already run](api_openai_vector_stores.md#knowledge-base-stores), addressed through the same endpoints — searched, its documents attached, listed and read, and the ones this API attached deleted. Both knowledge base generations are served. The store is **allowlisted per knowledge base** and is never created or deleted here: a request naming a knowledge base that is not on the allowlist answers exactly as one that does not exist, so the setting cannot be probed for what a deployment holds. Anything that would reshape the knowledge base — renaming, expiry, chunking strategy, rewriting a file's attributes — is refused, naming why.
+A store can equally be [an Amazon Bedrock knowledge base you already run](api_openai_vector_stores.md#knowledge-base-stores), addressed through the same endpoints — searched, its documents attached, listed and read, and the ones this API attached deleted. **Whichever way you built it over documents, it is served:**
+
+| Your Amazon Bedrock knowledge base                                                                          | Served here                                                                                          |
+|-------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------|
+| **Bedrock managed** — Amazon Bedrock owns the datastore, the embedding model, the parser and the reranker     | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">served</span> Yes                     |
+| **Customer-managed** — you provisioned the vector store and chose the embedding model                         | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">served</span> Yes                     |
+| Built over a **structured data store**, or over an **Amazon Kendra** index                                    | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not served</span> No — it answers with database rows or search hits rather than passages |
+
+It stays yours. The store is **allowlisted per knowledge base** and is never created or deleted here: a request naming one that is not on the allowlist answers exactly as one that does not exist, so the allowlist cannot be probed for what a deployment holds. Anything that would reshape the knowledge base — renaming, expiry, chunking strategy, rewriting a file's attributes — is refused, naming why.
 
 #### The model does the retrieving
 
@@ -351,19 +252,18 @@ A store can equally be [an Amazon Bedrock knowledge base you already run](api_op
 
 ### Multi-Region Routing & Quota Headroom
 
-Configure multiple AWS regions to draw on more than one Bedrock quota and to keep serving when one region is degraded:
+A deployment spanning several AWS regions draws on more than one Bedrock quota and keeps serving when one region is degraded. How traffic spreads across them is yours to [choose](operations_configuration.md#bedrock-region-routing), and the choice trades throughput against prompt-cache hit rate:
 
-| Routing Strategy    | Description                             | Prompt Caching |
-|---------------------|-----------------------------------------|----------------|
-| `ordered` (default) | Try regions in order; skip blocked ones | ✓ Compatible   |
-| `lowest_latency`    | Prefer fastest measured region          | ✓ Compatible   |
-| `round_robin`       | Distribute evenly across regions        | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not compatible</span> |
-| `disabled`          | Single region per model                 | ✓ Compatible   |
+| Routing across regions | What it gets you                                        | Prompt Caching |
+|------------------------|---------------------------------------------------------|----------------|
+| In order               | Deterministic placement; blocked regions skipped         | ✓ Compatible   |
+| Lowest latency         | The fastest measured region for each call                | ✓ Compatible   |
+| Round robin            | Load spread evenly, at the cost of cache locality        | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not compatible</span> |
+| Single region          | Every call to a model served from one place              | ✓ Compatible   |
 
 - **Each region adds its own quota** — Bedrock tokens-per-minute and requests-per-minute limits are per region, so a multi-region deployment draws on several independent quotas rather than one. How much of that headroom a workload reaches depends on the quota granted per model in each region and on the routing strategy
-- **Regional retry** — eligible failures switch region transparently on throttle, quota, or service errors. Streaming responses can only retry before the stream opens, and asynchronous jobs stay in the region that accepted them
-- **Exponential backoff** — doubles per consecutive error, capped at 1 hour
-- **Region health tracking** — per-model health status with configurable recovery delays
+- **Eligible failures retry elsewhere** — A throttle, quota or service error switches region transparently, under an exponential backoff that doubles per consecutive error and caps at an hour. Streaming responses can only retry before the stream opens, and asynchronous jobs stay in the region that accepted them
+- **Health is tracked per model** — A region that failed for one model is set aside for that model alone and brought back once it recovers, rather than taking the whole catalogue down with it
 
 [:octicons-arrow-right-24: Resilience & Failover](operations_resilience.md)
 
@@ -371,15 +271,14 @@ Configure multiple AWS regions to draw on more than one Bedrock quota and to kee
 
 | Feature                            | Description                                                                                                            |
 |------------------------------------|------------------------------------------------------------------------------------------------------------------------|
-| **Prompt Caching**                 | Cache system prompts, messages, and tools; granular section control; configurable TTL; cache metrics in every response |
+| **Prompt Caching**                 | Cache system prompts, messages and tools, section by section, with the cache TTL you want and cache metrics in every response — a long system prompt is billed at the cache-read rate on later turns instead of in full |
 | **Reasoning Modes**                | Extended thinking with effort levels (minimal → xhigh) for Claude and Nova; `thinking_budget` for token-level control  |
-| **Bedrock Guardrails**             | Content filtering and safety policies with configurable trace levels                                                   |
-| **Service Tiers**                  | Priority, default, flex, and reserved tiers per request with customizable defaults per model                           |
-| **Application Inference Profiles** | Custom profiles for workload isolation and cost attribution                                                            |
+| **Bedrock Guardrails**             | Content filtering and safety policies applied to traffic from every client, with the trace detail you choose           |
+| **Service Tiers**                  | Priority, default, flex and reserved tiers, per request or as a default per model — a latency-sensitive workload and a cheap bulk one share the deployment |
+| **Application Inference Profiles** | Isolate a workload and see it separately on the AWS bill                                                               |
 | **Prompt Routers**                 | Bedrock prompt routers for intelligent model selection                                                                 |
-| **Cross-Region Inference**         | Geography-pinned (US, EU, APAC) and global profiles with data residency control                                        |
-| **Web Search / Grounding**         | Built-in web search with source citations, billed per query: Amazon Nova grounding (Chat Completions, Responses, and Messages) and OpenAI GPT built-in search (`/v1/responses` only). Whether a search may reach the open internet is an [operator setting](operations_configuration.md#bedrock-external-web-access), and a request asking for something the deployment forbids is refused rather than silently rewritten |
-| **Batch Inference**                | Asynchronous request sets at the discounted batch price on both dialects — see [Asynchronous Batch Inference](#asynchronous-batch-inference) |
+| **Cross-Region Inference**         | Geography-pinned (US, EU, APAC) and global profiles, so inference stays inside the geography your data residency requires |
+| **Web Search / Grounding**         | Built-in web search with source citations, billed per query: Amazon Nova grounding (Chat Completions, Responses, and Messages) and OpenAI GPT built-in search (`/v1/responses` only). A deployment can [keep grounding off the open internet](operations_configuration.md#bedrock-external-web-access) entirely, and a request asking for what it forbids is refused rather than silently rewritten — so an answer never comes back as though it had honoured a restriction it ignored |
 | **System Tools (Nova)**            | Code interpreter                                                                                                        |
 | **Claude Server Tools**            | Bash, text editor, computer use (Claude 3.5+), memory (Claude 3.7+)                                                    |
 | **Extra Model Parameters**         | Any model-specific parameter forwarded via `extra_body` or top-level field                                             |
@@ -394,58 +293,35 @@ Large request sets run asynchronously at Amazon Bedrock's discounted batch price
 - **Discoverable before you submit** — The [model catalogue](api_search_models.md) reports whether a model can be used with the Batch API and lets a caller filter on it, over HTTP and through the same tool an agent reads. It is best effort: a model without the flag is still submitted, since the absence may only mean no price is published for it yet, and the backend's own refusal remains the last word
 - **Result files expire on your terms** — `output_expires_after` expires the result files instead of keeping them until deleted
 
-!!! note "Needs a service role and a bucket"
-    Batch inference answers `503` until you create the IAM service role Amazon Bedrock assumes to read the requests and write the results ([`AWS_BEDROCK_BATCH_ROLE_ARN`](operations_configuration.md#aws-bedrock-batch-role-arn)) and the bucket it reads and writes — see [Batch inference IAM](operations_iam_permissions.md#batch-inference).
+!!! note "Batches run under a role of yours"
+    Amazon Bedrock reads the requests and writes the results itself, under an IAM role and a bucket of yours — the batch runs on your account's terms, not the gateway's. Until that role exists the batch routes answer `503` and say why, instead of accepting work nothing can run — see [Batch inference IAM](operations_iam_permissions.md#batch-inference).
 
 ### :material-layers-triple: Bedrock Mantle Models { #bedrock-mantle-models }
 
 stdapi.ai serves models from the **Amazon Bedrock Mantle** endpoint alongside the classic Bedrock catalog: OpenAI GPT, xAI Grok, Google Gemma, Qwen, GLM, DeepSeek, MiniMax, Kimi, Nemotron, and more — the available catalog varies per region and grows over time.
 
 - **Every text API, every model** — All four text APIs (chat completions, responses, messages, legacy completions) work with every Mantle model: served natively (passthrough) when the model supports the API upstream, converted automatically otherwise, with an automatic fallback order (responses → chat completions → messages) learned at runtime
-- **Predictable routing** — Models available on both the classic endpoint and Mantle are served by the classic endpoint by default; Mantle serves Mantle-only models. Dual-homed models can be routed through Mantle globally or per request (`x-stdapi-service: bedrock-mantle` header) to tap Mantle's separate throughput quotas
+- **Predictable routing** — A model available on both endpoints is served by the classic one, so nothing silently changes backend under an existing workload; Mantle serves the models only it has. A dual-homed model can be [pointed at Mantle](operations_configuration.md#bedrock-mantle-preferred-models) for the whole deployment or for a single request, tapping Mantle's separate throughput quotas on top of your Bedrock ones
 - **Region failover** — Region failover and quota backoff work exactly like classic Bedrock region routing; requests chained via `previous_response_id` are pinned to their origin region
 - **No static secrets** — Mantle access uses the same AWS credential chain as the rest of the server; there is no separate API key to issue, store or rotate
 - **Native stored conversations** — `/v1/responses` with `store`, `previous_response_id`, and `GET`/`DELETE /v1/responses/{id}` use Mantle's native server-side storage: 30-day retention, region-local, project-scoped
 - **Usage & billing** — Token usage (including cached tokens and standard/flex/priority service tiers) is recorded and priced at bedrock-mantle rates, like all other models; built-in web search queries are recorded and priced beside them
 - **Built-in web search** — The OpenAI GPT-5.x family grounds answers in current web content with source citations on `/v1/responses`, inside the AWS boundary by default
 
-Enabled by default; regions, routing preferences, the per-request Mantle routing header, and required IAM permissions are covered in the [Bedrock Mantle configuration](operations_configuration.md#bedrock-mantle-enabled) and [IAM](operations_configuration.md#bedrock-mantle-iam) sections — without the required permissions, Mantle models are simply not listed and a warning is logged at startup.
-
-| Model Family                                    | Native Mantle APIs           |
-|-------------------------------------------------|------------------------------|
-| **OpenAI GPT** (frontier models)                | Responses                    |
-| **Anthropic Claude**                            | Messages                     |
-| **xAI Grok · OpenAI gpt-oss · Google Gemma 4**  | Chat Completions + Responses |
-| **Other open-weight models** (Gemma, Qwen, GLM, Mistral, DeepSeek, MiniMax, Kimi, Nemotron, Palmyra) | Chat Completions             |
+Mantle models appear in the same catalogue as the rest, under the same `/v1/models` call — nothing in a client distinguishes them. A deployment whose IAM policy does not reach Mantle simply does not list them, with a warning at startup rather than a runtime failure your users discover for you.
 
 !!! note "Limitations & conversion details"
     Bedrock Guardrails and cross-region inference profiles do not apply to Mantle-served requests, and the built-in [`web_search` tool](api_openai_responses.md#openai-gpt-web-search) is served on `/v1/responses` only. API-shape conversion preserves the core request semantics (messages, tools, sampling, streaming, usage); parameters with no equivalent in the serving API are dropped or adapted. The exact parameter tables, response-ID specifics, and per-route limitations are on the API pages: [chat completions](api_openai_chat_completions.md#bedrock-mantle), [responses](api_openai_responses.md#model-support), [messages](api_anthropic_messages.md#bedrock-mantle), and [legacy completions](api_openai_completions.md#feature-compatibility).
 
 [:octicons-arrow-right-24: Bedrock Mantle Configuration](operations_configuration.md#bedrock-mantle-enabled)
 
-### AWS AI Services Integration
+### Amazon S3 as the file layer
 
-| Service               | Capability                                                          |
-|-----------------------|---------------------------------------------------------------------|
-| **Amazon Polly**      | 60+ voices, 30+ languages, SSML, multiple engines and audio formats |
-| **Amazon Transcribe** | 100+ languages, speaker diarization, timestamps, SRT/VTT subtitles  |
-| **Amazon Nova Sonic** | Low-cost multilingual transcription and speech-to-English translation |
-| **Amazon Translate**  | Language translation for audio translation workflows                |
-| **Amazon Comprehend** | Automatic language detection for intelligent voice routing          |
+S3 backs the whole API surface, not just file storage, and that buys three things a file API bolted onto a database cannot offer:
 
-### Amazon S3 Integration
-
-S3 is woven into the entire API surface — not just file storage:
-
-- **Vector Stores API** — Documents, passages and vectors held in an S3 vector bucket in your own account — see [Retrieval & Vector Stores](#retrieval-vector-stores)
-- **Files API** — Full CRUD at `/v1/files` with no artificial size limit (up to S3's ~5 TB), optional expiry, S3 Lifecycle backstop; file IDs work across both OpenAI and Anthropic endpoints
-- **Multipart uploads** — `/v1/uploads` backed by S3 native multipart; stream large files without buffering
-- **Direct `s3://` image references** — Use `s3://bucket/key` in chat completions and Anthropic Messages; the gateway reads from S3 via IAM role — no pre-signed URLs
-- **Files API in image operations** — Reference uploaded files by `file_id` in image edits and variations
-- **Multimodal embeddings** — Pass `s3://` URLs directly; oversized base64 payloads auto-uploaded and invoked asynchronously
-- **Large attachments** — An attachment past what a model reads inline is staged in S3 automatically and referenced, wherever the model reads that kind from storage, so a request that would otherwise be refused is answered unchanged
-- **Regional buckets** — One bucket per Bedrock region; S3 region routing is automatic
-- **Transfer Acceleration** — Faster downloads via generated HTTP links
+- **No artificial size ceiling** — Files go up to S3's own limit of roughly 5 TB, uploaded in native multipart parts and streamed rather than buffered; expiry is enforced by the API and backstopped by an S3 Lifecycle rule. One file ID works on both the OpenAI and the Anthropic endpoints
+- **`s3://` is a first-class input** — An object already in your buckets is named directly in chat completions, Messages, embeddings and image operations, read under the gateway's IAM role: no pre-signed URLs, no download-and-re-upload round trip
+- **Region-local by construction** — Anything the gateway stages sits in a bucket in the region serving the request, so payloads do not cross a region on the way to the model; a generated image can be handed back over [S3 Transfer Acceleration](operations_configuration.md#aws-s3-accelerate), downloaded from a CloudFront edge instead of the bucket's region
 
 ---
 
@@ -464,7 +340,7 @@ stdapi.ai supports multiple authentication strategies to fit your architecture:
 | **No authentication**     | Open access                                                                                                        | Private VPC deployments      |
 
 - **Per-caller identity** — [Amazon Cognito user pool tokens](operations_configuration.md#cognito-authentication) are accepted instead of, or alongside, the API key, so each caller reaches the API with their own credential. Tokens are validated in-process against the pool's published keys, with no AWS call on the request path — and the identity the gateway verified is the one [per-user cost attribution](#per-user-cost-attribution) bills against
-- **The posture is asserted, not inferred** — [`AUTHENTICATION_MODE`](operations_configuration.md#authentication-mode) makes the server refuse to start when the selected method is not configured, or when a configured method would be silently ignored
+- **The posture is asserted, not inferred** — [Name the method you intend to run](operations_configuration.md#authentication-mode): the server refuses to start when the method you named is not actually in force, or when one you configured would be silently ignored, so a deployment cannot drift into answering unauthenticated traffic
 - **Agents discover how to authenticate** — An [OAuth 2.0 protected resource metadata document](operations_configuration.md#oauth-discovery), pointed at by every unauthorized response, lets an MCP client find the authorization server and the scope it needs without being configured for this deployment
 
 [:octicons-arrow-right-24: Authentication & Security](operations_authentication_security.md)
@@ -478,21 +354,19 @@ stdapi.ai supports multiple authentication strategies to fit your architecture:
 | **Trusted Hosts**                     | Restrict which hostnames the service responds to                                                                                                    |
 | **CORS Controls**                     | Configurable cross-origin resource sharing policies                                                                                                 |
 | **CSRF Protection**                   | Built-in cross-site request forgery protection                                                                                                      |
-| **Input Validation**                  | Configurable strict mode — rejects malformed or out-of-spec requests at the gateway edge                                                            |
+| **Input Validation**                  | Malformed and out-of-spec requests are rejected at the edge, before they reach an AWS call — with a [strict mode](operations_configuration.md#strict-input-validation) that also refuses unknown fields instead of ignoring them |
 | **Proxy Header Handling**             | Secure forwarded header processing for ALB and CloudFront                                                                                           |
 | **TLS 1.2+ in transit**               | All AWS service calls encrypted; the Terraform module configures ALB with TLS 1.3 and post-quantum hybrid key exchange                              |
+| **A hardened supply chain**           | Shipped as a validated container image built without exposure to a public package registry at run time                                              |
 
-!!! success "Commercial: Hardened Container Image :material-arrow-right: [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)"
-    The commercial image is security-validated by AWS Marketplace and includes: **read-only root filesystem**, **dropped Linux capabilities**, minimal installed packages, and no shell. The Terraform module also configures a **Customer Managed KMS key** (auto-rotation enabled) for all data at rest.
-
-!!! success "Commercial: Security Hub Validated by Default"
-    The Terraform module is built against the **AWS Security Hub Foundational Security Best Practices (FSBP)** standard and passes a large share of applicable controls out of the box — no extra configuration required. Opt-in variables add native **GuardDuty Runtime Monitoring** and **Route 53 Resolver DNS Firewall** (blocks outbound DNS resolution of known-malicious domains) on the module's dedicated VPC.
+!!! success "Commercial: hardened image, Security Hub validated :material-arrow-right: [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)"
+    The commercial image is security-validated by AWS Marketplace: **read-only root filesystem**, **dropped Linux capabilities**, minimal installed packages, no shell. The Terraform module is built against the **AWS Security Hub Foundational Security Best Practices** standard, passes a large share of applicable controls out of the box, and configures a **Customer Managed KMS key** with auto-rotation for all data at rest. Optional variables add native **GuardDuty Runtime Monitoring** and **Route 53 Resolver DNS Firewall** on the module's dedicated VPC.
 
     [:octicons-arrow-right-24: AWS Security Hub, GuardDuty & DNS Firewall Integration](operations_authentication_security.md#aws-security-hub-guardduty-dns-firewall-integration)
 
 ### Compliance & Data Sovereignty
 
-AWS service calls are restricted to the regions you configure. The AWS services used by stdapi.ai (Bedrock, S3, Polly, Transcribe, and more) are in scope for **GDPR**, **ISO 27001/27017/27018**, **SOC 1/2/3**, **HIPAA**, **FedRAMP**, **PCI-DSS**, and **CSA STAR Level 2** — these certifications apply to the AWS services and regions you choose, and are not inherited by stdapi.ai or by your application. The commercial Terraform module adds VPC endpoints (no internet egress), Customer Managed KMS keys, and region-pinned cross-region profiles for strict data residency.
+The gateway runs on infrastructure you own, so no third party sits between your users and your models, and Amazon Bedrock does not store your prompts or use them to train models. AWS service calls are restricted to the regions you configure. The AWS services used by stdapi.ai (Bedrock, S3, Polly, Transcribe, and more) are in scope for **GDPR**, **ISO 27001/27017/27018**, **SOC 1/2/3**, **HIPAA**, **FedRAMP**, **PCI-DSS**, and **CSA STAR Level 2** — these certifications apply to the AWS services and regions you choose, and are not inherited by stdapi.ai or by your application. The commercial Terraform module adds VPC endpoints (no internet egress), Customer Managed KMS keys, and region-pinned cross-region profiles for strict data residency.
 
 [:octicons-arrow-right-24: Data Sovereignty & Compliance](operations_compliance.md)
 
@@ -500,7 +374,7 @@ AWS service calls are restricted to the regions you configure. The AWS services 
 
 ## :material-puzzle: Works with Your Existing Tools
 
-stdapi.ai speaks the APIs hundreds of applications and tools already speak. Adopting it is two client-side changes: the API endpoint, and the model name — which you now pick from every provider in the catalogue rather than one vendor's list. A name the catalogue does not hold returns `404` instead of a lookalike, and [`MODEL_ALIASES`](operations_configuration.md#model-aliases) publishes a served model under whichever name your application already sends.
+stdapi.ai speaks the APIs hundreds of applications and tools already speak. Adopting it is two client-side changes: the API endpoint, and the model name — which you now pick from every provider in the catalogue rather than one vendor's list. A name the catalogue does not hold returns `404` instead of a lookalike, and a served model can be [published under whichever name your application already sends](operations_configuration.md#model-aliases), so an application whose model name is not yours to change keeps working untouched.
 
 <div class="grid cards" markdown>
 
@@ -538,52 +412,19 @@ stdapi.ai speaks the APIs hundreds of applications and tools already speak. Adop
 
 ### Agent Discovery
 
-AI agents can automatically discover the API's capabilities through standardized RFC 8288 Link headers and an API catalog:
+An agent that has only the base URL can work out the rest for itself, through standards rather than a hand-written integration: RFC 8288 `Link` headers on `/` point at the [OpenAPI schema](operations_configuration.md#enable-openapi-json), the documentation and the MCP server card; an RFC 9727 catalog at `/.well-known/api-catalog` lists all of them in one document; and the SEP-1649 MCP server card at `/.well-known/mcp/server-card.json` advertises the transports on offer.
 
-- **Link headers** — Root endpoint (`/`) includes `Link` response headers advertising available resources (`rel="service-desc"`, `rel="service-doc"`) when documentation endpoints are enabled, `rel="mcp-server-card"` when MCP is enabled, and the protected resource metadata when authentication discovery is configured
-- **API catalog** at `/.well-known/api-catalog` — RFC 9727 machine-readable catalog (RFC 9264 Linkset format) listing the OpenAPI schema, documentation, MCP server card, and protected resource metadata
-- **MCP server card** at `/.well-known/mcp/server-card.json` — SEP-1649 server card advertising available MCP transports and capabilities; active when MCP is enabled
-- **Protected resource metadata** at `/.well-known/oauth-protected-resource` — RFC 9728 document naming the authorization servers that issue tokens for this deployment and the scopes those tokens need, so an agent can authenticate itself; its address is also carried by the `WWW-Authenticate` challenge on every `401`. Active once [`OAUTH_RESOURCE_IDENTIFIER`](operations_configuration.md#oauth-resource-identifier) is set — see [Authentication Discovery for Agents](operations_authentication_security.md#authentication-discovery-for-agents)
-
-Set `ENABLE_OPENAPI_JSON=true` to activate schema-based agent discovery — this exposes the machine-readable OpenAPI schema at `/openapi.json` and populates the Link headers and API catalog. `ENABLE_DOCS` and `ENABLE_REDOC` also enable it as a side effect, but those UIs are human-facing and not needed by agents.
+It can also work out how to *authenticate* itself: an RFC 9728 [protected resource metadata document](operations_authentication_security.md#authentication-discovery-for-agents) names the authorization servers issuing tokens for this deployment and the scopes they need, and every `401` carries its address in the `WWW-Authenticate` challenge — so an MCP client reaches a secured deployment it was never configured for.
 
 ### MCP (Model Context Protocol)
 
 stdapi.ai exposes its full API surface as MCP tools, letting AI agents and orchestrators call any endpoint directly through the Model Context Protocol — no HTTP client code required.
 
-- **Streamable HTTP transport** — The recommended method, implementing the latest MCP Streamable HTTP specification at `/mcp`
-- **SSE transport** — Available at `/sse` for backwards compatibility with older MCP clients
-- **All endpoints as tools** — Every API operation (chat, images, audio, files, models) is surfaced as a named MCP tool with generated documentation
-- **Selective exposure** — Include or exclude tools by name to limit scope and reduce agent confusion
-- **Context-optimized tools** — Tool schemas hide parameters MCP clients cannot use (streaming modes, token-level tuning, caller identifiers), and tool results are returned as compact JSON, cutting the tokens each call costs the calling agent
-- **Media-aware results** — Endpoints answering with bytes return an image or audio result the agent can use directly, and fall back to a download reference for anything the protocol cannot carry, such as a generated video
-- **Automatic timeout alignment** — MCP calls respect the global `AI_RESPONSE_TIMEOUT` setting
-
-```bash
-# Enable MCP via HTTP (recommended)
-export ENABLE_MCP_STREAMABLE_HTTP=true
-
-# Restrict to safe, read-oriented tools
-export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
-```
-
-**Example use cases:**
-
-<div class="grid cards" markdown>
-
-- :material-robot: **AI coding assistants**
-  <br>Connect Claude Code, Cline, or OpenCode directly to stdapi.ai via MCP. Agents can generate text, search models, and manage files without any custom integration code.
-
-- :material-flask: **Agentic pipelines**
-  <br>Let orchestration frameworks (LangChain, LlamaIndex, CrewAI) discover and call Bedrock models dynamically. Include `search_models` so agents can find the right model ID, and `openai_chat_completion` for inference — keep the tool surface minimal.
-
-- :material-image-multiple: **Multimodal automation**
-  <br>Give an agent access to `openai_chat_completion`, `openai_image_generation`, and `openai_audio_speech` to build self-contained pipelines that generate text, images, and audio in a single session.
-
-- :material-database-search: **RAG pipelines**
-  <br>Expose `openai_embedding` and file management tools so agents can index documents, compute embeddings, and retrieve context autonomously — all backed by S3 and Bedrock.
-
-</div>
+- **80+ tools, no integration code** — Every API operation (chat, images, audio, embeddings, files, model search) is a named MCP tool with generated documentation, over Streamable HTTP at `/mcp` or SSE at `/sse` for older clients
+- **A tool surface you choose** — [Tools are included or excluded by name](operations_configuration.md#mcp-exclude-tools), so an agent is handed exactly the capabilities it should have and no more — a read-only deployment, or one without file deletion, is a list away
+- **Written for an agent's context window, not a human's** — Schemas hide parameters an MCP client cannot use (streaming modes, token-level tuning, caller identifiers) and results come back as compact JSON, so each call costs the calling agent fewer tokens
+- **Media-aware results** — An endpoint answering with bytes returns an image or audio result the agent can use directly, falling back to a download reference for what the protocol cannot carry, such as a generated video
+- **The same response deadline as HTTP** — An MCP call is bounded by the [deployment's own response timeout](operations_configuration.md#ai-response-timeout) rather than hanging past it
 
 [:octicons-arrow-right-24: MCP Configuration](operations_configuration.md#mcp-model-context-protocol)
 
@@ -591,61 +432,38 @@ export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
 
 ## :material-chart-line: Observability & Operations
 
-### Structured Logging
+### Logging & Tracing
 
-- JSON logs to stdout — natively ingested by CloudWatch Logs
-- Every request logs: method, path, status, model ID, region(s) used, execution time
-- Optional: full request/response payloads, client IP (disabled by default)
-- Configurable log levels (info, warning, error, critical, disabled)
-
-### OpenTelemetry Integration
-
-- Export traces and metrics to AWS X-Ray, Datadog, Jaeger, or any OTLP-compatible backend
-- Configurable sampling rate
-- Root span per request with full correlation IDs
-
-### Token Usage Tracking
-
-- Input, output, reasoning, and cached token counts in every API response
-- Consistent reporting across all endpoints (chat, messages, embeddings, images, audio)
+- **JSON to stdout, ingested by CloudWatch as it stands** — Every request logs its method, path, status, model, the region or regions that served it and how long it took, so a slow model or a region that started failing is one query away
+- **Prompts stay out of your logs unless you ask for them** — Full request and response payloads and the client IP are [available when you are debugging](operations_configuration.md#log-request-params) and are not written otherwise
+- **Traces and metrics into what you already run** — OpenTelemetry export to AWS X-Ray, Datadog, Jaeger or any OTLP backend, one root span per request with correlation IDs, sampled at a rate you set
 
 ### Cost Tracking
 
-- **Usage counts read back from AWS** — Token, character, second, and image counts come from the AWS responses themselves rather than from client-side counting; recorded per request across chat, embeddings, images, audio, and built-in tools
-- **Priced from the published AWS Price List** — Costs computed from AWS's own price list, refreshed automatically; no manual price list to maintain (operator overrides available for gaps)
-- **Priced on the dimensions AWS bills on** — Each call is priced with everything AWS prices differently: serving region, service tier (standard/flex/priority/batch, using the tier that *actually served* the call), prompt-cache TTLs, cross-region and latency-optimized routing, long-context rates, and image resolution/quality
-- **Beyond tokens** — Built-in web searches are counted per query and priced against their own catalog entry, and a search against a knowledge base the backend manages is priced at its published rate per call. What cannot be accounted for is [stated rather than approximated](operations_cost_management.md#vector-stores)
-- **Per-request and aggregate cost** — Request log entries carry cost and currency as exact decimal strings, with a per-request total rollup
-- **Multi-currency aware** — Detects your AWS partition's currency (USD, EUR, CNY) and never sums costs across currencies
-- **Model Pricing API** — Query the loaded catalog through [`GET /model_pricing`](api_model_pricing.md) for cost-aware model selection, also exposed as an MCP tool
-- **Optional CloudWatch cost metrics** — Track spend alongside your other operational metrics via EMF
+- **Usage counts read back from AWS** — Token, character, second and image counts come from the AWS responses themselves rather than from client-side counting; recorded per request across chat, embeddings, images, audio and built-in tools, and reported to the caller in the same `usage` shape on every endpoint — input, output, reasoning and cached tokens included
+- **Priced on the dimensions AWS bills on** — From AWS's own price list, refreshed automatically with no list to maintain by hand: serving region, service tier (standard, flex, priority or batch — the tier that *actually served* the call), prompt-cache TTLs, cross-region and latency-optimized routing, long-context rates, image resolution and quality. Operator overrides cover any gap
+- **Beyond tokens** — Built-in web searches are counted per query against their own catalog entry, and a search against a knowledge base the backend manages at its published rate per call. What cannot be accounted for is [stated rather than approximated](operations_cost_management.md#vector-stores)
+- **Currency-safe figures** — Cost and currency appear in the request log as exact decimal strings with a per-request rollup, in your AWS partition's own currency (USD, EUR, CNY) and never summed across two
+- **Model Pricing API** — The loaded catalog is queryable at [`GET /model_pricing`](api_model_pricing.md), over HTTP or as an MCP tool, for cost-aware model selection; spend can also be published to CloudWatch as EMF metrics
 
-!!! note "Opt-in, and an estimate — not a bill"
-    Cost tracking is disabled by default (it needs the `pricing:GetProducts` IAM permission); enable it with `COST_TRACKING=true`. Costs are a best-effort approximation for visibility and alerting, not a substitute for your AWS invoice — see [Cost Tracking](operations_cost_management.md#cost-tracking-real-time-aws-pricing) for accuracy details and known limitations.
+!!! note "An estimate, not a bill"
+    Costs are estimated from AWS's published prices, not read back from your invoice — a best-effort figure for visibility and alerting. See [Cost Tracking](operations_cost_management.md#cost-tracking-real-time-aws-pricing) for its accuracy and known limitations.
 
 ### Per-User Cost Attribution
 
-- **Each end user on the AWS bill** — Model calls optionally run under a short-lived role session opened for the user behind the request, so AWS reports their spend separately in Cost Explorer and CUR 2.0 — from the invoice, not from an estimate
-- **The identity the gateway verified** — The authenticated caller when authentication is enabled, otherwise the identifier the request declares (`safety_identifier`/`user`, or `metadata.user_id` on the Anthropic Messages API)
-- **A cost allocation dimension, and an access boundary** — The identity travels as a session tag, groupable in Cost Explorer and testable in IAM policies as `aws:PrincipalTag`
-- **Sessions cached and reused** — One session per user, refreshed before it expires, bounded in number; a burst of first requests opens a single session
-- **Fail-closed** — A session that cannot be opened fails the request instead of quietly billing the gateway, and requests identifying no user can be rejected outright
+- **Each end user on the AWS bill** — Model calls run under a short-lived role session opened for the user behind the request, so AWS reports their spend separately in Cost Explorer and CUR 2.0 — from the invoice, not from an estimate
+- **The identity the gateway verified** — The authenticated caller where authentication is enabled, otherwise the identifier the request declares (`safety_identifier`/`user`, or `metadata.user_id` on the Anthropic Messages API). It travels as a session tag: a cost allocation dimension in Cost Explorer, and an access boundary testable in IAM as `aws:PrincipalTag`
+- **Cheap and fail-closed** — One cached session per user, refreshed before it expires and bounded in number, so a burst of first requests opens a single session; a session that cannot be opened fails the request rather than quietly billing the gateway, and requests identifying no user can be rejected outright
 
-!!! note "Off by default, and it needs a role"
-    Enable it with `AWS_BEDROCK_USER_ROLE_ARN`, pointing at a role you create — see [Per-User Attribution](operations_cost_management.md#per-user-attribution). It covers model invocations; the rest of the gateway's AWS usage stays on its own identity.
+!!! note "It covers model invocations"
+    Each user's model calls are attributed; the rest of the gateway's AWS usage stays on its own identity — see [Per-User Attribution](operations_cost_management.md#per-user-attribution) for the role those calls run under.
 
-### Developer Tools
+### Day-to-Day Operation
 
-- **Swagger UI** at `/docs` — test endpoints directly in your browser
-- **ReDoc** at `/redoc` — clean, searchable API reference
-- **OpenAPI schema** at `/openapi.json` — import into Postman, generate client code
-
-### Quality of Life
-
-- **Model list caching** — Fast model listing without repeated AWS API calls
-- **Safety identifier** — `safety_identifier` field in requests as an alias to `user` for abuse tracking and audit trails
-- **Zero-configuration startup** — Automatic region and model detection; warnings on missing config
-- **Graceful shutdown** — A deployment, a scale-in or a Spot interruption waits for the work a request left running behind its answer — temporary file cleanups, vector store indexing, live audio sessions — under a single deadline ([`SHUTDOWN_DRAIN_TIMEOUT`](operations_configuration.md#shutdown-drain-timeout), 10 seconds by default); whatever the deadline still leaves is settled rather than abandoned, and counted in the `stop` log event
+- **An API reference on the deployment itself** — Swagger UI at `/docs` to try an endpoint in a browser, ReDoc at `/redoc` to read it, and the OpenAPI schema at `/openapi.json` to generate a client or import into Postman
+- **Starts from what it finds** — Regions and models are detected at startup and the catalogue is cached, so listing stays fast without re-asking AWS on every call, and missing configuration is reported as a warning rather than stopping the server
+- **Safety identifier** — `safety_identifier` is accepted as an alias for `user`, for abuse tracking and audit trails
+- **Graceful shutdown** — A deployment, a scale-in or a Spot interruption waits for the work a request left running behind its answer — temporary file cleanups, vector store indexing, live audio sessions — under a [single deadline](operations_configuration.md#shutdown-drain-timeout); whatever the deadline still leaves is settled rather than abandoned, and counted in the `stop` log event
 - **Proxy-aware outbound connections** — `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` are honoured by the connections the server makes to AWS and to model endpoints, not by the AWS SDK alone ([proxied deployments](operations_deploy_advanced.md#proxied-deployments))
 - **One answer for a feature the deployment cannot run** — A missing permission or an unconfigured resource answers `503` `feature_unavailable` on every route, with the server log naming the operation, the model and the permission AWS refused, instead of reaching clients as their own key being rejected
 
@@ -657,7 +475,7 @@ A gateway earns its place by adding as little as possible on top of the model ca
 
 - **Parallel where it counts** — Independent work fans out concurrently; a request finishes with its slowest item, not the sum of them
 - **Native code end to end** — JSON encoding and decoding, the AWS wire format, and the HTTP serving stack all run compiled, on an optimized event loop
-- **Every byte touched once** — Requests are parsed and validated once, responses encoded once, payloads moved without redundant copies — no duplicate work between layers or toward AWS
+- **Every byte touched once** — Requests are parsed and validated once, responses encoded once, payloads moved without redundant copies; a streamed response is passed through as it arrives, with no intermediate buffering
 
 Measured on the production serving stack, single worker, over the complete request path:
 
@@ -696,9 +514,7 @@ Typical requests are dominated by the fixed sub-millisecond serving floor; the o
 
 ### Compatibility is proven against the real APIs, not against our own docs
 
-A gateway tested only against itself proves only that it is self-consistent. The suite runs **the same test bodies against the genuine OpenAI, Anthropic and Cohere endpoints**, changing nothing but the URL. A test that passes here and fails there is treated as a compatibility bug in this product — not as an acceptable difference.
-
-That distinction is enforced when a test is written, before the feature exists: the expected behaviour is captured from the vendor's own API first, so the implementation is written to match a contract that was verified, not assumed.
+A gateway tested only against itself proves only that it is self-consistent. The suite runs **the same test bodies against the genuine OpenAI, Anthropic and Cohere endpoints**, changing nothing but the URL, and a test that passes here and fails there is a compatibility bug in this product rather than an acceptable difference. The expected behaviour is captured from the vendor's own API before the feature exists, so the implementation is written against a contract that was verified, not assumed.
 
 ### Real applications, not just API calls
 
@@ -716,9 +532,7 @@ Model documentation describes what a model is supposed to accept. What it actual
 | **Full AWS suite** | Every change to affected areas | All endpoints against live AWS services and models |
 | **Vendor compatibility** | Regularly | Parity against the upstream vendor APIs, URL swapped only |
 | **Real client applications** | Regularly | Third-party AI clients driving the gateway end to end |
-| **Release validation** | **Every release** | The complete suite, twice: locally, then against a deployed release candidate |
-
-No release ships without the full suite passing against a real deployment of the exact build being released.
+| **Release validation** | **Every release** | The complete suite, twice: locally, then against a real deployment of the exact build being released |
 
 ### Beyond automated tests
 
@@ -753,7 +567,7 @@ No release ships without the full suite passing against a real deployment of the
 
 All four solutions below expose an OpenAI-compatible API in front of Amazon Bedrock. The comparison focuses on the AWS deployment context — LiteLLM is evaluated with AWS services as the backend provider (Bedrock, Polly, Transcribe), not as a multi-cloud proxy. Bedrock Access Gateway is the official AWS-maintained open-source sample. Bedrock Mantle is AWS's own managed OpenAI-compatible endpoint, requiring no self-hosting — and stdapi.ai can also front it as an additional backend, serving Mantle-only models through the gateway (see [Bedrock Mantle Models](#bedrock-mantle-models)).
 
-Competitor capabilities were verified against official sources on 5 August 2026. stdapi.ai is AWS-only: if you need multi-cloud routing or spend limits enforced at request time, LiteLLM is the better fit.
+Competitor capabilities were verified against official sources on 5 August 2026; the batch inference, vector store, file search and per-end-user billing rows were verified on 21 August 2026. stdapi.ai is AWS-only: if you need multi-cloud routing or spend limits enforced at request time, LiteLLM is the better fit.
 
 !!! note "Cost attribution is not a spend limit"
     Bedrock's native attribution — IAM principal, application inference profiles, projects and workspaces — reports [aggregated billed cost to Cost Explorer and CUR 2.0 at per-usage-type-per-day granularity](https://docs.aws.amazon.com/bedrock/latest/userguide/cost-management.html), not as a per-request row. That is reporting, not enforcement: it cannot block a request that would exceed a budget. stdapi.ai's per-request cost figures are likewise an estimate for visibility. Enforcing a hard limit requires a gateway layer in front of inference — the approach AWS itself takes in its [Generative AI Gateway Solution](https://aws.amazon.com/solutions/), which uses LiteLLM.
@@ -773,6 +587,9 @@ Competitor capabilities were verified against official sources on 5 August 2026.
 | **OpenAI TTS (speech)**                     | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^12] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **OpenAI STT (transcription)**              | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **OpenAI Files & Uploads API**              | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
+| **Asynchronous batch inference**            | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> [^21] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> [^22] |
+| **Managed vector stores** (create, attach, index, search) | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^23] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
+| **Model-run file search, with citations**   | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^24] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **Server-side stored conversations**        | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^17] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> |
 | **OpenAI Realtime API**                     | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **Cohere Rerank API**                       | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
@@ -794,6 +611,7 @@ Competitor capabilities were verified against official sources on 5 August 2026.
 | **Model auto-discovery**                    | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^1] | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^7] | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> |
 | **Deprecated model failover**               | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **Cost & usage tracking**                   | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
+| **Per-end-user cost on the AWS bill**       | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> [^25] | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^26] | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^27] |
 | **Ready-to-use deployment**                 | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^3] | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> |
 | **Commercial support**                      | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> [^4] |
 | **Self-hosted**                             | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
@@ -845,3 +663,10 @@ Competitor capabilities were verified against official sources on 5 August 2026.
 [^18]: Served via LiteLLM's `/responses` endpoint, auto-bridged to `/chat/completions`; no native Bedrock Responses passthrough
 [^19]: Mantle uses Projects/Workspaces (tag-based cost allocation via Cost Explorer) for workload isolation instead of application inference profiles — see [Amazon Bedrock Projects](https://docs.aws.amazon.com/bedrock/latest/userguide/projects.html)
 [^20]: LiteLLM provides an [MCP gateway](https://docs.litellm.ai/docs/mcp/) that proxies configured third-party MCP servers and converts OpenAPI specs to tools — a related capability, but it does not expose LiteLLM's own AI and media endpoints as tools
+[^21]: Amazon Bedrock is a [first-class batch provider](https://docs.litellm.ai/docs/providers/bedrock_batches) for LiteLLM's Batches API — on the proxy only, not the SDK, and backed by [Managed Files](https://docs.litellm.ai/docs/proxy/managed_batches) with a Postgres database plus an operator-configured S3 bucket and Bedrock batch role. LiteLLM's own cost tracking for batches is an Enterprise feature
+[^22]: The Bedrock Mantle endpoint [serves](https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html) the Responses, Chat Completions and Anthropic Messages APIs only. Amazon Bedrock does offer an [OpenAI-compatible Batch API](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-openai-batch.html) on its `bedrock-runtime` endpoint — for OpenAI models only, reading its input from an S3 URI you upload yourself rather than through a Files API
+[^23]: With Amazon Bedrock it is a [bridge to a knowledge base you registered yourself](https://docs.litellm.ai/docs/providers/bedrock_vector_store): search, retrieve, list, update and delete are forwarded, while OpenAI-shaped store creation and [file attachment](https://docs.litellm.ai/docs/vector_store_files) accept the `openai` provider only. LiteLLM's own [`/v1/rag/ingest`](https://docs.litellm.ai/docs/rag_ingest) route does chunk, embed and index into a Bedrock knowledge base, but it is not part of the OpenAI API surface an unmodified client speaks
+[^24]: [Emulated](https://docs.litellm.ai/docs/tutorials/file_search_responses_api): the store is presented to the model as a function tool and the search is executed by the proxy rather than by the model's own server. LiteLLM documents that `file_citation` annotations can come back empty when the vector backend does not return the file metadata they need
+[^25]: Spend is attributed per key and per user in [LiteLLM's own database](https://docs.litellm.ai/docs/proxy/cost_tracking), not in AWS's billing data. Bedrock `requestMetadata` can be forwarded, which AWS surfaces in [invocation logs rather than Cost Explorer or CUR 2.0](https://docs.aws.amazon.com/bedrock/latest/userguide/cost-mgmt-request-metadata.html)
+[^26]: Application inference profiles put billed dollars in [Cost Explorer and CUR 2.0](https://docs.aws.amazon.com/bedrock/latest/userguide/cost-management.html), but per application rather than per end user — the gateway does not map a caller to a profile
+[^27]: [IAM principal attribution, Projects and Workspaces](https://docs.aws.amazon.com/bedrock/latest/userguide/cost-management.html) put billed dollars in Cost Explorer and CUR 2.0 — per identity or per project rather than per end user, and behind a shared gateway every caller arrives as the same identity
