@@ -93,6 +93,7 @@ from stdapi.vector_stores.jobs import (
     open_job_consumer,
     queue_region,
 )
+from stdapi.vector_stores.knowledge_base import verify_knowledge_bases
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
@@ -280,6 +281,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                             initialize_transcribe_models(),
                             initialize_moderation_models(),
                             verify_user_role_access(start_event),
+                            verify_knowledge_bases(start_event),
                             initialize_job_queue(start_event),
                             register(start_event),
                             return_exceptions=True,

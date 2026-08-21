@@ -36,6 +36,7 @@ from stdapi.vector_stores.backend import ExternalStore, IndexCapabilities
 from stdapi.vector_stores.knowledge_base import (
     CAPABILITIES,
     MANAGED_MEDIA_TYPES,
+    SERVED_KINDS,
     KnowledgeBaseIndex,
     document_file_id,
     document_target,
@@ -43,6 +44,7 @@ from stdapi.vector_stores.knowledge_base import (
     knowledge_base_id_of,
     store_id_of,
     translate_filter,
+    verify_knowledge_bases,
 )
 from stdapi.vector_stores.registry import backend_for, external_store_for
 from tests._helpers import make_client_error
@@ -73,6 +75,9 @@ _SYNCED_URI = "s3://corpus/handbook.txt"
 #: A syntactically valid identifier no test ever allowlists.
 _UNKNOWN_STORE_ID = "vs_kb_ZZZZZZZZZZ"
 
+#: A second allowlisted knowledge base, of a kind this backend does not serve.
+_UNSERVED_KB_ID = "FGHIJ67890"
+
 #: A file identifier the Files API stand-in serves.
 _FILE_ID = f"file-{'a' * 32}"
 
@@ -98,6 +103,8 @@ class _FakeAgentClient:
     def __init__(self) -> None:
         #: Generation the described knowledge base reports.
         self.kind = "VECTOR"
+        #: Generation one named knowledge base reports instead of :attr:`kind`.
+        self.kind_of: dict[str, str] = {}
         #: Lifecycle status it reports.
         self.status = "ACTIVE"
         #: Data sources it holds.
@@ -131,8 +138,10 @@ class _FakeAgentClient:
         if kwargs["knowledgeBaseId"] not in self.known:
             missing = make_client_error("ResourceNotFoundException", "GetKnowledgeBase")
             raise missing from None
-        configuration: dict[str, Any] = {"type": self.kind}
-        if self.kind == "VECTOR":
+        kind = self.kind_of.get(kwargs["knowledgeBaseId"], self.kind)
+        # An empty kind stands for a description stating none at all.
+        configuration: dict[str, Any] = {"type": kind} if kind else {}
+        if kind == "VECTOR":
             configuration["vectorKnowledgeBaseConfiguration"] = {
                 "embeddingModelArn": (
                     "arn:aws:bedrock:us-east-1::foundation-model/"
@@ -375,6 +384,17 @@ def _error_of(response: Any) -> dict[str, Any]:  # noqa: ANN401
     """Return the error envelope of a failed response."""
     payload: dict[str, Any] = response.json()["error"]
     return payload
+
+
+async def _startup_warnings() -> list[str]:
+    """Return the warnings the startup check of the allowlist reported.
+
+    Returns:
+        The warnings, in the order they were recorded.
+    """
+    start_event: dict[str, Any] = {"level": "info"}
+    await verify_knowledge_bases(start_event)  # type: ignore[arg-type]
+    return [str(entry) for entry in start_event.get("server_warnings", ())]
 
 
 def _walk_listing(
@@ -1871,3 +1891,223 @@ class TestRefusals:
         assert response.status_code == 400
         assert "stdapi-filename" in _error_of(response)["message"]
         assert not knowledge_base_backend.agent.documents
+
+
+@pytest.mark.local
+class TestUnservedKind:
+    """A knowledge base of a kind this backend does not serve, refused not served.
+
+    Bedrock models four kinds of knowledge base and this store answers passages
+    of two. A ``SQL`` one answers ``Retrieve`` with rows rather than text, and
+    the service takes ``vectorSearchConfiguration`` against it without
+    complaining — verified live: the same call against a real ``SQL`` knowledge
+    base got past configuration validation, while ``managedSearchConfiguration``
+    was refused with "Use vectorSearchConfiguration instead". So nothing
+    upstream stops it, and the store would answer every search with an empty
+    ``data`` forever.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_KnowledgeBaseConfiguration.html
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_RetrievalResultContent.html
+         stdapi/vector_stores/knowledge_base.py:_check_served_kind
+    """
+
+    @pytest.mark.parametrize("kind", ["SQL", "KENDRA"])
+    def test_a_search_is_refused_rather_than_answered_empty(
+        self, app_client: TestClient, knowledge_base_backend: _Backend, kind: str
+    ) -> None:
+        """An unserved kind refuses the search, and never retrieves against it.
+
+        Ref: stdapi/vector_stores/knowledge_base.py:_check_served_kind
+        """
+        knowledge_base_backend.agent.kind = kind
+
+        response = app_client.post(
+            f"/v1/vector_stores/{_STORE_ID}/search", json={"query": "refund window"}
+        )
+
+        assert response.status_code == 503
+        assert _error_of(response)["code"] == "feature_unavailable"
+        assert not knowledge_base_backend.runtime.calls
+
+    def test_a_description_stating_no_kind_is_refused_too(
+        self, app_client: TestClient, knowledge_base_backend: _Backend
+    ) -> None:
+        """A kind that cannot be read is never taken for the vector one.
+
+        Ref: stdapi/vector_stores/knowledge_base.py:_generation
+        """
+        knowledge_base_backend.agent.kind = ""
+
+        response = app_client.post(
+            f"/v1/vector_stores/{_STORE_ID}/search", json={"query": "refund window"}
+        )
+
+        assert response.status_code == 503
+        assert not knowledge_base_backend.runtime.calls
+
+    def test_an_unserved_knowledge_base_is_not_reported_as_a_healthy_store(
+        self, app_client: TestClient, knowledge_base_backend: _Backend
+    ) -> None:
+        """Reading the store answers unavailable rather than ``completed``.
+
+        Ref: https://platform.openai.com/docs/api-reference/vector-stores/retrieve
+        """
+        knowledge_base_backend.agent.kind = "SQL"
+
+        response = app_client.get(f"/v1/vector_stores/{_STORE_ID}")
+
+        assert response.status_code == 503
+        assert _error_of(response)["code"] == "feature_unavailable"
+
+    def test_an_unserved_knowledge_base_is_left_out_of_the_listing(
+        self,
+        app_client: TestClient,
+        knowledge_base_backend: _Backend,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A store that cannot be served is dropped, and the others still list.
+
+        Ref: https://platform.openai.com/docs/api-reference/vector-stores/list
+        """
+        monkeypatch.setattr(
+            SETTINGS, "aws_bedrock_knowledge_base_ids", [_KB_ID, _UNSERVED_KB_ID]
+        )
+        knowledge_base_backend.agent.known = {_KB_ID, _UNSERVED_KB_ID}
+        knowledge_base_backend.agent.kind_of = {_UNSERVED_KB_ID: "SQL"}
+
+        response = app_client.get("/v1/vector_stores")
+
+        assert response.status_code == 200
+        assert [entry["id"] for entry in response.json()["data"]] == [_STORE_ID]
+
+    def test_the_operator_reads_the_kind_found_and_the_kinds_served(
+        self,
+        app_client: TestClient,
+        knowledge_base_backend: _Backend,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """The log names both, and the caller-facing body names neither.
+
+        Ref: stdapi/api_errors.py:FeatureUnavailableError
+        """
+        knowledge_base_backend.agent.kind = "SQL"
+        capfd.readouterr()
+
+        response = app_client.post(
+            f"/v1/vector_stores/{_STORE_ID}/search", json={"query": "refund window"}
+        )
+
+        logged = capfd.readouterr().out
+        assert _KB_ID in logged
+        assert "'SQL'" in logged
+        assert " and ".join(SERVED_KINDS) in logged
+        message = _error_of(response)["message"]
+        assert "SQL" not in message
+        assert _KB_ID not in message
+
+    @pytest.mark.parametrize("kind", list(SERVED_KINDS))
+    def test_a_served_kind_still_answers_its_search(
+        self, app_client: TestClient, knowledge_base_backend: _Backend, kind: str
+    ) -> None:
+        """Both kinds this backend does serve are unaffected by the refusal.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Retrieve.html
+        """
+        knowledge_base_backend.agent.kind = kind
+
+        response = app_client.post(
+            f"/v1/vector_stores/{_STORE_ID}/search", json={"query": "refund window"}
+        )
+
+        assert response.status_code == 200
+        assert response.json()["data"]
+        assert knowledge_base_backend.runtime.calls
+
+
+@pytest.mark.local
+class TestStartupVerification:
+    """What startup says about the allowlisted knowledge bases it can read.
+
+    Reported and never fatal: a role that predates ``bedrock:GetKnowledgeBase``
+    must still boot, and every store checks its own kind again on first use.
+
+    Ref: stdapi/vector_stores/knowledge_base.py:verify_knowledge_bases
+    """
+
+    async def test_an_unserved_kind_is_named_at_startup(
+        self, knowledge_base_backend: _Backend
+    ) -> None:
+        """The deploy-time warning names the knowledge base, its kind and ours.
+
+        Ref: stdapi/vector_stores/knowledge_base.py:_unserved_kind_detail
+        """
+        knowledge_base_backend.agent.kind = "SQL"
+
+        warnings = await _startup_warnings()
+
+        assert len(warnings) == 1
+        assert _KB_ID in warnings[0]
+        assert "'SQL'" in warnings[0]
+        assert " and ".join(SERVED_KINDS) in warnings[0]
+
+    @pytest.mark.parametrize("kind", list(SERVED_KINDS))
+    async def test_a_served_kind_is_passed_over_in_silence(
+        self, knowledge_base_backend: _Backend, kind: str
+    ) -> None:
+        """A knowledge base this server serves warns about nothing.
+
+        Ref: stdapi/vector_stores/knowledge_base.py:verify_knowledge_bases
+        """
+        knowledge_base_backend.agent.kind = kind
+
+        assert await _startup_warnings() == []
+
+    async def test_a_kind_that_cannot_be_read_warns_instead_of_failing_startup(
+        self, knowledge_base_backend: _Backend, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A role without ``bedrock:GetKnowledgeBase`` still boots, and is told why.
+
+        This is what an upgraded deployment whose IAM policy was not updated
+        gets: one warning naming the action, and no refusal to start.
+
+        Ref: stdapi/api_errors.py:feature_unavailable_guard
+        """
+        denial = make_client_error("AccessDeniedException", "GetKnowledgeBase")
+
+        async def _denied(**kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
+            del kwargs
+            raise denial from None
+
+        monkeypatch.setattr(knowledge_base_backend.agent, "get_knowledge_base", _denied)
+
+        warnings = await _startup_warnings()
+
+        assert len(warnings) == 1
+        assert "bedrock:GetKnowledgeBase" in warnings[0]
+        assert _KB_ID in warnings[0]
+
+    async def test_a_knowledge_base_that_does_not_exist_warns_too(
+        self, knowledge_base_backend: _Backend
+    ) -> None:
+        """An allowlisted identifier naming nothing is reported, not swallowed.
+
+        Ref: stdapi/vector_stores/knowledge_base.py:_verify_knowledge_base
+        """
+        knowledge_base_backend.agent.known = set()
+
+        warnings = await _startup_warnings()
+
+        assert len(warnings) == 1
+        assert _KB_ID in warnings[0]
+
+    async def test_an_empty_allowlist_reads_nothing(
+        self, knowledge_base_backend: _Backend, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A deployment serving no knowledge base makes no call at startup.
+
+        Ref: stdapi/vector_stores/knowledge_base.py:verify_knowledge_bases
+        """
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_knowledge_base_ids", [])
+
+        assert await _startup_warnings() == []
+        assert not knowledge_base_backend.agent.calls

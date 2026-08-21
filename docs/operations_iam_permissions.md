@@ -448,6 +448,9 @@ Required to serve an [Amazon Bedrock knowledge base](https://docs.aws.amazon.com
     !!! note "The knowledge base is yours to create"
         The gateway never creates or deletes a knowledge base, so no create, update or delete action on the knowledge base itself is granted — only the documents of its data source.
 
+    !!! tip "Checked once at startup"
+        `bedrock:GetKnowledgeBase` — already needed to serve a store — is also called on every allowlisted entry at startup, to confirm each one is a kind the server can serve. No extra action is required for that check, and a role missing the action never stops the server: it starts with one warning per entry instead.
+
 ---
 
 ## :material-video: Video Generation (Optional) { #video-generation-optional }

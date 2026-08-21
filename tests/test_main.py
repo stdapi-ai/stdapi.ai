@@ -1103,6 +1103,7 @@ class TestShutdownDrain:
             "initialize_transcribe_models",
             "measure_region_latencies",
             "register",
+            "verify_knowledge_bases",
             "verify_user_role_access",
         ):
             monkeypatch.setattr(stdapi_main, name, _none)

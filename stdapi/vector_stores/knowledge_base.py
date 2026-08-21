@@ -19,7 +19,7 @@ from hashlib import blake2b
 from re import compile as re_compile
 from typing import TYPE_CHECKING, Any, Final, NoReturn
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from stdapi.api_errors import (
     ApiError,
@@ -29,7 +29,7 @@ from stdapi.api_errors import (
 from stdapi.aws import get_client
 from stdapi.config import SETTINGS
 from stdapi.files import get_file, get_file_content, parse_file_id
-from stdapi.monitoring import log_error_details
+from stdapi.monitoring import add_server_warning, log_error_details
 from stdapi.types.openai_vector_stores import (
     Attributes,
     AttributeValue,
@@ -60,6 +60,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterable, Sequence
     from contextlib import AbstractContextManager
 
+    from stdapi.monitoring import EventLog
     from stdapi.types import JsonMapping
 
 #: Identifier prefix addressing a store served by a knowledge base.
@@ -120,6 +121,11 @@ _MAX_ATTRIBUTE_BYTES: Final[int] = 2048
 
 #: Queries and document calls issued concurrently by one request.
 _CALL_WAVE: Final[int] = 8
+
+#: Knowledge base kinds this backend serves, out of the four the service models.
+#: A ``SQL`` one answers rows of a structured store and a ``KENDRA`` one an index
+#: of another service: neither holds the passages a vector store answers with.
+SERVED_KINDS: Final[tuple[str, ...]] = ("MANAGED", "VECTOR")
 
 #: Characters a search query may hold, per knowledge base generation.
 _QUERY_CHARACTERS_MAX: Final[dict[str, int]] = {"VECTOR": 1000, "MANAGED": 10000}
@@ -1095,9 +1101,117 @@ class KnowledgeBaseIndex:
 
 
 def _generation(described: JsonMapping) -> str:
-    """Return the generation of a described knowledge base."""
+    """Return the kind of a described knowledge base, or ``""`` when it states none.
+
+    Never defaulted to a kind: which one it is decides how it is searched, and
+    guessing is what serves a knowledge base this backend does not handle.
+    """
     configuration: JsonMapping = described.get("knowledgeBaseConfiguration") or {}  # type: ignore[assignment]
-    return str(configuration.get("type", "VECTOR"))
+    return str(configuration.get("type", ""))
+
+
+def _unserved_kind_detail(knowledge_base_id: str, kind: str) -> str:
+    """Return what the operator reads about a knowledge base of an unserved kind.
+
+    Args:
+        knowledge_base_id: The knowledge base the store addresses.
+        kind: The kind the service reports it as, or ``""`` when it states none.
+
+    Returns:
+        The detail, naming both the kind found and the kinds served.
+    """
+    served = " and ".join(SERVED_KINDS)
+    return (
+        f"Knowledge base '{knowledge_base_id}' is of kind '{kind or 'unknown'}', "
+        f"which the Vector Stores API does not serve: only {served} knowledge "
+        "bases hold the passages a vector store answers with, and a retrieval "
+        "against any other kind comes back with nothing this server can read. "
+        f"Point that entry of 'aws_bedrock_knowledge_base_ids' at a {served} "
+        "knowledge base, or remove it."
+    )
+
+
+def _check_served_kind(knowledge_base_id: str, described: JsonMapping) -> None:
+    """Refuse a knowledge base of a kind this backend does not serve.
+
+    Refused where the kind is known rather than at the retrieval: the service
+    takes a vector search against a structured knowledge base without
+    complaining and answers it with rows, which carry no passage text, so the
+    store would answer every search ``200`` with nothing in it, forever.
+
+    Args:
+        knowledge_base_id: The knowledge base the store addresses.
+        described: The knowledge base as the service describes it.
+
+    Raises:
+        FeatureUnavailableError: When it is not one of :data:`SERVED_KINDS` (503).
+    """
+    kind = _generation(described)
+    if kind not in SERVED_KINDS:
+        raise FeatureUnavailableError(
+            FEATURE, _unserved_kind_detail(knowledge_base_id, kind)
+        )
+
+
+async def verify_knowledge_bases(start_event: EventLog) -> None:
+    """Check every allowlisted knowledge base at startup, so its kind is known there.
+
+    Reported and never fatal, for the two deployments that would otherwise stop
+    booting on it: one whose role predates ``bedrock:GetKnowledgeBase``, and one
+    whose knowledge base is a moment away from existing. Each store checks
+    itself again on its own first request, so nothing is served on the strength
+    of this having passed.
+
+    Args:
+        start_event: Startup log event the findings are reported on.
+    """
+    if not (entries := list(allowlist())):
+        return
+    for warning in await gather_bounded(
+        [_verify_knowledge_base(entry) for entry in entries], _CALL_WAVE
+    ):
+        if warning:
+            add_server_warning(start_event, warning)
+
+
+async def _verify_knowledge_base(knowledge_base_id: str) -> str:
+    """Return what the operator must be told about one allowlisted entry.
+
+    Args:
+        knowledge_base_id: The allowlisted knowledge base.
+
+    Returns:
+        The warning, or ``""`` when it is a knowledge base this server serves.
+    """
+    try:
+        described = await _get_knowledge_base(knowledge_base_id)
+    except (ApiError, BotoCoreError, ClientError) as exception:
+        return (
+            f"Knowledge base '{knowledge_base_id}' could not be read at startup "
+            f"({type(exception).__name__}), so the kind it is stays unchecked: "
+            "grant bedrock:GetKnowledgeBase on it to have that checked here "
+            "rather than on the first request against the store."
+        )
+    kind = _generation(described)
+    if kind in SERVED_KINDS:
+        return ""
+    return _unserved_kind_detail(knowledge_base_id, kind)
+
+
+async def _get_knowledge_base(knowledge_base_id: str) -> Any:  # noqa: ANN401 - the description is an untyped service document
+    """Return what the service reports about one knowledge base, unchecked.
+
+    Args:
+        knowledge_base_id: The knowledge base to describe.
+
+    Returns:
+        The knowledge base description.
+    """
+    with _guard("GetKnowledgeBase"):
+        response = await agent_client().get_knowledge_base(
+            knowledgeBaseId=knowledge_base_id
+        )
+    return response["knowledgeBase"]
 
 
 def _ingested_media_types(described: JsonMapping) -> frozenset[str]:
@@ -1157,21 +1271,21 @@ async def _describe(knowledge_base_id: str, *, missing_is_none: bool = False) ->
 
     Args:
         knowledge_base_id: The knowledge base to describe.
-        missing_is_none: Whether a knowledge base that cannot be read is
-            reported as ``None`` rather than raising.
+        missing_is_none: Whether a knowledge base that cannot be read, or that
+            is not one this server serves, is reported as ``None`` rather than
+            raising — which is how a listing leaves it out instead of failing.
 
     Returns:
         The knowledge base description, or ``None``.
 
     Raises:
         ApiError: When the knowledge base does not exist (404, worded exactly
-            as an identifier this deployment was never given is).
+            as an identifier this deployment was never given is), or is of a
+            kind this backend does not serve (503).
     """
     try:
-        with _guard("GetKnowledgeBase"):
-            response = await agent_client().get_knowledge_base(
-                knowledgeBaseId=knowledge_base_id
-            )
+        described = await _get_knowledge_base(knowledge_base_id)
+        _check_served_kind(knowledge_base_id, described)
     except ClientError as exc:
         if missing_is_none:
             return None
@@ -1184,7 +1298,7 @@ async def _describe(knowledge_base_id: str, *, missing_is_none: bool = False) ->
         if missing_is_none:
             return None
         raise
-    return response["knowledgeBase"]
+    return described
 
 
 async def _data_source_id(knowledge_base_id: str) -> str:
