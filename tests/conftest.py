@@ -977,6 +977,26 @@ def app_client(api_key: str) -> TestClient:
 
 
 @pytest.fixture
+def enforced_auth_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """Client with no credentials, against an app whose API key check is armed.
+
+    The app lifespan is what normally hashes the configured key, so a handler is
+    installed directly instead: every request then reaches the real middleware
+    and is refused, without the AWS startup a live client would perform. Used by
+    the tests of the routes that must answer an anonymous caller anyway.
+    """
+    from pydantic import SecretStr  # noqa: PLC0415
+
+    import stdapi.auth  # noqa: PLC0415
+    from stdapi.main import app  # noqa: PLC0415
+
+    handler = stdapi.auth.AuthenticationHandler()
+    handler._hash_api_key(SecretStr("armed-key"))  # noqa: SLF001
+    monkeypatch.setattr(stdapi.auth, "_auth_handler", handler)
+    return TestClient(app)
+
+
+@pytest.fixture
 def anthropic_app_client(api_key: str) -> TestClient:
     """``app_client`` with the Anthropic route's own auth and version headers."""
     from stdapi.main import app  # noqa: PLC0415

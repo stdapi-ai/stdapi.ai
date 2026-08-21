@@ -10,7 +10,6 @@ Ref: stdapi/routes/core_root.py
 from typing import TYPE_CHECKING
 
 import pytest
-from pydantic import SecretStr
 
 from stdapi.config import SETTINGS
 
@@ -38,25 +37,6 @@ _OAUTH_ENABLED = bool(SETTINGS.oauth_resource_identifier)
 _OAUTH_RELATION = "https://www.rfc-editor.org/rfc/rfc9728"
 
 pytestmark = pytest.mark.local
-
-
-@pytest.fixture
-def enforced_auth_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    """Client with no credentials, against an app whose API key check is armed.
-
-    The app lifespan is what normally hashes the configured key, so a handler is
-    installed directly instead: every request then reaches the real middleware
-    and is refused, without the AWS startup a live client would perform.
-    """
-    from starlette.testclient import TestClient  # noqa: PLC0415
-
-    import stdapi.auth  # noqa: PLC0415
-    from stdapi.main import app  # noqa: PLC0415
-
-    handler = stdapi.auth.AuthenticationHandler()
-    handler._hash_api_key(SecretStr("armed-key"))  # noqa: SLF001
-    monkeypatch.setattr(stdapi.auth, "_auth_handler", handler)
-    return TestClient(app)
 
 
 class TestRoot:
@@ -329,22 +309,26 @@ class TestErrorsOnLogExemptPaths:
 
     Paths in ``LOGGING_PATHS_IGNORE`` run without a request-log context, and
     the error handlers call :func:`~stdapi.monitoring.log_error_details`; the
-    logger must therefore tolerate the missing context. Browsers trigger this
-    daily: loading ``/`` auto-requests ``/favicon.ico``, which has no route.
+    logger must therefore tolerate the missing context. A deployment reaches
+    this daily: the exempt list names the documentation pages, which most
+    deployments leave disabled, and something asks for them anyway.
 
     Ref: stdapi/monitoring.py:log_error_details
          stdapi/main.py:handle_http_exception
     """
 
-    def test_favicon_404_is_a_clean_error_envelope(
+    def test_404_on_an_exempt_path_is_a_clean_error_envelope(
         self, test_client: TestClient
     ) -> None:
-        """GET /favicon.ico returns the JSON 404 envelope, not a 500.
+        """GET an exempt path with no route returns the JSON 404 envelope, not a 500.
 
         ``TestClient`` re-raises server exceptions, so a ``LookupError`` in the
         exception handler would fail this test rather than surface as a 500.
         """
-        response = test_client.get("/favicon.ico")
+        if SETTINGS.enable_docs:
+            pytest.skip("Swagger UI is mounted in this configuration")
+
+        response = test_client.get("/docs")
         assert response.status_code == 404
         assert response.json()["error"] == "Not Found"
 

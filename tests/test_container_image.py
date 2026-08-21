@@ -53,6 +53,7 @@ import wave
 from array import array
 from contextlib import contextmanager
 from functools import cache
+from importlib.resources import files
 from io import BytesIO
 from os import O_CREAT, O_EXCL, O_WRONLY, environ, fdopen
 from os import open as os_open
@@ -242,6 +243,12 @@ while offset < len(data):
     offset += size
 print(json.dumps(detected))
 """
+
+#: In-image program reporting the size of the icon the documentation pages are branded with.
+_FAVICON_PROGRAM = (
+    "from importlib.resources import files;"
+    "print(len((files('stdapi') / 'favicon.svg').read_bytes()))"
+)
 
 #: In-image program reporting the module files installed beside the application package.
 _LAYOUT_PROGRAM = """
@@ -1599,6 +1606,22 @@ class TestFinalImageRuntime:
             f"{layout['caches'][:10]}"
         )
         assert layout["compiled"] > 0, f"no bytecode was found under {layout['root']}"
+
+    def test_the_documentation_icon_ships_in_the_image(self, image: str) -> None:
+        """The icon the documentation pages are branded with is package data.
+
+        The build copies the application tree and then deletes every ``.py``
+        file in it, so anything else the package carries has to survive that
+        rewrite: an icon missing here is a ``/docs`` page with a broken image
+        and no way to fetch the original, which is the whole point of serving
+        it from the gateway.
+
+        Ref: https://github.com/stdapi-ai/stdapi.ai/issues/184
+             stdapi/routes/core_docs.py:_FAVICON_RESPONSE
+        """
+        expected = (files("stdapi") / "favicon.svg").read_bytes()
+
+        assert int(_image_python(image, _FAVICON_PROGRAM)) == len(expected)
 
     def test_the_distribution_metadata_still_resolves(self, image: str) -> None:
         """Every distribution the runtime queries still reports a version.

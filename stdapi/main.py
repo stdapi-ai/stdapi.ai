@@ -366,8 +366,10 @@ app = FastAPI(
     lifespan=lifespan,
     contact={"name": "stdapi.ai", "url": "https://stdapi.ai"},
     license_info=LICENCE_INFO,
-    docs_url="/docs" if SETTINGS.enable_docs else None,
-    redoc_url="/redoc" if SETTINGS.enable_redoc else None,
+    # The built-in pages load their icon from fastapi.tiangolo.com; the routes in
+    # stdapi/routes/core_docs.py serve the same pages from the gateway alone.
+    docs_url=None,
+    redoc_url=None,
     openapi_url="/openapi.json" if SETTINGS.enable_openapi_json else None,
     # pydantic_core-rendered responses on every route (stdlib-identical wire format).
     default_response_class=JSONResponse,
