@@ -116,11 +116,14 @@ These are the model families served by this route, with the constraint each one 
 
 ### ![Cohere](styles/logo_cohere.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Cohere Models
 
-| Model                        | Model ID                       | Notes                                                              |
-|------------------------------|--------------------------------|--------------------------------------------------------------------|
-| Cohere Embed v4              | `cohere.embed-v4:0`            | The only model accepting `texts` and `images` in the same request  |
-| Cohere Embed Multilingual v3 | `cohere.embed-multilingual-v3` | `texts` or `images` in a request, not both                         |
-| Cohere Embed English v3      | `cohere.embed-english-v3`      | `texts` or `images` in a request, not both                         |
+| Model                        | Model ID                       | Cohere Name                | Notes                                                              |
+|------------------------------|--------------------------------|----------------------------|--------------------------------------------------------------------|
+| Cohere Embed v4              | `cohere.embed-v4:0`            | `embed-v4.0`               | The only model accepting `texts` and `images` in the same request  |
+| Cohere Embed Multilingual v3 | `cohere.embed-multilingual-v3` | `embed-multilingual-v3.0`  | `texts` or `images` in a request, not both                         |
+| Cohere Embed English v3      | `cohere.embed-english-v3`      | `embed-english-v3.0`       | `texts` or `images` in a request, not both                         |
+
+!!! tip "Cohere's Own Model Names Resolve As They Stand"
+    Each Cohere model is published under the name [Cohere's API](https://docs.cohere.com/docs/models) uses as well as its Bedrock ID, derived from the ID rather than curated by hand, so an application already calling Cohere changes only its base URL. Both forms reach the same model; a Cohere model Bedrock does not serve (e.g. `embed-english-light-v3.0`) returns `404` until you map it with [`MODEL_ALIASES`](operations_configuration.md#model-aliases).
 
 ### ![Amazon](styles/logo_amazon.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Models
 

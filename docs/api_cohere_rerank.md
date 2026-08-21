@@ -113,9 +113,12 @@ Any rerank model available in your configured Bedrock regions can be used, for e
 
 ### ![Cohere](styles/logo_cohere.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Cohere Models
 
-| Model             | Model ID               | Notes                                    |
-|-------------------|------------------------|-------------------------------------------|
-| Cohere Rerank 3.5 | `cohere.rerank-v3-5:0` | Multilingual, state-of-the-art relevance |
+| Model             | Model ID               | Cohere Name   | Notes                                    |
+|-------------------|------------------------|---------------|-------------------------------------------|
+| Cohere Rerank 3.5 | `cohere.rerank-v3-5:0` | `rerank-v3.5` | Multilingual, state-of-the-art relevance |
+
+!!! tip "Cohere's Own Model Names Resolve As They Stand"
+    Each Cohere model is published under the name [Cohere's API](https://docs.cohere.com/docs/models) uses as well as its Bedrock ID, derived from the ID rather than curated by hand, so an application already calling Cohere changes only its base URL. Both forms reach the same model. The Amazon rerank model has no such name, having no upstream Cohere API to stay compatible with.
 
 ### ![Amazon](styles/logo_amazon.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Models
 

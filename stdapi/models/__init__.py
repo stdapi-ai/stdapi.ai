@@ -580,6 +580,9 @@ class ModelBase[RequestT, ResponseT]:
     #: Regex to extract model alias from model ID
     ALIAS_MATCHER: ClassVar[Pattern[str] | None] = None
 
+    #: Regex substitutions applied in order to the alias captured by ``ALIAS_MATCHER``.
+    ALIAS_SUBSTITUTIONS: ClassVar[tuple[tuple[Pattern[str], str], ...]] = ()
+
     #: Media kinds the model reads from an ``s3Location`` in a Bedrock Converse content block.
     S3_LOCATION_MEDIA_TYPES: ClassVar[frozenset[BedrockMediaType]] = frozenset()
 
@@ -611,6 +614,10 @@ class ModelBase[RequestT, ResponseT]:
     def get_aliases(cls, all_models: dict[str, ModelDetails]) -> dict[str, str]:
         """Return API model name aliases mapped to model IDs.
 
+        The alias captured by ``ALIAS_MATCHER`` is rewritten by
+        ``ALIAS_SUBSTITUTIONS``, for providers whose own model names are not a
+        literal substring of the Bedrock model ID.
+
         IDs are visited Mantle-first so a bedrock-runtime model wins when
         both services derive the same alias.
 
@@ -622,11 +629,15 @@ class ModelBase[RequestT, ResponseT]:
         """
         if not cls.ALIAS_MATCHER:
             return {}
-        return {
-            match.group(1): model_id
-            for model_id in _order_ids_mantle_first(all_models)
-            if (match := cls.ALIAS_MATCHER.match(model_id))
-        }
+        aliases: dict[str, str] = {}
+        for model_id in _order_ids_mantle_first(all_models):
+            if not (match := cls.ALIAS_MATCHER.match(model_id)):
+                continue
+            alias = match.group(1)
+            for pattern, replacement in cls.ALIAS_SUBSTITUTIONS:
+                alias = pattern.sub(replacement, alias)
+            aliases[alias] = model_id
+        return aliases
 
     @property
     def model(self) -> ModelDetails:

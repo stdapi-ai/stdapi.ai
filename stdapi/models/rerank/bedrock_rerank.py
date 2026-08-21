@@ -16,6 +16,10 @@ from stdapi.models import (
     route_and_execute,
     set_effective_region,
 )
+from stdapi.models._cohere import (
+    COHERE_ALIAS_SUBSTITUTIONS,
+    COHERE_RERANK_ALIAS_MATCHER,
+)
 from stdapi.models.rerank import RerankedDocument, RerankModelBase, RerankResponse
 from stdapi.pricing import partition_of_region
 from stdapi.usage import record_bedrock_usage
@@ -92,11 +96,21 @@ def _document_source(document: str | JsonMapping) -> RerankSourceTypeDef:
 
 
 class RerankModel(RerankModelBase):
-    """Bedrock rerank model served via the Bedrock Rerank API."""
+    """Bedrock rerank model served via the Bedrock Rerank API.
+
+    The Cohere models are also published under the name Cohere's own API uses,
+    so an application already calling Cohere only changes its base URL:
+    ``cohere.rerank-v3-5:0`` answers to ``rerank-v3.5``. The Amazon models get
+    no such alias, having no upstream API to stay compatible with.
+
+    Ref: https://docs.cohere.com/docs/models
+    """
 
     __slots__ = ()
 
     MATCHER = re_compile(r"(?:amazon|cohere)\.rerank")
+    ALIAS_MATCHER = COHERE_RERANK_ALIAS_MATCHER
+    ALIAS_SUBSTITUTIONS = COHERE_ALIAS_SUBSTITUTIONS
 
     async def rerank(
         self,

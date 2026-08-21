@@ -2,7 +2,7 @@
 
 - cohere.embed-english-v3
 - cohere.embed-multilingual-v3
-- cohere.embed-v4
+- cohere.embed-v4:0
 """
 
 from asyncio import gather
@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from stdapi.api_errors import ApiError
 from stdapi.input_file import InputFile, InputFileUrl
+from stdapi.models._cohere import COHERE_ALIAS_SUBSTITUTIONS, COHERE_EMBED_ALIAS_MATCHER
 from stdapi.models.embedding import (
     EmbeddingImageDescription,
     EmbeddingModelBase,
@@ -91,11 +92,21 @@ class _Response(TypedDict):
 
 
 class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
-    """Cohere embedding model."""
+    """Cohere embedding model.
+
+    Each model is also published under the name Cohere's own API uses, so an
+    application already calling Cohere only changes its base URL:
+    ``cohere.embed-english-v3`` answers to ``embed-english-v3.0`` and
+    ``cohere.embed-v4:0`` to ``embed-v4.0``.
+
+    Ref: https://docs.cohere.com/docs/models
+    """
 
     __slots__ = ()
 
     MATCHER = "cohere.embed-"
+    ALIAS_MATCHER = COHERE_EMBED_ALIAS_MATCHER
+    ALIAS_SUBSTITUTIONS = COHERE_ALIAS_SUBSTITUTIONS
 
     #: Characters a v3 text input accepts; longer texts are rejected, never truncated.
     _V3_MAX_INPUT_CHARACTERS = 2048
