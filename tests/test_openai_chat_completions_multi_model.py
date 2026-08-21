@@ -520,6 +520,7 @@ class TestMultiModelToolUse:
 
     @pytest.mark.expensive
     @pytest.mark.agentic
+    @pytest.mark.retry("the model decides how many turns the task needs")
     @_AGENTIC_MODELS
     def test_agentic_loop_directory_and_file(
         self, model: str, openai_client: OpenAI
