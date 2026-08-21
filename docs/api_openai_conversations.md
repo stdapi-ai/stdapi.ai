@@ -46,6 +46,51 @@ the response output are added to it automatically.
 | `/v1/conversations/{conversation_id}/items/{item_id}` | `GET`    | Retrieve one item               | `openai_conversation_item_get`      |
 | `/v1/conversations/{conversation_id}/items/{item_id}` | `DELETE` | Delete one item                 | `openai_conversation_item_delete`   |
 
+## Feature Compatibility
+
+<div class="feature-table" markdown>
+
+| Feature                                   |                  Status                  | Notes                                                                       |
+|-------------------------------------------|:----------------------------------------:|-----------------------------------------------------------------------------|
+| **Conversation**                          |                                          |                                                                             |
+| `items`                                   |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Up to 20 initial items, prepared before the conversation is created, so a rejected item leaves no empty conversation behind |
+| `metadata`                                |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | The limits in [Metadata](#metadata). A key given a `null` value is accepted and dropped rather than stored; on an update that same `null` removes the key |
+| A request with no body                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Both fields are optional, and the body itself may be omitted                |
+| Retrieve, update, delete                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `metadata` is the only field an update takes; a delete removes the conversation and every item it holds |
+| **Items**                                 |                                          |                                                                             |
+| `items` on an add                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 1 to 20 per request; the response is a `list` envelope of the items added, not the whole conversation |
+| Item shapes                               |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | The [Responses](api_openai_responses.md) `input` and `output` items: messages, reasoning items, tool calls and their outputs |
+| A message `content` sent as a string      |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Expanded into an `input_text` or `output_text` part according to the message's `role` |
+| An `id` sent on a new item                |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Accepted and ignored — the server mints the identifier, prefixed by the item's type |
+| `item_reference` items                    |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Resolved against the conversation and then dropped rather than stored again, since the item it names is already there; one naming an item that is not answers `404` |
+| Retrieve and delete one item              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | A delete returns the conversation, and the item leaves both the listing and the prefix of the next Responses turn |
+| **Listing items**                         |                                          |                                                                             |
+| `order`, `limit`, `after`                 |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Bounds and cursor semantics in [Listing](#listing)                          |
+| `include`                                 |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Accepted on the listing, on a retrieval and on an add. Only `reasoning.encrypted_content` changes the response; every other value is accepted and ignored |
+| `first_id` / `last_id` / `has_more`       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Populated on every page; the server never auto-paginates                    |
+| **Lifecycle**                             |                                          |                                                                             |
+| Conversation lifetime                     |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | 30 days from creation, after which every route on it answers `404`. Amazon Bedrock session storage sets the window and it cannot be extended |
+| Adding and deleting items                 |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | 1,000 requests per conversation — see [Limits](#limits)                     |
+
+</div>
+
+<div class="feature-table" markdown>
+
+**Legend:**
+
+* :material-check-circle:{ .success role="img" aria-label="Supported" } **Supported** — Fully compatible with OpenAI API
+* :material-minus-circle:{ .partial role="img" aria-label="Partial" } **Partial** — Supported with limitations
+
+</div>
+
+!!! note "No model is involved"
+    Every endpoint on this page is state management: items are stored and read
+    back as they were sent. Nothing here embeds, summarises or re-runs an item,
+    so no endpoint takes a model identifier and a conversation behaves the same
+    whatever the deployment's catalog holds. Summarising a long exchange is
+    [`POST /v1/responses/compact`](api_openai_responses.md#conversation-compaction),
+    on the Responses API.
+
 ## Quick Start
 
 ```python
@@ -132,7 +177,7 @@ Updating **merges**: keys that are not sent keep their value, and a key sent as
 | Limit                                             | Value                  |
 |---------------------------------------------------|------------------------|
 | Items per add request                             | 20                     |
-| Requests that add or delete items, per conversation | 1,000                |
+| Invocation steps read when listing a conversation | 1,000 — a large item spans several, so a listing can stop early |
 | Conversation lifetime                             | 30 days after creation |
 
 A response bound to a conversation counts as one adding request, whatever its

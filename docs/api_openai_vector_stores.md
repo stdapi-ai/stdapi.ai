@@ -60,6 +60,88 @@ search it.
 | `/v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/cancel` | `POST`   | Cancel a file batch                 | `openai_vector_store_file_batch_cancel`      |
 | `/v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/files`  | `GET`    | List a file batch's files           | `openai_vector_store_file_batch_file_list`   |
 
+## Feature Compatibility
+
+A store this server owns and a [knowledge base store](#knowledge-base-stores)
+answer the same endpoints, but not always the same way. Where the two differ,
+the row says which one it is talking about.
+
+<div class="feature-table" markdown>
+
+| Feature                                    |                  Status                  | Notes                                                                       |
+|--------------------------------------------|:----------------------------------------:|-----------------------------------------------------------------------------|
+| **Creating a store**                       |                                          |                                                                             |
+| `name`, `description`                      |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Up to 256 and 512 characters                                                |
+| `file_ids`                                 |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Up to 2000, indexed in the background; a rejected file leaves no store behind |
+| `chunking_strategy`                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `auto`, or `static` with the bounds in [Chunking](#chunking); becomes the store's own strategy |
+| `expires_after`                            |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `anchor: "last_active_at"` and a day count — see [Expiration](#expiration)   |
+| `metadata`                                 |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Up to 16 pairs, 64-character keys, 512-character values                     |
+| [Knowledge base stores](#knowledge-base-stores) | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | An Amazon Bedrock knowledge base you already run, served through these same endpoints as `vs_kb_...` |
+| Creating one of those                      | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | A knowledge base is addressed, never created: no request field names one    |
+| **Managing a store**                       |                                          |                                                                             |
+| Retrieve                                   |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | On a knowledge base store, name, description, creation time and status are read from it |
+| Update `name`, `metadata`, `expires_after` |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | `expires_after: null` clears the policy. `400` on a knowledge base store — the three are read from it |
+| Delete                                     |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | `400` on a knowledge base store, which is managed outside this server       |
+| `limit`, `order`, `after`, `before`        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | On every listing: 1 to 100, default 20, newest first — see [Listing Order](#listing-order) |
+| `filter` on a file listing                 |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Returns only the files with the named status                                |
+| **Attaching a file**                       |                                          |                                                                             |
+| `file_id`                                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | A file uploaded with the [Files API](api_openai_files.md)                   |
+| `attributes`                               |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Up to 16 pairs within a 2048-byte budget. On a knowledge base store they are indexed and searchable but never reported back on the file, and the key `stdapi-filename` is reserved — `400` |
+| `chunking_strategy` on an attach           |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | `400` on a knowledge base store, which chooses its own passage boundaries   |
+| Replace a file's `attributes`              |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Replaces the whole set. `400` on a knowledge base store — attach the file again with the attributes it should carry |
+| Retrieve, detach                           |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Detaching a document of the corpus behind a knowledge base store is `400`; it is removed where that corpus comes from |
+| Read a file's indexed passages             |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | `400` on a knowledge base store — download the file itself instead          |
+| **File batches**                           |                                          |                                                                             |
+| `file_ids` or `files`                      |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Exactly one of the two, up to 2000 entries; `files` carries per-file `attributes` and `chunking_strategy`. `400` on a knowledge base store |
+| Batch-level `attributes`, `chunking_strategy` |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Applied to every `file_ids` entry                                           |
+| Retrieve, cancel, list a batch's files     |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | A cancel stops the files that have not started; the ones already indexed stay. `400` on a knowledge base store |
+| **Searching**                              |                                          |                                                                             |
+| `query`                                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | A string, or up to 16 strings searched together, on either kind of store    |
+| `max_num_results`                          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 1 to 50, default 10                                                         |
+| `filters`                                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | All eight comparison operators and both combinators, nestable, on either kind of store — see [Filters](#filters) |
+| `ranking_options.score_threshold`          |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | `400` on a knowledge base store, whose relevance value is not comparable between searches; use `max_num_results` there |
+| `ranking_options.ranker`                   |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Accepted and ignored — results are always ranked by the store's own relevance, and any value is taken |
+| `rewrite_query`                            |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Accepted and ignored — the query is searched as written                     |
+| `has_more` / `next_page` on a results page |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Always `false` and `null`: a search returns one complete page               |
+
+</div>
+
+<div class="feature-table" markdown>
+
+**Legend:**
+
+* :material-check-circle:{ .success role="img" aria-label="Supported" } **Supported** — Fully compatible with OpenAI API
+* :material-minus-circle:{ .partial role="img" aria-label="Partial" } **Partial** — Supported with limitations
+* :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } **Unsupported** — Not available in this implementation
+* :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } **Extra Feature** — Enhanced capability beyond OpenAI API
+
+</div>
+
+## Model Support
+
+No request field names a model: a store embeds with the model it was built with,
+and a search embeds its query with that same one. Which model that is depends on
+the kind of store.
+
+| Store                                          | Embeds with                                                                 |
+|------------------------------------------------|-------------------------------------------------------------------------------|
+| One this server owns                           | [`VECTOR_STORE_EMBEDDING_MODEL`](operations_configuration.md#vector-store-embedding-model), recorded on the store when it is created |
+| A [knowledge base store](#knowledge-base-stores) | The embedding model of the knowledge base itself — the setting above is not used, and the knowledge base embeds the query on its side |
+
+Any model this deployment serves that produces embeddings is eligible. To
+shortlist them, call [`search_models`](api_search_models.md) with
+`route=openai_embedding`. A model that produces something else is refused with
+`400`, naming it, when a store is created — never silently, and never at search
+time.
+
+!!! note "No reranking stage"
+    A search is a single pass: the passages closest to the query, in that
+    order. Nothing re-scores them afterwards, so
+    `ranking_options.ranker` names no model and selects nothing — see the
+    [Rerank API](api_cohere_rerank.md) to re-order results yourself. A Bedrock
+    managed knowledge base may rerank inside its own retrieval, which is its
+    behaviour rather than this server's.
+
 ## Listing Order
 
 Every listing — stores, a store's files, a batch's files — is ordered by the

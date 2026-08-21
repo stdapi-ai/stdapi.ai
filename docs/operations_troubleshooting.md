@@ -257,7 +257,7 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     A [conversation](api_openai_conversations.md) has a bounded lifetime and a bounded number of writes, and both are reached silently.
 
     - **After 30 days**, a conversation and its items are removed and every route on it returns `404`. Long-lived agents must create a new conversation rather than reusing one indefinitely.
-    - **1,000 requests that add or delete items** is the per-conversation ceiling; a response bound to a conversation counts as one, whatever its number of output items. Past it, adding fails while reads keep working — start a new conversation, seeding it with the items you still need.
+    - **1,000 requests that add or delete items** is the per-conversation ceiling; a response bound to a conversation counts as one, whatever its number of output items. Past it, a listing stops early rather than adding failing: the gateway reads at most 1,000 invocation steps, and a single large item spans several. Start a new conversation, seeding it with the items you still need.
     - **`503` saying the API is not available on the current server** means the IAM role is missing the [Bedrock Session Storage permissions](operations_iam_permissions.md#bedrock-session-storage-optional), including `bedrock:UpdateSession`, which only the metadata update uses — a deployment created before conversations shipped fails on `POST /v1/conversations/{id}` alone. The client message is the same whichever one is absent; the server log names it.
     - **Items added by a streamed response appear when the stream ends**, not while it runs; a client that reads them from a callback fired on the terminal event must wait for the stream to close.
 
