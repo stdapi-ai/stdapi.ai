@@ -46,13 +46,12 @@ The same applies to committed-spend agreements: check whether your EDP or Privat
 
 ### Which Models Are Which
 
-The split follows the model **provider**, not the API you call. Per AWS, models from **Amazon, DeepSeek, Mistral AI, Meta, Qwen and OpenAI** are not sold through AWS Marketplace, so they bill as ordinary Amazon Bedrock usage. Other providers — Anthropic among them — are third-party listings billed through Marketplace.
+Some models on Amazon Bedrock are sold as third-party AWS Marketplace listings; the rest bill as ordinary Amazon Bedrock usage. Open-weight models are generally in the second group. Which side a model sits on is the provider's and AWS's decision, it changes without notice, and a model can move after launch — so check your own account rather than trusting any list, this page included.
 
-!!! tip "Verify rather than assume"
-    That split changes as AWS onboards providers, so treat the list above as a starting point, not a contract. Two reliable checks:
-
-    - A model that needs `aws-marketplace:Subscribe` on first use is a Marketplace listing. AWS documents the [permission error](https://repost.aws/knowledge-center/bedrock-resolve-marketplace-permission) this produces.
-    - In the AWS Price List, Marketplace listings carry an *"(Amazon Bedrock Edition)"* product name. This is the same signal stdapi.ai's price catalog uses to parse them.
+!!! tip "How to check, and what each check can prove"
+    - **Your invoice is the authority.** Group Cost Explorer by service, or read the AWS Marketplace line on the bill. Nothing else settles it.
+    - A model that needs `aws-marketplace:Subscribe` on first use **is** a Marketplace listing. AWS documents the [permission error](https://repost.aws/knowledge-center/bedrock-resolve-marketplace-permission) this produces.
+    - In the AWS Price List, an *"(Amazon Bedrock Edition)"* product name marks a Marketplace listing — the signal stdapi.ai's price catalog parses. It confirms one when present, but **cannot rule one out**: models do bill through Marketplace while carrying no such product name, no `MP:` usage type, and no price-list row in commercial regions at all.
 
 ### What stdapi.ai Does About It
 
@@ -71,7 +70,7 @@ Cost tracking is **opt-in and off by default**. When `COST_TRACKING=true` is ena
 1. **Price Catalog**: At startup, stdapi.ai fetches the AWS Price List API for all configured regions and services in a background task, then caches in memory. Server readiness never waits on it: requests served before the load completes simply record usage without a cost. Failed loads are retried with exponential backoff (1–15 min), and each attempt's outcome is logged as a `background` event named `price_catalog_load`
 2. **On-Demand Refresh**: The catalog is refreshed whenever a newly available Bedrock model is discovered with no catalog entry yet — not on a proactive schedule. If that refresh's AWS call fails (Price List throttling, missing permissions), the failure never propagates: the errors are captured per region and service rather than raised, the triggering request completes normally, and the new model stays unpriced until a later refresh succeeds. The refresh itself emits no per-request diagnostic — the miss surfaces on first use through the unpriced-model `error_detail` described in step 5
 3. **Per-Request Computation**: For each request, costs are computed by multiplying billed quantities by the resolved unit price
-4. **Built-in Defaults**: A few models are priced only on the [AWS pricing page](https://aws.amazon.com/bedrock/pricing/), not in the Price List API (e.g. the Stability AI Image Services) — their page rates ship built in, used only when AWS publishes no row for the model; `COST_PRICE_OVERRIDES` still takes precedence
+4. **Built-in Defaults**: A few models are not in the Price List API at all — the Stability AI Image Services, priced on the [AWS pricing page](https://aws.amazon.com/bedrock/pricing/), and OpenAI's hosted GPT models, priced on their Bedrock model cards. Those published rates ship built in, used only when AWS publishes no row for the model; `COST_PRICE_OVERRIDES` still takes precedence
 5. **Fallback on a Missing Price**: Once the catalog has been fetched, if a specific model/dimension has no resolvable price in it, the cost field is omitted for that entry rather than blocking the request, and the request log carries a `warning`-level `error_detail` naming the model and unpriced dimensions (a hint to supply the missing price via `COST_PRICE_OVERRIDES`)
 
 !!! warning "Pricing is an estimate, not a bill"
@@ -233,6 +232,7 @@ Multimodal embedding inputs are billed by AWS per media unit on top of (or inste
 - **Client disconnect during streaming**: streamed chat responses still record their final usage after a disconnect. For streamed responses on other routes and for image generation jobs, AWS bills the input tokens and everything generated up to the cancellation, but no usage is recorded for that call. No estimate is substituted.
 - **Rerank queries with more than 100 documents**: AWS bills one search unit per 100 documents; the document count isn't visible at recording time, so one unit per query is recorded.
 - **Reserved capacity pricing**: if a request explicitly asks for AWS's Reserved Capacity service tier, its cost is computed at the standard on-demand rate instead — Reserved Capacity uses a separate monthly-commitment pricing model this app doesn't ingest. Avoid relying on this app's cost figures for Reserved Capacity workloads.
+- **Long-context prompts on OpenAI's hosted GPT models**: their model cards price a 272K short-context and a 1M long-context tier, and the built-in rates carry the short-context one only. A prompt past that boundary is therefore costed at the short-context rate — an under-estimate of 2× on input and 1.5× on output for GPT-5.6 Luna, Sol and Terra.
 - Some very new or region-specific models may have no published price anywhere yet — AWS publishes pricing after model availability, sometimes with a delay.
 - **AWS GovCloud**: the Price List API has no GovCloud endpoint, so catalog prices cannot be fetched there — usage is still recorded, a startup warning is emitted, and only `COST_PRICE_OVERRIDES` entries produce costs.
 
