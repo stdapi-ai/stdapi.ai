@@ -1052,6 +1052,29 @@ class TestBackgroundEventLog:
         )
         assert "execution_time_ms" in log
 
+    def test_the_scope_supplies_a_request_id_to_work_with_no_request(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``REQUEST_ID`` resolves inside the scope even with no request behind it.
+
+        The variable carries no default, so work that reads it -- an embedding
+        call staging to S3, among others -- raises ``LookupError`` unless the
+        scope sets it. A vector store job resumed from the queue runs in exactly
+        that state: it never started inside a request, so before this the job
+        died, the file was never marked failed and stayed ``in_progress`` while
+        the message drained to the dead-letter queue.
+
+        Ref: stdapi/monitoring.py:log_background_event
+        """
+        monkeypatch.setattr(monitoring, "write_log_event", lambda _log: None)
+        outer = REQUEST_ID.get(None)
+
+        with log_background_event("vector_store_indexing", "rid-from-the-queue"):
+            assert REQUEST_ID.get() == "rid-from-the-queue"
+
+        # Restored, so a scope entered inside a request cannot leak into it.
+        assert REQUEST_ID.get(None) == outer
+
     def test_success_stays_info(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A clean scope writes a single info entry, so failures stand out."""
         written: list[EventLog] = []

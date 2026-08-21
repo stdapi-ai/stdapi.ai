@@ -460,7 +460,13 @@ async def _run_job(message: dict[str, Any]) -> None:
     heartbeat = create_task(_keep_invisible(receipt))
     try:
         await handler.run(job)
-    except (ApiError, BotoCoreError, ClientError, OSError) as exc:
+    except Exception as exc:  # noqa: BLE001
+        # Deliberately every exception, not the expected few: one that escaped
+        # here left the job neither retried to a conclusion nor given up, so
+        # the file stayed "in_progress" for ever while the message worked its
+        # way to the dead-letter queue -- the one outcome this job type exists
+        # to prevent. A file reported failed is recoverable; one pending for
+        # ever is not.
         log_error_details(
             f"Vector store indexing job failed ({exc!r}); delivery "
             f"{deliveries} of {_MAX_RECEIVES}.",

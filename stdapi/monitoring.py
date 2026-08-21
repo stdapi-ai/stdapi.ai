@@ -754,6 +754,12 @@ def log_background_event(
     )
     # Without it, the work logs into a finalized request log, or nowhere.
     request_log_token = REQUEST_LOG.set(log)
+    # REQUEST_ID has no default, so anything this work reaches that reads it --
+    # an embedding call staging to S3, among others -- raises LookupError when
+    # the work did not start inside a request. That is every job resumed from
+    # the vector store queue: the exception escapes, the file is never marked
+    # failed, and it stays "in_progress" until the store is deleted.
+    request_id_token = REQUEST_ID.set(request_id)
     start = perf_counter_ns()
     try:
         with (
@@ -774,6 +780,7 @@ def log_background_event(
             MODEL_STATE.reset(model_state_token)
         _attach_aws_api_calls(log)
         REQUEST_LOG.reset(request_log_token)
+        REQUEST_ID.reset(request_id_token)
         write_log_event(log)
 
 
