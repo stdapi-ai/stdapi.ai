@@ -79,6 +79,23 @@ The agent never needs to be told which identity provider you use, where its endp
 
 Full walkthrough and the exact document served: [Authentication Discovery for Agents](operations_authentication_security.md#authentication-discovery-for-agents).
 
+!!! tip "An authenticated agent can be billed as itself"
+    Once callers arrive with their own identity, [per-user cost attribution](operations_cost_management.md#per-user-attribution) runs each one's model calls under a short-lived role session of their own, and AWS reports their spend separately in Cost Explorer and the Cost and Usage Report — per agent, per tenant or per end user, from the invoice rather than an estimate. Behind a shared API key the same split is available from the identifier the request declares (`safety_identifier`, or `metadata.user_id` on the Messages API), with the caveat that a caller chooses its own: that is cost metadata, not an authorization boundary.
+
+---
+
+## :material-database-search: Giving an Agent Your Own Documents
+
+An agent loop is only as grounded as what it can look up. Two paths reach the same [vector stores](api_openai_vector_stores.md), and neither needs a retrieval feature in the CLI itself:
+
+- **As a tool the model calls** — an agent that composes its own [`/v1/responses`](api_openai_responses.md#file-search) request declares `file_search` with the stores it may read, and the model runs the searches its turn needs and cites the files it answered from.
+- **As an MCP tool** — with [MCP](api_overview.md#mcp-model-context-protocol) enabled, `openai_vector_store_search` is one more tool in the agent's list, usable by any MCP client whatever wire format it chats with. This is the path for a CLI that builds its own request bodies — Hermes, below, connects any MCP server this way.
+
+Building the store itself — parsing, chunking, embedding, filters — is covered in the [RAG Pipelines guide](use_cases_rag.md#managed-retrieval); an Amazon Bedrock knowledge base you already run is [addressed as a store too](use_cases_rag.md#knowledge-base).
+
+!!! tip "State the gateway can hold for you"
+    An agent that resends its whole history each turn can instead keep the thread server-side with the [Conversations API](api_openai_conversations.md) and continue it by id — useful for long-running or resumable agents, and for handing one session between processes.
+
 ---
 
 ## :material-robot: Hermes
@@ -233,7 +250,7 @@ tofu apply
 
 - :material-rocket-launch: [**Getting Started**](operations_getting_started.md) — Deploy stdapi.ai to AWS with Terraform
 - :material-docker: [**Local Development**](operations_getting_started_local.md) — Run stdapi.ai locally with Docker
-- :material-language-python: [**Python Client Libraries**](use_cases_python_libraries.md) — Configuring LangChain and pydantic-ai directly against stdapi.ai
+- :material-language-python: [**Python Client Libraries**](use_cases_python_libraries.md) — Configuring LangChain, pydantic-ai and the OpenAI Agents SDK directly against stdapi.ai
 - :material-puzzle: [**More Use Cases**](use_cases.md) — Explore other integrations and tools
 
 </div>

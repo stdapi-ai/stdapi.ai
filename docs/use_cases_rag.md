@@ -10,7 +10,7 @@ Build retrieval-augmented generation and semantic search pipelines on Amazon Bed
 
 There are two ways to do it, and they share the same deployment:
 
-- **Managed** — attach your files to a [vector store](api_openai_vector_stores.md) and search it. Chunking, embedding, indexing and retrieval are the gateway's job; you write no pipeline.
+- **Managed** — attach your files to a [vector store](api_openai_vector_stores.md) and search it, or let the model search it for itself. Chunking, embedding, indexing and retrieval are the gateway's job; you write no pipeline.
 - **Assembled** — keep your own framework and vector database, and use stdapi.ai for the embedding, reranking and generation calls.
 
 Start managed, and move to the assembled pipeline when you need a retrieval strategy of your own.
@@ -33,6 +33,9 @@ stdapi.ai serves all three from Amazon Bedrock through standard, unmodified clie
 
 - :material-database-search: __Managed Vector Stores__
   <br>Attach a file to a [vector store](api_openai_vector_stores.md) and search it by meaning—no chunker, embedder or vector database to run.
+
+- :material-database-import: __Your Existing Knowledge Base__
+  <br>An [Amazon Bedrock knowledge base](api_openai_vector_stores.md#knowledge-base-stores) you already run is addressed as a vector store too—searched and extended, never recreated.
 
 - :material-swap-horizontal: __Two Dialects, One Deployment__
   <br>Point your embedder and chat model at the OpenAI-compatible `/v1` route, and your reranker at the Cohere-compatible `/cohere` route—no separate services to run.
@@ -83,6 +86,31 @@ Upload your files, attach them to a vector store, and search it. Nothing else ru
     Feed the returned passages to a chat model as context and you have a complete RAG loop in a dozen lines. Tag files with `attributes` to scope a search to a department, a product or a language.
 
 Only **text** files can be indexed — convert PDFs and office documents first, with the [document parsing](#document-parsing) stage below. See the [Vector Stores API](api_openai_vector_stores.md) for chunking, filters, expiration and the storage it needs in your account.
+
+!!! tip "Indexing that survives a deployment"
+    A file is indexed by the server that accepted it. Point [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url) at a queue and the job is handed over to it instead, so a bulk ingestion keeps going — and finishes — when that server is replaced mid-way. See [Durable indexing](api_openai_vector_stores.md#durable-indexing).
+
+### :material-file-search: Let the Model Do the Retrieving { #file-search }
+
+Naming a store as a `file_search` tool on the [Responses API](api_openai_responses.md#file-search) moves the whole loop into a single request: the model decides when to search and with which query, answers from the passages it gets back, and annotates the answer with a citation per file it drew on.
+
+!!! example "One request, retrieval included"
+    ```python
+    response = client.responses.create(
+        model="amazon.nova-2-lite-v1:0",
+        input="How much parental leave do I get?",
+        tools=[{"type": "file_search", "vector_store_ids": [store.id]}],
+    )
+    print(response.output_text)
+    ```
+
+    No retriever to call, no context to assemble, no citation bookkeeping: the searches the turn ran come back as `file_search_call` items when you want to show them, and `include=["file_search_call.results"]` returns the passages themselves. See [File Search](api_openai_responses.md#file-search) for attribute filters, score thresholds and the streamed event order.
+
+### :material-database-import: Searching a Knowledge Base You Already Run { #knowledge-base }
+
+If your documents are already in an **Amazon Bedrock knowledge base**, keep it where it is. Allowlist it in [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration.md#aws-bedrock-knowledge-base-ids) and it is addressed as the vector store `vs_kb_<knowledgeBaseId>` — searched, listed, read and (on a custom data source) extended with new documents, through the same client code and the same `file_search` tool as above.
+
+The knowledge base stays yours: it is never created and never deleted here, and a request that would reshape it — renaming, an expiry, a chunking strategy — is refused with the reason rather than half-applied. Its retrieval scores are reported as the backend states them, so a `score_threshold` against such a store is refused instead of meaning something else. See [Knowledge Base Stores](api_openai_vector_stores.md#knowledge-base-stores).
 
 ---
 
@@ -162,6 +190,9 @@ Point your framework's OpenAI-compatible embedder at `/v1` with an embeddings-ca
 
     Embed your corpus with `OpenAIDocumentEmbedder` and each incoming query with `OpenAITextEmbedder`, using the same model for both so the vectors share a space. See [Embeddings API](api_openai_embeddings.md) for supported models.
 
+!!! tip "A first ingestion does not have to run synchronously"
+    Embedding a whole corpus is exactly the shape the [Batch API](api_openai_batches.md) is for: write one `/v1/embeddings` request per passage into a JSONL file, submit it, and collect the vectors when it finishes — at the Amazon Bedrock batch price rather than the synchronous one. Queries stay on the synchronous route, where latency matters.
+
 ### :material-sort-variant: Reranking
 
 Point your framework's Cohere-compatible reranker at `/cohere`, not the full rerank path—the Cohere client appends the operation itself.
@@ -205,6 +236,8 @@ Point your framework's OpenAI-compatible chat generator at `/v1`, answering from
 ### :material-toolbox: Other Frameworks
 
 The same two-route pattern—OpenAI-compatible `/v1` for embedding and generation, Cohere-compatible `/cohere` for reranking—applies to any framework built on those SDKs, including LlamaIndex, RAGFlow, and LightRAG. Set the base URL and API key on the framework's OpenAI and Cohere client configuration; the vector store itself (pgvector, Qdrant, or an in-memory store) is unaffected and stores whatever the embedder returns.
+
+Frameworks that drive the Responses API can take the [managed](#managed-retrieval) half instead of a store of their own: given a file and a `file_search` tool, **Agno** uploads it, creates the vector store, waits for the indexing and names the store on the turn — all against the base URL it already chats with.
 
 !!! tip "Want the platform instead of the pipeline?"
     This page covers wiring stdapi.ai into a pipeline you assemble yourself. If you would rather run a finished product—a web UI, document parsing, knowledge bases, and grounded chat, with no pipeline code to write—see the [RAGFlow Integration](use_cases_ragflow.md) guide, which deploys RAGFlow with all three stages already bound to Amazon Bedrock.

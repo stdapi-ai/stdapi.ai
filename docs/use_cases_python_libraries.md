@@ -1,23 +1,24 @@
 ---
-title: Python AI Libraries - LangChain and pydantic-ai on Amazon Bedrock
-description: Build Python applications and agents on Amazon Bedrock with stdapi.ai. Configure LangChain (ChatOpenAI, OpenAIEmbeddings, ChatAnthropic) and pydantic-ai against stdapi.ai's OpenAI- and Anthropic-compatible endpoints.
-keywords: LangChain AWS Bedrock, ChatOpenAI custom base URL, pydantic-ai AWS Bedrock, LangChain Anthropic Bedrock, Python AI library AWS, OpenAIEmbeddings custom endpoint, LangChain agent Bedrock
+title: Python AI Libraries - LangChain, pydantic-ai and the OpenAI Agents SDK on Amazon Bedrock
+description: Build Python applications and agents on Amazon Bedrock with stdapi.ai. Configure LangChain (ChatOpenAI, OpenAIEmbeddings, ChatAnthropic), pydantic-ai and the OpenAI Agents SDK against stdapi.ai's OpenAI- and Anthropic-compatible endpoints.
+keywords: LangChain AWS Bedrock, ChatOpenAI custom base URL, pydantic-ai AWS Bedrock, OpenAI Agents SDK AWS Bedrock, LangChain Anthropic Bedrock, Python AI library AWS, OpenAIEmbeddings custom endpoint, LangChain agent Bedrock
 ---
 
 # :material-language-python: Python Client Libraries Integration
 
-Build Python applications and agents directly on Amazon Bedrock models with stdapi.ai, using the same LangChain and pydantic-ai client classes you would use against OpenAI or Anthropic directly—two client-side changes: the base URL, and the model name, which you now pick from every provider in the catalogue rather than one vendor's list.
+Build Python applications and agents directly on Amazon Bedrock models with stdapi.ai, using the same LangChain, pydantic-ai and OpenAI Agents SDK client classes you would use against OpenAI or Anthropic directly—two client-side changes: the base URL, and the model name, which you now pick from every provider in the catalogue rather than one vendor's list.
 
-## :material-information-outline: About LangChain and pydantic-ai
+## :material-information-outline: About These Libraries
 
-**🔗 Links:** [LangChain](https://python.langchain.com/) | [pydantic-ai](https://ai.pydantic.dev/)
+**🔗 Links:** [LangChain](https://python.langchain.com/) | [pydantic-ai](https://ai.pydantic.dev/) | [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/)
 
-LangChain and pydantic-ai are two of the most widely used Python frameworks for building LLM-backed applications and agents. Both ship OpenAI-compatible client classes that accept a custom base URL and API key as constructor arguments—no plugin, wrapper, or extension needed.
+These are three of the most widely used Python frameworks for building LLM-backed applications and agents. All of them ship OpenAI-compatible client classes that accept a custom base URL and API key as constructor arguments—no plugin, wrapper, or extension needed.
 
 **What you can build:**
 
 - **Custom agents** - Tool-calling loops, structured output, and multi-turn conversations in your own Python code
 - **RAG applications** - Combine chat models with `OpenAIEmbeddings` for retrieval, see [RAG Pipelines](use_cases_rag.md)
+- **Stateful and voice agents** - Server-side conversations, hosted retrieval and spoken sessions through the OpenAI Agents SDK
 - **Internal services** - Backend applications and scripts that call Bedrock models without a UI or CLI in between
 
 ## :material-help-circle-outline: Why Python Libraries + stdapi.ai?
@@ -25,7 +26,7 @@ LangChain and pydantic-ai are two of the most widely used Python frameworks for 
 <div class="grid cards" markdown>
 
 - :material-swap-horizontal: __Standard Client Classes, No Fork__
-  <br>`ChatOpenAI`, `OpenAIEmbeddings`, `ChatAnthropic`, and pydantic-ai's `OpenAIChatModel` all accept a custom base URL directly—no gateway-specific SDK to install.
+  <br>`ChatOpenAI`, `OpenAIEmbeddings`, `ChatAnthropic`, pydantic-ai's `OpenAIChatModel` and the Agents SDK's `OpenAIResponsesModel` all accept a custom base URL directly—no gateway-specific SDK to install.
 
 - :material-aws: __Access Amazon Bedrock Models__
   <br>Claude, Nova, DeepSeek, Qwen, and 100+ models, called through the same classes your code already imports.
@@ -41,7 +42,7 @@ LangChain and pydantic-ai are two of the most widely used Python frameworks for 
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true}} }%%
 flowchart LR
-  app["Your Python App\n(LangChain, pydantic-ai)"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
+  app["Your Python App\n(LangChain, pydantic-ai, Agents SDK)"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
@@ -154,6 +155,63 @@ result = agent.run_sync(
     model_settings=OpenAIChatModelSettings(openai_reasoning_effort="low"),
 )
 ```
+
+---
+
+## :material-account-group: OpenAI Agents SDK
+
+The [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) speaks the [Responses API](api_openai_responses.md) natively, so pointing its client at the gateway also hands its agents the server-side surfaces the Responses route serves — stored conversations, hosted retrieval and the realtime voice session included.
+
+!!! example "An agent bound to the gateway"
+    ```python
+    from agents import Agent, Runner, set_tracing_disabled
+    from agents.models.openai_responses import OpenAIResponsesModel
+    from openai import AsyncOpenAI
+
+    set_tracing_disabled(True)
+
+    client = AsyncOpenAI(base_url="https://YOUR_STDAPI_URL/v1", api_key="YOUR_STDAPI_KEY")
+    agent = Agent(
+        name="assistant",
+        instructions="Answer in one short sentence.",
+        model=OpenAIResponsesModel(model="anthropic.claude-fable-5", openai_client=client),
+    )
+
+    result = Runner.run_sync(agent, "Name the largest planet in the solar system.")
+    print(result.final_output)
+    ```
+
+    `set_tracing_disabled(True)` matters here: left on, the SDK exports every run to OpenAI's tracing backend with its own key, which is exactly the third party this deployment exists to remove.
+
+### :material-history: Server-Side Sessions
+
+`OpenAIConversationsSession` keeps an agent's turns in a [conversation](api_openai_conversations.md) on the gateway instead of in the process, so a second run replays what the gateway stored rather than a history you carried:
+
+```python
+from agents.memory import OpenAIConversationsSession
+
+session = OpenAIConversationsSession(openai_client=client)
+```
+
+Pass it as `Runner.run_sync(..., session=session)`; the conversation id is what makes a run resumable from another process.
+
+### :material-file-search: Hosted Retrieval
+
+`FileSearchTool(vector_store_ids=[...])` attaches a [vector store](api_openai_vector_stores.md) to the agent, and the search happens inside the response — the SDK's own loop never sees a tool call. Build the store first, as in the [RAG Pipelines guide](use_cases_rag.md#managed-retrieval), then:
+
+```python
+from agents import FileSearchTool
+
+agent = Agent(
+    name="librarian",
+    instructions="Answer only from the attached notes.",
+    tools=[FileSearchTool(vector_store_ids=["vs_abc123"], include_search_results=True)],
+)
+```
+
+### :material-microphone: Voice Agents
+
+`RealtimeRunner` opens a spoken session against [`WS /v1/realtime`](api_openai_realtime.md): give its `model_config` the `wss://YOUR_STDAPI_URL/v1/realtime?model=<id>` URL and either the API key or a [minted client secret](api_openai_realtime.md#ephemeral-client-secrets). Sessions last up to 8 minutes and call no tools — see the [Realtime API](api_openai_realtime.md#feature-compatibility) for what a session does and does not emit.
 
 ---
 

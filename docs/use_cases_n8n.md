@@ -220,6 +220,8 @@ Enables: Text-to-speech audio generation in workflows.
 
     n8n calls `POST /v1/audio/speech` (see [Audio Speech API](api_openai_audio_speech.md)).
 
+    A single node call takes up to [100,000 characters](api_openai_audio_speech.md#long-input) — 24× the upstream limit — so a whole article or report becomes one audio file instead of a split-and-concatenate branch. Past 3,000 characters the deployment needs a bucket for the serving region; generative voices reach 20,000 without one.
+
 #### :material-microphone: Audio Transcription (STT)
 
 Enables: Speech-to-text transcription in workflows.
@@ -287,6 +289,18 @@ n8n calls the `/v1/files` endpoints (see [Files API](api_openai_files.md)). Set 
     - **Return All / Limit:** control pagination; enable **Return All** or set **Limit** for the first page
 
     Files are returned in descending order (newest first) by default.
+
+#### :material-package-variant-closed: Bulk Runs (Batch API)
+
+Enables: running thousands of chat completion or embedding requests asynchronously, at the Amazon Bedrock batch price rather than the synchronous one.
+
+n8n ships no node for the [Batch API](api_openai_batches.md) — the OpenAI node's resources stop at text, images, audio and files — so drive it with **HTTP Request** nodes, as the Cohere routes are reached [below](#known-limitations):
+
+1. Build the request set as JSONL, one line per item with its own `custom_id`, and upload it with `purpose=batch` (`OpenAI/Upload a File` when its **Purpose** list offers it, an HTTP Request against `POST /v1/files` otherwise)
+2. `POST /v1/batches` with that file id, then poll `GET /v1/batches/{id}` behind a **Wait** node until it reports `completed`
+3. Download the output file and match each line back to its `custom_id` — results may arrive in any order
+
+Worth the extra nodes when a workflow classifies, enriches or summarizes a large backlog overnight and nothing is waiting on the answer. Interactive workflows stay on the synchronous nodes above.
 
 ---
 

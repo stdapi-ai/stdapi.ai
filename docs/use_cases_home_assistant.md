@@ -85,6 +85,23 @@ The proxy calls `POST /v1/audio/transcriptions` (see [Audio Transcriptions API](
 !!! tip "Pin the backend"
     Left unset, wyoming-openai probes a few well-known self-hosted backends before falling back to a generic OpenAI-compatible one. Setting `STT_BACKEND=OPENAI` and `TTS_BACKEND=OPENAI` skips that probing and connects directly.
 
+!!! tip "A cheaper speech-to-text model"
+    `STT_MODELS=amazon.nova-2-sonic-v1:0` transcribes through [Amazon Nova Sonic](api_openai_audio_transcriptions.md#amazon-nova-sonic) instead of Amazon Transcribe: the lowest-cost transcription available here, punctuated and in the language spoken. It answers `json` and `text` only — which is all the proxy asks for — and caps a recording at 10 minutes, well beyond any voice command. Keep `amazon.transcribe` if the same deployment also serves subtitles, timestamps or speaker labels.
+
+### :material-waveform: Streaming Speech to Text
+
+Enables: recognizing a spoken command phrase by phrase, instead of after the whole utterance has been recorded.
+
+!!! example "Environment Variables"
+    ```bash
+    STT_STREAMING_MODELS=amazon.transcribe
+    ```
+
+Only the models listed there are called in streaming mode, which is what makes the proxy ask stdapi.ai for a [streamed transcription](api_openai_audio_transcriptions.md#streaming). The gateway returns each phrase as it is recognized whenever the request names the language to expect; if the proxy sends none, set [`AWS_TRANSCRIBE_STREAM_LANGUAGES`](operations_configuration.md#aws-transcribe-stream-languages) on stdapi.ai to the languages your satellites actually speak and those requests take the same fast path. Streamed transcription stages nothing, so it works on a deployment with no S3 bucket configured.
+
+!!! note "This is the streaming option to use, not the realtime one"
+    stdapi.ai's [Realtime API](api_openai_realtime.md) serves speech-to-speech sessions, and a transcription-only session is requested through an [ephemeral client secret](api_openai_realtime.md#ephemeral-client-secrets) rather than on the socket — so a client that expects OpenAI's realtime *transcription* socket gets no transcript from it. Assist's pipeline is turn-based anyway: speech to text, then a conversation agent, then text to speech.
+
 ### :material-volume-high: Streaming Text to Speech
 
 Enables: speaking a response as it is generated, instead of waiting for the whole sentence to synthesize.

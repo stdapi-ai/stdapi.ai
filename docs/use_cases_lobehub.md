@@ -95,6 +95,11 @@ For the full reference, see LobeHub's [environment variables documentation](http
 
 LobeHub has no server-side environment variable for the default voice provider. In an agent's settings, under **Text-to-Speech**/**Speech-to-Text**, select **OpenAI Audio** — it reuses the same stdapi.ai connection already configured, with no extra key needed.
 
+Two gateway-side details make that pairing more comfortable than it is upstream:
+
+- **Reading a long answer aloud takes one request.** [`/v1/audio/speech`](api_openai_audio_speech.md#long-input) accepts up to 100,000 characters — 24× the upstream limit — and speaks long input as it is synthesized rather than after the whole job finishes, so an essay-length reply needs no client-side splitting. Past 3,000 characters it needs a bucket for the serving region, except on generative voices, which reach 20,000 without one.
+- **Transcription can be cheaper.** Naming `amazon.nova-2-sonic-v1:0` as the speech-to-text model transcribes through [Amazon Nova Sonic](api_openai_audio_transcriptions.md#amazon-nova-sonic), the lowest-cost option here; it returns punctuated text with no timestamps, for recordings up to 10 minutes.
+
 ### :material-account-key: SSO and Authentication
 
 LobeHub supports SSO providers (Google, GitHub, Microsoft, AWS Cognito, and others) and restricting registration to specific email domains via `AUTH_ALLOWED_EMAILS` / `AUTH_DISABLE_EMAIL_PASSWORD`. See LobeHub's [authentication environment variables](https://lobehub.com/docs/self-hosting/environment-variables/auth).

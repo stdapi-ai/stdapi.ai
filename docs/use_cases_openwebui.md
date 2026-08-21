@@ -172,6 +172,9 @@ Enables: Voice input and audio transcription.
 
 Open WebUI calls `POST /v1/audio/transcriptions` (see [Audio Transcriptions API](api_openai_audio_transcriptions.md)).
 
+!!! tip "A cheaper transcription model"
+    Setting `AUDIO_STT_MODEL=amazon.nova-2-sonic-v1:0` transcribes through [Amazon Nova Sonic](api_openai_audio_transcriptions.md#amazon-nova-sonic), the lowest-cost option here, punctuated and in the language spoken. It returns plain text with no timestamps and takes recordings up to 10 minutes — ample for chat voice input, but keep `amazon.transcribe` if you also transcribe long meeting recordings from the same setting.
+
 ### :material-volume-high: Text to Speech (TTS)
 
 Enables: Spoken responses from chat outputs.
@@ -250,6 +253,9 @@ tofu apply
 ## :material-alert-outline: Known Issues
 
 Open WebUI may list all available models in the chat model selector, including models that do not support chat completions (like image or embedding models). Disable incompatible models in the Open WebUI admin panel.
+
+!!! note "Per-user cost attribution needs an identifier Open WebUI does not send"
+    Open WebUI identifies the signed-in user to its backend with `X-OpenWebUI-User-*` headers (`ENABLE_FORWARD_USER_INFO_HEADERS`), not with the OpenAI `safety_identifier` field. [Per-user attribution](operations_cost_management.md#per-user-attribution) reads that field, or an authenticated caller — neither of which one shared connection provides — so every chat is billed to the deployment's own identity. Where the split matters, give each team its own [model alias](operations_configuration.md#model-aliases-configuration) as a separate Open WebUI connection, and read the totals from Amazon Bedrock model invocation logs.
 
 ## :material-arrow-right: Next Steps
 

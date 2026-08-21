@@ -96,12 +96,15 @@ Build self-directed AI agents that can plan, execute, and refine complex tasks a
 - **Multi-agent systems** - Collaborative agents for complex problem-solving
 - **Task automation** - Self-improving workflows that adapt to results
 - **Code agents** - Autonomous development and testing systems
+- **Grounded agents** - Retrieval the agent calls for itself, over [vector stores](api_openai_vector_stores.md) holding your own documents
+- **Resumable sessions** - Threads kept server-side with the [Conversations API](api_openai_conversations.md) and continued by id, rather than resent every turn
+- **Per-caller identity** - Agents that [discover how to authenticate](operations_authentication_security.md#authentication-discovery-for-agents) and whose spend is [reported per end user](operations_cost_management.md#per-user-attribution)
 
-**Compatible frameworks:** **OpenClaw**, **Hermes**, **LangChain**, **Pydantic AI**, **OpenAI Agents SDK**, **LiteLLM**, LangGraph, LlamaIndex, CrewAI, Strands Agents
+**Compatible frameworks:** **OpenClaw**, **Hermes**, **LangChain**, **Pydantic AI**, **OpenAI Agents SDK**, **Agno**, **LlamaIndex**, **LiteLLM**, LangGraph, CrewAI, Strands Agents
 
 All agent frameworks that support OpenAI or Anthropic SDKs work immediately — point the SDK's base URL to stdapi.ai. See the [API overview](api_overview.md) for connection details.
 
-**[Python Client Libraries Guide](use_cases_python_libraries.md)** — Configuring LangChain and pydantic-ai directly against stdapi.ai
+**[Python Client Libraries Guide](use_cases_python_libraries.md)** — Configuring LangChain, pydantic-ai and the OpenAI Agents SDK directly against stdapi.ai
 
 **[Autonomous Agent CLIs Guide](use_cases_autonomous_agents.md)** — Configuring Hermes and OpenClaw directly against stdapi.ai
 
@@ -144,6 +147,7 @@ Integrate Amazon Bedrock AI into your business processes and automation workflow
 - **Content creation** - Automated blog posts, social media, email campaigns
 - **Data processing** - Extract, transform, and analyze data with AI
 - **Document workflows** - Automated summarization, translation, and classification
+- **Bulk runs** - Push a backlog through the [Batch API](api_openai_batches.md) asynchronously, at the Amazon Bedrock batch price
 - **Content safety** - Screen user-generated content with the [Moderations API](api_openai_moderations.md)
 
 **Popular tools:** **n8n**, **Haystack**, Langflow, Dify, Flowise
@@ -163,12 +167,15 @@ Build voice-first applications on the same OpenAI-compatible endpoint: text-to-s
 
 **What you can build:**
 
+- **Speech-to-speech agents** - Hold a spoken conversation over one WebSocket with the [Realtime API](api_openai_realtime.md) — the model handles turn taking and interruption, and a live transcript comes back with the audio
 - **Voice agents** - Real-time conversational agents for phone, web, and support lines
 - **Meeting intelligence** - Transcription with speaker diarization and AI summaries
+- **Live transcription** - Return each phrase as it is recognized instead of after the whole recording, with [streamed transcriptions](api_openai_audio_transcriptions.md#streaming)
 - **Subtitles & dubbing** - Transcribe and translate audio with SRT/VTT subtitle output
+- **Long-form narration** - Speak up to [100,000 characters](api_openai_audio_speech.md#long-input) per request, streamed as it is synthesized
 - **Voice interfaces** - Add speech input/output to chat interfaces and internal tools
 
-**Popular frameworks:** **Pipecat**, **LiveKit Agents**, TEN Framework — all accept a custom OpenAI-compatible base URL for LLM, speech-to-text, and text-to-speech services
+**Popular frameworks:** **Pipecat**, **LiveKit Agents**, TEN Framework — all accept a custom OpenAI-compatible base URL for LLM, speech-to-text, and text-to-speech services, and the first two are also what put [WebRTC or a phone line](api_openai_realtime.md#transports) in front of a realtime session
 
 **Popular tools:** Home Assistant Assist (via the **wyoming-openai** proxy)
 
@@ -187,13 +194,16 @@ Build retrieval-augmented generation and semantic search pipelines with Bedrock 
 
 **What you can build:**
 
+- **Managed retrieval** - Attach files to a [vector store](api_openai_vector_stores.md) and search it by meaning, with no chunker, embedder, or vector database of your own to run
+- **Retrieval the model runs itself** - Name a store as a `file_search` tool and the model searches it mid-answer, citing the files it drew on
+- **Your existing knowledge base** - Address an Amazon Bedrock knowledge base you already operate [as a vector store](api_openai_vector_stores.md#knowledge-base-stores) — searched and extended, never recreated
 - **Document ingestion** - Parse PDFs and office documents into Markdown with Docling before embedding
 - **RAG pipelines** - Ground model answers in your documents with [embeddings](api_openai_embeddings.md)
 - **Two-stage retrieval** - Improve relevance with the [Rerank API](api_cohere_rerank.md) on top of vector search
 - **Semantic search** - Search by meaning across documents, tickets, and knowledge bases
 - **Multimodal search** - Embed text and images with models like Cohere Embed v4
 
-**Popular tools:** **Docling Serve** for document parsing, **Haystack**, RAGFlow, LlamaIndex, LightRAG for retrieval — works with any vector database (pgvector, Qdrant, and others store the vectors; stdapi.ai serves the embeddings)
+**Popular tools:** **Docling Serve** for document parsing, **Haystack**, **Agno**, **LlamaIndex**, RAGFlow, LightRAG for retrieval — the managed stores need no vector database, and an assembled pipeline works with any of them (pgvector, Qdrant, and others store the vectors; stdapi.ai serves the embeddings)
 
 **[RAG Pipelines Guide](use_cases_rag.md)** — Configuring document parsing, embeddings, Cohere-compatible reranking, and generation together
 
@@ -264,7 +274,7 @@ Deploy intelligent AI assistants to your team's communication platforms powered 
 ## :material-help-circle: Common Questions
 
 - **Where does my data go?** The gateway runs in your own AWS account, so no third party sits between your users and your models: inference runs on the AWS services and regions you enable, and Amazon Bedrock does not share prompts with model providers or use them for training. [Data sovereignty & compliance →](operations_compliance.md)
-- **What does it cost?** $0.10/container-hour for the gateway — the Terraform module runs one container per Availability Zone by default — plus Amazon Bedrock rates, with no markup and no per-seat fees. [Licensing & pricing →](operations_licensing.md) · [Cost management →](operations_cost_management.md)
+- **What does it cost?** $0.10/container-hour for the gateway — the Terraform module runs one container per Availability Zone by default — plus Amazon Bedrock rates, with no markup and no per-seat fees. Each end user's share can be reported separately in Cost Explorer, from the invoice rather than an estimate. [Licensing & pricing →](operations_licensing.md) · [Cost management →](operations_cost_management.md)
 - **Am I locked in?** No — stdapi.ai speaks the standard OpenAI, Anthropic, and Cohere APIs. Leaving is the same client-side change that got you in.
 
 ## :material-arrow-right: Ready to Get Started?

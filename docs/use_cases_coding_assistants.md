@@ -475,12 +475,28 @@ export MCP_INCLUDE_TOOLS="openai_completion,search_models,openai_embedding,opena
 export MCP_INCLUDE_TOOLS="openai_completion,search_models,openai_embedding,openai_file,openai_file_list,openai_files_get,openai_file_content,openai_audio_transcription,openai_audio_translation,openai_audio_speech"
 ```
 
+**Coding agent with your own documentation** — completions plus semantic search over a [vector store](api_openai_vector_stores.md) holding your design docs, runbooks, or an internal API reference:
+
+```bash
+export MCP_INCLUDE_TOOLS="openai_completion,search_models,openai_vector_store_list,openai_vector_store_search,openai_file,openai_file_list,openai_files_get,openai_file_content"
+```
+
+`openai_vector_store_search` returns the matching passages with their file names and scores, so the agent looks a fact up instead of guessing at it — and it works whatever wire format the assistant chats with, since the search is a tool call rather than a request field. Indexing the corpus is a one-off, covered in the [RAG Pipelines guide](use_cases_rag.md#managed-retrieval).
+
 In all cases, file deletion tools (`openai_files_delete`, `anthropic_files_delete`) are intentionally omitted — add them only when your workflow explicitly requires cleanup.
 
 !!! warning "Token usage — complex API tools"
     `openai_chat_completion`, `openai_response`, and `anthropic_message` expose large schemas (messages, tool definitions, multimodal content parts). Each tool invocation can cost hundreds of extra tokens just to describe the schema. Select them only when your workflow actually needs multi-turn chat, function calling, or structured output — for text-first code Q&A, `openai_completion` is significantly cheaper per call.
 
 See [Configuration Reference → MCP](operations_configuration.md#mcp-model-context-protocol) for the full tool list and selection guidance.
+
+---
+
+## :material-account-key: One Key for the Team, or One Identity per Developer
+
+An assistant configured with the deployment's API key makes every developer's calls indistinguishable on the AWS bill. A deployment can [authenticate callers with Amazon Cognito user pool tokens](operations_configuration.md#cognito-authentication) instead — alongside the API key or in place of it — so each developer reaches the gateway with a credential of their own. With [per-user cost attribution](operations_cost_management.md#per-user-attribution) enabled, their model calls then run under a short-lived role session of their own, and Cost Explorer and the Cost and Usage Report show what each of them spent, from the invoice rather than an estimate.
+
+The assistant needs no feature for this beyond sending the token it was given: whichever field holds the API key today (`ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, a provider entry) carries the access token instead. Renewal is the thing to plan for — an access token expires where an API key does not — so favour a tool that reads its credential from the environment, or from a helper command, on each run over one that stores a key once in a settings file.
 
 ---
 
