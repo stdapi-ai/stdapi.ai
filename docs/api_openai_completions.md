@@ -89,6 +89,16 @@ Generate text completions with Amazon Bedrock foundation models—including Clau
 
 </div>
 
+## Model Support
+
+Every model the [Chat Completions API](api_openai_chat_completions.md#model-support) serves also answers here — the same model classes back both routes, with the prompt adapted into a single Converse turn. That means all models supported by the Amazon Bedrock Converse and Converse Stream API, plus every model served by [Bedrock Mantle](features.md#bedrock-mantle-models) when enabled. The Mantle conversion behavior tabled above is the same three serving paths described on the Chat Completions page.
+
+To list the models this deployment serves on this route, call [`search_models`](api_search_models.md) with `route=openai_completion`.
+
+### Model Name Aliases
+
+The dynamic aliases published by the official provider APIs resolve here too, exactly as they do for chat — `gpt-oss-20b` reaches `openai.gpt-oss-20b-1:0`.
+
 ## Prompt Input Types
 
 _stdapi.ai extends the standard completions interface with multiple input modes:_

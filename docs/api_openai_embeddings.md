@@ -66,6 +66,22 @@ Generate vector embeddings for semantic search and RAG applications with Amazon 
 
 </div>
 
+## Model Support
+
+Any Amazon Bedrock model that produces embeddings answers on this route — the Amazon Titan Embed and Amazon Nova embedding families, Cohere Embed, and TwelveLabs Marengo. A model that produces something else is refused with `400`, naming it.
+
+To list the models this deployment serves on this route, call [`search_models`](api_search_models.md) with `route=openai_embedding`. Which of them accept images, video or audio rather than text alone is covered under [Multimodal Embeddings](#multimodal-embeddings).
+
+!!! note "No Bedrock Mantle models here"
+    [Bedrock Mantle](features.md#bedrock-mantle-models) serves chat models only. Embeddings always come from the classic `bedrock-runtime` catalogue, whether or not Mantle is enabled.
+
+### Model Name Aliases
+
+Cohere models carry the dotted version their own API publishes, so the name you already send resolves without change:
+
+- `embed-v4.0` → `cohere.embed-v4:0`
+- `embed-english-v3.0` → `cohere.embed-english-v3`
+
 ## Advanced Features
 
 ### Embedding a Corpus in Bulk
