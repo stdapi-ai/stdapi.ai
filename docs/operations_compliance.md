@@ -1,7 +1,7 @@
 ---
 title: Data Sovereignty & Compliance
-description: How stdapi.ai enforces data residency and sovereignty on AWS — region-locked Bedrock, S3, KMS encryption, AI service calls, and configuration guidance for GDPR, US, and APAC compliance requirements.
-keywords: data sovereignty, data residency, GDPR compliance AWS, AWS Bedrock compliance, AI data privacy, stdapi.ai compliance, cross-region inference data residency, AWS data residency, enterprise AI compliance, KMS encryption AI, Bedrock data protection, CMK customer managed key, CLOUD Act AWS, FISA 702 cloud, EU-US Data Privacy Framework, data sovereignty AI gateway
+description: How stdapi.ai enforces data residency, sovereignty and content safety on AWS — region-locked Bedrock, S3, KMS encryption, AI service calls, Amazon Bedrock guardrails, and configuration guidance for GDPR, US, and APAC compliance requirements.
+keywords: data sovereignty, data residency, GDPR compliance AWS, AWS Bedrock compliance, AI data privacy, stdapi.ai compliance, cross-region inference data residency, AWS data residency, enterprise AI compliance, KMS encryption AI, Bedrock data protection, CMK customer managed key, CLOUD Act AWS, FISA 702 cloud, EU-US Data Privacy Framework, data sovereignty AI gateway, Bedrock guardrails compliance, AI content safety, PII masking AI gateway, content moderation compliance
 ---
 
 # :material-shield-lock: Data Sovereignty & Compliance
@@ -201,6 +201,81 @@ Amazon Polly, Transcribe, Comprehend, and Translate each run in an independently
 
 ---
 
+## :material-shield-check: Content Safety
+
+Content filtering is a control you configure, not one the gateway supplies of its own. It enforces an [Amazon Bedrock guardrail](operations_configuration.md#bedrock-guardrails) that you create and own, evaluated by Bedrock in your account and in your configured regions. With no guardrail configured, nothing is filtered or refused on inference — the [Moderations API](api_openai_moderations.md) still classifies content on demand, but classification is a report, not a block.
+
+There is no separate stdapi.ai content policy, model evaluation, or review stage layered on top. Every behavior below is the enforcement of the policy **you** define on the guardrail, plus the classification backends the Moderations API exposes.
+
+### Guardrail Coverage
+
+A guardrail set through [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER` and `AWS_BEDROCK_GUARDRAIL_VERSION`](operations_configuration.md#aws-bedrock-guardrail-identifier) — or carried by a [model alias](operations_configuration.md#model-aliases-configuration), which overrides the global one for the requests naming that alias — applies to **every route**:
+
+| Routes                                                       | Direction checked                                                                  |
+|--------------------------------------------------------------|--------------------------------------------------------------------------------------|
+| Chat Completions, Responses, Completions, Anthropic Messages | **Input and output**, natively inside the Bedrock invocation                       |
+| Embeddings, Rerank, Images Generations / Edits, Videos, Audio Speech | **Input** — the client-supplied text, checked before it reaches the backend |
+| Audio Transcriptions, Audio Translations                     | **Output** — the transcript or translated text, checked before it is returned      |
+| Realtime                                                     | **Input and output**, per turn — written items before the model sees them, transcribed caller speech, and each completed answer |
+
+Routes whose AWS backend has no native guardrail mechanism call the ApplyGuardrail API explicitly; see [Route Coverage](operations_configuration.md#route-coverage) for the mechanism used per route, and [Bedrock Guardrails](operations_iam_permissions.md#bedrock-guardrails-optional) for the IAM permission it requires.
+
+Clients cannot weaken the policy: [`AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE`](operations_configuration.md#aws-bedrock-allow-guardrail-override) is `false` by default, so guardrail request headers and request-body guardrail configuration are ignored while a guardrail is configured. It is auto-enabled at startup only when no guardrail is configured anywhere — there is then no policy to bypass.
+
+!!! warning "Two places a configured guardrail does not reach"
+    - **Bedrock Mantle-served models** — guardrails are a `bedrock-runtime` feature and do not apply to requests served by the Mantle endpoint. Startup emits a warning counting the affected models; set [`AWS_BEDROCK_MANTLE_ENABLED=false`](operations_configuration.md#bedrock-mantle-enabled) to close the gap. A **model alias** that carries a guardrail while pointing at a Mantle-served model is fatal at startup rather than silently unguarded.
+    - **Batch inference** — the Bedrock batch API cannot carry a guardrail. A batched request that a configured guardrail would apply to is **refused**, not run unguarded; send those requests without batching.
+
+    Both are fail-closed by design: the failure mode is a refused request or a refused startup, never content served past a policy the operator believes is active.
+
+### Intervention Behavior
+
+What a client sees when the guardrail intervenes depends on the mechanism the route uses:
+
+| Route family                                                 | Result of a blocking intervention                                                                     |
+|--------------------------------------------------------------|---------------------------------------------------------------------------------------------------------|
+| ApplyGuardrail-enforced routes (embeddings, rerank, images, videos, speech, transcription, translation, moderations) | HTTP **400** with error code `content_filter`, carrying the guardrail's own configured blocked messaging |
+| Chat Completions, Responses, Completions                     | The response is returned and reports `content_filter` as its finish (or incomplete) reason              |
+| Anthropic Messages                                           | The response is returned with stop reason `refusal`                                                     |
+| Realtime                                                     | A terminal `error` event and close code `3000` — the session ends                                       |
+
+A **masking-only** intervention (the guardrail's sensitive-information policy anonymizing rather than blocking) substitutes the masked text instead of failing: masked input reaches the backend model already masked, and a masked transcript or translation is returned on the plain `json` and `text` formats. Response formats that cannot represent masked text — `srt`, `vtt`, `verbose_json`, `diarized_json` — fail with the same `content_filter` error rather than return the unmasked content.
+
+On the Realtime API the check cannot precede delivery in one direction: the model's speech is streamed while it is generated and its transcript is only complete once the answer is over, so a blocked answer may already have been partly heard when the session ends.
+
+!!! info "Guardrail evaluation is a billed AWS operation"
+    AWS charges for the guardrail on every route it applies to. Only the ApplyGuardrail-enforced routes report the units consumed, which appear per guardrail policy in [usage logs and cost tracking](operations_logging_monitoring.md). Native chat routes are billed by AWS but return no unit counts, so tracked cost on them is lower than the AWS bill by the guardrail's share.
+
+### Content Classification
+
+The [Moderations API](api_openai_moderations.md) (`POST /v1/moderations`) classifies text and images against three backends, all inside your AWS account:
+
+| Backend                                                                  | Requires                                              | Inputs           |
+|--------------------------------------------------------------------------|-------------------------------------------------------|------------------|
+| Amazon Bedrock Guardrails                                                | A configured guardrail resource                       | Text and images  |
+| Inline guardrail checks (`InvokeGuardrailChecks`)                        | **No guardrail resource** — only a Bedrock region offering the operation | Text only |
+| Amazon Comprehend toxicity detection                                     | Nothing — always available                            | Text only        |
+
+Because the last two need no setup, `/v1/moderations` works on any deployment: with no guardrail configured it resolves to inline guardrail checks where a configured region offers them, then falls back to Comprehend. See [Model Support](api_openai_moderations.md#model-support) for the selection rules and category mapping, and [Comprehend Moderation](operations_iam_permissions.md#comprehend-moderation) for its permission.
+
+The same classification is available inline on generation: the `moderation` request parameter of the Chat Completions and Responses APIs reports how the guardrail assessed the input and the output of that request. It requires a guardrail resource, and is rejected on Mantle-served models.
+
+### Personal Data in Content
+
+Personal data is handled in exactly two places, both of which you switch on deliberately:
+
+- **The guardrail's sensitive-information policy** — the PII entity types and regular expressions you configure on the guardrail are masked or blocked wherever that guardrail is checked, in both directions, following the intervention behavior above.
+- **Amazon Transcribe PII redaction** — a client may request `ContentRedaction` on a transcription; only the single-output `redacted` mode is accepted, so no unredacted copy is produced. See [Audio Transcriptions](api_openai_audio_transcriptions.md).
+
+Just as importantly, there is no personal-data handling anywhere else, and none should be assumed:
+
+- The gateway performs **no detection, classification or redaction of its own** — everything above is AWS-side policy evaluation.
+- Only **text** is submitted for checking on inference routes. Images, audio and documents passed to a model are not scanned for personal data; the Moderations API is the one surface that submits images to a guardrail.
+- Objects held temporarily in your S3 buckets are **not scanned or redacted** — see [S3 Data Storage](#s3-data-storage) for their lifecycle.
+- Application logs are not filtered for personal data; prompt and response content simply never reaches them unless you enable it — see [Logging](#logging).
+
+---
+
 ## :material-bucket-outline: S3 Data Storage
 
 S3 is used as temporary storage for multimodal content (images, PDFs, audio files) passed to or returned from Bedrock and the AI services. Data is stored only in buckets you own and configure.
@@ -271,6 +346,9 @@ Security Hub Foundational Security Best Practices control mapping, GuardDuty Run
 | `AWS_TRANSCRIBE_S3_BUCKET`                  | S3 bucket for Transcribe audio files                          | Must be in the same region as `AWS_TRANSCRIBE_REGION` |
 | `AWS_COMPREHEND_REGION`                     | Comprehend service region                                     | Pin to your target geography                          |
 | `AWS_TRANSLATE_REGION`                      | Translate service region                                      | Pin to your target geography                          |
+| `AWS_BEDROCK_GUARDRAIL_IDENTIFIER`          | Guardrail applied to every route                              | Enforce your content and sensitive-information policy |
+| `AWS_BEDROCK_GUARDRAIL_VERSION`             | Version of that guardrail                                     | Pin the exact policy version in force                 |
+| `AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE`      | Allow clients to override the configured guardrail            | Keep `false` so no client can bypass the policy       |
 
 !!! warning "Service regions are unpinned by default"
     Left unset, `AWS_POLLY_REGION`, `AWS_TRANSCRIBE_REGION`, `AWS_COMPREHEND_REGION` and `AWS_TRANSLATE_REGION` make every [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) entry a candidate, with automatic failover between them. Restrict `AWS_BEDROCK_REGIONS` to compliant regions, or pin each service explicitly, so no request can be served outside your target geography.
@@ -374,6 +452,7 @@ AWS also incorporates **Standard Contractual Clauses (SCCs)** into its Data Proc
 - :material-check: **Restrict all region settings to compliant regions** — `AWS_BEDROCK_REGIONS` is the primary control; all services default to it, and any optional per-service override must stay within your target geography.
 - :material-check: **Set `AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL=false`** — stdapi.ai will then use geography-pinned inference profiles (`us.*`, `eu.*`, `apac.*`), whose destination region list AWS commits to keeping within the named geography.
 - :material-check: **Opt out of AWS AI service improvement** via an AWS Organizations policy — one-time console action covering Polly, Transcribe, Comprehend, and Translate.
+- :material-check: **Configure an Amazon Bedrock guardrail and leave `AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE` at `false`** — the policy then applies to every route in both directions and no client can weaken it. If you rely on it, also set `AWS_BEDROCK_MANTLE_ENABLED=false`, since guardrails do not apply to Mantle-served models. See [Content Safety](#content-safety).
 - :material-check: **Use a CMK with a restrictive key policy** — the Terraform module creates one by default, so the key policy, its grants and its CloudTrail usage records are yours to control. For stricter control: bring your own key, limit decrypt to the ECS task role, enable automatic rotation, crypto-shredding for right-to-erasure, or a CloudHSM-backed store for FIPS 140-3 Level 3.
 - :material-check: **Confirm `LOG_REQUEST_PARAMS` is disabled** (the default) in production — prompt and response content are then kept out of application logs entirely. If Bedrock invocation logging is enabled for audit purposes, configure a KMS CMK for the S3 or CloudWatch destination.
 - :material-check: **Use AWS PrivateLink** for Bedrock and S3 to keep service calls off the public internet, and **enable TLS 1.3 on the ALB** to activate post-quantum hybrid key exchange.
