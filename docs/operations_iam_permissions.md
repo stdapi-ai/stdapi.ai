@@ -77,7 +77,7 @@ These permissions are mandatory for stdapi.ai to discover and invoke Amazon Bedr
 
 **Environment Variables**: [`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE`](operations_configuration.md#bedrock-marketplace-auto-subscribe)
 
-Required only if you want to enable automatic subscription to new models in the AWS Marketplace (`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true`, which is the default). When enabled, the server can automatically subscribe to marketplace offerings for newly discovered models.
+Required only if you want models sold as third-party AWS Marketplace listings to be usable without subscribing to each one by hand (`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true`, which is the default). The server never calls `Subscribe` itself: it keeps a listing with no agreement in the catalogue, and AWS creates the subscription under this role on the first invocation. It applies to whichever models AWS sells that way — see [Which Models Are Which](operations_cost_management.md#which-models-are-which); models billed as ordinary Amazon Bedrock usage need none of these permissions.
 
 ??? example "Bedrock Marketplace Auto-Subscribe IAM Policy Statement"
     ```json

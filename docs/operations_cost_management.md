@@ -56,7 +56,7 @@ Some models on Amazon Bedrock are sold as third-party AWS Marketplace listings; 
 ### What stdapi.ai Does About It
 
 - **Both paths are priced.** [Cost tracking](#cost-tracking-real-time-aws-pricing) ingests Marketplace listings and native Bedrock rows alike, so a request log entry carries a cost regardless of how AWS bills it.
-- **Subscriptions are handled automatically.** AWS creates the Marketplace subscription on first invocation; stdapi.ai performs that flow when [`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE`](operations_configuration.md#bedrock-marketplace-auto-subscribe) is enabled (the default). It requires `aws-marketplace:Subscribe` and `aws-marketplace:ViewSubscriptions` — see [IAM Permissions](operations_configuration.md#bedrock-iam). Without them, the first call to a third-party model fails with `AccessDeniedException`.
+- **Subscriptions are handled automatically.** AWS creates the Marketplace subscription on first invocation; stdapi.ai keeps a not-yet-subscribed listing in the catalogue so that call can happen, when [`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE`](operations_configuration.md#bedrock-marketplace-auto-subscribe) is enabled (the default), and hides it otherwise. It requires `aws-marketplace:Subscribe` and `aws-marketplace:ViewSubscriptions` — see [IAM Permissions](operations_configuration.md#bedrock-iam). Without them, the first call to a third-party model fails with `AccessDeniedException`.
 - **Cost tracking does not separate the two lines.** Request logs report what a call cost, not which AWS invoice section it lands on. Use Cost Explorer, grouped by service, to see the Marketplace split.
 
 ---
