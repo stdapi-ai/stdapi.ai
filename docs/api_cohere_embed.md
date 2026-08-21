@@ -19,7 +19,7 @@ This is an alternate route to the [OpenAI-compatible Embeddings API](api_openai_
     export BASE="https://your-host/cohere"  # <scheme>://<host> + COHERE_ROUTES_PREFIX
     ```
 
-## Why Choose Embed?
+## Why Choose the Embed API?
 
 <div class="grid cards" markdown>
 
@@ -37,7 +37,7 @@ This is an alternate route to the [OpenAI-compatible Embeddings API](api_openai_
 
 </div>
 
-## Quick Start: Available Endpoints
+## Available Endpoints
 
 | Endpoint    | Method | What It Does                                           | Powered By               | MCP Tool          |
 |-------------|--------|--------------------------------------------------------|--------------------------|-------------------|
@@ -109,6 +109,34 @@ curl -X POST "$BASE/v2/embed" \
 * :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } **Extra Feature** — Enhanced capability beyond the Cohere API
 
 </div>
+
+## Model Support
+
+These are the model families served by this route, with the constraint each one places on a request:
+
+### ![Cohere](styles/logo_cohere.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Cohere Models
+
+| Model                        | Model ID                       | Notes                                                              |
+|------------------------------|--------------------------------|--------------------------------------------------------------------|
+| Cohere Embed v4              | `cohere.embed-v4:0`            | The only model accepting `texts` and `images` in the same request  |
+| Cohere Embed Multilingual v3 | `cohere.embed-multilingual-v3` | `texts` or `images` in a request, not both                         |
+| Cohere Embed English v3      | `cohere.embed-english-v3`      | `texts` or `images` in a request, not both                         |
+
+### ![Amazon](styles/logo_amazon.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Models
+
+| Model                               | Model ID                                  | Notes                                                          |
+|-------------------------------------|-------------------------------------------|------------------------------------------------------------------|
+| Amazon Nova 2 Multimodal Embeddings | `amazon.nova-2-multimodal-embeddings-v1:0` | `output_dimension` limited to `256`, `384`, `1024` or `3072`   |
+| Amazon Titan Embed Text v2          | `amazon.titan-embed-text-v2:0`            | Text only                                                       |
+| Amazon Titan Embed Image v1         | `amazon.titan-embed-image-v1`             | The only Titan model accepting `images`                         |
+| Amazon Titan Embed Text v1          | `amazon.titan-embed-text-v1`              | Deprecated — served by `amazon.titan-embed-text-v2:0` instead   |
+
+### ![TwelveLabs](styles/logo_twelvelabs.svg){ style="height: 1.2em; vertical-align: text-bottom;" } TwelveLabs Models
+
+| Model                        | Model ID                          | Notes                                    |
+|------------------------------|-----------------------------------|--------------------------------------------|
+| TwelveLabs Marengo Embed 3.0 | `twelvelabs.marengo-embed-3-0-v1:0` | `output_dimension` is rejected with a 400 |
+| TwelveLabs Marengo Embed 2.7 | `twelvelabs.marengo-embed-2-7-v1:0` | `output_dimension` is rejected with a 400 |
 
 ## Quantized and Base64 Embedding Types
 

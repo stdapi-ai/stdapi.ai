@@ -17,7 +17,7 @@ Rank documents by semantic relevance to a query with Amazon Bedrock rerank model
     export BASE="https://your-host/cohere"  # <scheme>://<host> + COHERE_ROUTES_PREFIX
     ```
 
-## Why Choose Rerank?
+## Why Choose the Rerank API?
 
 <div class="grid cards" markdown>
 
@@ -35,7 +35,7 @@ Rank documents by semantic relevance to a query with Amazon Bedrock rerank model
 
 </div>
 
-## Quick Start: Available Endpoints
+## Available Endpoints
 
 | Endpoint     | Method | What It Does                                        | Powered By            | MCP Tool           |
 |--------------|--------|-----------------------------------------------------|-----------------------|--------------------|

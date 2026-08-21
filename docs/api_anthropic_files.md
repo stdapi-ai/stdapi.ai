@@ -19,6 +19,8 @@ keywords: Files API, Anthropic files, file upload, S3 file storage, Anthropic me
 
 Upload and manage files via an Anthropic-compatible interface. Files are stored in Amazon S3 and can be referenced directly in Messages requests as document or image sources.
 
+## Why Choose the Files API?
+
 <div class="grid cards" markdown>
 
 - :material-upload: __Simple Upload__
@@ -325,7 +327,7 @@ curl -X POST "$BASE/v1/messages" \
 
 See the [OpenAI Files API documentation](api_openai_files.md#referencing-uploaded-files-via-the-file-id-uri-scheme) for the full list of supported routes — the same scheme works identically across both API surfaces.
 
-## Error Reference
+## Errors
 
 | HTTP | Cause                                                                               |
 |------|-------------------------------------------------------------------------------------|

@@ -19,7 +19,7 @@ Discover and list available Amazon Bedrock text models through an Anthropic-comp
 
     **Note:** `ANTHROPIC_ROUTES_PREFIX` must always be a non-empty path and is validated at startup to differ from `OPENAI_ROUTES_PREFIX` (the server refuses to start otherwise). This Anthropic-compatible Models API is therefore always served on its own path, distinct from the [OpenAI-compatible Models API](api_openai_models.md).
 
-## Why Use the Models API?
+## Why Choose the Models API?
 
 <div class="grid cards" markdown>
 
@@ -37,7 +37,7 @@ Discover and list available Amazon Bedrock text models through an Anthropic-comp
 
 </div>
 
-## Quick Start: Available Endpoints
+## Available Endpoints
 
 | Endpoint                | Method | What It Does                     | Powered By     | MCP Tool               |
 |-------------------------|--------|----------------------------------|----------------|------------------------|

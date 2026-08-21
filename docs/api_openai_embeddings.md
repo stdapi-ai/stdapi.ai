@@ -26,7 +26,7 @@ Generate vector embeddings for semantic search and RAG applications with Amazon 
 
 </div>
 
-## Quick Start: Available Endpoint
+## Available Endpoints
 
 | Endpoint         | Method | What It Does                                                | Powered By                   | MCP Tool           |
 |------------------|--------|-------------------------------------------------------------|------------------------------|--------------------|
@@ -131,72 +131,6 @@ export DEFAULT_MODEL_PARAMS='{
 
 - :material-check-circle:{ .success role="img" aria-label="Supported" } **Compatible parameters**: Forwarded to the model and applied
 - :material-alert-circle:{ .warning } **Unsupported parameters**: Return HTTP 400 with an error message
-
-## Available Request Headers
-
-This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
-
-### Content Safety (Guardrails)
-
-| Header                               | Purpose                            | Valid Values                          |
-|--------------------------------------|------------------------------------|---------------------------------------|
-| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier             |
-| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`)            |
-| `X-Amzn-Bedrock-Trace`               | Guardrail trace level              | `disabled`, `enabled`, `enabled_full` |
-
-### Performance Optimization
-
-| Header                                     | Purpose                | Valid Values                  |
-|--------------------------------------------|------------------------|-------------------------------|
-| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `default`, `flex`, `priority`, `reserved` |
-| `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`       |
-
-**Example with headers:**
-
-```bash
-curl -X POST "$BASE/v1/embeddings" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -H "X-Amzn-Bedrock-Service-Tier: flex" \
-  -H "X-Amzn-Bedrock-PerformanceConfig-Latency: standard" \
-  -d '{
-    "model": "amazon.nova-2-multimodal-embeddings-v1:0",
-    "input": ["Batch text 1", "Batch text 2", "Batch text 3"]
-  }'
-```
-
-!!! info "Detailed Documentation"
-    For complete information about these headers, configuration options, and use cases, see:
-
-    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
-    - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
-
-## Try It Now
-
-**Single text embedding:**
-
-```bash
-curl -X POST "$BASE/v1/embeddings" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "amazon.nova-2-multimodal-embeddings-v1:0",
-    "input": "Semantic search transforms how we find information"
-  }'
-```
-
-**Batch processing with base64 encoding:**
-
-```bash
-curl -X POST "$BASE/v1/embeddings" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "amazon.nova-2-multimodal-embeddings-v1:0",
-    "input": ["Product description", "User query", "Related content"],
-    "encoding_format": "base64"
-  }'
-```
 
 ## Multimodal Embeddings
 
@@ -373,3 +307,69 @@ curl -X POST "$BASE/v1/embeddings" \
 ---
 
 **Build smarter search and recommendations!** Explore available embedding models in the [Models API](api_openai_models.md).
+## Available Request Headers
+
+This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
+
+### Content Safety (Guardrails)
+
+| Header                               | Purpose                            | Valid Values                          |
+|--------------------------------------|------------------------------------|---------------------------------------|
+| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier             |
+| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`)            |
+| `X-Amzn-Bedrock-Trace`               | Guardrail trace level              | `disabled`, `enabled`, `enabled_full` |
+
+### Performance Optimization
+
+| Header                                     | Purpose                | Valid Values                  |
+|--------------------------------------------|------------------------|-------------------------------|
+| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `default`, `flex`, `priority`, `reserved` |
+| `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`       |
+
+**Example with headers:**
+
+```bash
+curl -X POST "$BASE/v1/embeddings" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "X-Amzn-Bedrock-Service-Tier: flex" \
+  -H "X-Amzn-Bedrock-PerformanceConfig-Latency: standard" \
+  -d '{
+    "model": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "input": ["Batch text 1", "Batch text 2", "Batch text 3"]
+  }'
+```
+
+!!! info "Detailed Documentation"
+    For complete information about these headers, configuration options, and use cases, see:
+
+    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
+    - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
+
+## Try It Now
+
+**Single text embedding:**
+
+```bash
+curl -X POST "$BASE/v1/embeddings" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "input": "Semantic search transforms how we find information"
+  }'
+```
+
+**Batch processing with base64 encoding:**
+
+```bash
+curl -X POST "$BASE/v1/embeddings" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "input": ["Product description", "User query", "Related content"],
+    "encoding_format": "base64"
+  }'
+```
+

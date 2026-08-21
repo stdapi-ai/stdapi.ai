@@ -26,7 +26,7 @@ Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable 
 
 </div>
 
-## Quick Start: Available Endpoint
+## Available Endpoints
 
 | Endpoint                    | Method | What It Does                             | Powered By                                       | MCP Tool                  |
 |-----------------------------|--------|------------------------------------------|--------------------------------------------------|---------------------------|
@@ -299,7 +299,7 @@ The following parameters from Amazon Transcribe's [StartTranscriptionJob API](ht
 
 `VocabularyName`, `VocabularyFilterName`, and custom language models must already exist in your AWS account (created via the AWS Transcribe console, CLI, or SDK) before being referenced here.
 
-### :material-lightning-bolt: Streaming Transcriptions { #streaming }
+## :material-lightning-bolt: Streaming { #streaming }
 
 `stream=true` returns the transcript as server-sent events — `transcript.text.delta` events followed by a final `transcript.text.done` — instead of one response body. A [ready-to-run example](#try-it-now) is below.
 
@@ -308,6 +308,46 @@ Each phrase is sent as it is recognized, rather than after the whole recording, 
 A request naming neither is still streamed, but its events arrive together once the recording has been read and its language detected. Operators can set [`AWS_TRANSCRIBE_STREAM_LANGUAGES`](operations_configuration.md#aws-transcribe-stream-languages) to the languages their callers actually send, which gives those requests the faster path too. The same applies to a request using any provider-specific parameter above other than `VocabularyName`, `VocabularyFilterName` and `VocabularyFilterMethod`, which are the only ones a phrase-by-phrase transcript can carry.
 
 Streamed events carry text only, which is why `srt`, `vtt` and `diarized_json` are rejected with `stream=true` rather than answered without their cues or speaker labels.
+
+## Available Request Headers
+
+This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
+
+### Content Safety (Guardrails)
+
+| Header                               | Purpose                            | Valid Values               |
+|--------------------------------------|------------------------------------|----------------------------|
+| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier  |
+| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`) |
+
+The guardrail evaluates the transcript the model produced, not the audio sent. On a streamed request the events are withheld until the transcript is complete, so the guardrail sees the whole text before any of it is delivered. `X-Amzn-Bedrock-Trace` is accepted but has no effect on this route — no guardrail trace is returned.
+
+### Performance Optimization
+
+| Header                                     | Purpose                | Valid Values                              |
+|--------------------------------------------|------------------------|-------------------------------------------|
+| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `default`, `flex`, `priority`, `reserved` |
+| `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`                   |
+
+Both apply only to models transcribed through the Amazon Bedrock runtime. They have no effect on `amazon.transcribe`, which is served by Amazon Transcribe, nor on Amazon Nova Sonic, which is served over its own bidirectional stream.
+
+**Example with headers:**
+
+```bash
+curl -X POST "$BASE/v1/audio/transcriptions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "X-Amzn-Bedrock-GuardrailIdentifier: your-guardrail-id" \
+  -H "X-Amzn-Bedrock-GuardrailVersion: 1" \
+  -F file=@meeting-recording.mp3 \
+  -F model=amazon.transcribe \
+  -F response_format=json
+```
+
+!!! info "Detailed Documentation"
+    For complete information about these headers, configuration options, and use cases, see:
+
+    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
+    - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
 
 ## Try It Now
 

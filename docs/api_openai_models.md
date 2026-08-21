@@ -26,7 +26,7 @@ Discover and list available Amazon Bedrock models across all configured regions 
 
 </div>
 
-## Quick Start: Available Endpoints
+## Available Endpoints
 
 | Endpoint | Method | What It Does | Powered By | MCP Tool |
 |----------|--------|--------------|------------|----------|

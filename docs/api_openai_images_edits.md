@@ -26,7 +26,7 @@ Edit images using inpainting with Amazon Bedrock image models through an OpenAI-
 
 </div>
 
-## Quick Start: Available Endpoint
+## Available Endpoints
 
 | Endpoint           | Method | What It Does                            | Powered By                  | MCP Tool           |
 |--------------------|--------|-----------------------------------------|-----------------------------|--------------------|

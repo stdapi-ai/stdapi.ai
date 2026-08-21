@@ -26,7 +26,7 @@ Hold a live, bidirectional speech-to-speech conversation over a single WebSocket
 
 </div>
 
-## Quick Start: Available Endpoints
+## Available Endpoints
 
 | Endpoint                     | Method | What It Does                                                    | Powered By      | MCP Tool                     |
 |-------------------------------|--------|-------------------------------------------------------------------|------------------|-------------------------------|
@@ -37,122 +37,6 @@ Hold a live, bidirectional speech-to-speech conversation over a single WebSocket
     `POST /v1/realtime/calls`, which upstream uses to negotiate a WebRTC peer connection or to accept a SIP call, is **not available** and answers `404`. Every session runs over the WebSocket above — a browser's included.
 
     [Transports](#transports) covers the whole picture: how a browser connects, and how to put WebRTC or a phone line in front of this deployment today.
-
-## Authentication
-
-Open the WebSocket with one of three credentials, carried in whichever channel the client can use:
-
-| Client                                    | Credential carrier                                                   |
-|--------------------------------------------|------------------------------------------------------------------------|
-| Server-side SDKs                           | `Authorization: Bearer <api key or ephemeral secret>` header           |
-| Other gateway clients                      | `x-api-key: <api key or ephemeral secret>` header                      |
-| Browser (cannot set custom WebSocket headers) | `Sec-WebSocket-Protocol` list entry `openai-insecure-api-key.<credential>` |
-
-Either the deployment's own API key or an [ephemeral client secret](#ephemeral-client-secrets) (`ek_...`) works as the credential. The `model` query parameter (`/v1/realtime?model=<model id>`) selects the model serving the session; it may be omitted when the credential is an ephemeral secret whose session configuration already names one. See [Authentication & Security](operations_authentication_security.md) for how the API key itself is configured.
-
-!!! warning "A refused credential is not an HTTP status"
-    The WebSocket upgrade always completes first, so a rejected or expired credential is **not** answered with `401`/`403`. The connection opens, the first and only event is a terminal `error` with `code: "invalid_api_key"`, and the socket is then closed with close code `3000` and reason `invalid_request_error.invalid_api_key` — the same shape the upstream API uses. Instrument the `error` event and the close code, not the handshake status.
-
-## Ephemeral Client Secrets
-
-`POST /v1/realtime/client_secrets` mints a short-lived credential — a value starting with `ek_` — that carries a session configuration. Hand it to a browser or mobile client so it can open a session directly, without ever holding the deployment's own API key.
-
-```bash
-curl -X POST "$BASE/v1/realtime/client_secrets" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "expires_after": {"anchor": "created_at", "seconds": 60},
-    "session": {
-      "type": "realtime",
-      "model": "amazon.nova-2-sonic-v1:0",
-      "instructions": "You are a helpful support agent."
-    }
-  }'
-```
-
-```json
-{
-  "value": "ek_...",
-  "expires_at": 1731000060,
-  "session": {
-    "type": "realtime",
-    "model": "amazon.nova-2-sonic-v1:0",
-    "instructions": "You are a helpful support agent.",
-    "audio": { "...": "..." }
-  }
-}
-```
-
-- `expires_after.seconds` accepts **10 to 7,200** seconds, defaulting to **600** (10 minutes) when omitted. This bounds how long the secret can be used to *open* a session — a session already opened with it keeps running for its own [session limit](#session-lifecycle-and-limits).
-- `session` accepts the same configuration a client would otherwise send in a `session.update` event; it is applied to every session opened with the secret. It also accepts `{"type": "transcription"}`, which opens sessions that only transcribe the caller and never answer out loud — the only way to ask for one, since the socket itself takes no session type.
-- By default the carried configuration is a **default, not a constraint**: the client may name another model on the `?model=` query string and change the configuration with its own `session.update`, as it can upstream. Set [`REALTIME_ALLOW_SESSION_OVERRIDE=false`](operations_configuration.md#realtime-allow-session-override) to make the model, the `instructions` and `max_output_tokens` the secret was minted with final — a mismatching `?model=` is then refused at connect, and a `session.update` changing one of them answers an `error`.
-
-!!! warning "What a secret grants until it expires"
-    A secret cannot be revoked: rotating [`REALTIME_CLIENT_SECRET_KEY`](operations_configuration.md#realtime-client-secret-key) invalidates every outstanding one at once, and nothing else does. Until then it may open **any number of concurrent sessions**, each billed to the deployment — so keep `expires_after.seconds` as short as the flow allows.
-
-    Its payload is signed, not encrypted: whoever holds the secret can read the session configuration it carries. Nothing confidential belongs in `instructions`.
-
-!!! info "Stateless, and signed"
-    Nothing is stored server-side: the secret is the session configuration plus a signature, so **any instance behind a load balancer verifies a secret minted by any other** — no shared session store, no sticky routing required.
-
-    The signing key is derived from the deployment's configured API key by default. When the deployment runs with **no API key configured at all**, the signing key falls back to a random value generated **per process**: minted secrets then only verify on the instance that minted them, and stop working once a request reaches a different one. Set [`realtime_client_secret_key`](operations_configuration.md#realtime-client-secret-key) explicitly to fix a key shared by every instance regardless of the API key configuration.
-
-## Transports
-
-Upstream offers a realtime session over three transports — WebSocket, WebRTC and SIP. **This API serves the WebSocket, and only the WebSocket.** `POST /v1/realtime/calls`, the endpoint upstream uses to trade an SDP offer for a WebRTC peer connection or to accept an inbound SIP call, has no route here and answers `404`; it is planned for a later release.
-
-### A browser connects to that same WebSocket
-
-There is no separate browser transport to be missing. The page opens `wss://<host>/v1/realtime?model=<id>` itself, carrying an [ephemeral client secret](#ephemeral-client-secrets) in the way [Authentication](#authentication) describes, so the deployment's own API key never leaves your backend. It is two steps — mint the secret server-side, connect with it client-side — and the [browser example](#browser-ephemeral-client-secret) below is both of them.
-
-What the page owns in exchange is the media. Capturing the microphone, resampling it to the session's input format and playing back the `response.output_audio.delta` chunks are its own work, because a WebSocket carries the audio bytes handed to it and nothing else: no jitter buffer, no packet-loss concealment, no echo cancellation. On a good network that is unremarkable; on a lossy one it is audible, and it is the reason to reach for a media stack rather than write one.
-
-### Put WebRTC or a phone line in front of the gateway
-
-The route to a browser peer connection or a phone call does not run through `POST /v1/realtime/calls`. The two frameworks most voice agents are already built on — **LiveKit Agents** and **Pipecat** — terminate WebRTC themselves (and SIP, through their telephony transports), and reach the model over exactly the WebSocket this API serves. The caller speaks WebRTC or SIP to the framework; the framework speaks this API. Pointing one at this deployment is the same two client-side changes the rest of this gateway asks for: the base URL, and the model name.
-
-**LiveKit Agents** takes an HTTP base URL and derives the WebSocket from it, exactly as the official SDK does:
-
-```python
-from livekit.agents import AgentSession
-from livekit.plugins import openai
-
-session = AgentSession(
-    llm=openai.realtime.RealtimeModel(
-        model="amazon.nova-2-sonic-v1:0",
-        base_url="https://your-deployment.example.com/v1",
-        api_key="YOUR_API_KEY",
-    )
-)
-```
-
-`base_url` also reads from the `OPENAI_BASE_URL` environment variable, and `api_key` from `OPENAI_API_KEY`. A base URL ending in `/v1` has `/realtime` appended for you; a deployment served under a non-default [`OPENAI_ROUTES_PREFIX`](operations_configuration.md#openai-routes-prefix) has to name the full path itself.
-
-**Pipecat** takes the WebSocket URL whole, `/v1/realtime` included:
-
-```python
-import os
-
-from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
-
-llm = OpenAIRealtimeLLMService(
-    base_url="wss://your-deployment.example.com/v1/realtime",
-    api_key=os.environ["OPENAI_API_KEY"],
-    settings=OpenAIRealtimeLLMService.Settings(model="amazon.nova-2-sonic-v1:0"),
-)
-```
-
-On a telephony leg, set the session's audio formats to `audio/pcmu` or `audio/pcma` — G.711 at 8 kHz is what a phone call already carries, so nothing resamples it twice.
-
-!!! note "Check the constructor against the version you install"
-    The parameters above are as shipped in `livekit-plugins-openai` 1.6.10 and `pipecat-ai` 1.7.0. Both projects have renamed this integration before — Pipecat's service moved out of `pipecat.services.openai_realtime_beta`, and LiveKit does not list `base_url` on its own parameters page — so read [LiveKit's OpenAI realtime plugin](https://docs.livekit.io/agents/models/realtime/plugins/openai/) and [Pipecat's OpenAI realtime service](https://docs.pipecat.ai/api-reference/server/services/s2s/openai) for the release you pin.
-
-### Why WebRTC is a different kind of endpoint
-
-An HTTP request that returns an SDP answer is the small, visible part of WebRTC. The rest is a media transport in its own right: a UDP path negotiated separately from the HTTPS connection, carrying encrypted RTP, with its own address discovery, NAT traversal and congestion control. Serving it means **terminating that media path**, not routing one more request — and the two are not the same thing to build, nor the same thing to put an ingress in front of. SIP has the same shape under different names: signalling on one connection, audio on another.
-
-That is also why a framework is the shorter path rather than a stopgap. LiveKit and Pipecat already own a media stack, already run wherever your users are, and already speak this API on the other side. If you do intend to run a media terminator of your own, [WebRTC and SIP need their own ingress](operations_deploy_advanced.md#webrtc-and-sip-need-their-own-ingress) covers what that costs a deployment.
 
 ## Feature Compatibility
 
@@ -279,6 +163,122 @@ curl "$BASE/search_models?route=openai_realtime" \
 
 Pass the returned model ID as `model` on the WebSocket URL, or in the `session.model` field of an ephemeral secret's configuration. See the [Search Models API](api_search_models.md) for the full filter syntax.
 
+## Authentication
+
+Open the WebSocket with one of three credentials, carried in whichever channel the client can use:
+
+| Client                                    | Credential carrier                                                   |
+|--------------------------------------------|------------------------------------------------------------------------|
+| Server-side SDKs                           | `Authorization: Bearer <api key or ephemeral secret>` header           |
+| Other gateway clients                      | `x-api-key: <api key or ephemeral secret>` header                      |
+| Browser (cannot set custom WebSocket headers) | `Sec-WebSocket-Protocol` list entry `openai-insecure-api-key.<credential>` |
+
+Either the deployment's own API key or an [ephemeral client secret](#ephemeral-client-secrets) (`ek_...`) works as the credential. The `model` query parameter (`/v1/realtime?model=<model id>`) selects the model serving the session; it may be omitted when the credential is an ephemeral secret whose session configuration already names one. See [Authentication & Security](operations_authentication_security.md) for how the API key itself is configured.
+
+!!! warning "A refused credential is not an HTTP status"
+    The WebSocket upgrade always completes first, so a rejected or expired credential is **not** answered with `401`/`403`. The connection opens, the first and only event is a terminal `error` with `code: "invalid_api_key"`, and the socket is then closed with close code `3000` and reason `invalid_request_error.invalid_api_key` — the same shape the upstream API uses. Instrument the `error` event and the close code, not the handshake status.
+
+## Ephemeral Client Secrets
+
+`POST /v1/realtime/client_secrets` mints a short-lived credential — a value starting with `ek_` — that carries a session configuration. Hand it to a browser or mobile client so it can open a session directly, without ever holding the deployment's own API key.
+
+```bash
+curl -X POST "$BASE/v1/realtime/client_secrets" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "expires_after": {"anchor": "created_at", "seconds": 60},
+    "session": {
+      "type": "realtime",
+      "model": "amazon.nova-2-sonic-v1:0",
+      "instructions": "You are a helpful support agent."
+    }
+  }'
+```
+
+```json
+{
+  "value": "ek_...",
+  "expires_at": 1731000060,
+  "session": {
+    "type": "realtime",
+    "model": "amazon.nova-2-sonic-v1:0",
+    "instructions": "You are a helpful support agent.",
+    "audio": { "...": "..." }
+  }
+}
+```
+
+- `expires_after.seconds` accepts **10 to 7,200** seconds, defaulting to **600** (10 minutes) when omitted. This bounds how long the secret can be used to *open* a session — a session already opened with it keeps running for its own [session limit](#session-lifecycle-and-limits).
+- `session` accepts the same configuration a client would otherwise send in a `session.update` event; it is applied to every session opened with the secret. It also accepts `{"type": "transcription"}`, which opens sessions that only transcribe the caller and never answer out loud — the only way to ask for one, since the socket itself takes no session type.
+- By default the carried configuration is a **default, not a constraint**: the client may name another model on the `?model=` query string and change the configuration with its own `session.update`, as it can upstream. Set [`REALTIME_ALLOW_SESSION_OVERRIDE=false`](operations_configuration.md#realtime-allow-session-override) to make the model, the `instructions` and `max_output_tokens` the secret was minted with final — a mismatching `?model=` is then refused at connect, and a `session.update` changing one of them answers an `error`.
+
+!!! warning "What a secret grants until it expires"
+    A secret cannot be revoked: rotating [`REALTIME_CLIENT_SECRET_KEY`](operations_configuration.md#realtime-client-secret-key) invalidates every outstanding one at once, and nothing else does. Until then it may open **any number of concurrent sessions**, each billed to the deployment — so keep `expires_after.seconds` as short as the flow allows.
+
+    Its payload is signed, not encrypted: whoever holds the secret can read the session configuration it carries. Nothing confidential belongs in `instructions`.
+
+!!! info "Stateless, and signed"
+    Nothing is stored server-side: the secret is the session configuration plus a signature, so **any instance behind a load balancer verifies a secret minted by any other** — no shared session store, no sticky routing required.
+
+    The signing key is derived from the deployment's configured API key by default. When the deployment runs with **no API key configured at all**, the signing key falls back to a random value generated **per process**: minted secrets then only verify on the instance that minted them, and stop working once a request reaches a different one. Set [`realtime_client_secret_key`](operations_configuration.md#realtime-client-secret-key) explicitly to fix a key shared by every instance regardless of the API key configuration.
+
+## Transports
+
+Upstream offers a realtime session over three transports — WebSocket, WebRTC and SIP. **This API serves the WebSocket, and only the WebSocket.** `POST /v1/realtime/calls`, the endpoint upstream uses to trade an SDP offer for a WebRTC peer connection or to accept an inbound SIP call, has no route here and answers `404`; it is planned for a later release.
+
+### A browser connects to that same WebSocket
+
+There is no separate browser transport to be missing. The page opens `wss://<host>/v1/realtime?model=<id>` itself, carrying an [ephemeral client secret](#ephemeral-client-secrets) in the way [Authentication](#authentication) describes, so the deployment's own API key never leaves your backend. It is two steps — mint the secret server-side, connect with it client-side — and the [browser example](#browser-ephemeral-client-secret) below is both of them.
+
+What the page owns in exchange is the media. Capturing the microphone, resampling it to the session's input format and playing back the `response.output_audio.delta` chunks are its own work, because a WebSocket carries the audio bytes handed to it and nothing else: no jitter buffer, no packet-loss concealment, no echo cancellation. On a good network that is unremarkable; on a lossy one it is audible, and it is the reason to reach for a media stack rather than write one.
+
+### Put WebRTC or a phone line in front of the gateway
+
+The route to a browser peer connection or a phone call does not run through `POST /v1/realtime/calls`. The two frameworks most voice agents are already built on — **LiveKit Agents** and **Pipecat** — terminate WebRTC themselves (and SIP, through their telephony transports), and reach the model over exactly the WebSocket this API serves. The caller speaks WebRTC or SIP to the framework; the framework speaks this API. Pointing one at this deployment is the same two client-side changes the rest of this gateway asks for: the base URL, and the model name.
+
+**LiveKit Agents** takes an HTTP base URL and derives the WebSocket from it, exactly as the official SDK does:
+
+```python
+from livekit.agents import AgentSession
+from livekit.plugins import openai
+
+session = AgentSession(
+    llm=openai.realtime.RealtimeModel(
+        model="amazon.nova-2-sonic-v1:0",
+        base_url="https://your-deployment.example.com/v1",
+        api_key="YOUR_API_KEY",
+    )
+)
+```
+
+`base_url` also reads from the `OPENAI_BASE_URL` environment variable, and `api_key` from `OPENAI_API_KEY`. A base URL ending in `/v1` has `/realtime` appended for you; a deployment served under a non-default [`OPENAI_ROUTES_PREFIX`](operations_configuration.md#openai-routes-prefix) has to name the full path itself.
+
+**Pipecat** takes the WebSocket URL whole, `/v1/realtime` included:
+
+```python
+import os
+
+from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
+
+llm = OpenAIRealtimeLLMService(
+    base_url="wss://your-deployment.example.com/v1/realtime",
+    api_key=os.environ["OPENAI_API_KEY"],
+    settings=OpenAIRealtimeLLMService.Settings(model="amazon.nova-2-sonic-v1:0"),
+)
+```
+
+On a telephony leg, set the session's audio formats to `audio/pcmu` or `audio/pcma` — G.711 at 8 kHz is what a phone call already carries, so nothing resamples it twice.
+
+!!! note "Check the constructor against the version you install"
+    The parameters above are as shipped in `livekit-plugins-openai` 1.6.10 and `pipecat-ai` 1.7.0. Both projects have renamed this integration before — Pipecat's service moved out of `pipecat.services.openai_realtime_beta`, and LiveKit does not list `base_url` on its own parameters page — so read [LiveKit's OpenAI realtime plugin](https://docs.livekit.io/agents/models/realtime/plugins/openai/) and [Pipecat's OpenAI realtime service](https://docs.pipecat.ai/api-reference/server/services/s2s/openai) for the release you pin.
+
+### Why WebRTC is a different kind of endpoint
+
+An HTTP request that returns an SDP answer is the small, visible part of WebRTC. The rest is a media transport in its own right: a UDP path negotiated separately from the HTTPS connection, carrying encrypted RTP, with its own address discovery, NAT traversal and congestion control. Serving it means **terminating that media path**, not routing one more request — and the two are not the same thing to build, nor the same thing to put an ingress in front of. SIP has the same shape under different names: signalling on one connection, audio on another.
+
+That is also why a framework is the shorter path rather than a stopgap. LiveKit and Pipecat already own a media stack, already run wherever your users are, and already speak this API on the other side. If you do intend to run a media terminator of your own, [WebRTC and SIP need their own ingress](operations_deploy_advanced.md#webrtc-and-sip-need-their-own-ingress) covers what that costs a deployment.
+
 ## Session Lifecycle and Limits
 
 - **Duration cap** — a session lasts at most **8 minutes**. When it is reached, the server closes the connection with WebSocket close code `1000` and reason `session_expired`; reconnect to continue the conversation.
@@ -289,7 +289,7 @@ Pass the returned model ID as `model` on the WebSocket URL, or in the `session.m
 - **Uncommitted audio** — under manual turns (`turn_detection: null`), at most **5.7 MB** of decoded audio may be buffered before an `input_audio_buffer.commit` (about 2 minutes of 24 kHz PCM, longer for G.711); past that the append answers an `error`. Commit each turn, or clear the buffer with `input_audio_buffer.clear`.
 - **Addressable items** — the session keeps its **200** most recent conversation items addressable, dropping the oldest past that. `conversation.item.truncate`, `.retrieve` and `.delete` answer an `error` for an item that has fallen out; the model's own memory of the conversation is unaffected.
 
-## Cost
+## Billing { #cost }
 
 A realtime session bills audio and text tokens continuously, in both directions, for as long as the connection is open — not per request. Usage is reported per answer, in each `response.done` event, and recorded in the gateway's usage log the same way, so a session that drops mid-conversation still accounts for everything spoken before it. Speech tokens are priced well above text tokens by AWS, and the two are recorded and priced separately here. See [Cost Management](operations_cost_management.md) for how usage becomes cost.
 

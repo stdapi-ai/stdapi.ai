@@ -26,7 +26,7 @@ Create variations of existing images using Amazon Bedrock image models through a
 
 </div>
 
-## Quick Start: Available Endpoint
+## Available Endpoints
 
 | Endpoint                | Method | What It Does                           | Powered By                  | MCP Tool               |
 |-------------------------|--------|----------------------------------------|-----------------------------|------------------------|
@@ -164,69 +164,6 @@ precedence. `image` may also be a plain reference string (equivalent to
 
 ### Provider-Specific Parameters
 
-#### ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Titan Image Generator
-
-**Basic Usage (Standard OpenAI Parameters):**
-
-```bash
-curl -X POST "$BASE/v1/images/variations" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@input.png \
-  -F model="amazon.titan-image-generator-v2:0"
-```
-
-**Parameter Mapping:**
-
-| OpenAI Parameter | Maps to                                | Notes                               |
-|------------------|----------------------------------------|-------------------------------------|
-| `image`          | Depends on `taskType`                  | See taskType-specific mapping below |
-| `size`           | `imageGenerationConfig.width/height`   | Fixed sizes (512-2048)              |
-| `n`              | `imageGenerationConfig.numberOfImages` | 1-5 variations                      |
-
-**TaskType-Specific Parameter Mapping:**
-
-| taskType                    | `image` maps to                              |
-|-----------------------------|----------------------------------------------|
-| `IMAGE_VARIATION` (default) | `imageVariationParams.images`                |
-| `TEXT_IMAGE`                | `textToImageParams.conditionImage`           |
-| `COLOR_GUIDED_GENERATION`   | `colorGuidedGenerationParams.referenceImage` |
-
-**Advanced Variation Modes (with form fields):**
-
-Default `taskType` is `"IMAGE_VARIATION"`.
-
-Available task types:
-
-- `"IMAGE_VARIATION"` - Standard image variations
-- `"TEXT_IMAGE"` - Text-guided generation with condition image
-- `"COLOR_GUIDED_GENERATION"` - Color palette-based variations
-
-```bash
-# Text-Guided Condition Image
-curl -X POST "$BASE/v1/images/variations" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@input.png \
-  -F model="amazon.titan-image-generator-v2:0" \
-  -F taskType="TEXT_IMAGE" \
-  -F "textToImageParams[text]=Photorealistic version"
-
-# Color-Guided Variations
-curl -X POST "$BASE/v1/images/variations" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@input.png \
-  -F model="amazon.titan-image-generator-v2:0" \
-  -F taskType="COLOR_GUIDED_GENERATION" \
-  -F "colorGuidedGenerationParams[colors][]=#FF6B6B" \
-  -F "colorGuidedGenerationParams[colors][]=#4ECDC4" \
-  -F "colorGuidedGenerationParams[colors][]=#45B7D1"
-```
-
-!!! info "Full Parameter Reference"
-    For all parameters and task types, see [Amazon Titan Image Generator documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html)
-
 #### ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Nova Canvas
 
 **Basic Usage (Standard OpenAI Parameters):**
@@ -290,6 +227,69 @@ curl -X POST "$BASE/v1/images/variations" \
 
 !!! info "Full Parameter Reference"
     For all parameters, styles, and task types, see [Amazon Nova Canvas documentation](https://docs.aws.amazon.com/nova/latest/userguide/image-generation.html)
+
+#### ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Titan Image Generator
+
+**Basic Usage (Standard OpenAI Parameters):**
+
+```bash
+curl -X POST "$BASE/v1/images/variations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@input.png \
+  -F model="amazon.titan-image-generator-v2:0"
+```
+
+**Parameter Mapping:**
+
+| OpenAI Parameter | Maps to                                | Notes                               |
+|------------------|----------------------------------------|-------------------------------------|
+| `image`          | Depends on `taskType`                  | See taskType-specific mapping below |
+| `size`           | `imageGenerationConfig.width/height`   | Fixed sizes (512-2048)              |
+| `n`              | `imageGenerationConfig.numberOfImages` | 1-5 variations                      |
+
+**TaskType-Specific Parameter Mapping:**
+
+| taskType                    | `image` maps to                              |
+|-----------------------------|----------------------------------------------|
+| `IMAGE_VARIATION` (default) | `imageVariationParams.images`                |
+| `TEXT_IMAGE`                | `textToImageParams.conditionImage`           |
+| `COLOR_GUIDED_GENERATION`   | `colorGuidedGenerationParams.referenceImage` |
+
+**Advanced Variation Modes (with form fields):**
+
+Default `taskType` is `"IMAGE_VARIATION"`.
+
+Available task types:
+
+- `"IMAGE_VARIATION"` - Standard image variations
+- `"TEXT_IMAGE"` - Text-guided generation with condition image
+- `"COLOR_GUIDED_GENERATION"` - Color palette-based variations
+
+```bash
+# Text-Guided Condition Image
+curl -X POST "$BASE/v1/images/variations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@input.png \
+  -F model="amazon.titan-image-generator-v2:0" \
+  -F taskType="TEXT_IMAGE" \
+  -F "textToImageParams[text]=Photorealistic version"
+
+# Color-Guided Variations
+curl -X POST "$BASE/v1/images/variations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@input.png \
+  -F model="amazon.titan-image-generator-v2:0" \
+  -F taskType="COLOR_GUIDED_GENERATION" \
+  -F "colorGuidedGenerationParams[colors][]=#FF6B6B" \
+  -F "colorGuidedGenerationParams[colors][]=#4ECDC4" \
+  -F "colorGuidedGenerationParams[colors][]=#45B7D1"
+```
+
+!!! info "Full Parameter Reference"
+    For all parameters and task types, see [Amazon Titan Image Generator documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html)
 
 #### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Stability AI Models
 

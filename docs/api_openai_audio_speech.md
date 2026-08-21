@@ -26,7 +26,7 @@ Generate natural-sounding speech from text with Amazon Polly through an OpenAI-c
 
 </div>
 
-## Quick Start: Available Endpoint
+## Available Endpoints
 
 | Endpoint            | Method | What It Does                           | Powered By                       | MCP Tool           |
 |---------------------|--------|----------------------------------------|----------------------------------|--------------------|
@@ -266,6 +266,43 @@ The following parameters from the Amazon Polly [SynthesizeSpeech API](https://do
 - `SampleRate` (string): Audio sample rate in Hz — `8000`, `16000`, `22050`, or `24000` (`pcm` output: `8000` or `16000`; omit it to get OpenAI's 24 kHz `pcm` contract instead)
 - `LanguageCode` (string): Language code for bilingual voices only (e.g., `en-IN`, `hi-IN`)
 - `SpeechMarkTypes` (list): Timing marks to return instead of audio — `sentence`, `ssml`, `viseme`, `word`
+
+## Available Request Headers
+
+This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
+
+### Content Safety (Guardrails)
+
+| Header                               | Purpose                            | Valid Values               |
+|--------------------------------------|------------------------------------|----------------------------|
+| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier  |
+| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`) |
+
+The guardrail evaluates the text to synthesize; the audio produced from it is not itself evaluated. `X-Amzn-Bedrock-Trace` is accepted but has no effect on this route — no guardrail trace is returned.
+
+**Example with headers:**
+
+```bash
+curl -X POST "$BASE/v1/audio/speech" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "X-Amzn-Bedrock-GuardrailIdentifier: your-guardrail-id" \
+  -H "X-Amzn-Bedrock-GuardrailVersion: 1" \
+  -d '{
+    "model": "amazon.polly-neural",
+    "voice": "Amy",
+    "input": "Welcome to the future of voice technology!"
+  }' \
+  --output speech.mp3
+```
+
+!!! note "No performance headers on this route"
+    `X-Amzn-Bedrock-Service-Tier` and `X-Amzn-Bedrock-PerformanceConfig-Latency` have no effect here: speech is synthesized by Amazon Polly, which is not invoked through the Amazon Bedrock runtime.
+
+!!! info "Detailed Documentation"
+    For complete information about these headers, configuration options, and use cases, see:
+
+    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
 
 ## Try It Now
 

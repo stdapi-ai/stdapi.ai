@@ -17,7 +17,7 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
     export BASE="https://your-host/anthropic"  # <scheme>://<host> + ANTHROPIC_ROUTES_PREFIX
     ```
 
-## Why Choose Messages API?
+## Why Choose the Messages API?
 
 <div class="grid cards" markdown>
 
@@ -35,7 +35,7 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 
 </div>
 
-## Quick Start: Available Endpoints
+## Available Endpoints
 
 | Endpoint                    | Method | What It Does                               | Powered By                                                                    | MCP Tool                         |
 |-----------------------------|--------|--------------------------------------------|-------------------------------------------------------------------------------|----------------------------------|
@@ -455,7 +455,7 @@ curl -X POST "$BASE/v1/messages" \
 !!! note "Model Compatibility"
     Requesting `code_execution` on a model that does not support it will return a `400 Bad Request` error.
 
-#### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Claude Server Tools
+#### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic Claude Server Tools
 
 Anthropic Claude models support server-side tools that are executed by the model provider. Declare them in their native Anthropic JSON format.
 

@@ -168,7 +168,7 @@ that produces Markdown from PDF and office formats.
 | `server_error`    | Indexing failed, or was interrupted; attach the file again.     |
 
 A [knowledge base store](#knowledge-base-stores) indexes more than text — PDF and
-office documents as they stand, and media on a fully managed one. Its own
+office documents as they stand, and media on a Bedrock managed one. Its own
 refusals list the formats that store accepts.
 
 ## Chunking
@@ -295,6 +295,23 @@ base identifier is ten alphanumeric characters — on every `/v1/vector_stores`
 endpoint, and returned by `GET /v1/vector_stores` next to the stores the server
 owns.
 
+Amazon Bedrock builds a knowledge base over documents in two ways, and **both
+are served**:
+
+| Knowledge base                                                                                                                                                                              | API type  |
+|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------|
+| [Bedrock managed](https://docs.aws.amazon.com/bedrock/latest/userguide/kb-build-managed.html) — Amazon Bedrock owns the datastore, the embedding model, the parser and the reranker            | `MANAGED` |
+| [Customer-managed](https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base-build.html) — you provision the vector store and choose the embedding model                             | `VECTOR`  |
+
+They differ in [two things](#two-kinds) a client can see; everything else on this
+page holds for either.
+
+!!! warning "A structured-data knowledge base is not one of them"
+    A knowledge base [connected to a structured data store](https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base-build-structured.html)
+    (`SQL`) answers a query with database rows rather than passages, and one
+    backed by an Amazon Kendra GenAI index (`KENDRA`) is a search index rather
+    than a vector store. Neither is served here — allowlist only the two above.
+
 **The knowledge base stays yours.** It is addressed, never created and never
 deleted; the server searches it and manages the documents of its data source.
 Its name, description, creation time and status are read from the knowledge base
@@ -302,7 +319,7 @@ itself.
 
 !!! warning "Attaching a file needs a custom data source"
     A file attached through this API becomes an in-line document, which only a
-    **custom** data source takes — on either generation. Point the allowlist
+    **custom** data source takes — on either kind. Point the allowlist
     entry at one, as `<knowledgeBaseId>/<dataSourceId>`; pointed at a data
     source that syncs its corpus from a bucket or another service, the store
     answers `400` to an attach and keeps serving search, listing and reading.
@@ -382,7 +399,7 @@ Files are indexed as they stand, with no conversion step:
 | Formats                                                                 | Indexed by                                     |
 |---------------------------------------------------------------------------|--------------------------------------------------|
 | `.txt`, `.md`, `.html`, `.csv`, `.doc`, `.docx`, `.xls`, `.xlsx`, `.pdf` | Every knowledge base                             |
-| `.ppt`, `.pptx`, images, audio and video                                | A fully managed knowledge base, additionally     |
+| `.ppt`, `.pptx`, images, audio and video                                | A Bedrock managed knowledge base, additionally   |
 | Anything else whose bytes decode as text                                | Every knowledge base, indexed as text            |
 
 One file is at most **5 MiB**.
@@ -392,15 +409,14 @@ the formats **this** store takes — rather than accepted and then reported as
 `failed`. A file that is attached and then fails is one of a format the store
 does take, so it settles with `last_error.code="server_error"`.
 
-### Two Generations, Two Differences
+### Where the Two Kinds Differ { #two-kinds }
 
-Both generations are supported: a knowledge base you provisioned the storage for,
-and a fully managed one. Only two things differ from the client's point of view:
+Only two things differ from the client's point of view:
 
-| Difference               | You provisioned the storage | Fully managed                              |
-|--------------------------|-----------------------------|--------------------------------------------|
-| Document formats indexed | The table above             | Also `.ppt`, `.pptx`, images, audio, video |
-| `query` length           | 1,000 characters            | 10,000 characters                          |
+| Difference               | Customer-managed | Bedrock managed                            |
+|--------------------------|------------------|--------------------------------------------|
+| Document formats indexed | The table above  | Also `.ppt`, `.pptx`, images, audio, video |
+| `query` length           | 1,000 characters | 10,000 characters                          |
 
 ### Cost
 
@@ -410,13 +426,13 @@ queried or not. This is information for choosing between the two, not a
 recommendation.
 
 What the [usage log](operations_cost_management.md#vector-stores) reports differs
-per generation, because the retrieval runs inside the knowledge base rather than
+per kind, because the retrieval runs inside the knowledge base rather than
 through an embedding model of the server's:
 
-| Generation                  | Search                                                         | Attaching a file                                     |
-|-----------------------------|----------------------------------------------------------------|------------------------------------------------------|
-| Fully managed               | One `search_units` unit per query, at the published flat rate  | Not reported: index storage is billed monthly per GB |
-| You provisioned the storage | Not reported: no per-retrieval rate is published for it         | Not reported: billed by its own embedding model      |
+| Knowledge base   | Search                                                         | Attaching a file                                     |
+|------------------|----------------------------------------------------------------|------------------------------------------------------|
+| Bedrock managed  | One `search_units` unit per query, at the published flat rate  | Not reported: index storage is billed monthly per GB |
+| Customer-managed | Not reported: no per-retrieval rate is published for it         | Not reported: billed by its own embedding model      |
 
 Everything left unreported is on your AWS bill and readable from AWS Cost
 Explorer. Full detail in [Cost Management](operations_cost_management.md#vector-stores).

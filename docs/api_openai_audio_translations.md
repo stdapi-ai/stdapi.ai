@@ -26,7 +26,7 @@ Translate audio from any language to English text with Amazon Transcribe + Trans
 
 </div>
 
-## Quick Start: Available Endpoint
+## Available Endpoints
 
 | Endpoint                 | Method | What It Does                                     | Powered By                                                   | MCP Tool                    |
 |--------------------------|--------|--------------------------------------------------|--------------------------------------------------------------|-----------------------------|
@@ -177,6 +177,46 @@ Both settings apply consistently to the primary translated text and, for `respon
     `TerminologyNames` references AWS Translate custom terminology resources created ahead of time via the AWS Translate console, CLI, or SDK (`ImportTerminology`) — stdapi.ai does not create or manage them. An unknown name is rejected by AWS Translate with a client error.
 
 Invalid `Settings` values (e.g. an unsupported `Formality`) are rejected with HTTP 400 before any partial translation occurs.
+
+## Available Request Headers
+
+This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
+
+### Content Safety (Guardrails)
+
+| Header                               | Purpose                            | Valid Values               |
+|--------------------------------------|------------------------------------|----------------------------|
+| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier  |
+| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`) |
+
+The guardrail evaluates the English translation the model produced, not the audio sent. `X-Amzn-Bedrock-Trace` is accepted but has no effect on this route — no guardrail trace is returned.
+
+### Performance Optimization
+
+| Header                                     | Purpose                | Valid Values                              |
+|--------------------------------------------|------------------------|-------------------------------------------|
+| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `default`, `flex`, `priority`, `reserved` |
+| `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`                   |
+
+Both apply only to models translated through the Amazon Bedrock runtime. They have no effect on `amazon.transcribe`, which is served by Amazon Transcribe and AWS Translate, nor on Amazon Nova Sonic, which is served over its own bidirectional stream.
+
+**Example with headers:**
+
+```bash
+curl -X POST "$BASE/v1/audio/translations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "X-Amzn-Bedrock-GuardrailIdentifier: your-guardrail-id" \
+  -H "X-Amzn-Bedrock-GuardrailVersion: 1" \
+  -F file=@spanish-interview.mp3 \
+  -F model=amazon.transcribe \
+  -F response_format=json
+```
+
+!!! info "Detailed Documentation"
+    For complete information about these headers, configuration options, and use cases, see:
+
+    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
+    - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
 
 ## Try It Now
 

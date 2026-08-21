@@ -26,7 +26,7 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 
 </div>
 
-## Quick Start: Available Endpoint
+## Available Endpoints
 
 | Endpoint               | Method | What It Does                               | Powered By               | MCP Tool                  |
 |------------------------|--------|--------------------------------------------|--------------------------|---------------------------|
@@ -124,18 +124,6 @@ Two outcomes are possible for a parameter no model behind this API can honor, an
 * :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } **Extra Feature** — Enhanced capability beyond OpenAI API
 
 </div>
-
-## Stored Chat Completions
-
-Set `store: true` to persist a chat completion in [Amazon Bedrock session storage](https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html) — same mechanism, region, and [KMS setting](operations_configuration.md#aws-bedrock-session-encryption-key-arn) as [stored responses](api_openai_responses.md#stored-responses). The returned `id` then works with the full stored-completion surface:
-
-- `GET /v1/chat/completions` — list stored completions, sorted by creation time (`order`, `after`, `limit`), filterable by `model` and by metadata pairs. Metadata filters accept either one `metadata[key]=value` parameter per key (what the OpenAI SDKs send) or a single `metadata={"key": "value"}` JSON object of string values, for clients that can only send a whole object in one query parameter. A bare `metadata` in any other shape is rejected with `400` naming both accepted forms.
-- `GET /v1/chat/completions/{completion_id}` — retrieve the stored completion.
-- `POST /v1/chat/completions/{completion_id}` — replace its `metadata` (`null` clears it).
-- `GET /v1/chat/completions/{completion_id}/messages` — list its input messages.
-- `DELETE /v1/chat/completions/{completion_id}` — delete it and its backing session.
-
-`store` defaults to **false** on this implementation and is ignored with `stream=true` or when the server lacks the [session storage IAM permissions](operations_configuration.md#bedrock-session-storage-optional) (a warning is recorded in the request log). Listings scan a capped number of sessions (1,000) in the primary Bedrock region; accounts beyond the cap may see incomplete listings.
 
 ## Model Support
 
@@ -386,7 +374,7 @@ The string-overloaded `image_url.url`, `file.file_data`, and `input_audio.data` 
 !!! info "Two equivalent ways to reference an uploaded file"
     The OpenAI-native typed path `{"type": "file", "file": {"file_id": "file-…"}}` is unchanged and still preferred when a typed object is acceptable. The `file-id:` URI is the equivalent for the *string-overloaded* `image_url.url` / `file.file_data` / `input_audio.data` fields, where today you would otherwise pass an `s3://`, `https://`, or `data:` URI. See [Referencing Uploaded Files via the `file-id:` URI Scheme](api_openai_files.md#referencing-uploaded-files-via-the-file-id-uri-scheme).
 
-### Amazon Bedrock System Tools
+### Server Tools
 
 Amazon Bedrock system tools are built-in capabilities that foundation models can use directly, without requiring you to implement backend integrations.
 
@@ -539,85 +527,6 @@ curl -X POST "$BASE/v1/chat/completions" \
 
     - `bash`, `str_replace_based_edit_tool` → `computer-use-2024-10-22` (Claude 3.5) or `computer-use-2025-01-24` (Claude 3.7+)
     - `memory` → `context-management-2025-06-27` (Claude 3.7+)
-
-### Provider-Specific Parameters
-
-Unlock advanced model capabilities by passing provider-specific parameters directly in your requests. These parameters are forwarded to Amazon Bedrock and allow you to access features unique to each foundation model provider.
-
-!!! info "Documentation"
-    See [Bedrock Model Parameters](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters.html) for the complete list of available parameters per model.
-
-**How It Works:**
-
-Add provider-specific fields at the top level of your request body alongside standard OpenAI parameters. The API automatically forwards these to the appropriate model provider via Amazon Bedrock.
-
-**Examples:**
-
-**Top K Sampling:**
-```json
-{
-  "model": "anthropic.claude-fable-5",
-  "messages": [{"role": "user", "content": "Write a poem"}],
-  "top_k": 50,
-  "temperature": 0.7
-}
-```
-
-**Configuration Options:**
-
-**Option 1: Per-Request**
-
-Add provider-specific parameters directly in your request body (as shown in examples above).
-
-**Option 2: Server-Wide Defaults**
-
-Configure default parameters for specific models via the `DEFAULT_MODEL_PARAMS` environment variable:
-
-```bash
-export DEFAULT_MODEL_PARAMS='{
-  "anthropic.claude-sonnet-5": {
-    "anthropic_beta": ["context-management-2025-06-27"]
-  }
-}'
-```
-
-!!! tip "Parameter Priority"
-    Per-request parameters override server-wide defaults.
-
-**Behavior:**
-
-- :material-check-circle:{ .success role="img" aria-label="Supported" } **Compatible parameters**: Forwarded to the model and applied
-- :material-alert-circle:{ .warning } **Unsupported parameters**: Return HTTP 400 with an error message
-- :material-alert-circle:{ .warning } **Reserved names**: `model_id` and `additional_request_fields` collide with the gateway's own request-building parameters and are rejected with a `400 invalid_request_error` naming the key, instead of being forwarded
-
-#### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic Claude Features
-
-Enable cutting-edge Claude capabilities through Anthropic beta feature flags.
-
-##### Beta Feature Flags
-
-Enable experimental Claude features like interleaved thinking by adding the `anthropic_beta` array to your request (extended thinking itself is controlled through the [reasoning parameters](#reasoning-control), not a beta flag):
-
-```bash
-curl -X POST "$BASE/v1/chat/completions" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "anthropic.claude-sonnet-5",
-    "messages": [{"role":"user","content":"Summarize the news headline."}],
-    "anthropic_beta": ["Interleaved-thinking-2025-05-14"]
-  }'
-```
-
-!!! tip "Server-Wide Configuration"
-    You can also configure beta flags server-wide using the `DEFAULT_MODEL_PARAMS` environment variable (see [Provider-Specific Parameters](#provider-specific-parameters)).
-
-!!! warning "Unsupported Beta Flags"
-    Unsupported flags that would change output return HTTP 400 errors.
-
-!!! info "Documentation"
-    See [Using Claude on Amazon Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html) for more details on Claude-specific parameters.
-
 
 ### Reasoning Control
 
@@ -779,6 +688,97 @@ What this does **not** affect, measured on Claude Haiku 4.5:
     passage in a form Claude accepts. Request
     `include: ["reasoning.encrypted_content"]` and echo the reasoning items back,
     and the model continues from its own earlier reasoning.
+
+### Provider-Specific Parameters
+
+Unlock advanced model capabilities by passing provider-specific parameters directly in your requests. These parameters are forwarded to Amazon Bedrock and allow you to access features unique to each foundation model provider.
+
+!!! info "Documentation"
+    See [Bedrock Model Parameters](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters.html) for the complete list of available parameters per model.
+
+**How It Works:**
+
+Add provider-specific fields at the top level of your request body alongside standard OpenAI parameters. The API automatically forwards these to the appropriate model provider via Amazon Bedrock.
+
+**Examples:**
+
+**Top K Sampling:**
+```json
+{
+  "model": "anthropic.claude-fable-5",
+  "messages": [{"role": "user", "content": "Write a poem"}],
+  "top_k": 50,
+  "temperature": 0.7
+}
+```
+
+**Configuration Options:**
+
+**Option 1: Per-Request**
+
+Add provider-specific parameters directly in your request body (as shown in examples above).
+
+**Option 2: Server-Wide Defaults**
+
+Configure default parameters for specific models via the `DEFAULT_MODEL_PARAMS` environment variable:
+
+```bash
+export DEFAULT_MODEL_PARAMS='{
+  "anthropic.claude-sonnet-5": {
+    "anthropic_beta": ["context-management-2025-06-27"]
+  }
+}'
+```
+
+!!! tip "Parameter Priority"
+    Per-request parameters override server-wide defaults.
+
+**Behavior:**
+
+- :material-check-circle:{ .success role="img" aria-label="Supported" } **Compatible parameters**: Forwarded to the model and applied
+- :material-alert-circle:{ .warning } **Unsupported parameters**: Return HTTP 400 with an error message
+- :material-alert-circle:{ .warning } **Reserved names**: `model_id` and `additional_request_fields` collide with the gateway's own request-building parameters and are rejected with a `400 invalid_request_error` naming the key, instead of being forwarded
+
+#### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic Claude Features
+
+Enable cutting-edge Claude capabilities through Anthropic beta feature flags.
+
+##### Beta Feature Flags
+
+Enable experimental Claude features like interleaved thinking by adding the `anthropic_beta` array to your request (extended thinking itself is controlled through the [reasoning parameters](#reasoning-control), not a beta flag):
+
+```bash
+curl -X POST "$BASE/v1/chat/completions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "anthropic.claude-sonnet-5",
+    "messages": [{"role":"user","content":"Summarize the news headline."}],
+    "anthropic_beta": ["Interleaved-thinking-2025-05-14"]
+  }'
+```
+
+!!! tip "Server-Wide Configuration"
+    You can also configure beta flags server-wide using the `DEFAULT_MODEL_PARAMS` environment variable (see [Provider-Specific Parameters](#provider-specific-parameters)).
+
+!!! warning "Unsupported Beta Flags"
+    Unsupported flags that would change output return HTTP 400 errors.
+
+!!! info "Documentation"
+    See [Using Claude on Amazon Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html) for more details on Claude-specific parameters.
+
+
+## Stored Chat Completions
+
+Set `store: true` to persist a chat completion in [Amazon Bedrock session storage](https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html) — same mechanism, region, and [KMS setting](operations_configuration.md#aws-bedrock-session-encryption-key-arn) as [stored responses](api_openai_responses.md#stored-responses). The returned `id` then works with the full stored-completion surface:
+
+- `GET /v1/chat/completions` — list stored completions, sorted by creation time (`order`, `after`, `limit`), filterable by `model` and by metadata pairs. Metadata filters accept either one `metadata[key]=value` parameter per key (what the OpenAI SDKs send) or a single `metadata={"key": "value"}` JSON object of string values, for clients that can only send a whole object in one query parameter. A bare `metadata` in any other shape is rejected with `400` naming both accepted forms.
+- `GET /v1/chat/completions/{completion_id}` — retrieve the stored completion.
+- `POST /v1/chat/completions/{completion_id}` — replace its `metadata` (`null` clears it).
+- `GET /v1/chat/completions/{completion_id}/messages` — list its input messages.
+- `DELETE /v1/chat/completions/{completion_id}` — delete it and its backing session.
+
+`store` defaults to **false** on this implementation and is ignored with `stream=true` or when the server lacks the [session storage IAM permissions](operations_configuration.md#bedrock-session-storage-optional) (a warning is recorded in the request log). Listings scan a capped number of sessions (1,000) in the primary Bedrock region; accounts beyond the cap may see incomplete listings.
 
 ## Available Request Headers
 

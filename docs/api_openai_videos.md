@@ -28,7 +28,7 @@ Video generation is **asynchronous**: creating a video returns a job object imme
 
 </div>
 
-## Quick Start: Available Endpoints
+## Available Endpoints
 
 | Endpoint                       | Method   | What It Does                                     | Powered By                  | MCP Tool                 |
 |--------------------------------|----------|--------------------------------------------------|-----------------------------|--------------------------|

@@ -26,7 +26,7 @@ Generate images with Amazon Bedrock image models like Stability AI and Amazon No
 
 </div>
 
-## Quick Start: Available Endpoint
+## Available Endpoints
 
 | Endpoint                 | Method | What It Does                      | Powered By                  | MCP Tool                  |
 |--------------------------|--------|-----------------------------------|-----------------------------|---------------------------|
@@ -168,7 +168,7 @@ export DEFAULT_MODEL_PARAMS='{
 }
 ```
 
-### ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Nova Canvas Extra Features
+#### ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Nova Canvas
 
 **Basic Usage (Standard OpenAI Parameters):**
 
@@ -226,7 +226,7 @@ curl -X POST "$BASE/v1/images/generations" \
 !!! info "Full Parameter Reference"
     For all parameters, styles, and task types, see [Amazon Nova Canvas documentation](https://docs.aws.amazon.com/nova/latest/userguide/image-generation.html)
 
-### ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Titan Image Generator Extra Features
+#### ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Titan Image Generator
 
 **Basic Usage (Standard OpenAI Parameters):**
 
@@ -283,7 +283,7 @@ curl -X POST "$BASE/v1/images/generations" \
 !!! info "Full Parameter Reference"
     For all parameters and task types, see [Amazon Titan Image Generator documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html)
 
-### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Stability AI Extra Features
+#### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Stability AI Models
 
 **Basic Usage (Standard OpenAI Parameters):**
 

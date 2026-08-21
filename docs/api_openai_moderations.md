@@ -26,7 +26,7 @@ Classify content for harm with [Amazon Bedrock Guardrails](https://aws.amazon.co
 
 </div>
 
-## Quick Start: Available Endpoint
+## Available Endpoints
 
 | Endpoint          | Method | What It Does                                                | Powered By                                | MCP Tool            |
 |-------------------|--------|--------------------------------------------------------------|-------------------------------------------|---------------------|

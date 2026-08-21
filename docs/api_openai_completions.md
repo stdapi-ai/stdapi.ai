@@ -30,7 +30,7 @@ Generate text completions with Amazon Bedrock foundation models—including Clau
 
 </div>
 
-## Quick Start: Available Endpoint
+## Available Endpoints
 
 | Endpoint          | Method | What It Does                     | Powered By                                | MCP Tool            |
 |-------------------|--------|----------------------------------|-------------------------------------------|---------------------|
@@ -275,27 +275,6 @@ curl -N -X POST "$BASE/v1/completions" \
   }'
 ```
 
-## Model-Specific Features
-
-### ![TwelveLabs](styles/logo_twelvelabs.svg){ style="height: 1.2em; vertical-align: text-bottom;" } TwelveLabs Pegasus
-
-`twelvelabs.pegasus-1-2-v1:0` is a video-understanding model. The Completions endpoint supports multimodal input: pass an array with exactly one text instruction and one video URL as `prompt` — the server combines them into a single Pegasus request.
-
-- `temperature` and `max_tokens` are forwarded.
-- A text-only `prompt` without a video returns HTTP 400 (Pegasus requires exactly one video).
-
-**Video input formats**: `s3://bucket/key`, `https://…`, `data:video/mp4;base64,…`, or `file-id:…`. Videos above 18.75 MB are automatically uploaded to S3.
-
-```bash
-curl -X POST "$BASE/v1/completions" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "twelvelabs.pegasus-1-2-v1:0",
-    "prompt": ["Describe what happens in this video.", "s3://my-bucket/video.mp4"]
-  }'
-```
-
 ## Available Request Headers
 
 This endpoint supports standard Bedrock headers for enhanced control over your requests — they are applied by the shared request middleware, exactly as on the [Chat Completions API](api_openai_chat_completions.md#available-request-headers). All headers are optional and can be combined as needed.
@@ -320,6 +299,27 @@ This endpoint supports standard Bedrock headers for enhanced control over your r
 
     - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
     - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
+
+## Model-Specific Features
+
+### ![TwelveLabs](styles/logo_twelvelabs.svg){ style="height: 1.2em; vertical-align: text-bottom;" } TwelveLabs Pegasus
+
+`twelvelabs.pegasus-1-2-v1:0` is a video-understanding model. The Completions endpoint supports multimodal input: pass an array with exactly one text instruction and one video URL as `prompt` — the server combines them into a single Pegasus request.
+
+- `temperature` and `max_tokens` are forwarded.
+- A text-only `prompt` without a video returns HTTP 400 (Pegasus requires exactly one video).
+
+**Video input formats**: `s3://bucket/key`, `https://…`, `data:video/mp4;base64,…`, or `file-id:…`. Videos above 18.75 MB are automatically uploaded to S3.
+
+```bash
+curl -X POST "$BASE/v1/completions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "twelvelabs.pegasus-1-2-v1:0",
+    "prompt": ["Describe what happens in this video.", "s3://my-bucket/video.mp4"]
+  }'
+```
 
 ## Try It Now
 

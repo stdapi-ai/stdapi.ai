@@ -26,7 +26,7 @@ Generate model responses with Amazon Bedrock foundation models through an OpenAI
 
 </div>
 
-## Quick Start: Available Endpoints
+## Available Endpoints
 
 | Endpoint                                  | Method   | What It Does                                                             | Powered By                                | MCP Tool                       |
 |-------------------------------------------|----------|--------------------------------------------------------------------------|-------------------------------------------|--------------------------------|
@@ -500,34 +500,6 @@ Cached token usage is reported in the response:
 
 Following OpenAI semantics, `input_tokens` covers the **full** prompt: tokens read from and written to the cache are included, and `cached_tokens` (the tokens read from cache) is a subset of `input_tokens`. In this example, 1,200 of the 1,500 input tokens were retrieved from cache.
 
-### Provider-Specific Parameters
-
-A top-level field this API does not declare is forwarded to the model as a
-provider-specific inference parameter, as on
-[Chat Completions](api_openai_chat_completions.md#provider-specific-parameters)
-and [Messages](api_anthropic_messages.md#provider-specific-parameters). A
-capability Amazon Bedrock exposes and the OpenAI API has no field for is
-therefore reachable without leaving this endpoint — the OpenAI SDK sends these
-through `extra_body`:
-
-```json
-{
-  "model": "anthropic.claude-sonnet-5",
-  "input": "Write a poem about the sea",
-  "top_k": 50
-}
-```
-
-Server-wide defaults per model come from `DEFAULT_MODEL_PARAMS`, and a
-per-request value wins over them.
-
-**Behavior:**
-
-- :material-check-circle:{ .success role="img" aria-label="Supported" } **Compatible parameters**: forwarded to the model and applied
-- :material-alert-circle:{ .warning } **Unsupported parameters**: the backend refuses the request, returned as a `400`
-- :material-alert-circle:{ .warning } **Reserved names**: `additional_request_fields`, `max_tokens`, `model_id`, `stop_sequences`, `temperature`, `top_logprobs` and `top_p` are the argument names the gateway binds when it builds the Bedrock call, so sending one as an extra is rejected with a `400` naming it instead of binding twice — use the declared `max_output_tokens`, `temperature`, `top_p` and `top_logprobs` fields
-- :material-alert-circle:{ .warning } **Client-side control fields**: names no provider treats as inference parameters (LiteLLM's `drop_params` among them) are dropped before the call. [`EXTRA_MODEL_PARAMS_DENYLIST`](operations_configuration.md#extra-model-params-denylist) extends that list, and [`EXTRA_MODEL_PARAMS_DROP_ALL`](operations_configuration.md#extra-model-params-drop-all) disables the passthrough entirely
-
 ### Managed Prompt Templates { #managed-prompt-templates }
 
 The `prompt` parameter references a prompt template stored in [Amazon Bedrock Prompt Management](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-management.html). Amazon Bedrock renders the template server-side, so the request body carries only the variable values.
@@ -841,6 +813,157 @@ You can also specify image parameters in the tool definition:
 !!! warning "Computer Use Not Supported"
     The `computer` and `computer_use_preview` integrated tools are **not supported**: requests succeed, but the tools are accepted and dropped from the tool configuration, so the model can never call them.
 
+### Provider-Specific Parameters
+
+A top-level field this API does not declare is forwarded to the model as a
+provider-specific inference parameter, as on
+[Chat Completions](api_openai_chat_completions.md#provider-specific-parameters)
+and [Messages](api_anthropic_messages.md#provider-specific-parameters). A
+capability Amazon Bedrock exposes and the OpenAI API has no field for is
+therefore reachable without leaving this endpoint — the OpenAI SDK sends these
+through `extra_body`:
+
+```json
+{
+  "model": "anthropic.claude-sonnet-5",
+  "input": "Write a poem about the sea",
+  "top_k": 50
+}
+```
+
+Server-wide defaults per model come from `DEFAULT_MODEL_PARAMS`, and a
+per-request value wins over them.
+
+**Behavior:**
+
+- :material-check-circle:{ .success role="img" aria-label="Supported" } **Compatible parameters**: forwarded to the model and applied
+- :material-alert-circle:{ .warning } **Unsupported parameters**: the backend refuses the request, returned as a `400`
+- :material-alert-circle:{ .warning } **Reserved names**: `additional_request_fields`, `max_tokens`, `model_id`, `stop_sequences`, `temperature`, `top_logprobs` and `top_p` are the argument names the gateway binds when it builds the Bedrock call, so sending one as an extra is rejected with a `400` naming it instead of binding twice — use the declared `max_output_tokens`, `temperature`, `top_p` and `top_logprobs` fields
+- :material-alert-circle:{ .warning } **Client-side control fields**: names no provider treats as inference parameters (LiteLLM's `drop_params` among them) are dropped before the call. [`EXTRA_MODEL_PARAMS_DENYLIST`](operations_configuration.md#extra-model-params-denylist) extends that list, and [`EXTRA_MODEL_PARAMS_DROP_ALL`](operations_configuration.md#extra-model-params-drop-all) disables the passthrough entirely
+
+## Input Token Counting
+
+Count input tokens without generating a response. Useful for estimating costs or checking context-window fit before making a full response call.
+
+**Basic usage:**
+
+```bash
+curl -X POST "$BASE/v1/responses/input_tokens" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-micro-v1:0",
+    "input": "Hello, how are you?"
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "object": "response.input_tokens",
+  "input_tokens": 142
+}
+```
+
+**With instructions and tools:**
+
+```bash
+curl -X POST "$BASE/v1/responses/input_tokens" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-micro-v1:0",
+    "input": "What is the weather?",
+    "instructions": "You are a helpful assistant.",
+    "tools": [{"type": "function", "name": "get_weather", "description": "Get weather for a location", "parameters": {"type": "object", "properties": {"location": {"type": "string"}}, "required": ["location"]}}]
+  }'
+```
+
+!!! note "Limitations"
+    The `previous_response_id` and `conversation` parameters are not supported for token counting (they would change the count); `personality` (a token-counting-only schema field) and `reasoning.context` are accepted and ignored. Token counting is not available for models served by [Amazon Bedrock Mantle](features.md#bedrock-mantle-models) (the request is rejected with a `400` error).
+
+## Stored Responses
+
+Set `store: true` to persist a response in [Amazon Bedrock session storage](https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html): one AWS-managed session per stored response, encrypted at rest (optionally with [your own KMS key](operations_configuration.md#aws-bedrock-session-encryption-key-arn)), with no state on the server itself.
+
+```bash
+curl -X POST "$BASE/v1/responses" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "amazon.nova-micro-v1:0", "input": "Hello!", "store": true}'
+```
+
+The returned `id` then works with:
+
+- `GET /v1/responses/{response_id}` — retrieve the stored response.
+- `GET /v1/responses/{response_id}/input_items` — list the input items that produced it. Bedrock Mantle native storage does not serve input item listings: for Mantle-stored responses this returns `404` with an explanatory message.
+- `DELETE /v1/responses/{response_id}` — delete it (and its Amazon Bedrock session).
+- `POST /v1/responses/{response_id}/cancel` — for Mantle region-tagged IDs, proxied to Bedrock Mantle (background responses are cancellable upstream); for Bedrock-session-stored responses it fails with the OpenAI synchronous-response error since execution is synchronous.
+- `previous_response_id` on a new request — continue the conversation: the stored input and output are automatically prepended to the new input (instructions are not carried over, per the OpenAI API).
+
+!!! warning "Response IDs are stdapi.ai-specific"
+    Response IDs embed the serving AWS region, so conversation turns chained with `previous_response_id` stay region-local. These IDs **cannot** be used directly against the Bedrock Mantle API, and raw [Mantle](features.md#bedrock-mantle-models) response IDs are not accepted by stdapi.ai.
+
+!!! note "Behavior notes"
+    - `store` defaults to **false** on this implementation (the OpenAI API defaults to true).
+    - `POST /v1/responses/input_tokens` and `POST /v1/responses/compact` cannot reference a Mantle-stored response via `previous_response_id` — like input-item listings, Mantle native storage does not serve the stored items back.
+    - On Amazon Bedrock session storage, `store=true` is ignored with `stream=true` (a warning is recorded in the request log). [Mantle](features.md#bedrock-mantle-models) models persist responses in Mantle native storage instead, where `store` works with streaming too.
+    - Mantle models without native Responses storage (Messages- or Chat-Completions-bound) use Amazon Bedrock session storage like classic models. Only a `store=true` request answered through a mid-request API fallback (away from the upstream Responses API) is served without storage, with a warning recorded in the request log; its ID cannot be retrieved later. `previous_response_id` on such a fallback returns `400` instead — conversation history is never silently dropped.
+    - Sessions are created in the primary Bedrock region and persist until deleted through the API — see [operator guidance on cleaning up stale sessions](operations_configuration.md#bedrock-session-storage-optional).
+    - `GET /v1/responses/{response_id}` rejects `stream=true` with `400`; `include` and `starting_after` are accepted and ignored.
+    - Amazon Bedrock session storage is offered in fewer regions than model inference. Where the primary Bedrock region does not provide it, `store=true` is ignored and a warning naming the region as the cause is recorded in the request log — the response itself is still returned. Configure a primary region that provides session storage to avoid this entirely.
+    - Requires the Amazon Bedrock session management IAM permissions (`bedrock:CreateSession`, `bedrock:CreateInvocation`, `bedrock:PutInvocationStep`, `bedrock:GetInvocationStep`, `bedrock:ListInvocationSteps`, `bedrock:ListInvocations`, `bedrock:ListSessions`, `bedrock:ListTagsForResource`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:TagResource`). Without them, `store=true` is ignored (with a request-log warning) and the response is not persisted.
+
+## Conversation Compaction
+
+Compact a long conversation into a single `compaction` item to keep multi-turn sessions within the context window. The model summarizes the provided `input`; the summary comes back as an opaque item that you include in the `input` of later requests instead of the full history.
+
+```bash
+curl -X POST "$BASE/v1/responses/compact" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-pro-v1:0",
+    "input": [
+      {"role": "user", "content": "..."},
+      {"role": "assistant", "content": "..."}
+    ]
+  }'
+```
+
+**Response** (trimmed to the compaction item; `output` also echoes the conversation's message items before it):
+
+```json
+{
+  "id": "resp-...",
+  "object": "response.compaction",
+  "created_at": 1752000000,
+  "output": [
+    {"id": "ci-...", "type": "compaction", "encrypted_content": "..."}
+  ],
+  "usage": {"input_tokens": 1500, "output_tokens": 220, "total_tokens": 1720}
+}
+```
+
+Continue the conversation by sending the compaction item back, followed by new messages:
+
+```json
+{
+  "model": "amazon.nova-pro-v1:0",
+  "input": [
+    {"id": "ci-...", "type": "compaction", "encrypted_content": "..."},
+    {"role": "user", "content": "Next question..."}
+  ]
+}
+```
+
+!!! note "Stateless compaction"
+    The compaction content is fully self-contained (marker-prefixed and encoded, not encrypted): no conversation state is needed, and any server instance can expand it. Only compaction items produced by this server can be expanded — items encrypted by the upstream OpenAI API are rejected with `400`, and locally-produced items cannot be continued on a [Mantle](features.md#bedrock-mantle-models)-served model. `previous_response_id` may reference a [stored response](#stored-responses) to include its conversation in the compaction.
+
+---
+
+**Ready to build with AI?** Check out the [Models API](api_openai_models.md) to see all available foundation models!
 ## Available Request Headers
 
 This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
@@ -977,126 +1100,3 @@ curl -X POST "$BASE/v1/responses" \
   }'
 ```
 
-## Input Token Counting
-
-Count input tokens without generating a response. Useful for estimating costs or checking context-window fit before making a full response call.
-
-**Basic usage:**
-
-```bash
-curl -X POST "$BASE/v1/responses/input_tokens" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "amazon.nova-micro-v1:0",
-    "input": "Hello, how are you?"
-  }'
-```
-
-**Response:**
-
-```json
-{
-  "object": "response.input_tokens",
-  "input_tokens": 142
-}
-```
-
-**With instructions and tools:**
-
-```bash
-curl -X POST "$BASE/v1/responses/input_tokens" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "amazon.nova-micro-v1:0",
-    "input": "What is the weather?",
-    "instructions": "You are a helpful assistant.",
-    "tools": [{"type": "function", "name": "get_weather", "description": "Get weather for a location", "parameters": {"type": "object", "properties": {"location": {"type": "string"}}, "required": ["location"]}}]
-  }'
-```
-
-!!! note "Limitations"
-    The `previous_response_id` and `conversation` parameters are not supported for token counting (they would change the count); `personality` (a token-counting-only schema field) and `reasoning.context` are accepted and ignored. Token counting is not available for models served by [Amazon Bedrock Mantle](features.md#bedrock-mantle-models) (the request is rejected with a `400` error).
-
-## Stored Responses
-
-Set `store: true` to persist a response in [Amazon Bedrock session storage](https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html): one AWS-managed session per stored response, encrypted at rest (optionally with [your own KMS key](operations_configuration.md#aws-bedrock-session-encryption-key-arn)), with no state on the server itself.
-
-```bash
-curl -X POST "$BASE/v1/responses" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model": "amazon.nova-micro-v1:0", "input": "Hello!", "store": true}'
-```
-
-The returned `id` then works with:
-
-- `GET /v1/responses/{response_id}` — retrieve the stored response.
-- `GET /v1/responses/{response_id}/input_items` — list the input items that produced it. Bedrock Mantle native storage does not serve input item listings: for Mantle-stored responses this returns `404` with an explanatory message.
-- `DELETE /v1/responses/{response_id}` — delete it (and its Amazon Bedrock session).
-- `POST /v1/responses/{response_id}/cancel` — for Mantle region-tagged IDs, proxied to Bedrock Mantle (background responses are cancellable upstream); for Bedrock-session-stored responses it fails with the OpenAI synchronous-response error since execution is synchronous.
-- `previous_response_id` on a new request — continue the conversation: the stored input and output are automatically prepended to the new input (instructions are not carried over, per the OpenAI API).
-
-!!! warning "Response IDs are stdapi.ai-specific"
-    Response IDs embed the serving AWS region, so conversation turns chained with `previous_response_id` stay region-local. These IDs **cannot** be used directly against the Bedrock Mantle API, and raw [Mantle](features.md#bedrock-mantle-models) response IDs are not accepted by stdapi.ai.
-
-!!! note "Behavior notes"
-    - `store` defaults to **false** on this implementation (the OpenAI API defaults to true).
-    - `POST /v1/responses/input_tokens` and `POST /v1/responses/compact` cannot reference a Mantle-stored response via `previous_response_id` — like input-item listings, Mantle native storage does not serve the stored items back.
-    - On Amazon Bedrock session storage, `store=true` is ignored with `stream=true` (a warning is recorded in the request log). [Mantle](features.md#bedrock-mantle-models) models persist responses in Mantle native storage instead, where `store` works with streaming too.
-    - Mantle models without native Responses storage (Messages- or Chat-Completions-bound) use Amazon Bedrock session storage like classic models. Only a `store=true` request answered through a mid-request API fallback (away from the upstream Responses API) is served without storage, with a warning recorded in the request log; its ID cannot be retrieved later. `previous_response_id` on such a fallback returns `400` instead — conversation history is never silently dropped.
-    - Sessions are created in the primary Bedrock region and persist until deleted through the API — see [operator guidance on cleaning up stale sessions](operations_configuration.md#bedrock-session-storage-optional).
-    - `GET /v1/responses/{response_id}` rejects `stream=true` with `400`; `include` and `starting_after` are accepted and ignored.
-    - Amazon Bedrock session storage is offered in fewer regions than model inference. Where the primary Bedrock region does not provide it, `store=true` is ignored and a warning naming the region as the cause is recorded in the request log — the response itself is still returned. Configure a primary region that provides session storage to avoid this entirely.
-    - Requires the Amazon Bedrock session management IAM permissions (`bedrock:CreateSession`, `bedrock:CreateInvocation`, `bedrock:PutInvocationStep`, `bedrock:GetInvocationStep`, `bedrock:ListInvocationSteps`, `bedrock:ListInvocations`, `bedrock:ListSessions`, `bedrock:ListTagsForResource`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:TagResource`). Without them, `store=true` is ignored (with a request-log warning) and the response is not persisted.
-
-## Conversation Compaction
-
-Compact a long conversation into a single `compaction` item to keep multi-turn sessions within the context window. The model summarizes the provided `input`; the summary comes back as an opaque item that you include in the `input` of later requests instead of the full history.
-
-```bash
-curl -X POST "$BASE/v1/responses/compact" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "amazon.nova-pro-v1:0",
-    "input": [
-      {"role": "user", "content": "..."},
-      {"role": "assistant", "content": "..."}
-    ]
-  }'
-```
-
-**Response** (trimmed to the compaction item; `output` also echoes the conversation's message items before it):
-
-```json
-{
-  "id": "resp-...",
-  "object": "response.compaction",
-  "created_at": 1752000000,
-  "output": [
-    {"id": "ci-...", "type": "compaction", "encrypted_content": "..."}
-  ],
-  "usage": {"input_tokens": 1500, "output_tokens": 220, "total_tokens": 1720}
-}
-```
-
-Continue the conversation by sending the compaction item back, followed by new messages:
-
-```json
-{
-  "model": "amazon.nova-pro-v1:0",
-  "input": [
-    {"id": "ci-...", "type": "compaction", "encrypted_content": "..."},
-    {"role": "user", "content": "Next question..."}
-  ]
-}
-```
-
-!!! note "Stateless compaction"
-    The compaction content is fully self-contained (marker-prefixed and encoded, not encrypted): no conversation state is needed, and any server instance can expand it. Only compaction items produced by this server can be expanded — items encrypted by the upstream OpenAI API are rejected with `400`, and locally-produced items cannot be continued on a [Mantle](features.md#bedrock-mantle-models)-served model. `previous_response_id` may reference a [stored response](#stored-responses) to include its conversation in the compaction.
-
----
-
-**Ready to build with AI?** Check out the [Models API](api_openai_models.md) to see all available foundation models!

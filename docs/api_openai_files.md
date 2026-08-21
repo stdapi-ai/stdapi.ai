@@ -504,7 +504,7 @@ curl -X DELETE "$BASE/v1/files/${FILE_ID}" \
   -H "Authorization: Bearer $OPENAI_API_KEY"
 ```
 
-## Error Reference
+## Errors
 
 | HTTP | Cause                                                              |
 |------|--------------------------------------------------------------------|

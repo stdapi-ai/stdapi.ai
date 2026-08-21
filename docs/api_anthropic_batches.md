@@ -39,16 +39,57 @@ The requests are sent inline, the batch runs without a connection held open, and
 | `/anthropic/v1/messages/batches/{id}/cancel`    | `POST`   | Cancel a batch that is still processing | `anthropic_message_batch_cancel` |
 | `/anthropic/v1/messages/batches/{id}`           | `DELETE` | Delete a batch that has ended       | `anthropic_message_batch_delete`  |
 
-## Prerequisites
+## Feature Compatibility
 
-The Message Batches API is disabled until the deployment declares an AWS IAM service role that Amazon Bedrock assumes to read the requests and write the results:
+<div class="feature-table" markdown>
 
-- [`AWS_BEDROCK_BATCH_ROLE_ARN`](operations_configuration.md#aws-bedrock-batch-role-arn) — the service role.
-- [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) — the bucket holding the batch data.
-- [`AWS_S3_BATCHES_PREFIX`](operations_configuration.md#aws-s3-batches-prefix) — the prefix it is stored under.
+| Feature                          |                  Status                  | Notes                                                                     |
+|----------------------------------|:----------------------------------------:|---------------------------------------------------------------------------|
+| **Creation**                     |                                          |                                                                           |
+| `requests[].custom_id`           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Up to 64 characters, unique within the batch                              |
+| `requests[].params`              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Same parameters as [Messages](api_anthropic_messages.md)                |
+| Several models in one batch      |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Up to 8, each needing the 100-request minimum                             |
+| `tools` / `tool_choice`          | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Refused when the batch is created — tool use is not available in a batch |
+| Structured output schema         | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Refused when the batch is created                                         |
+| `stream`                         | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | A batch has nothing to stream to                                          |
+| `cache_control`                  |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Accepted and ignored — a batch reads and writes no prompt cache, and the request is answered without one |
+| **Lifecycle**                    |                                          |                                                                           |
+| Retrieve / poll                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `in_progress` → `canceling` → `ended`                                     |
+| Results (JSONL)                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Streamed; available once `processing_status` is `ended`                   |
+| Cancel                           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Requests that already produced a Message keep it, the ones that never ran are reported `canceled`; cancelling twice, or cancelling a batch that has ended, changes nothing |
+| Delete                           |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Only once the batch has ended — cancel it first, as upstream requires     |
+| List batches                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Newest first, with `before_id` / `after_id` cursors                       |
+| `archived_at`                    | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Results stay readable until the batch is deleted                          |
 
-The permissions the role and the server need are listed in [IAM Permissions](operations_iam_permissions.md#batch-inference).
-While the role is unset, every batch endpoint answers `529`.
+</div>
+
+<div class="feature-table" markdown>
+
+**Legend:**
+
+* :material-check-circle:{ .success role="img" aria-label="Supported" } **Supported** — Fully compatible with Anthropic API
+* :material-minus-circle:{ .partial role="img" aria-label="Partial" } **Partial** — Supported with limitations
+* :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } **Unsupported** — Not available in this implementation
+
+</div>
+
+!!! note "`results_url` and Reverse Proxies"
+    `results_url` is an absolute URL on the address the request came in on, so `client.messages.batches.results(...)` works with no extra configuration and a client fetching it outside the SDK gets a URL it can dial as-is. Behind a reverse proxy it names the proxy's own origin, taken from the `Host` and `X-Forwarded-Proto` headers — enable [`ENABLE_PROXY_HEADERS`](operations_configuration.md#enable-proxy-headers) so the forwarded scheme is trusted, or a TLS-terminating proxy yields an `http://` URL.
+
+!!! note "Content Guardrails and Batches"
+    A request that a [guardrail](operations_configuration.md#aws-bedrock-guardrail-identifier) would apply to is refused rather than run unguarded. Send those requests without batching.
+
+!!! note "Prompt Caching and Batches"
+    Batched requests neither read nor write a prompt cache, on any model. A request carrying `cache_control` is still accepted and answered — the hint is dropped rather than the request — so a result reports no `cache_read_input_tokens` and no `cache_creation_input_tokens`. Nothing is lost by leaving it in: batched requests are already billed at the batch rate, and the cache discount was never available at that rate.
+
+## Model Support
+
+Any chat model available for batch inference in your configured Amazon Bedrock regions can be used — the same identifiers as [Messages](api_anthropic_messages.md). To shortlist them, call [`search_models`](api_search_models.md) with `route=anthropic_message&batch=true`; each entry also carries a `batch` field.
+
+!!! warning "The shortlist is a hint, not a rule"
+    `batch` is advertised on a best-effort basis and never used to reject a request. A model it does not advertise — or says nothing about — may still run a batch, so submit the batch rather than ruling the model out; the answer you get back is the authoritative one.
+
+A model that cannot serve batched requests is refused when the batch is created, naming the model; no sibling job is left running. A model this deployment normally serves through another Amazon Bedrock endpoint is batched under the identifier the batch endpoint knows it by, so it needs nothing from you.
 
 ## Workflow
 
@@ -151,63 +192,22 @@ A batch below the minimum, or over the model cap, is refused when it is created 
 !!! note "The 100-request minimum is a quota default"
     100 is the default of the Amazon Bedrock quota *Minimum number of records per batch inference job*, which is set **per model** and adjustable for some of them — see [Amazon Bedrock quotas](https://docs.aws.amazon.com/general/latest/gr/bedrock.html). The gateway checks against that default, not against your account's own value, so a raised quota is enforced by Amazon Bedrock rather than here — a model given 150 requests clears this check and is then refused by the backend — and a lowered one is not usable: fewer than 100 requests for a model is still refused here.
 
-## Feature Compatibility
+## Prerequisites
 
-<div class="feature-table" markdown>
+The Message Batches API is disabled until the deployment declares an AWS IAM service role that Amazon Bedrock assumes to read the requests and write the results:
 
-| Feature                          |                  Status                  | Notes                                                                     |
-|----------------------------------|:----------------------------------------:|---------------------------------------------------------------------------|
-| **Creation**                     |                                          |                                                                           |
-| `requests[].custom_id`           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Up to 64 characters, unique within the batch                              |
-| `requests[].params`              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Same parameters as [Messages](api_anthropic_messages.md)                |
-| Several models in one batch      |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Up to 8, each needing the 100-request minimum                             |
-| `tools` / `tool_choice`          | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Refused when the batch is created — tool use is not available in a batch |
-| Structured output schema         | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Refused when the batch is created                                         |
-| `stream`                         | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | A batch has nothing to stream to                                          |
-| `cache_control`                  |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Accepted and ignored — a batch reads and writes no prompt cache, and the request is answered without one |
-| **Lifecycle**                    |                                          |                                                                           |
-| Retrieve / poll                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `in_progress` → `canceling` → `ended`                                     |
-| Results (JSONL)                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Streamed; available once `processing_status` is `ended`                   |
-| Cancel                           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Requests that already produced a Message keep it, the ones that never ran are reported `canceled`; cancelling twice, or cancelling a batch that has ended, changes nothing |
-| Delete                           |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Only once the batch has ended — cancel it first, as upstream requires     |
-| List batches                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Newest first, with `before_id` / `after_id` cursors                       |
-| `archived_at`                    | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Results stay readable until the batch is deleted                          |
+- [`AWS_BEDROCK_BATCH_ROLE_ARN`](operations_configuration.md#aws-bedrock-batch-role-arn) — the service role.
+- [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) — the bucket holding the batch data.
+- [`AWS_S3_BATCHES_PREFIX`](operations_configuration.md#aws-s3-batches-prefix) — the prefix it is stored under.
 
-</div>
+The permissions the role and the server need are listed in [IAM Permissions](operations_iam_permissions.md#batch-inference).
+While the role is unset, every batch endpoint answers `529`.
 
-<div class="feature-table" markdown>
-
-**Legend:**
-
-* :material-check-circle:{ .success role="img" aria-label="Supported" } **Supported** — Fully compatible with Anthropic API
-* :material-minus-circle:{ .partial role="img" aria-label="Partial" } **Partial** — Supported with limitations
-* :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } **Unsupported** — Not available in this implementation
-
-</div>
-
-!!! note "`results_url` and Reverse Proxies"
-    `results_url` is an absolute URL on the address the request came in on, so `client.messages.batches.results(...)` works with no extra configuration and a client fetching it outside the SDK gets a URL it can dial as-is. Behind a reverse proxy it names the proxy's own origin, taken from the `Host` and `X-Forwarded-Proto` headers — enable [`ENABLE_PROXY_HEADERS`](operations_configuration.md#enable-proxy-headers) so the forwarded scheme is trusted, or a TLS-terminating proxy yields an `http://` URL.
-
-!!! note "Content Guardrails and Batches"
-    A request that a [guardrail](operations_configuration.md#aws-bedrock-guardrail-identifier) would apply to is refused rather than run unguarded. Send those requests without batching.
-
-!!! note "Prompt Caching and Batches"
-    Batched requests neither read nor write a prompt cache, on any model. A request carrying `cache_control` is still accepted and answered — the hint is dropped rather than the request — so a result reports no `cache_read_input_tokens` and no `cache_creation_input_tokens`. Nothing is lost by leaving it in: batched requests are already billed at the batch rate, and the cache discount was never available at that rate.
-
-## Model Support
-
-Any chat model available for batch inference in your configured Amazon Bedrock regions can be used — the same identifiers as [Messages](api_anthropic_messages.md). To shortlist them, call [`search_models`](api_search_models.md) with `route=anthropic_message&batch=true`; each entry also carries a `batch` field.
-
-!!! warning "The shortlist is a hint, not a rule"
-    `batch` is advertised on a best-effort basis and never used to reject a request. A model it does not advertise — or says nothing about — may still run a batch, so submit the batch rather than ruling the model out; the answer you get back is the authoritative one.
-
-A model that cannot serve batched requests is refused when the batch is created, naming the model; no sibling job is left running. A model this deployment normally serves through another Amazon Bedrock endpoint is batched under the identifier the batch endpoint knows it by, so it needs nothing from you.
-
-## Pricing
+## Billing
 
 Batched requests are billed at the published batch rate for the model, roughly half the on-demand rate. Usage is recorded once, when the batch ends. See [Cost Management](operations_cost_management.md#batch-inference).
 
-## Related
+## See Also
 
 - [Messages API](api_anthropic_messages.md) — the per-request parameters
 - [Batch API](api_openai_batches.md) — the OpenAI-shaped equivalent
