@@ -90,16 +90,17 @@ Streaming responses can only retry before the stream opens, and asynchronous job
 
 ## One gateway, every modality you're already calling.
 
-Most gateways stop at chat completions. stdapi.ai covers text, embeddings, images, video, speech, transcription, moderation, reranking, and file storage across the OpenAI, Anthropic, and Cohere protocols — with server-side stored conversations on chat.
+Most gateways stop at chat completions. stdapi.ai covers text, retrieval, embeddings, images, video, speech, live voice, batch inference, moderation, reranking, and file storage across the OpenAI, Anthropic, and Cohere protocols — with conversations kept server-side and continued by id instead of resent.
 
 <div class="panel-split" markdown>
 <div class="panel-visual" markdown>
 <div class="api-groups" markdown>
 
-- :material-message-text: <span class="chip">/v1/chat/completions</span> <span class="chip">/v1/responses</span> <span class="chip">/anthropic/v1/messages</span>
-- :material-vector-link: <span class="chip">/v1/embeddings</span> <span class="chip">/cohere/v2/rerank</span>
+- :material-message-text: <span class="chip">/v1/chat/completions</span> <span class="chip">/v1/responses</span> <span class="chip">/anthropic/v1/messages</span> <span class="chip">/v1/conversations</span>
+- :material-vector-link: <span class="chip">/v1/embeddings</span> <span class="chip">/v1/vector_stores</span> <span class="chip">/cohere/v2/rerank</span>
 - :material-image-outline: <span class="chip">/v1/images/*</span> <span class="chip">/v1/videos</span>
-- :material-waveform: <span class="chip">/v1/audio/speech</span> <span class="chip">/v1/audio/transcriptions</span>
+- :material-waveform: <span class="chip">/v1/audio/speech</span> <span class="chip">/v1/audio/transcriptions</span> <span class="chip">WS /v1/realtime</span>
+- :material-tray-full: <span class="chip">/v1/batches</span> <span class="chip">/anthropic/v1/messages/batches</span>
 - :material-shield-check-outline: <span class="chip">/v1/moderations</span> <span class="chip">/v1/files</span>
 
 </div>
@@ -108,10 +109,46 @@ Most gateways stop at chat completions. stdapi.ai covers text, embeddings, image
 <div class="panel-stats" markdown>
 
 - <code>3</code> API protocols — OpenAI, Anthropic, and Cohere — from one deployment
-- <code>50+</code> endpoints — text, images, video, audio, embeddings, moderation, files
-- <code>0</code> plugins — standard SDKs connect on the base URL alone
+- <code>50+</code> endpoints — text, retrieval, images, video, audio, batch, moderation, files
+- <code>WS</code> live speech-to-speech on the OpenAI Realtime API — speech in, speech and a transcript out
 
 [:octicons-arrow-right-24: API overview](api_overview.md)
+
+</div>
+</div>
+</div>
+
+<div class="carousel__panel" data-tab="Retrieval" markdown>
+<div class="carousel__kicker">FOR RAG &amp; KNOWLEDGE</div>
+
+## Your documents answer, and the model cites them.
+
+Attach a file and it is chunked, embedded and indexed in a vector bucket in your own account, then searched by meaning. Point the same endpoints at an Amazon Bedrock knowledge base you already run and it answers as a vector store too. Then hand the stores to any chat model on the Responses API: it runs the searches the turn needs and cites the files it drew on.
+
+<div class="panel-split" markdown>
+<div class="panel-visual panel-visual--mono">
+<div class="receipt">
+<div class="receipt__row receipt__row--head"><span>POST /v1/responses</span><span class="ok">200 · file_search</span></div>
+<div class="receipt__row"><span>model</span><span>any chat model on /v1/responses</span></div>
+<div class="receipt__row"><span>searches run by the model</span><span>"vacation days" · "PTO accrual"</span></div>
+<div class="receipt__row"><span>passages kept</span><span>4 · scored, attribute-filtered</span></div>
+<div class="receipt__row receipt__row--total"><span>grounded answer</span><span class="amount">2 file citations</span></div>
+</div>
+<div class="chips">
+<span class="chip">managed store · Amazon S3 Vectors</span>
+<span class="chip">your Amazon Bedrock knowledge base</span>
+</div>
+</div>
+<div class="panel-stats" markdown>
+
+- <code>0</code> extra infrastructure — no chunker, no embedding pipeline and no vector database to run beside the gateway
+- <code>2</code> kinds of store behind one API — files you attach here, or a knowledge base you already run
+- <code>1</code> citation per file the answer drew on, with the passages returned on request
+
+A knowledge base is addressed under an allowlist and is never created or deleted through this API.
+{ .panel-stats__note }
+
+[:octicons-arrow-right-24: Vector stores &amp; file search](features.md#retrieval-vector-stores)
 
 </div>
 </div>
@@ -143,7 +180,7 @@ Agents need no HTTP glue code. stdapi.ai publishes its whole API surface over th
 </div>
 <div class="panel-stats" markdown>
 
-- <code>53</code> endpoints exposed as named MCP tools, each with generated documentation
+- <code>50+</code> endpoints exposed as named MCP tools, each with generated documentation
 - <code>2</code> transports — Streamable HTTP at /mcp, SSE for older clients
 - <code>0</code> HTTP client code — agents call every endpoint directly
 - <code>auto</code> discovery — agents find every tool through the server card and API catalog
@@ -221,7 +258,8 @@ Built for AWS, not around it — Bedrock-native capabilities are exposed through
 <span class="chip">Web grounding</span>
 <span class="chip">Code interpreter</span>
 <span class="chip">SSML speech</span>
-<span class="chip">Speaker diarization</span>
+<span class="chip">Batch inference</span>
+<span class="chip">Live transcription</span>
 </div>
 <div class="model-logos">
 <img src="styles/logo_amazon_bedrock.svg" alt="Amazon Bedrock" title="Amazon Bedrock" width="80" height="80" decoding="async" loading="lazy" />
@@ -249,9 +287,9 @@ Built for AWS, not around it — Bedrock-native capabilities are exposed through
 <div class="carousel__panel" data-tab="Cost control" markdown>
 <div class="carousel__kicker">FOR BUDGET OWNERS</div>
 
-## Pay AWS rates. Track what every request costs.
+## Pay AWS rates. See which user spent them.
 
-No subscriptions, no minimums, no markup on model usage. Optional built-in cost tracking prices each call from AWS's own Price List — serving region, service tier, cached tokens, and long-context rates included.
+No subscriptions, no minimums, no markup on model usage. Optional cost tracking prices each call from AWS's own Price List — serving region, service tier, cached tokens, and long-context rates included. And each end user's model calls can run under their own short-lived role session, so AWS reports their spend separately in Cost Explorer and the Cost and Usage Report — from the invoice itself, not from an estimate.
 
 <div class="panel-split" markdown>
 <div class="panel-visual panel-visual--mono">
@@ -260,6 +298,7 @@ No subscriptions, no minimums, no markup on model usage. Optional built-in cost 
 <div class="receipt__row"><span>model</span><span>claude-fable-5</span></div>
 <div class="receipt__row"><span>region · tier</span><span>eu-west-1 · priority</span></div>
 <div class="receipt__row"><span>tokens</span><span>in 12,410 (9,800 cached) · out 642</span></div>
+<div class="receipt__row"><span>end user</span><span>billed under their own role session</span></div>
 <div class="receipt__row receipt__row--total"><span>estimated cost</span><span class="amount">$0.048231 USD</span></div>
 </div>
 </div>
@@ -267,7 +306,11 @@ No subscriptions, no minimums, no markup on model usage. Optional built-in cost 
 
 - <code>0%</code> markup on model usage — Bedrock billed by AWS directly
 - <code>live</code> rates from the AWS Price List catalog — fetched from AWS, not hand-maintained
-- <code>1:1</code> per-request and per-user cost attribution — estimated from published AWS prices, not read back from your invoice
+- <code>per user</code> spend on the AWS bill itself — grouped in Cost Explorer and the CUR, and testable in IAM policies
+- <code>batch</code> price on asynchronous request sets — submit a corpus, pay Bedrock's discounted batch rate
+
+Per-request cost figures are estimated from published AWS prices, not read back from your invoice; per-user attribution is off by default and needs a role you create.
+{ .panel-stats__note }
 
 [:octicons-arrow-right-24: Cost management documentation](operations_cost_management.md)
 
@@ -520,15 +563,15 @@ Every integration is the same four steps: deploy, copy your endpoint URL, paste 
 <div class="usecase" markdown>
 <div class="usecase__tag">AUTONOMOUS AGENTS</div>
 <div class="usecase__title">Agents you control</div>
-<div class="usecase__body">Self-directed agents on infrastructure you own — with the built-in MCP server exposing every endpoint as an agent tool.</div>
-<div class="usecase__tools"><strong>OpenClaw</strong> · <strong>Hermes</strong> · <strong>LangChain</strong> · <strong>Pydantic AI</strong> · LangGraph · CrewAI</div>
+<div class="usecase__body">Self-directed agents on infrastructure you own — with the built-in MCP server exposing every endpoint as an agent tool, and Cognito tokens giving each caller its own identity.</div>
+<div class="usecase__tools"><strong>OpenClaw</strong> · <strong>Hermes</strong> · <strong>LangChain</strong> · <strong>Pydantic AI</strong> · <strong>OpenAI Agents SDK</strong> · <strong>Agno</strong> · LangGraph · CrewAI</div>
 [Autonomous agents guide](use_cases_autonomous_agents.md)
 </div>
 
 <div class="usecase" markdown>
 <div class="usecase__tag">VOICE &amp; AUDIO</div>
 <div class="usecase__title">Speech in, speech out</div>
-<div class="usecase__body">Voice agents, transcription with speaker diarization, and subtitles — on Amazon Polly and Transcribe, without a second AI vendor.</div>
+<div class="usecase__body">Speech-to-speech agents over a single WebSocket, transcription streamed phrase by phrase, and subtitles — on Amazon Bedrock, Polly and Transcribe, without a second AI vendor.</div>
 <div class="usecase__tools"><strong>wyoming-openai</strong> · <strong>Pipecat</strong> · <strong>LiveKit Agents</strong> · Home Assistant</div>
 [Home Assistant voice guide](use_cases_home_assistant.md)
 </div>
@@ -536,8 +579,8 @@ Every integration is the same four steps: deploy, copy your endpoint URL, paste 
 <div class="usecase" markdown>
 <div class="usecase__tag">RAG &amp; SEARCH</div>
 <div class="usecase__title">Answers grounded in your data</div>
-<div class="usecase__body">Two-stage retrieval through one deployment — Bedrock embeddings, then Cohere-compatible reranking, with any vector database.</div>
-<div class="usecase__tools"><strong>Haystack</strong> · <strong>Docling Serve</strong> · LlamaIndex · RAGFlow · LightRAG</div>
+<div class="usecase__body">Retrieval through one deployment — built-in vector stores or the knowledge base you already run, embeddings, and Cohere-compatible reranking.</div>
+<div class="usecase__tools"><strong>Haystack</strong> · <strong>Docling Serve</strong> · <strong>LlamaIndex</strong> · RAGFlow · LightRAG</div>
 [RAG pipelines guide](use_cases_rag.md)
 </div>
 
@@ -562,16 +605,16 @@ Media generation, knowledge management and team chatbots are covered too. [:octi
 - :material-account-check: __20 client &amp; framework suites__
   <br>Real CLIs, apps, and libraries driven end to end against a live deployment.
 
-- :material-brain: __100 model-probe records__
+- :material-brain: __100+ model-probe records__
   <br>Committed observations of what each model actually accepts and rejects.
 
-- :material-robot: __53 MCP API tools__
+- :material-robot: __50+ MCP API tools__
   <br>Every exposed tool called end to end through the official MCP client.
 
-</div>
+- :material-shield-check: __95%+ branch coverage__
+  <br>Measured across the full suite, with every test tier enabled.
 
-Offline CI runs on every push and pull request with an enforced coverage floor. The live-AWS, vendor cross-validation, and client suites run on demand against a real deployment. Branch coverage measured with every test tier enabled — the full suite, not just the offline CI run — is 95%+.
-{ .band__note }
+</div>
 
 [:octicons-arrow-right-24: Inspect the public test suite](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests) &nbsp;·&nbsp; [what each client suite exercises](https://github.com/stdapi-ai/stdapi.ai/blob/main/tests/agentic/README.md)
 { .band__note }
