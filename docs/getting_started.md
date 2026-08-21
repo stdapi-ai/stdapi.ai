@@ -6,7 +6,7 @@ keywords: stdapi.ai getting started, try stdapi.ai, OpenAI gateway AWS, Anthropi
 
 # :material-rocket-launch: Get Started
 
-Pick the path that fits where you are right now. Both use the same OpenAI, Anthropic, and Cohere-compatible API, and both are adopted the same way — two client-side changes: point your client at the base URL, then name a model the deployment serves. The second one is the point of the first: the catalogue spans every provider your regions offer, not one vendor's list. [`GET /search_models`](api_search_models.md) lists it.
+Pick the path that fits where you are right now. Both use the same OpenAI, Anthropic, and Cohere-compatible API, and both are adopted the same way: point your client at the deployment's base URL, give it that deployment's API key, and change the model name only where it differs. Usually it does not — each model is published under the name its provider uses, so a client already asking for `claude-opus-5` or `gpt-5.6-sol` changes nothing but the base URL. Where a name *does* differ, [`MODEL_ALIASES`](operations_configuration.md#model-aliases) maps the name your application already sends onto a model the deployment serves. What the base URL buys is the catalogue behind it: it spans every provider your regions offer, not one vendor's list. [`GET /search_models`](api_search_models.md) lists it.
 
 Looking for reference documentation rather than a quickstart? See [Features](features.md) for what the gateway does, and the [API Overview](api_overview.md) for endpoints, parameters, and SDK usage.
 
@@ -75,7 +75,7 @@ The Docker path additionally needs [Docker](https://docs.docker.com/get-started/
 | Already running a production workload elsewhere | **AWS (Terraform)** | Jump straight to the stack you'll operate long-term. |
 | Contributing to an open-source project | **Docker (local)** | AGPL-3.0 community image is free to use and redistribute. |
 
-You can start local and migrate to AWS later — same API, same SDKs, same two client-side changes. Point the base URL at your AWS endpoint, and check the model name against what that deployment's regions serve.
+You can start local and migrate to AWS later — same API, same SDKs, same client-side changes. Point the base URL at your AWS endpoint, add that deployment's API key, and check your model names against what its regions serve.
 
 ---
 

@@ -235,7 +235,7 @@ What the page owns in exchange is the media. Capturing the microphone, resamplin
 
 ### Put WebRTC or a phone line in front of the gateway
 
-The route to a browser peer connection or a phone call does not run through `POST /v1/realtime/calls`. The two frameworks most voice agents are already built on — **LiveKit Agents** and **Pipecat** — terminate WebRTC themselves (and SIP, through their telephony transports), and reach the model over exactly the WebSocket this API serves. The caller speaks WebRTC or SIP to the framework; the framework speaks this API. Pointing one at this deployment is the same two client-side changes the rest of this gateway asks for: the base URL, and the model name.
+The route to a browser peer connection or a phone call does not run through `POST /v1/realtime/calls`. The two frameworks most voice agents are already built on — **LiveKit Agents** and **Pipecat** — terminate WebRTC themselves (and SIP, through their telephony transports), and reach the model over exactly the WebSocket this API serves. The caller speaks WebRTC or SIP to the framework; the framework speaks this API. Pointing one at this deployment asks no more of it than the rest of this gateway does: the base URL, the deployment's API key, and the model name only where the name differs.
 
 **LiveKit Agents** takes an HTTP base URL and derives the WebSocket from it, exactly as the official SDK does:
 

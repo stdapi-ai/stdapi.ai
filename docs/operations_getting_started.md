@@ -110,7 +110,7 @@ terraform output docs_url
 !!! info "If the docs page returns 503 or shows a TLS warning"
     These are normal on a fresh deployment. The ECS service takes 2–3 minutes to pass health checks (→ 503), and the auto-generated `*.elb.amazonaws.com` domain has no trusted TLS certificate (→ browser warning; safe to bypass for testing). See [Troubleshooting](operations_troubleshooting.md) for a permanent HTTPS setup with a custom domain.
 
-stdapi.ai is compatible with both OpenAI and Anthropic SDKs. If you've used either before, you already know how to use it — the base URL changes, and usually the model name with it. Here are the raw HTTP calls with `curl` so you can verify the endpoint from any shell:
+stdapi.ai is compatible with both OpenAI and Anthropic SDKs. If you've used either before, you already know how to use it — the base URL changes, along with the API key, and the model name only where it differs, since Anthropic's and OpenAI's own names for the models Bedrock serves resolve here as they stand. Here are the raw HTTP calls with `curl` so you can verify the endpoint from any shell:
 
 === "OpenAI-compatible"
 
