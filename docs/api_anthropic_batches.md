@@ -28,6 +28,17 @@ The requests are sent inline, the batch runs without a connection held open, and
 
 </div>
 
+## Available Endpoints
+
+| Endpoint                                        | Method   | What It Does                        | MCP Tool                          |
+|-------------------------------------------------|----------|-------------------------------------|-----------------------------------|
+| `/anthropic/v1/messages/batches`                | `POST`   | Create a batch from inline requests | `anthropic_message_batch`         |
+| `/anthropic/v1/messages/batches`                | `GET`    | List batches, newest first          | `anthropic_message_batch_list`    |
+| `/anthropic/v1/messages/batches/{id}`           | `GET`    | Retrieve a batch and its counters   | `anthropic_message_batch_get`     |
+| `/anthropic/v1/messages/batches/{id}/results`   | `GET`    | Stream the results as JSONL         | `anthropic_message_batch_results` |
+| `/anthropic/v1/messages/batches/{id}/cancel`    | `POST`   | Cancel a batch that is still processing | `anthropic_message_batch_cancel` |
+| `/anthropic/v1/messages/batches/{id}`           | `DELETE` | Delete a batch that has ended       | `anthropic_message_batch_delete`  |
+
 ## Prerequisites
 
 The Message Batches API is disabled until the deployment declares an AWS IAM service role that Amazon Bedrock assumes to read the requests and write the results:
@@ -138,7 +149,7 @@ Each line pairs a `custom_id` with its outcome:
 A batch below the minimum, or over the model cap, is refused when it is created and the message names the shortfall — a batch naming several models must reach the minimum **for each of them**.
 
 !!! note "The 100-request minimum is a quota default"
-    100 is the default of the Amazon Bedrock quota *Minimum number of records per batch inference job*, which is set **per model** and adjustable for some of them — see [Amazon Bedrock quotas](https://docs.aws.amazon.com/general/latest/gr/bedrock.html). The check applied here is the default, whatever your account's own value is: an account that raised the quota has its smaller batches accepted here and refused on creation, and one that lowered it still cannot submit fewer than 100 requests for a model.
+    100 is the default of the Amazon Bedrock quota *Minimum number of records per batch inference job*, which is set **per model** and adjustable for some of them — see [Amazon Bedrock quotas](https://docs.aws.amazon.com/general/latest/gr/bedrock.html). The gateway checks against that default, not against your account's own value, so a raised quota is enforced by Amazon Bedrock rather than here — a model given 150 requests clears this check and is then refused by the backend — and a lowered one is not usable: fewer than 100 requests for a model is still refused here.
 
 ## Feature Compatibility
 

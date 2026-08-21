@@ -28,6 +28,15 @@ A batch is created from a file of requests, runs without a connection held open,
 
 </div>
 
+## Available Endpoints
+
+| Endpoint                    | Method | What It Does                          | MCP Tool              |
+|-----------------------------|--------|---------------------------------------|-----------------------|
+| `/v1/batches`               | `POST` | Create a batch from an uploaded file  | `openai_batch`        |
+| `/v1/batches`               | `GET`  | List batches, newest first            | `openai_batch_list`   |
+| `/v1/batches/{batch_id}`    | `GET`  | Retrieve a batch and its counters     | `openai_batch_get`    |
+| `/v1/batches/{batch_id}/cancel` | `POST` | Cancel a batch that is still running | `openai_batch_cancel` |
+
 ## Prerequisites
 
 The Batch API is disabled until the deployment declares an AWS IAM service role that Amazon Bedrock assumes to read the requests and write the results:
@@ -57,7 +66,7 @@ Embedding requests are written the same way, against `/v1/embeddings`:
 {"custom_id": "doc-2", "method": "POST", "url": "/v1/embeddings", "body": {"model": "amazon.titan-embed-text-v2:0", "input": "Second passage of the corpus"}}
 ```
 
-Both samples above are abridged: a real file needs at least 100 requests, the minimum a batch carries for each model it names.
+Both samples above are abridged: a real file needs at least 100 requests, the minimum a batch carries.
 
 ```python
 from openai import OpenAI
@@ -150,7 +159,7 @@ Requests that failed are collected in a separate file, named by `error_file_id`.
 
 | Limit                          | Value                        |
 |--------------------------------|------------------------------|
-| Minimum requests per model     | 100 (default quota)          |
+| Minimum requests per batch     | 100 (default quota)          |
 | Maximum requests per batch     | 50,000                       |
 | Maximum input file size        | 200 MB                       |
 | `custom_id` length             | 64 characters                |
@@ -160,7 +169,7 @@ Requests that failed are collected in a separate file, named by `error_file_id`.
 A batch below the minimum, or past any of these caps, is refused when it is created and the message names the shortfall, rather than accepted and failed later.
 
 !!! note "The 100-request minimum is a quota default"
-    100 is the default of the Amazon Bedrock quota *Minimum number of records per batch inference job*, which is set **per model** and adjustable for some of them — see [Amazon Bedrock quotas](https://docs.aws.amazon.com/general/latest/gr/bedrock.html). The check applied here is the default, whatever your account's own value is: an account that raised the quota has its smaller batches accepted here and refused on creation, and one that lowered it still cannot submit fewer than 100 requests for a model.
+    100 is the default of the Amazon Bedrock quota *Minimum number of records per batch inference job*, which is set **per model** and adjustable for some of them — see [Amazon Bedrock quotas](https://docs.aws.amazon.com/general/latest/gr/bedrock.html). The gateway checks against that default, not against your account's own value, so a raised quota is enforced by Amazon Bedrock rather than here — a batch of 150 clears this check and is then refused by the backend — and a lowered one is not usable: fewer than 100 requests is still refused here.
 
 ## Feature Compatibility
 

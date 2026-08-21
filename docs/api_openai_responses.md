@@ -101,7 +101,7 @@ Generate model responses with Amazon Bedrock foundation models through an OpenAI
 | `stream_options`                                                      |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Accepted but ignored on Converse-served models; forwarded upstream on Bedrock Mantle native models |
 | `conversation`                                                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Prepends the conversation's items to `input` and appends the turn to it unless `store` is false; rejected (`400`) with `previous_response_id` — see [Conversations](api_openai_conversations.md) |
 | `prompt` (template reference)                                         |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }   | Amazon Bedrock Prompt Management prompt ARN only, when enabled server-side — see [Managed Prompt Templates](#managed-prompt-templates) |
-| `safety_identifier`                                                   | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted but ignored by generation; recorded in request logs                 |
+| `safety_identifier` / `user`                                          |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }   | Does not affect generation; identifies the end user in the request log and in [per-user cost attribution](operations_cost_management.md#per-user-attribution) |
 | `client_metadata`                                                     |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Accepted but ignored on Converse-served models (sent by newer OpenAI clients such as Codex); forwarded upstream on Bedrock Mantle native models |
 | `moderation`                                                          |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Applies an Amazon Bedrock guardrail; results in the response `moderation` field (on the terminal event when streaming) — rejected (`400`) on Mantle-served models |
 | **Output Format**                                                     |                                         |                                                                              |
@@ -499,6 +499,34 @@ Cached token usage is reported in the response:
 ```
 
 Following OpenAI semantics, `input_tokens` covers the **full** prompt: tokens read from and written to the cache are included, and `cached_tokens` (the tokens read from cache) is a subset of `input_tokens`. In this example, 1,200 of the 1,500 input tokens were retrieved from cache.
+
+### Provider-Specific Parameters
+
+A top-level field this API does not declare is forwarded to the model as a
+provider-specific inference parameter, as on
+[Chat Completions](api_openai_chat_completions.md#provider-specific-parameters)
+and [Messages](api_anthropic_messages.md#provider-specific-parameters). A
+capability Amazon Bedrock exposes and the OpenAI API has no field for is
+therefore reachable without leaving this endpoint — the OpenAI SDK sends these
+through `extra_body`:
+
+```json
+{
+  "model": "anthropic.claude-sonnet-5",
+  "input": "Write a poem about the sea",
+  "top_k": 50
+}
+```
+
+Server-wide defaults per model come from `DEFAULT_MODEL_PARAMS`, and a
+per-request value wins over them.
+
+**Behavior:**
+
+- :material-check-circle:{ .success role="img" aria-label="Supported" } **Compatible parameters**: forwarded to the model and applied
+- :material-alert-circle:{ .warning } **Unsupported parameters**: the backend refuses the request, returned as a `400`
+- :material-alert-circle:{ .warning } **Reserved names**: `additional_request_fields`, `max_tokens`, `model_id`, `stop_sequences`, `temperature`, `top_logprobs` and `top_p` are the argument names the gateway binds when it builds the Bedrock call, so sending one as an extra is rejected with a `400` naming it instead of binding twice — use the declared `max_output_tokens`, `temperature`, `top_p` and `top_logprobs` fields
+- :material-alert-circle:{ .warning } **Client-side control fields**: names no provider treats as inference parameters (LiteLLM's `drop_params` among them) are dropped before the call. [`EXTRA_MODEL_PARAMS_DENYLIST`](operations_configuration.md#extra-model-params-denylist) extends that list, and [`EXTRA_MODEL_PARAMS_DROP_ALL`](operations_configuration.md#extra-model-params-drop-all) disables the passthrough entirely
 
 ### Managed Prompt Templates { #managed-prompt-templates }
 

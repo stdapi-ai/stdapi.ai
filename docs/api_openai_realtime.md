@@ -204,8 +204,8 @@ That is also why a framework is the shorter path rather than a stopgap. LiveKit 
 | `create_response`, `interrupt_response`        | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored — a detected turn always starts a response, and interruption is the model's own decision |
 | Barge-in (caller speaks over the answer)       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Handled by the model itself                                          |
 | **Voices**                                    |                                          |                                                                     |
-| OpenAI voice names                             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `marin`, `sage`, `shimmer`, `verse` |
-| Any other voice name                           | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Passed through to the model as given                                 |
+| OpenAI voice names                             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `marin`, `sage`, `shimmer`, `verse` — each served by the model's own nearest voice, so the timbre is not the upstream one |
+| Any other voice name                           | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Passed through to the model as given, so a model voice can be named directly |
 | **Not Available**                             |                                          |                                                                     |
 | `POST /v1/realtime/calls` (WebRTC, SIP)        | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Answers `404`; sessions run over the WebSocket only — see [Transports](#transports) for the browser and telephony route |
 | `tools`, `tool_choice`, `parallel_tool_calls`  | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored — the session calls no tools                    |
@@ -287,6 +287,7 @@ Pass the returned model ID as `model` on the WebSocket URL, or in the `session.m
 - **Fatal errors** — a fatal error sends a terminal `error` event, then closes the connection with close code `3000`, whose reason is `<error type>.<error code>` (e.g. `invalid_request_error.model_not_found`).
 - **Event size** — a single client event may carry at most **4 MiB**, base64 included; a larger one answers an `error` and is dropped. Append audio in the small chunks it is captured in rather than whole files.
 - **Uncommitted audio** — under manual turns (`turn_detection: null`), at most **5.7 MB** of decoded audio may be buffered before an `input_audio_buffer.commit` (about 2 minutes of 24 kHz PCM, longer for G.711); past that the append answers an `error`. Commit each turn, or clear the buffer with `input_audio_buffer.clear`.
+- **Addressable items** — the session keeps its **200** most recent conversation items addressable, dropping the oldest past that. `conversation.item.truncate`, `.retrieve` and `.delete` answer an `error` for an item that has fallen out; the model's own memory of the conversation is unaffected.
 
 ## Cost
 

@@ -308,6 +308,8 @@ curl -X POST "$BASE/v1/uploads/upload_0190c51c7de7455d9b8c2efe27dfbf67/complete"
 
 The optional `md5` is the hex-encoded MD5 digest of the **whole file** — the parts concatenated in `part_ids` order, not a digest per part. When it is supplied the completed file is verified against it, and a mismatch is refused with a 400 error and leaves no file behind. Omit it and the upload completes unverified.
 
+The assembled file reports the `created_at` of the upload session rather than of its completion, and takes the matching position in [the listing](#list-files) — so a large file uploaded part by part sorts where its own timestamp says it belongs.
+
 **Response:** A completed `Upload` object with the `file` field populated.
 
 ```json

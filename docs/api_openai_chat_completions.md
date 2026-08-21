@@ -107,7 +107,7 @@ Two outcomes are possible for a parameter no model behind this API can honor, an
 | `metadata`                               |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Echoed in the response, updatable on stored completions, and usable to filter the Bedrock invocation log. Also forwarded to Bedrock `requestMetadata`, whose limits apply: max 16 pairs, values ≤256 characters, restricted character set |
 | `store`                                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Persists the completion in Amazon Bedrock session storage (non-streaming) |
 | List / update stored completions         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | List with `model`/`metadata` filters; metadata update            |
-| `safety_identifier` / `user`             |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Logged                                                          |
+| `safety_identifier` / `user`             |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Does not affect generation; identifies the end user in the request log and in [per-user cost attribution](operations_cost_management.md#per-user-attribution) |
 | Bedrock Guardrails                       | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Content safety policies — not applied to Mantle-served requests |
 | `moderation`                             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Applies an Amazon Bedrock guardrail; results in the response (non-streaming) — rejected (`400`) on Mantle-served models |
 

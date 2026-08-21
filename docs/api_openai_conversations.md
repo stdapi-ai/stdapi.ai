@@ -28,8 +28,8 @@ the response output are added to it automatically.
 - :material-format-list-bulleted: __Cursor Pagination__
   <br>List items newest- or oldest-first with `limit` and the `after` cursor.
 
-- :material-server-network: __No Server State__
-  <br>Conversations are stored in your AWS account, so any gateway instance serves any conversation.
+- :material-server-network: __No Gateway State__
+  <br>The thread lives in your AWS account, not in a gateway instance, so any instance behind a load balancer serves any conversation.
 
 </div>
 
@@ -107,7 +107,7 @@ reasoning items, function calls and their outputs.
 | Parameter | Default  | Notes                                                        |
 |-----------|----------|--------------------------------------------------------------|
 | `order`   | `desc`   | `asc` is conversation order.                                 |
-| `limit`   | `20`     | 1 to 100 items per page.                                     |
+| `limit`   | `20`     | Up to 100 items per page; `0` returns an empty page.         |
 | `after`   | —        | An item ID; only items strictly after it are returned. An ID that is not in the conversation returns `404`. |
 | `include` | —        | Extra item fields to return.                                 |
 
