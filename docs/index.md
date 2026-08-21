@@ -13,7 +13,7 @@ hide:
 
 # Your OpenAI &amp; Anthropic apps on AWS. Not just chat.
 
-An AI gateway you run in your own AWS account. Point Claude Code, Open WebUI, n8n, OpenClaw — or your own code — at it, and they reach 100+ models including Claude, OpenAI GPT, DeepSeek and Nova, at AWS Bedrock rates with zero markup. Two client-side changes: the base URL, and the model name — now picked from all of them, not one vendor's list.
+An AI gateway you run in your own AWS account. Point Claude Code, Open WebUI, n8n, OpenClaw — or your own code — at it, and they reach 100+ models including Claude, OpenAI GPT, DeepSeek and Nova, at AWS Bedrock rates with zero markup. Adoption is quick: they point at your gateway instead of the vendor's, and the model they name is now drawn from all of them, not one vendor's list.
 
 <div class="buttons" markdown>
 [Start 14-day free trial](operations_getting_started.md){ .md-button .md-button--primary }
