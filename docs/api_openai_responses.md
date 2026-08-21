@@ -708,11 +708,16 @@ runs one or more queries, and grounds its answer in what it finds.
 !!! warning "Amazon Bedrock Mantle only"
     Amazon Bedrock serves this tool on the Mantle endpoint alone; it is refused
     on the `bedrock-runtime` endpoint. Models offered on both — the GPT-5.6
-    family among them — resolve to their runtime twin by default, which does
-    **not** answer `web_search`. Send the request to Mantle explicitly, with the
-    `x-stdapi-service` header below or by naming the model in
+    family among them — resolve to their runtime twin by default, which cannot
+    answer `web_search`: the request is **rejected with a `400`** naming both
+    ways to reach Mantle, rather than answered without a search. Send it to
+    Mantle explicitly, with the `x-stdapi-service` header below or by naming the
+    model in
     [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration.md#bedrock-mantle-preferred-models).
     Available in `us-east-1`, `us-east-2` and `us-west-2`, and billed per query.
+
+    `code_interpreter` is refused the same way and for the same reason: no
+    OpenAI GPT server tool is served on `bedrock-runtime`.
 
 ```bash
 curl -X POST "$BASE/v1/responses" \

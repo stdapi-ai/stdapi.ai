@@ -173,9 +173,9 @@ if TYPE_CHECKING:
 
     from stdapi.config import LogLevel
     from stdapi.models.chat import ReasoningParams
+    from stdapi.models.chat._adapters._common import ServerToolNames
     from stdapi.models.chat._default import ChatModel
     from stdapi.types import JsonMapping
-    from stdapi.types.anthropic_messages import ServerTools
     from stdapi.types.openai import ResponseModeration
     from stdapi.types.openai_responses import (
         Annotation,
@@ -360,26 +360,31 @@ def _map_tool_choice(tool_choice: ToolChoice | None) -> ToolChoiceTypeDef | None
 
 
 def _resolve_integrated_tool_name(
-    tool: Tool, tool_name_map: Mapping[ServerTools, str] | None
+    tool: Tool, tool_name_map: ServerToolNames | None
 ) -> str | None:
     """Return the Bedrock name for an integrated tool, or ``None`` if not recognized.
 
     Args:
         tool: OpenAI Responses API tool instance.
-        tool_name_map: Optional canonical → Bedrock name map.  When provided,
-            the canonical name must exist in the map or ``ApiError`` is raised.
+        tool_name_map: What the model declares about server tool names.  A map
+            translates the canonical name, and the name must exist in it or
+            ``ApiError`` is raised; a ``NoServerTools`` refuses outright;
+            ``None`` forwards the canonical name as a stub tool.
 
     Returns:
         Bedrock tool name, or ``None`` when *tool* is not in
         ``_TOOL_TYPE_TO_BEDROCK_NAME``.
 
     Raises:
-        ApiError: If *tool_name_map* is provided and the canonical name is
-            absent, or if *tool* is a web search tool carrying restrictions no
-            backend-served web search can apply.
+        ApiError: If the model's backend serves no server tool, if
+            *tool_name_map* is a map the canonical name is absent from, or if
+            *tool* is a web search tool carrying restrictions no backend-served
+            web search can apply.
     """
     if (canonical_name := _TOOL_TYPE_TO_BEDROCK_NAME.get(type(tool))) is None:
         return None
+    if isinstance(tool_name_map, _common.NoServerTools):
+        tool_name_map.refuse(getattr(tool, "type", type(tool).__name__))
     if isinstance(tool, WebSearchTool | WebSearchPreviewTool):
         _reject_web_search_restrictions(tool)
     if tool_name_map is None:
@@ -431,7 +436,7 @@ def _function_tool_spec(tool: FunctionTool) -> ToolTypeDef:
 
 def _build_tool_config(
     request: ResponseCreateParams | InputTokenCountParams,
-    tool_name_map: Mapping[ServerTools, str] | None = None,
+    tool_name_map: ServerToolNames | None = None,
 ) -> ToolConfigurationTypeDef | None:
     """Build a Bedrock tool configuration from a Responses API request.
 
@@ -446,19 +451,18 @@ def _build_tool_config(
 
     Args:
         request: Responses API creation or input-token count request.
-        tool_name_map: Optional mapping from canonical server tool name to
-            Bedrock system tool name.  When provided, integrated tool types are
-            translated to Bedrock names; if a canonical name is absent, an
-            ``ApiError`` is raised.
+        tool_name_map: What the model declares about server tool names
+            (``ChatModel.server_tool_names``).
 
     Returns:
         Bedrock tool configuration, or ``None`` if no tools are present
         or tool calling is disabled.
 
     Raises:
-        ApiError: If ``tool_name_map`` is provided and an integrated tool's
-            canonical name is absent from the map, or if a ``web_search`` tool
-            carries search restrictions.
+        ApiError: If the model's backend serves no server tool, if
+            ``tool_name_map`` is a map an integrated tool's canonical name is
+            absent from, or if a ``web_search`` tool carries search
+            restrictions.
     """
     if request.tool_choice == "none" or not request.tools:
         return None
@@ -1308,7 +1312,7 @@ def translate_request(
     request: ResponseCreateParams,
     model_id: str,
     *,
-    tool_name_map: Mapping[ServerTools, str] | None = None,
+    tool_name_map: ServerToolNames | None = None,
 ) -> tuple[
     InferenceConfigurationTypeDef,
     JsonMapping,
@@ -1324,9 +1328,10 @@ def translate_request(
     Args:
         request: Responses API creation request.
         model_id: The Bedrock model identifier.
-        tool_name_map: Optional mapping from canonical server tool name to Bedrock
-            system tool name.  When provided, integrated tool types are translated
-            to Bedrock names before being added as ``toolSpec`` entries.
+        tool_name_map: What the model declares about server tool names
+            (``ChatModel.server_tool_names``): a map translates integrated tool
+            types to Bedrock names before they are added as ``toolSpec``
+            entries, and a ``NoServerTools`` refuses them.
 
     Returns:
         Tuple of ``(inference_cfg, additional_request_fields, tool_config,
@@ -1336,9 +1341,10 @@ def translate_request(
         ``outputConfig.textFormat`` when JSON output is requested.
 
     Raises:
-        ApiError: If ``tool_name_map`` is provided and an integrated tool's
-            canonical name is absent from the map, or if an extra parameter
-            reuses a name the translation already binds.
+        ApiError: If the model's backend serves no server tool, if
+            ``tool_name_map`` is a map an integrated tool's canonical name is
+            absent from, or if an extra parameter reuses a name the translation
+            already binds.
     """
     additional_request_fields: JsonMapping = {}
     return (
@@ -4085,7 +4091,7 @@ async def count_input_tokens_via_bedrock(
 
     # Reuse the converse tool mapping so synthetic and integrated tools count too.
     tool_config = _build_tool_config(
-        request, tool_name_map=chat_model.CANONICAL_TO_BEDROCK_TOOL_MAP or None
+        request, tool_name_map=chat_model.server_tool_names
     )
     server_tools = chat_model._req_extract_server_tools(tool_config)  # noqa: SLF001
     tool_config = chat_model._req_promote_system_tools(tool_config)  # noqa: SLF001

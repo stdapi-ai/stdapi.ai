@@ -52,6 +52,7 @@ if TYPE_CHECKING:
 
     from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
     from stdapi.models.chat import Effort
+    from stdapi.models.chat._adapters._common import NoServerTools, ServerToolNames
     from stdapi.types import JsonMapping
     from stdapi.types.anthropic_messages import (
         ContentBlock,
@@ -131,6 +132,20 @@ class ChatModel(ChatModelBase[Any, Any]):
     CANONICAL_TO_BEDROCK_TOOL_MAP: ClassVar[MappingProxyType[ServerTools, str]] = (
         MappingProxyType({})
     )
+
+    #: Refusal for a model whose backend serves no server tool at all; ``None`` (default) instead forwards an undeclared server tool as a stub ``toolSpec``, which Claude needs to accept ``toolResult`` blocks in multi-turn.
+    SERVER_TOOLS_UNSERVED: ClassVar[NoServerTools | None] = None
+
+    @property
+    def server_tool_names(self) -> ServerToolNames | None:
+        """Server tool translation the adapters apply to this model.
+
+        Returns:
+            The refusal when the backend serves no server tool, the declared
+            canonical → Bedrock name map when there is one, or ``None`` when the
+            family declares neither and a server tool is forwarded as a stub.
+        """
+        return self.SERVER_TOOLS_UNSERVED or self.CANONICAL_TO_BEDROCK_TOOL_MAP or None
 
     @classmethod
     def get_supported_operations(cls) -> Capability:
@@ -390,7 +405,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             self._model_id,
             prompt_caching_supported=self.PROMPT_CACHING_SUPPORTED,
             prompt_caching_tool_supported=self.PROMPT_CACHING_TOOL_SUPPORTED,
-            tool_name_map=self.CANONICAL_TO_BEDROCK_TOOL_MAP,
+            tool_name_map=self.server_tool_names,
             req_map_content_block=self._req_map_content_block,
             system_message_as_messages=self.SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED,
         )
@@ -542,9 +557,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             prompt_caching_ttl,
             request_metadata,
         ) = responses_adapter.translate_request(
-            request,
-            self._model_id,
-            tool_name_map=self.CANONICAL_TO_BEDROCK_TOOL_MAP or None,
+            request, self._model_id, tool_name_map=self.server_tool_names
         )
 
         server_tools = self._req_extract_server_tools(tool_config)

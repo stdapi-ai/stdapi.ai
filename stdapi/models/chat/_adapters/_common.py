@@ -1,6 +1,7 @@
 """Bedrock helpers shared by every chat adapter, regardless of the client API shape."""
 
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, NoReturn, final
 
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import filter_extra_model_parameters
@@ -15,8 +16,48 @@ if TYPE_CHECKING:
         MessageTypeDef,
     )
 
+    from stdapi.types.anthropic_messages import ServerTools
+
 #: Extra model parameter choosing whether a request's searches may reach the external web.
 EXTERNAL_WEB_ACCESS_PARAM = "external_web_access"
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class NoServerTools:
+    """Refusal declared by a model whose backend serves no server tool at all.
+
+    A model class declares one as ``SERVER_TOOLS_UNSERVED``.  It is deliberately
+    distinct from an empty ``CANONICAL_TO_BEDROCK_TOOL_MAP``, which means the
+    family declared no name translation: there, a server tool is still forwarded
+    as a stub ``toolSpec``, which Claude needs for Bedrock to accept the matching
+    ``toolResult`` blocks in a multi-turn conversation.
+
+    Attributes:
+        alternative: How to reach a backend that does serve the tool, appended to
+            the refusal so the caller can act on it.
+    """
+
+    alternative: str
+
+    def refuse(self, tool_type: str) -> NoReturn:
+        """Refuse a server tool the model's backend does not serve.
+
+        Args:
+            tool_type: Tool type as the request spelled it.
+
+        Raises:
+            ApiError: Always.
+        """
+        msg = (
+            f"Server tool '{tool_type}' is not supported by this model. "
+            f"{self.alternative}"
+        )
+        raise ApiError(msg)
+
+
+#: What a model declares about backend server tool names: a canonical → Bedrock name map, or a refusal when its backend serves none.
+type ServerToolNames = Mapping[ServerTools, str] | NoServerTools
 
 
 def append_or_merge(

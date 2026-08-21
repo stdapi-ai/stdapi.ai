@@ -1128,6 +1128,53 @@ class TestResponses:
         )
         assert completed, "Expected response.completed event"
 
+    @pytest.mark.expensive
+    def test_web_search_tool_on_a_natively_served_model(
+        self, openai_client: OpenAI, responses_web_search_native_model: str
+    ) -> None:
+        """A backend running the search itself answers with a search, not a tool call.
+
+        This is the path AWS documents for web search: the OpenAI GPT models on
+        the Bedrock Mantle endpoint, where the search runs server-side and the
+        answer comes back grounded.  The same request on their bedrock-runtime
+        twin used to return an unanswerable ``function_call`` (issue #186), so
+        the absence of one is the assertion that matters here; each
+        ``url_citation`` annotation, when the answer carries any, must delimit
+        the text it supports.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
+             https://developers.openai.com/api/docs/guides/tools-web-search
+             stdapi/models/chat/_mantle/_convert.py
+        """
+        response = openai_client.responses.create(
+            model=responses_web_search_native_model,
+            input="What is today's top headline news story?",
+            tools=[{"type": "web_search"}],
+        )
+
+        assert response.status == "completed"
+        assert response.output_text, "Expected non-empty text response"
+        web_search_calls = [
+            item for item in response.output if item.type == "web_search_call"
+        ]
+        assert len(web_search_calls) >= 1, (
+            "Expected at least one web_search_call output item"
+        )
+        assert web_search_calls[0].status == "completed"
+        function_calls = [
+            item for item in response.output if item.type == "function_call"
+        ]
+        assert function_calls == [], (
+            f"the built-in search must not surface as a function call: {function_calls}"
+        )
+        for item in response.output:
+            for content in getattr(item, "content", None) or ():
+                for annotation in getattr(content, "annotations", None) or ():
+                    if annotation.type != "url_citation":
+                        continue
+                    assert annotation.url
+                    assert 0 <= annotation.start_index <= annotation.end_index
+
     # Multimodal Input
 
     def test_image_base64_input(
@@ -2269,6 +2316,69 @@ class TestInputTokensMantleRejection:
         assert "not supported" in error["message"]
         assert error["type"] == "invalid_request_error"
         assert not counted, "CountTokens ran for a model it cannot resolve"
+
+
+@pytest.mark.local
+class TestServerToolsUnservedOnRuntime:
+    """A server tool the model's backend cannot run is refused, never forwarded.
+
+    Amazon Bedrock serves the OpenAI server tools on the ``bedrock-mantle``
+    endpoint alone, and the GPT-5.6 models are offered on both endpoints, so
+    they resolve to their ``bedrock-runtime`` twin by default.  Forwarding the
+    tool there produced a ``function_call`` no client can answer and no search
+    at all, so the model declares ``SERVER_TOOLS_UNSERVED`` and the request is
+    refused with the two ways to reach Mantle (issue #186).
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
+         stdapi/models/chat/openai_gpt.py:ChatModel
+         stdapi/models/chat/_adapters/_openai_responses.py:_resolve_integrated_tool_name
+    """
+
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            {"type": "web_search"},
+            {"type": "web_search_preview"},
+            {"type": "code_interpreter", "container": {"type": "auto"}},
+        ],
+        ids=["web_search", "web_search_preview", "code_interpreter"],
+    )
+    def test_integrated_tool_is_refused_on_a_runtime_served_gpt_model(
+        self,
+        app_client: TestClientType,
+        monkeypatch: pytest.MonkeyPatch,
+        tool: dict[str, Any],
+    ) -> None:
+        """Every integrated tool type is a 400 naming both ways to reach Mantle.
+
+        The refusal must precede the Bedrock call: a request that reached
+        Converse would be answered with the stub tool instead.
+        """
+        from stdapi.routes import openai_responses  # noqa: PLC0415
+        from tests._helpers import make_model_details  # noqa: PLC0415
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> ModelDetails:
+            return make_model_details(model_id)
+
+        monkeypatch.setattr(openai_responses, "validate_model", _validate_model)
+
+        response = app_client.post(
+            "/v1/responses",
+            json={
+                "model": "openai.gpt-5.6-terra",
+                "input": "What shipped this week?",
+                "tools": [tool],
+            },
+        )
+
+        assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert f"Server tool '{tool['type']}'" in error["message"]
+        assert "x-stdapi-service: bedrock-mantle" in error["message"]
+        assert "AWS_BEDROCK_MANTLE_PREFERRED_MODELS" in error["message"]
 
 
 class TestCodeInterpreterTool:

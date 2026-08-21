@@ -100,7 +100,7 @@ from stdapi.types.anthropic_messages import (
 from stdapi.utils import b64decode, b64encode
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
+    from collections.abc import AsyncGenerator, AsyncIterator, Callable
 
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_bedrock_runtime.literals import (
@@ -134,9 +134,9 @@ if TYPE_CHECKING:
     )
 
     from stdapi.models.chat import ReasoningParams
+    from stdapi.models.chat._adapters._common import ServerToolNames
     from stdapi.models.chat._default import ChatModel
     from stdapi.types import JsonMapping
-    from stdapi.types.anthropic_messages import ServerTools
 
 
 def _build_cache_point(
@@ -787,27 +787,31 @@ def _handle_system_tool(
     tool: ToolUnionParam,
     tool_list: list[ToolTypeDef],
     *,
-    tool_name_map: Mapping[ServerTools, str] | None,
+    tool_name_map: ServerToolNames | None,
 ) -> None:
     """Append a ``toolSpec`` stub for an Anthropic server tool.
 
-    The Bedrock name is looked up via *tool_name_map* when provided, otherwise
-    ``tool.name`` is used verbatim.  The stub is later promoted to a Bedrock
-    ``systemTool`` entry by ``_req_promote_system_tools`` (non-Claude models),
-    or kept as a ``toolSpec`` entry in ``toolConfig`` by Claude models
+    The Bedrock name is looked up via *tool_name_map* when it is a map,
+    otherwise ``tool.name`` is used verbatim.  The stub is later promoted to a
+    Bedrock ``systemTool`` entry by ``_req_promote_system_tools`` (non-Claude
+    models), or kept as a ``toolSpec`` entry in ``toolConfig`` by Claude models
     (multi-turn stub mode: required so Bedrock accepts ``toolResult`` blocks in
     multi-turn conversations).
 
     Args:
         tool: Anthropic server tool param.
         tool_list: Mutable Bedrock tool list to append to.
-        tool_name_map: Anthropic → Bedrock name map.
+        tool_name_map: What the model declares about server tool names
+            (``ChatModel.server_tool_names``).
 
     Raises:
-        ApiError: If *tool_name_map* is provided and the tool name is absent, or
-            *tool* is a ``web_search`` tool with filter fields that Bedrock's
+        ApiError: If the model's backend serves no server tool, if
+            *tool_name_map* is a map the tool name is absent from, or *tool* is
+            a ``web_search`` tool with filter fields that Bedrock's
             ``systemTool`` (e.g. Amazon Nova grounding) cannot honor.
     """
+    if isinstance(tool_name_map, _common.NoServerTools):
+        tool_name_map.refuse(getattr(tool, "type", type(tool).__name__))
     if tool_name_map:
         if tool.name not in tool_name_map:
             tool_type = getattr(tool, "type", type(tool).__name__)
@@ -841,7 +845,7 @@ def _build_tool_config(
     tool_choice: ToolChoiceParam | None,
     *,
     allow_explicit_caching: bool = False,
-    tool_name_map: Mapping[ServerTools, str] | None = None,
+    tool_name_map: ServerToolNames | None = None,
 ) -> ToolConfigurationTypeDef | None:
     """Build a Bedrock tool configuration from Anthropic tools and tool choice.
 
@@ -859,14 +863,16 @@ def _build_tool_config(
         tool_choice: Anthropic tool choice, or ``None``.
         allow_explicit_caching: Append a cache-point right after each tool that
             carries ``cache_control``.
-        tool_name_map: Anthropic server tool name → Bedrock name translation map.
+        tool_name_map: What the model declares about server tool names
+            (``ChatModel.server_tool_names``).
 
     Returns:
         Bedrock ``ToolConfigurationTypeDef``, ``None`` when *tools* is empty or
         *tool_choice* disables tool calling.
 
     Raises:
-        ApiError: If *tool_name_map* is provided and a server tool name is absent.
+        ApiError: If the model's backend serves no server tool, or
+            *tool_name_map* is a map a server tool name is absent from.
     """
     if not tools or isinstance(tool_choice, ToolChoiceNoneParam):
         return None
@@ -934,7 +940,7 @@ async def translate_request(
     *,
     prompt_caching_supported: bool,
     prompt_caching_tool_supported: bool,
-    tool_name_map: Mapping[ServerTools, str] | None = None,
+    tool_name_map: ServerToolNames | None = None,
     req_map_content_block: Callable[[ContentBlockParam], ContentBlockTypeDef | None]
     | None = None,
     system_message_as_messages: bool = False,
@@ -956,9 +962,10 @@ async def translate_request(
         model_id: Bedrock model identifier.
         prompt_caching_supported: True if prompt caching is supported by the model.
         prompt_caching_tool_supported: True if tool caching is supported by the model.
-        tool_name_map: Optional mapping from Anthropic canonical tool name to Bedrock
-            system tool name.  When provided, system tool names are translated to
-            Bedrock names before being added as ``toolSpec`` entries.
+        tool_name_map: What the model declares about server tool names
+            (``ChatModel.server_tool_names``): a map translates Anthropic
+            canonical names to Bedrock names before they are added as
+            ``toolSpec`` entries, and a ``NoServerTools`` refuses them.
         req_map_content_block: Optional model-specific callback for content block
             translation.  Passed through to ``_map_messages``.
         system_message_as_messages: When True, system-role messages in a
@@ -2051,7 +2058,7 @@ async def count_tokens_via_bedrock(
             request.tools,
             request.tool_choice,
             allow_explicit_caching=allow_explicit_caching and allow_tool_caching,
-            tool_name_map=chat_model.CANONICAL_TO_BEDROCK_TOOL_MAP,
+            tool_name_map=chat_model.server_tool_names,
         )
     )
     additional_request_fields: JsonMapping = {}

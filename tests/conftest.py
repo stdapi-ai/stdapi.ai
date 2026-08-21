@@ -358,6 +358,9 @@ MODEL_MAPPINGS = {
         # Bedrock ``outputConfig`` is rejected by Nova: keep the cheapest Claude.
         "responses_json_output": "anthropic.claude-haiku-4-5-20251001-v1:0",
         "responses_web_search": "amazon.nova-2-lite-v1:0",
+        # AWS serves web search on Bedrock Mantle alone: Luna is the GPT-5.6 model
+        # aws_bedrock_mantle_preferred_models routes there (issue #186).
+        "responses_web_search_native": "openai.gpt-5.6-luna",
         "responses_code_interpreter": "amazon.nova-2-lite-v1:0",
         # Bedrock CountTokens only supports Anthropic models; the call is unbilled.
         "input_tokens": "anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -387,6 +390,7 @@ MODEL_MAPPINGS = {
         "responses": "gpt-5-nano",
         "responses_json_output": "gpt-5-nano",
         "responses_web_search": "gpt-5-nano",
+        "responses_web_search_native": "gpt-5-nano",
         "responses_code_interpreter": "gpt-5-nano",
         "input_tokens": "gpt-4o-mini",
         # gpt-image-1 is the only image model OpenAI still serves (the DALL-E family
@@ -813,6 +817,17 @@ def responses_json_output_model(models: dict[str, str]) -> str:
 def responses_web_search_model(models: dict[str, str]) -> str:
     """Responses-API model supporting the hosted web-search tool."""
     return models["responses_web_search"]
+
+
+@pytest.fixture(scope="session")
+def responses_web_search_native_model(models: dict[str, str]) -> str:
+    """Responses-API model whose backend runs the search itself, with citations.
+
+    Local: OpenAI GPT-5.6 Luna, served by Bedrock Mantle -- the only endpoint
+    AWS serves web search on, and the path its documentation shows.
+    Official API: ``gpt-5-nano``.
+    """
+    return models["responses_web_search_native"]
 
 
 @pytest.fixture(scope="session")

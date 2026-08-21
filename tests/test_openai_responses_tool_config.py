@@ -17,11 +17,13 @@ import pytest
 
 from stdapi.api_errors import ApiError
 from stdapi.models.chat._adapters._anthropic_message import _handle_system_tool
+from stdapi.models.chat._adapters._common import NoServerTools
 from stdapi.models.chat._adapters._openai_responses import (
     _build_output_config,
     _build_tool_config,
     _resolve_integrated_tool_name,
 )
+from stdapi.models.chat.openai_gpt import ChatModel as GptChatModel
 from stdapi.types.anthropic_messages import WebSearchToolParam
 from stdapi.types.openai_responses import (
     ResponseCreateParams,
@@ -128,6 +130,46 @@ class TestServerToolParity:
             )
             == "web_search"
         )
+
+    def test_a_model_whose_backend_serves_none_rejects(self) -> None:
+        """Both surfaces raise, with the alternative the model declared.
+
+        ``NoServerTools`` is what tells the two states of an empty map apart:
+        the family that declared nothing keeps the stub above, and the model
+        whose backend serves no server tool at all refuses instead of returning
+        a tool call nothing can answer (issue #186).
+
+        Ref: stdapi/models/chat/_adapters/_common.py:NoServerTools
+        """
+        unserved = NoServerTools("Ask the other endpoint.")
+        expected = "is not supported by this model. Ask the other endpoint."
+
+        with pytest.raises(ApiError, match="Ask the other endpoint") as anthropic_exc:
+            _handle_system_tool(
+                WebSearchToolParam(name="web_search", type="web_search_20250305"),
+                [],
+                tool_name_map=unserved,
+            )
+        assert anthropic_exc.value.status == 400
+        assert expected in str(anthropic_exc.value)
+
+        with pytest.raises(ApiError, match="Ask the other endpoint") as responses_exc:
+            _resolve_integrated_tool_name(WebSearchTool(type="web_search"), unserved)
+        assert responses_exc.value.status == 400
+        assert expected in str(responses_exc.value)
+
+    def test_the_openai_gpt_models_declare_their_backend_serves_none(self) -> None:
+        """The refusal names both ways to reach the endpoint that does serve it.
+
+        AWS serves the OpenAI server tools on Bedrock Mantle alone, so the
+        message has to carry the way out rather than a bare "not supported".
+
+        Ref: stdapi/models/chat/openai_gpt.py:ChatModel
+        """
+        unserved = GptChatModel.SERVER_TOOLS_UNSERVED
+        assert unserved is not None
+        assert "x-stdapi-service: bedrock-mantle" in unserved.alternative
+        assert "AWS_BEDROCK_MANTLE_PREFERRED_MODELS" in unserved.alternative
 
     def test_a_model_declaring_other_server_tools_rejects(self) -> None:
         """Both surfaces raise when the model maps tools but not this one."""
