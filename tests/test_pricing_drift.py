@@ -45,6 +45,14 @@ A model whose card never published a Global rate is **silent**, not vanished:
 most models publish only In-Region, so its absence from
 ``DEFAULT_MODEL_GLOBAL_PRICES`` is the correct state rather than a finding.
 
+A hand-copied rate also stops being the right answer the moment AWS starts
+publishing one, so a second live check reads the Price List itself and fails
+when any table entry's model has gained a row -- in either form, a native
+Bedrock row or an ``(Amazon Bedrock Edition)`` Marketplace listing.
+``_apply_default_prices`` guards per *model*, not per dimension: one published
+row discards the whole hand-copied entry, silently unpricing every dimension
+AWS did not publish.
+
 The live check is opt-in (``--drift``): a vendor changing a price is not a
 regression in this repository, and it must never turn an unrelated run red. It
 fails only inside its own lane, where a hard failure is the point. The
@@ -69,7 +77,11 @@ from typing import TYPE_CHECKING, Final
 
 import httpx
 import pytest
+from botocore.exceptions import BotoCoreError, ClientError
 
+from stdapi import pricing
+from stdapi.aws import AWSConnectionManager, get_client
+from stdapi.config import SETTINGS
 from stdapi.models.pricing_overrides import (
     DEFAULT_MODEL_GLOBAL_PRICES,
     DEFAULT_MODEL_PRICES,
@@ -761,6 +773,98 @@ def test_default_model_prices_match_their_published_source() -> None:
         warnings.warn(format_report(reported), PriceSourceWarning, stacklevel=2)
     if any(finding.outcome is Outcome.DRIFT for finding in findings):
         pytest.fail(f"{report}\n{_FIX}")
+
+
+#: The Price List service codes a Bedrock row arrives under, native or Marketplace.
+_BEDROCK_SERVICE_CODES: Final[tuple[str, ...]] = (
+    "AmazonBedrock",
+    "AmazonBedrockService",
+    "AmazonBedrockFoundationModels",
+)
+
+#: What to do when AWS starts publishing a rate one of the tables hand-copies.
+_FIX_PUBLISHED: Final[str] = (
+    "FIX: AWS now publishes Price List rows for a model the hand-copied tables "
+    "price. _apply_default_prices guards per model, so those rows already "
+    "discarded the whole table entry and every dimension AWS does not publish "
+    "is unpriced right now. Check which dimensions the published rows cover: "
+    "drop the entry when they cover all of them, and when they do not, treat "
+    "the per-model guard as the defect it becomes and fix that first."
+)
+
+
+async def _published_bedrock_model_keys() -> dict[str, set[str]]:
+    """Fetch the Bedrock rows AWS publishes today, keyed as the price catalog keys them.
+
+    Drives ``_fetch_service_pricing``, the same ingestion the running gateway
+    loads its catalog with, so a change to key normalization or to the
+    Marketplace listing parser moves this check with it instead of past it.
+
+    Returns:
+        Price-catalog model key to the claims that produced its rows -- a
+        usagetype for a native row, ``"<listing name>:<usagetype>"`` for a
+        Marketplace one.
+
+    Raises:
+        BotoCoreError: When the Price List API is unreachable.
+        ClientError: When the Price List API refuses the request.
+    """
+    endpoint = pricing.pricing_endpoint_region()
+    claimed: dict[str, set[str]] = {}
+    # type-ignore: the RegionName stub Literal lags EUSC/China (works live).
+    async with AWSConnectionManager(("pricing", endpoint)):  # type: ignore[arg-type]
+        client = get_client("pricing", endpoint)  # type: ignore[arg-type]
+        for region in SETTINGS.aws_bedrock_regions:
+            for service_code in _BEDROCK_SERVICE_CODES:
+                rows, claims = await pricing._fetch_service_pricing(  # noqa: SLF001
+                    client, service_code, str(region), []
+                )
+                for key in rows:
+                    claimed.setdefault(key.model, set()).add(claims[key])
+    return claimed
+
+
+@pytest.mark.drift
+async def test_the_price_list_publishes_no_rate_the_tables_hand_copy() -> None:
+    """No model the hand-copied tables price may have gained a Price List row.
+
+    The tables exist only because AWS publishes these rates nowhere the gateway
+    can read them: the OpenAI hosted models are absent from the Price List
+    outside GovCloud -- they are not AWS Marketplace listings either, no
+    ``(Amazon Bedrock Edition)`` product names one -- and the Stability image
+    services are on the pricing page alone. That absence is a vendor fact, and
+    the day it changes the hand-copied entry stops being a fallback and starts
+    being a second, unreconciled answer.
+
+    Worse, it fails closed on the wrong side: ``_apply_default_prices`` guards
+    per model, so a single published row -- one dimension, one region, either
+    listing form -- discards the whole entry, and every dimension AWS did not
+    publish goes unpriced with no test noticing. A run that fetched nothing
+    fails rather than passing vacuously.
+
+    Ref: stdapi/models/pricing_overrides.py:DEFAULT_MODEL_PRICES
+         stdapi/pricing.py:_apply_default_prices
+         stdapi/pricing.py:_ingest_marketplace_item
+    """
+    if pricing.pricing_endpoint_region() is None:
+        pytest.skip("this partition has no AWS Price List API endpoint")
+    try:
+        claimed = await _published_bedrock_model_keys()
+    except (BotoCoreError, ClientError) as exc:
+        pytest.skip(f"the AWS Price List API is not reachable: {exc}")
+
+    assert claimed, "the Price List published no Bedrock row at all -- nothing was read"
+    published = [
+        f"{model_id} (catalog key {key!r}): {', '.join(sorted(claimed[key]))}"
+        for model_id in sorted({*DEFAULT_MODEL_PRICES, *DEFAULT_MODEL_GLOBAL_PRICES})
+        if (key := pricing.resolve_model_key(model_id)) in claimed
+    ]
+    if published:
+        pytest.fail(
+            "The AWS Price List now publishes rows for hand-copied models:\n"
+            + "\n".join(f"  {line}" for line in published)
+            + f"\n{_FIX_PUBLISHED}"
+        )
 
 
 @pytest.fixture(scope="module")
