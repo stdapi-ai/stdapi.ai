@@ -96,7 +96,7 @@ Most gateways stop at chat completions. stdapi.ai covers text, retrieval, embedd
 <div class="panel-visual" markdown>
 <div class="api-groups" markdown>
 
-- :material-message-text: <span class="chip">/v1/chat/completions</span> <span class="chip">/v1/responses</span> <span class="chip">/anthropic/v1/messages</span> <span class="chip">/v1/conversations</span>
+- :material-message-text: <span class="chip">/v1/chat/completions</span> <span class="chip">/v1/responses</span> <span class="chip">/anthropic/v1/messages</span>
 - :material-vector-link: <span class="chip">/v1/embeddings</span> <span class="chip">/v1/vector_stores</span> <span class="chip">/cohere/v2/rerank</span>
 - :material-image-outline: <span class="chip">/v1/images/*</span> <span class="chip">/v1/videos</span>
 - :material-waveform: <span class="chip">/v1/audio/speech</span> <span class="chip">/v1/audio/transcriptions</span> <span class="chip">WS /v1/realtime</span>
@@ -306,7 +306,7 @@ No subscriptions, no minimums, no markup on model usage. Optional cost tracking 
 
 - <code>0%</code> markup on model usage — Bedrock billed by AWS directly
 - <code>live</code> rates from the AWS Price List catalog — fetched from AWS, not hand-maintained
-- <code>per user</code> spend on the AWS bill itself — grouped in Cost Explorer and the CUR, and testable in IAM policies
+- <code>per user</code> spend on the AWS bill itself — grouped in Cost Explorer and the CUR
 - <code>batch</code> price on asynchronous request sets — submit a corpus, pay Bedrock's discounted batch rate
 
 Per-request cost figures are estimated from published AWS prices, not read back from your invoice; per-user attribution is off by default and needs a role you create.

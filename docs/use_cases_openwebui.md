@@ -72,7 +72,7 @@ flowchart LR
     tools["SearXNG · Playwright<br/>ECS Fargate"]
     aurora["Aurora PostgreSQL<br/>Serverless v2 + pgvector"]
     valkey["ElastiCache Valkey<br/>TLS + auth token"]
-    egress["NAT gateways<br/>or interface VPC endpoints"]
+    egress["NAT gateways<br/>one per AZ"]
   end
 
   subgraph regional["AWS service endpoints · your account, the regions you configure"]
@@ -83,7 +83,7 @@ flowchart LR
     cw["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon CloudWatch<br/>logs · metrics · alarms"]
   end
 
-  user -->|"HTTPS · TLS 1.2+"| alb
+  user -->|"HTTPS · TLS 1.2+<br/>(HTTP until a domain is set)"| alb
   alb -->|"HTTP · private subnet"| openwebui
   openwebui -->|"OpenAI + Cohere API · API key<br/>private DNS, no public endpoint"| stdapi
   openwebui --> aurora
@@ -110,11 +110,11 @@ Two properties of this topology are worth reading off the picture. The gateway h
 | **Amazon Bedrock** | Chat completions, embeddings, reranking, image generation and editing | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
 | **Amazon Transcribe** | Voice input, behind `POST /v1/audio/transcriptions` | `AUDIO_STT_MODEL` (above) |
 | **Amazon Polly** | Spoken replies, behind `POST /v1/audio/speech` | `AUDIO_TTS_MODEL` (above) |
-| **Amazon Aurora PostgreSQL** | Open WebUI's own database, and the pgvector store its RAG pipeline queries; Serverless v2, storage encrypted | Terraform sample |
-| **Amazon ElastiCache (Valkey)** | WebSocket session state and model-list cache, reached over `rediss://` with an auth token | Terraform sample |
+| **Amazon Aurora PostgreSQL** | Open WebUI's own database, and the pgvector store its RAG pipeline queries; Serverless v2, two instances across Availability Zones, storage encrypted, TLS enforced (`rds.force_ssl`) | Terraform sample |
+| **Amazon ElastiCache (Valkey)** | WebSocket session state and model-list cache, reached over `rediss://` with an auth token; a primary and a cross-AZ replica with automatic failover | Terraform sample |
 | **Amazon S3** | Open WebUI file uploads under an `openwebui/` prefix, plus the gateway's temporary multimodal objects | [S3 storage](operations_compliance.md#s3-data-storage) |
 | **AWS KMS** | Customer-managed keys encrypting the S3 bucket and the Aurora cluster storage | Terraform sample |
-| **AWS Secrets Manager** | Holds the Aurora master password; the task reads it at start-up | Terraform sample |
+| **AWS Secrets Manager** | Holds the RDS-managed Aurora master password, used only by the apply-time RDS Data API initialization. The tasks' own credentials are Systems Manager Parameter Store SecureStrings created by the ECS module | Terraform sample |
 | **Amazon CloudWatch** | Container logs, Container Insights, gateway request logs and EMF usage metrics | [Logging & monitoring](operations_logging_monitoring.md) |
 | **AWS IAM** | Separate least-privilege task roles for each service; the gateway's role grants only the model and AI-service actions it invokes | [IAM permissions](operations_iam_permissions.md) |
 
@@ -319,9 +319,6 @@ tofu init
 tofu apply
 ```
 
-!!! note "Requires a sibling checkout for now"
-    This example pins the ECS module to a local path, because the S3 Files support it relies on is not yet in a published module release. Clone [JGoutin/terraform-aws-ecs](https://github.com/JGoutin/terraform-aws-ecs) next to your `samples` checkout until that release ships.
-
 ---
 
 ## :material-gauge: Operating This Integration
@@ -333,7 +330,7 @@ tofu apply
 | stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
 | ECS Fargate | Four services — Open WebUI, the gateway, SearXNG, Playwright — each sized and auto-scaled independently |
 | Load balancing and networking | One ALB, plus the NAT gateways the private subnets egress through |
-| Aurora Serverless v2 | Scales with query load; the sample sets a minimum capacity of zero ACUs |
+| Aurora Serverless v2 | Scales with query load; the sample floors it at 0.5 ACU rather than zero, because auto-pause needs no open connections and the application holds an idle pool |
 | ElastiCache Valkey | A standing node cost |
 | Model and AI-service usage | Amazon Bedrock, Polly and Transcribe at AWS rates, billed to your account with no markup |
 

@@ -93,7 +93,7 @@ Two things are worth reading off the picture. stdapi.ai has no listener of its o
 | **Amazon Bedrock** | Serves the model calls the agent's chosen wire dialect sends through stdapi.ai | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
 | **Amazon S3** | The gateway's own bucket for generated and temporary files; KMS-encrypted, versioned, lifecycle-managed | Module baseline (`storage.tf`) |
 | **AWS KMS** | Customer-managed key encrypting the gateway's S3 bucket; a separate key, created by the ECS module, encrypts the agent's EFS volumes and Fargate ephemeral storage | Terraform module baseline |
-| **Amazon EFS** | Persists the agent's own state (config, sessions, workspace) across redeployments | Terraform sample (`mount_points` in `hermes.tf`/`openclaw.tf`) |
+| **Amazon EFS** | Persists the agent's own state (config, sessions, workspace) across redeployments. For Hermes it holds *all* state, including every SQLite database, which is why that service runs a single task | Terraform sample (`mount_points` in `hermes.tf`/`openclaw.tf`) |
 | **Amazon CloudWatch** | Container logs, gateway request logs, and, when enabled, EMF usage metrics | [Logging & monitoring](operations_logging_monitoring.md) |
 | **AWS IAM** | Separate least-privilege task roles per ECS task; the gateway's role grants only the Bedrock/AI-service actions it calls | [IAM permissions](operations_iam_permissions.md) |
 
@@ -187,7 +187,7 @@ providers:
 
 model:
   provider: stdapi
-  model: anthropic.claude-fable-5
+  default: anthropic.claude-fable-5
 ```
 
 `key_env` names the environment variable Hermes reads the API key from—set `STDAPI_API_KEY` (or whatever name you choose) to your stdapi.ai key.
@@ -225,8 +225,9 @@ Deploy Hermes + stdapi.ai together on ECS Fargate, with `config.yaml` pre-seeded
 
 - Hermes gateway API and web dashboard on ECS Fargate, each behind its own generated credential
 - stdapi.ai gateway connected to Amazon Bedrock, registered as a custom OpenAI-compatible provider
-- `config.yaml` seeded on first boot with the stdapi.ai URL and API key already filled in
+- `config.yaml` seeded with the stdapi.ai URL and API key already filled in, and re-seeded whenever the rendered template changes — so a model or key changed in Terraform reaches the deployment, at the cost of overwriting edits made in the dashboard
 - Persistent state (config, sessions, memories, skills) on EFS, so it survives redeployments
+- **Exactly one task**, because every one of those stores is SQLite with no external backend ([upstream #38185](https://github.com/NousResearch/hermes-agent/issues/38185)). Recovery is a Fargate reschedule, with no failover — see *Single instance by design* in the sample's README
 - No local image build — the public `nousresearch/hermes-agent` image is pulled anonymously by Fargate
 - ECS Exec enabled for shelling into the container or driving Hermes' interactive CLI directly
 
