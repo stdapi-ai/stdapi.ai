@@ -83,10 +83,13 @@ from stdapi import pricing
 from stdapi.aws import AWSConnectionManager, get_client
 from stdapi.config import SETTINGS
 from stdapi.models.pricing_overrides import (
+    DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES,
     DEFAULT_MODEL_GLOBAL_PRICES,
+    DEFAULT_MODEL_LONG_CONTEXT_PRICES,
     DEFAULT_MODEL_PRICES,
+    MODEL_LONG_CONTEXT_THRESHOLDS,
 )
-from stdapi.pricing import Dimension
+from stdapi.pricing import ContextLength, Dimension
 from tests.conftest import REPO_ROOT
 
 if TYPE_CHECKING:
@@ -154,6 +157,20 @@ _IN_REGION_ROW: Final[str] = "in-region"
 
 #: The card row naming the rate the ``global.`` inference profile is billed at.
 _GLOBAL_ROW: Final[str] = "global cris"
+
+#: Caption fragment labelling the short-context table; an uncaptioned table is one.
+_SHORT_CONTEXT_CAPTION: Final[str] = "short context"
+
+#: Caption fragment labelling the long-context table, absent from most cards.
+_LONG_CONTEXT_CAPTION: Final[str] = "long context"
+
+#: How a card states the boundary between its two context tables, e.g. "(272K)".
+_CONTEXT_WINDOW_SIZE: Final[re.Pattern[str]] = re.compile(
+    r"\((\d+)\s*K\)", re.IGNORECASE
+)
+
+#: Multiplier turning a card's "K" context-window size into prompt tokens.
+_THOUSAND: Final[int] = 1_000
 
 #: Header of the pricing-page table holding the Stability rates.
 _STABILITY_HEADING: Final[str] = "stability ai image services"
@@ -236,6 +253,36 @@ class SourceReading:
     problem: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ThresholdReading:
+    """What a card had to say about the prompt size its rates split at.
+
+    The same three states as :class:`SourceReading`: ``tokens`` set means the
+    card states a context window, both unset means it prices a single tier, and
+    ``problem`` set means the card could not be read.
+    """
+
+    url: str
+    tokens: int | None = None
+    problem: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CardReadings:
+    """Everything one model card publishes, as separately classifiable readings.
+
+    A card prices up to two context tiers, each with an In-Region and a Global
+    row, and states the boundary between them. Each is compared against its own
+    table, so one withdrawn rate never reads as another's.
+    """
+
+    in_region: SourceReading
+    cross_region: SourceReading
+    long_in_region: SourceReading
+    long_cross_region: SourceReading
+    threshold: ThresholdReading
+
+
 def _text(fragment: str) -> str:
     """Return *fragment*'s visible text, unescaped and whitespace-collapsed."""
     return _SPACES.sub(" ", unescape(_TAG.sub(" ", fragment))).strip()
@@ -265,27 +312,40 @@ def _card_dimension(header: str) -> Dimension | None:
     )
 
 
+def _captioned_tables(section: str) -> list[tuple[str | None, str]]:
+    """Return the section's pricing tables, each with the caption labelling it.
+
+    A card carries one unlabelled table, or several captioned ones: a short and
+    a long context window, or a separate AWS GovCloud block. Pairing each table
+    with its own caption is what keeps one tier's rate from being read as
+    another's.
+    """
+    tables: list[tuple[str | None, str]] = []
+    caption: str | None = None
+    for match in _CAPTION_OR_TABLE.finditer(section):
+        if match.group(0).startswith("<table"):
+            tables.append((caption, match.group(0)))
+            caption = None
+        else:
+            caption = _text(match.group(1))
+    return tables
+
+
 def _short_context_table(section: str) -> str:
     """Return the card's commercial short-context pricing table.
 
-    A card carries one unlabelled table, or several captioned ones: a short and
-    a long context window, or a separate AWS GovCloud block. Only an absent
-    caption or one naming the short context window prices what the table
-    registers, and anything else is a different rate that must not be guessed
-    at.
+    Only an absent caption or one naming the short context window prices what
+    ``DEFAULT_MODEL_PRICES`` registers, and anything else is a different rate
+    that must not be guessed at.
 
     Raises:
         UnreadableSourceError: If the section holds no single such table.
     """
-    candidates: list[str] = []
-    caption: str | None = None
-    for match in _CAPTION_OR_TABLE.finditer(section):
-        if match.group(0).startswith("<table"):
-            if caption is None or "short context" in caption.casefold():
-                candidates.append(match.group(0))
-            caption = None
-        else:
-            caption = _text(match.group(1))
+    candidates = [
+        table
+        for caption, table in _captioned_tables(section)
+        if caption is None or _SHORT_CONTEXT_CAPTION in caption.casefold()
+    ]
     if len(candidates) != 1:
         msg = (
             f"expected exactly one uncaptioned or short-context pricing table, "
@@ -295,22 +355,34 @@ def _short_context_table(section: str) -> str:
     return candidates[0]
 
 
-def _pricing_rows(page: str) -> list[list[str]]:
-    """Return the rows of a card's commercial short-context pricing table.
+def _long_context_table(section: str) -> str | None:
+    """Return the card's long-context pricing table, or None when it has none.
 
-    Every inference option is a row of this one table, so both rates the tables
-    carry are read from it -- and both are therefore protected from the
-    long-context and GovCloud blocks by the same table selection.
-
-    Args:
-        page: The model card's HTML.
-
-    Returns:
-        The header row followed by one row per inference option.
+    Most cards price a single context window and carry no such table at all,
+    which is a published absence rather than a fault. Two would mean the
+    caption stopped naming one table, which must not be guessed at either.
 
     Raises:
-        UnreadableSourceError: If the pricing section, its unit note or its
-            short-context table cannot be identified.
+        UnreadableSourceError: If the section holds more than one.
+    """
+    candidates = [
+        table
+        for caption, table in _captioned_tables(section)
+        if caption is not None and _LONG_CONTEXT_CAPTION in caption.casefold()
+    ]
+    if len(candidates) > 1:
+        msg = (
+            f"expected at most one long-context pricing table, found {len(candidates)}"
+        )
+        raise UnreadableSourceError(msg)
+    return candidates[0] if candidates else None
+
+
+def _pricing_section(page: str) -> str:
+    """Return the card's Pricing section, checked to still quote per-1M rates.
+
+    Raises:
+        UnreadableSourceError: If the section or its unit note is absent.
     """
     section = _PRICING_SECTION.search(page)
     if section is None:
@@ -320,7 +392,61 @@ def _pricing_rows(page: str) -> list[list[str]]:
     if _PER_MILLION_NOTE not in _text(body).casefold():
         msg = f"the Pricing section no longer states rates {_PER_MILLION_NOTE!r}"
         raise UnreadableSourceError(msg)
-    return _rows(_short_context_table(body))
+    return body
+
+
+def _pricing_rows(page: str, context: ContextLength = "") -> list[list[str]] | None:
+    """Return the rows of one of a card's commercial pricing tables.
+
+    Every inference option is a row of one table, so the In-Region and the
+    Global rate of a context tier are both read from it -- and both are
+    therefore protected from the other tier's block and from GovCloud by the
+    same table selection.
+
+    Args:
+        page: The model card's HTML.
+        context: "" for the short-context table, "long" for the long-context one.
+
+    Returns:
+        The header row followed by one row per inference option, or None when
+        *context* is "long" and the card prices a single context window.
+
+    Raises:
+        UnreadableSourceError: If the pricing section, its unit note or the
+            wanted table cannot be identified.
+    """
+    body = _pricing_section(page)
+    table = _long_context_table(body) if context else _short_context_table(body)
+    return _rows(table) if table is not None else None
+
+
+def parse_context_window(page: str) -> int | None:
+    """Return the prompt size at which a card leaves its short-context rate.
+
+    A split card captions its first table with the window it prices, e.g.
+    "Short Context Window (272K)". That figure is the boundary
+    ``MODEL_LONG_CONTEXT_THRESHOLDS`` has to carry: registering a different one
+    prices real calls from the wrong tier in whichever direction it errs.
+
+    Args:
+        page: The model card's HTML.
+
+    Returns:
+        The boundary in prompt tokens, or None when the card captions no
+        context window -- the ordinary case of a card pricing a single tier.
+
+    Raises:
+        UnreadableSourceError: If the pricing section or its unit note is
+            absent, or a short-context caption states no readable size.
+    """
+    for caption, _ in _captioned_tables(_pricing_section(page)):
+        if caption is None or _SHORT_CONTEXT_CAPTION not in caption.casefold():
+            continue
+        if (size := _CONTEXT_WINDOW_SIZE.search(caption)) is None:
+            msg = f"the short-context caption {caption!r} states no window size"
+            raise UnreadableSourceError(msg)
+        return int(size.group(1)) * _THOUSAND
+    return None
 
 
 def _row_rates(rows: list[list[str]], label: str) -> dict[Dimension, Decimal] | None:
@@ -347,20 +473,28 @@ def _row_rates(rows: list[list[str]], label: str) -> dict[Dimension, Decimal] | 
     }
 
 
-def parse_model_card(page: str) -> dict[Dimension, Decimal]:
+def parse_model_card(
+    page: str, context: ContextLength = ""
+) -> dict[Dimension, Decimal] | None:
     """Return the per-token In-Region rates a Bedrock model card publishes.
 
     Args:
         page: The model card's HTML.
+        context: Which context tier's table to read -- "" for the short-context
+            rates ``DEFAULT_MODEL_PRICES`` carries, "long" for the
+            ``DEFAULT_MODEL_LONG_CONTEXT_PRICES`` ones.
 
     Returns:
-        The rate per token, per dimension, for the model's own region.
+        The rate per token, per dimension, for the model's own region, or None
+        when *context* is "long" and the card prices a single context window.
 
     Raises:
-        UnreadableSourceError: If the pricing section, its unit note, its
-            short-context table or its In-Region row cannot be identified.
+        UnreadableSourceError: If the pricing section, its unit note, the
+            wanted table or its In-Region row cannot be identified.
     """
-    rows = _pricing_rows(page)
+    rows = _pricing_rows(page, context)
+    if rows is None:
+        return None
     rates = _row_rates(rows, _IN_REGION_ROW)
     if rates is None:
         msg = "the pricing table has no In-Region row"
@@ -371,24 +505,30 @@ def parse_model_card(page: str) -> dict[Dimension, Decimal]:
     return rates
 
 
-def parse_model_card_global(page: str) -> dict[Dimension, Decimal] | None:
+def parse_model_card_global(
+    page: str, context: ContextLength = ""
+) -> dict[Dimension, Decimal] | None:
     """Return the per-token Global cross-Region rates a model card publishes.
 
     Args:
         page: The model card's HTML.
+        context: Which context tier's table to read, as in
+            :func:`parse_model_card`.
 
     Returns:
         The rate per token, per dimension, for the ``global.`` inference
-        profile, or None when the card quotes no Global row -- the ordinary
-        case, since most models are priced In-Region only.
+        profile, or None when the card quotes no Global row in that tier --
+        the ordinary case, since most models are priced In-Region only.
 
     Raises:
-        UnreadableSourceError: If the pricing section, its unit note or its
-            short-context table cannot be identified, or if a Global row is
-            present but prices nothing, which reads as changed columns rather
-            than as a withdrawn rate.
+        UnreadableSourceError: If the pricing section, its unit note or the
+            wanted table cannot be identified, or if a Global row is present
+            but prices nothing, which reads as changed columns rather than as
+            a withdrawn rate.
     """
-    rows = _pricing_rows(page)
+    rows = _pricing_rows(page, context)
+    if rows is None:
+        return None
     rates = _row_rates(rows, _GLOBAL_ROW)
     if rates is not None and not rates:
         msg = "the Global CRIS row states no rate"
@@ -496,24 +636,68 @@ def _compare(
     return Finding(Outcome.MATCH, model_id, f"{dimension.value}: {expected:f}")
 
 
-def _global_key(model_id: str) -> str:
-    """Return how a model's Global cross-Region entry is named in the report.
+def _qualified_key(model_id: str, label: str) -> str:
+    """Return how a model's entry in a qualified table is named in the report.
 
-    Both tables price the same model, so the report has to say which rate a
+    Four tables price the same model, so the report has to say which rate a
     finding is about for it to be actionable.
     """
-    return f"{model_id} (Global)"
+    return f"{model_id} ({label})"
+
+
+def _global_key(model_id: str) -> str:
+    """Return how a model's Global cross-Region entry is named in the report."""
+    return _qualified_key(model_id, "Global")
+
+
+def classify_qualified(
+    model_id: str,
+    table: Mapping[str, Mapping[Dimension, str]],
+    label: str,
+    constant: str,
+    reading: SourceReading,
+) -> list[Finding]:
+    """Compare one model's entry in an optional rate table against its card.
+
+    The Global, long-context and long-context Global tables all name only the
+    models AWS publishes that rate for, so all three share one rule: a model
+    absent from both the table and the card reports nothing (that is the state
+    of most models, and reporting it would bury the findings that matter), a
+    card that stops quoting a rate the table carries is a vanished rate like
+    any other, and a rate only the card carries is new.
+
+    Args:
+        model_id: The model the entry prices.
+        table: The table holding the qualified rates.
+        label: Which rate this is, as the report names it.
+        constant: The table's name in the source, so a finding says what to edit.
+        reading: What the model's card had to say about this rate.
+
+    Returns:
+        The findings for this rate, empty when neither side carries one.
+    """
+    expected = table.get(model_id)
+    if expected is not None:
+        return classify(_qualified_key(model_id, label), expected, reading)
+    if reading.rates is None:
+        return []
+    return [
+        Finding(
+            Outcome.NEW,
+            _qualified_key(model_id, label),
+            f"{dimension.value}: {reading.url} publishes {rate}, "
+            f"{constant} has no entry",
+        )
+        for dimension, rate in reading.rates.items()
+    ]
 
 
 def classify_global(model_id: str, reading: SourceReading) -> list[Finding]:
     """Compare one model's Global cross-Region entry against what its card said.
 
-    A model priced In-Region only is absent from both sides and reports nothing:
-    that is the state of most models, and reporting it would bury the findings
-    that matter under six lines of noise on every run. A card that stops quoting
-    a Global rate the table carries is a vanished rate like any other -- the
-    entry is kept, since the ``global.`` inference profile still serves calls
-    that have to be priced.
+    A card that stops quoting a Global rate the table carries is a vanished
+    rate like any other -- the entry is kept, since the ``global.`` inference
+    profile still serves calls that have to be priced.
 
     Args:
         model_id: The model the entry prices.
@@ -523,20 +707,56 @@ def classify_global(model_id: str, reading: SourceReading) -> list[Finding]:
         The findings for *model_id*'s Global rate, empty when neither the table
         nor the card carries one.
     """
-    expected = DEFAULT_MODEL_GLOBAL_PRICES.get(model_id)
-    if expected is not None:
-        return classify(_global_key(model_id), expected, reading)
-    if reading.rates is None:
-        return []
-    return [
-        Finding(
-            Outcome.NEW,
-            _global_key(model_id),
-            f"{dimension.value}: {reading.url} publishes {rate}, "
-            f"DEFAULT_MODEL_GLOBAL_PRICES has no entry",
+    return classify_qualified(
+        model_id,
+        DEFAULT_MODEL_GLOBAL_PRICES,
+        "Global",
+        "DEFAULT_MODEL_GLOBAL_PRICES",
+        reading,
+    )
+
+
+def classify_threshold(model_id: str, reading: ThresholdReading) -> list[Finding]:
+    """Compare a model's registered long-context boundary against its card.
+
+    The boundary decides which of two published tiers prices a real call, so a
+    stale one mis-bills exactly as a stale rate does -- and more quietly, since
+    both rates it selects between are correct. A card that stops splitting its
+    rates is reported, never failed: the registered boundary keeps whatever
+    calls it already priced.
+
+    Args:
+        model_id: The model the boundary applies to.
+        reading: What the model's card had to say about its context window.
+
+    Returns:
+        One finding, or none when neither the card nor the table states a
+        boundary -- the ordinary case of a model priced at a single tier.
+    """
+    key = _qualified_key(model_id, "context window")
+    expected = MODEL_LONG_CONTEXT_THRESHOLDS.get(model_id)
+    if reading.problem is not None:
+        return [Finding(Outcome.UNREACHABLE, key, f"{reading.url}: {reading.problem}")]
+    if reading.tokens is None:
+        if expected is None:
+            return []
+        detail = (
+            f"{reading.url} no longer states a context window. Keep the entry: "
+            f"calls are still priced from whichever tier it selects."
         )
-        for dimension, rate in reading.rates.items()
-    ]
+        return [Finding(Outcome.VANISHED, key, detail)]
+    if expected is None:
+        detail = (
+            f"{reading.url} splits its rates at {reading.tokens} prompt tokens, "
+            f"MODEL_LONG_CONTEXT_THRESHOLDS has no entry"
+        )
+        return [Finding(Outcome.NEW, key, detail)]
+    if expected != reading.tokens:
+        detail = (
+            f"table has {expected} prompt tokens, {reading.url} states {reading.tokens}"
+        )
+        return [Finding(Outcome.DRIFT, key, detail)]
+    return [Finding(Outcome.MATCH, key, f"{expected} prompt tokens")]
 
 
 def _card_url(slug: str) -> str:
@@ -556,32 +776,47 @@ def card_is_withdrawn(slug: str, page: str) -> bool:
     return slug not in page and not _H1.search(page)
 
 
-def _read_model_card(
-    client: httpx.Client, slug: str
-) -> tuple[SourceReading, SourceReading]:
+def _withdrawn_readings(url: str) -> CardReadings:
+    """Return the readings of a card the user guide no longer serves."""
+    return CardReadings(
+        SourceReading(url),
+        SourceReading(url),
+        SourceReading(url),
+        SourceReading(url),
+        ThresholdReading(url),
+    )
+
+
+def _read_model_card(client: httpx.Client, slug: str) -> CardReadings:
     """Fetch a model card once, never raising on a source-side problem.
 
     Returns:
-        Its In-Region reading and its Global cross-Region one. A card that
-        cannot be read at all makes both unreachable, so a redesigned card never
-        reads as a withdrawn Global rate.
+        Everything the card publishes. A card that cannot be read at all makes
+        every reading unreachable, so a redesigned card never reads as a
+        withdrawn Global or long-context rate.
     """
     url = _card_url(slug)
     try:
         response = client.get(url)
         if response.status_code == httpx.codes.NOT_FOUND:
-            return SourceReading(url), SourceReading(url)
+            return _withdrawn_readings(url)
         response.raise_for_status()
         page = response.text
         if card_is_withdrawn(slug, page):
-            return SourceReading(url), SourceReading(url)
-        return (
+            return _withdrawn_readings(url)
+        return CardReadings(
             SourceReading(url, rates=parse_model_card(page)),
             SourceReading(url, rates=parse_model_card_global(page)),
+            SourceReading(url, rates=parse_model_card(page, "long")),
+            SourceReading(url, rates=parse_model_card_global(page, "long")),
+            ThresholdReading(url, tokens=parse_context_window(page)),
         )
     except (httpx.HTTPError, UnreadableSourceError) as exc:
         problem = f"{type(exc).__name__}: {exc}"
-        return SourceReading(url, problem=problem), SourceReading(url, problem=problem)
+        reading = SourceReading(url, problem=problem)
+        return CardReadings(
+            reading, reading, reading, reading, ThresholdReading(url, problem=problem)
+        )
 
 
 def stability_readings(
@@ -673,8 +908,12 @@ def format_report(findings: list[Finding]) -> str:
 #: What to do about a drift, printed with the failure that reports one.
 _FIX: Final[str] = (
     "FIX: the vendor changed a published rate. Update the matching entry in "
-    "stdapi/models/pricing_overrides.py -- DEFAULT_MODEL_PRICES, or "
-    "DEFAULT_MODEL_GLOBAL_PRICES for a model reported as '(Global)' -- to the "
+    "stdapi/models/pricing_overrides.py -- DEFAULT_MODEL_PRICES, or the table "
+    "the parenthesis after the model names: '(Global)' is "
+    "DEFAULT_MODEL_GLOBAL_PRICES, '(long context)' is "
+    "DEFAULT_MODEL_LONG_CONTEXT_PRICES, '(long context, Global)' is "
+    "DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES and '(context window)' is "
+    "MODEL_LONG_CONTEXT_THRESHOLDS -- to the "
     "value the source now publishes (a model card states per-1M-token rates: "
     "divide by 1e6), re-run this test, and note the change in the release "
     "entry. Never delete an entry whose rate merely stopped being published: "
@@ -686,9 +925,30 @@ def _collect(client: httpx.Client) -> list[Finding]:
     """Read every source once and classify the whole table against it."""
     findings: list[Finding] = []
     for model_id, slug in _MODEL_CARD_URLS.items():
-        in_region, cross_region = _read_model_card(client, slug)
-        findings.extend(classify(model_id, DEFAULT_MODEL_PRICES[model_id], in_region))
-        findings.extend(classify_global(model_id, cross_region))
+        card = _read_model_card(client, slug)
+        findings.extend(
+            classify(model_id, DEFAULT_MODEL_PRICES[model_id], card.in_region)
+        )
+        findings.extend(classify_global(model_id, card.cross_region))
+        findings.extend(
+            classify_qualified(
+                model_id,
+                DEFAULT_MODEL_LONG_CONTEXT_PRICES,
+                "long context",
+                "DEFAULT_MODEL_LONG_CONTEXT_PRICES",
+                card.long_in_region,
+            )
+        )
+        findings.extend(
+            classify_qualified(
+                model_id,
+                DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES,
+                "long context, Global",
+                "DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES",
+                card.long_cross_region,
+            )
+        )
+        findings.extend(classify_threshold(model_id, card.threshold))
 
     page: str | None = None
     problem: str | None = None
@@ -743,9 +1003,24 @@ def test_default_model_prices_match_their_published_source() -> None:
         "DEFAULT_MODEL_PRICES gained or lost an entry: give it a source above, "
         "or this detector silently stops covering it"
     )
-    assert set(DEFAULT_MODEL_GLOBAL_PRICES) <= set(_MODEL_CARD_URLS), (
-        "DEFAULT_MODEL_GLOBAL_PRICES prices a model with no model card above, "
-        "or this detector silently stops covering it"
+    for name, table in (
+        ("DEFAULT_MODEL_GLOBAL_PRICES", DEFAULT_MODEL_GLOBAL_PRICES),
+        ("DEFAULT_MODEL_LONG_CONTEXT_PRICES", DEFAULT_MODEL_LONG_CONTEXT_PRICES),
+        (
+            "DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES",
+            DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES,
+        ),
+        ("MODEL_LONG_CONTEXT_THRESHOLDS", MODEL_LONG_CONTEXT_THRESHOLDS),
+    ):
+        assert set(table) <= set(_MODEL_CARD_URLS), (
+            f"{name} carries a model with no model card above, "
+            f"or this detector silently stops covering it"
+        )
+    assert set(DEFAULT_MODEL_LONG_CONTEXT_PRICES) <= set(
+        MODEL_LONG_CONTEXT_THRESHOLDS
+    ), (
+        "a long-context rate with no registered boundary is unreachable: the "
+        "default 200K would select it for prompts the model still bills short"
     )
 
     with httpx.Client(
@@ -926,6 +1201,7 @@ class TestModelCardParsing:
         drift on every run against a rate the table never claimed.
         """
         rates = parse_model_card(daybreak_blue_card)
+        assert rates is not None
         assert rates[Dimension.INPUT_TOKENS] == Decimal("0.0000055")
         assert rates[Dimension.OUTPUT_TOKENS] == Decimal("0.000033")
 
@@ -966,6 +1242,7 @@ class TestModelCardParsing:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-54.html
         """
         rates = parse_model_card(gpt_54_card)
+        assert rates is not None
         assert rates[Dimension.INPUT_TOKENS] == Decimal("0.00000275")
         assert rates[Dimension.OUTPUT_TOKENS] == Decimal("0.0000165")
         assert parse_model_card_global(gpt_54_card) is None
@@ -1002,7 +1279,9 @@ class TestModelCardParsing:
     ) -> None:
         """A dimension a card prices with an em dash is absent, not unreadable."""
         card = gpt_56_cyber_card.replace(">$17.1875<", ">—<")
-        assert Dimension.CACHE_WRITE_TOKENS not in parse_model_card(card)
+        rates = parse_model_card(card)
+        assert rates is not None
+        assert Dimension.CACHE_WRITE_TOKENS not in rates
 
     def test_an_ambiguous_pricing_section_is_unreadable(
         self, daybreak_blue_card: str
@@ -1030,6 +1309,130 @@ class TestModelCardParsing:
         """
         stub = "<html><head><title>Amazon Bedrock</title></head><body></body></html>"
         assert card_is_withdrawn("model-card-openai-gpt-56-cyber", stub)
+
+
+class TestLongContextParsing:
+    """The parser reads the second context tier, and the boundary between them.
+
+    A card that splits its rates publishes two tables and names the window each
+    prices. Both halves are needed: the rates without the boundary would be
+    selected for the wrong calls, and the boundary without the rates would
+    select a tier that is not there.
+
+    Ref: stdapi/models/pricing_overrides.py:DEFAULT_MODEL_LONG_CONTEXT_PRICES
+         stdapi/models/pricing_overrides.py:MODEL_LONG_CONTEXT_THRESHOLDS
+         https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
+    """
+
+    def test_the_long_context_table_yields_the_1m_tier_rates(
+        self, gpt_56_sol_card: str
+    ) -> None:
+        """The long reading is the 1M table's In-Region row, not the 272K one."""
+        assert parse_model_card(gpt_56_sol_card, "long") == {
+            Dimension.INPUT_TOKENS: Decimal("0.000011"),
+            Dimension.CACHE_WRITE_TOKENS: Decimal("0.00001375"),
+            Dimension.CACHE_READ_TOKENS: Decimal("0.0000011"),
+            Dimension.OUTPUT_TOKENS: Decimal("0.0000495"),
+        }
+
+    def test_the_long_context_global_row_comes_from_the_same_table(
+        self, gpt_56_sol_card: str
+    ) -> None:
+        """The 1M Global rate is the one beside the 1M In-Region rate."""
+        assert parse_model_card_global(gpt_56_sol_card, "long") == {
+            Dimension.INPUT_TOKENS: Decimal("0.00001"),
+            Dimension.CACHE_WRITE_TOKENS: Decimal("0.0000125"),
+            Dimension.CACHE_READ_TOKENS: Decimal("0.000001"),
+            Dimension.OUTPUT_TOKENS: Decimal("0.000045"),
+        }
+
+    def test_a_single_tier_card_publishes_no_long_context_rate(
+        self, gpt_56_cyber_card: str
+    ) -> None:
+        """One context window is an absence, not a fault: most cards have one."""
+        assert parse_model_card(gpt_56_cyber_card, "long") is None
+        assert parse_model_card_global(gpt_56_cyber_card, "long") is None
+
+    def test_the_govcloud_block_is_not_mistaken_for_a_long_context_table(
+        self, gpt_54_card: str
+    ) -> None:
+        """A captioned table that is not the long-context one yields no long rate."""
+        assert parse_model_card(gpt_54_card, "long") is None
+
+    def test_the_boundary_is_read_from_the_short_context_caption(
+        self, gpt_56_sol_card: str
+    ) -> None:
+        """The short-context caption states where the long-context rate starts."""
+        assert parse_context_window(gpt_56_sol_card) == 272_000
+
+    def test_a_single_tier_card_states_a_window_when_it_captions_one(
+        self, gpt_56_cyber_card: str
+    ) -> None:
+        """A card can name its window without pricing a second tier.
+
+        Cyber's window is 272K and it publishes no 1M rate, so the boundary is
+        still the point below which its one rate applies -- registering it is
+        what keeps a 250K prompt from being recorded as long-context.
+        """
+        assert parse_context_window(gpt_56_cyber_card) == 272_000
+        assert parse_model_card(gpt_56_cyber_card, "long") is None
+
+    def test_an_uncaptioned_card_states_no_boundary(self, gpt_54_card: str) -> None:
+        """A card pricing one unlabelled table leaves the model on the default."""
+        assert parse_context_window(gpt_54_card) is None
+
+    def test_a_caption_without_a_size_is_unreadable(self, gpt_56_sol_card: str) -> None:
+        """A reworded caption must raise rather than yield a guessed boundary."""
+        card = gpt_56_sol_card.replace(
+            "Short Context Window (272K)", "Short Context Window"
+        )
+        with pytest.raises(UnreadableSourceError, match="no window size"):
+            parse_context_window(card)
+
+    def test_two_long_context_tables_are_unreadable(self, gpt_56_sol_card: str) -> None:
+        """A caption that stops naming one table must not have one picked for it."""
+        card = gpt_56_sol_card.replace(
+            "Short Context Window (272K)", "Long Context Window (1M)"
+        )
+        with pytest.raises(UnreadableSourceError, match="at most one"):
+            parse_model_card(card, "long")
+
+    def test_a_changed_boundary_is_reported_as_drift(self) -> None:
+        """A card moving its window must fail, naming both figures.
+
+        Silent here is the worst case: both rates it selects between stay
+        correct, so every cost the gateway reports looks plausible while half
+        of them come from the wrong tier.
+        """
+        url = _card_url("model-card-openai-gpt-56-sol")
+        reading = ThresholdReading(url, tokens=400_000)
+        findings = classify_threshold("openai.gpt-5.6-sol", reading)
+        assert [finding.outcome for finding in findings] == [Outcome.DRIFT]
+        assert findings[0].model_id == "openai.gpt-5.6-sol (context window)"
+        assert findings[0].detail == (
+            f"table has 272000 prompt tokens, {url} states 400000"
+        )
+
+    def test_a_withdrawn_boundary_keeps_its_entry_without_failing(self) -> None:
+        """A card that stops splitting its rates keeps the registered boundary."""
+        reading = ThresholdReading(_card_url("model-card-openai-gpt-56-sol"))
+        findings = classify_threshold("openai.gpt-5.6-sol", reading)
+        assert [finding.outcome for finding in findings] == [Outcome.VANISHED]
+        assert "Keep the entry" in findings[0].detail
+
+    def test_a_model_with_no_boundary_on_either_side_reports_nothing(self) -> None:
+        """A single-tier model with no entry is silent, like an In-Region-only one."""
+        reading = ThresholdReading(_card_url("model-card-openai-gpt-54"))
+        assert classify_threshold("openai.gpt-5.4", reading) == []
+
+    def test_a_newly_split_card_is_reported_not_failed(self) -> None:
+        """A card that gains a context window is actionable, not our regression."""
+        url = _card_url("model-card-openai-gpt-54")
+        findings = classify_threshold(
+            "openai.gpt-5.4", ThresholdReading(url, tokens=200_000)
+        )
+        assert [finding.outcome for finding in findings] == [Outcome.NEW]
+        assert "MODEL_LONG_CONTEXT_THRESHOLDS has no entry" in findings[0].detail
 
     def test_a_served_card_is_never_read_as_withdrawn(
         self, gpt_56_cyber_card: str

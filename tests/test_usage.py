@@ -23,12 +23,15 @@ from pydantic import ValidationError
 
 from stdapi import usage
 from stdapi.config import SETTINGS, _Settings
+from stdapi.models.pricing_overrides import MODEL_LONG_CONTEXT_THRESHOLDS
 from stdapi.pricing import (
     WEB_SEARCH_MODEL,
     Dimension,
     Service,
     guardrail_policy_model,
+    long_context_threshold,
     normalize_model_key,
+    resolve_model_key,
 )
 from stdapi.usage import (
     IMAGE_SPEC,
@@ -821,16 +824,20 @@ class TestEmitUsageMetrics:
 
 
 class TestLongContextDetection:
-    """record_bedrock_usage's context="long" detection (prompt > 200K tokens).
+    """record_bedrock_usage's context="long" detection, at the model's own boundary.
 
-    AWS bills a whole call at the long-context rate once the prompt exceeds
-    200K tokens. Bedrock reports fresh, cache-read and cache-write tokens
-    separately (inputTokens excludes both cache counts), so the threshold is
-    evaluated on their sum, and the bucket is part of the record key so long
-    and standard calls to one model never merge.
+    AWS bills a whole call at the long-context rate once the prompt passes the
+    boundary the model publishes -- 200K for most, but the GPT-5.6 cards split
+    their two rate tables at a 272K short context window. Bedrock reports
+    fresh, cache-read and cache-write tokens separately (inputTokens excludes
+    both cache counts), so the boundary is evaluated on their sum, and the
+    bucket is part of the record key so long and standard calls to one model
+    never merge.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html
+         https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
          stdapi/usage.py:record_bedrock_usage
+         stdapi/pricing.py:long_context_threshold
     """
 
     def test_exactly_threshold_is_not_long(self) -> None:
@@ -903,6 +910,86 @@ class TestLongContextDetection:
         assert records[""].cost == Decimal("0.003000")
         # Long record: 200_001 * 0.000006
         assert records["long"].cost == Decimal("1.200006")
+
+    @pytest.mark.parametrize(
+        ("model", "expected"),
+        [
+            *MODEL_LONG_CONTEXT_THRESHOLDS.items(),
+            ("anthropic.claude-sonnet-4-5-20250929-v1:0", 200_000),
+            ("longmodel", 200_000),
+        ],
+    )
+    def test_every_registered_boundary_is_reachable_and_the_rest_default(
+        self, model: str, expected: int
+    ) -> None:
+        """Each registered entry answers for its model; others keep the default.
+
+        The registered half is about reachability, not arithmetic: an entry
+        keyed under an ID that normalizes to something else answers for no
+        model at all, and the call it should have priced goes on billing from
+        the wrong tier with nothing to say so.
+
+        Ref: stdapi/models/pricing_overrides.py:MODEL_LONG_CONTEXT_THRESHOLDS
+        """
+        assert long_context_threshold(model) == expected
+
+    def test_a_prompt_under_the_models_own_boundary_is_not_long(self) -> None:
+        """200_001 tokens is long for most models and short for a 272K one.
+
+        This is the regression a single global threshold reintroduces: GPT-5.6
+        bills its short-context rate up to 272K, so recording this call as long
+        would price it at double what AWS charges.
+        """
+        get_model_state("openai.gpt-5.6-sol").region = "us-east-1"
+        record_bedrock_usage("openai.gpt-5.6-sol", input_tokens=200_001)
+        record = next(iter(usage.USAGE.get().values()))
+        assert record.context == ""
+
+    def test_a_prompt_over_the_models_own_boundary_is_long(self) -> None:
+        """One token past 272K marks the record long, on the sum of all three counts."""
+        get_model_state("openai.gpt-5.6-sol").region = "us-east-1"
+        record_bedrock_usage(
+            "openai.gpt-5.6-sol",
+            input_tokens=172_001,
+            cached_tokens=50_000,
+            cache_write_tokens=50_000,
+        )
+        record = next(iter(usage.USAGE.get().values()))
+        assert record.context == "long"
+
+    def test_the_two_sides_of_a_272k_boundary_bill_at_their_own_rates(self) -> None:
+        """A 200K and a 300K prompt to one 272K model bill short and long respectively.
+
+        The rates seeded here are GPT-5.6 Sol's published In-Region ones; that
+        the shipped table really carries them is the drift lane's job, and that
+        each prompt reaches the right one is this test's.
+
+        Ref: stdapi/models/pricing_overrides.py:DEFAULT_MODEL_LONG_CONTEXT_PRICES
+        """
+        get_model_state("openai.gpt-5.6-sol").region = "us-east-1"
+        # set_test_price keys verbatim, so seed under resolve_model_key's output.
+        price_key = resolve_model_key("openai.gpt-5.6-sol")
+        set_test_price(
+            price_key, "us-east-1", Dimension.INPUT_TOKENS, "0.0000055", "USD"
+        )
+        set_test_price(
+            price_key,
+            "us-east-1",
+            Dimension.INPUT_TOKENS,
+            "0.000011",
+            "USD",
+            context="long",
+        )
+
+        record_bedrock_usage("openai.gpt-5.6-sol", input_tokens=200_000)
+        record_bedrock_usage("openai.gpt-5.6-sol", input_tokens=300_000)
+
+        records = {r.context: r for r in usage.USAGE.get().values()}
+        compute_costs()
+        # Short context: 200_000 * $5.50/1M -- long only past 272K
+        assert records[""].cost == Decimal("1.1000000")
+        # Long context: 300_000 * $11.00/1M, twice the short-context rate
+        assert records["long"].cost == Decimal("3.3000000")
 
 
 class TestGroundingRequests:

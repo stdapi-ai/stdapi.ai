@@ -32,6 +32,7 @@ from stdapi.pricing import (
     Dimension,
     Price,
     PriceKey,
+    Routing,
     Service,
     _apply_price_overrides,
     _apply_regional_fallback,
@@ -3166,6 +3167,67 @@ class TestDefaultModelPrices:
         )
         assert price is not None
         assert price.amount == Decimal("0.00000022")
+
+    @pytest.mark.parametrize(
+        ("routing", "short", "long"),
+        [("", "0.0000055", "0.000011"), ("global", "0.000005", "0.00001")],
+    )
+    def test_the_long_context_defaults_resolve_beside_their_short_context_twin(
+        self, monkeypatch: pytest.MonkeyPatch, routing: Routing, short: str, long: str
+    ) -> None:
+        """Both context tiers of GPT-5.6 Sol resolve, In-Region and Globally.
+
+        The long-context rates are reachable only if they register on the
+        context axis: keyed anywhere else they are dead entries, and
+        ``resolve_price`` relaxes a long-context call straight onto the
+        short-context rate -- half of what AWS charges, reported as fact.
+
+        Ref: stdapi/models/pricing_overrides.py:DEFAULT_MODEL_LONG_CONTEXT_PRICES
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
+        """
+        index: dict[PriceKey, Price] = {}
+        pricing._apply_default_prices(index)  # noqa: SLF001
+        monkeypatch.setattr(pricing._state, "price_index", index)  # noqa: SLF001
+        prices = [
+            resolve_price(
+                Service.BEDROCK,
+                "openai.gpt-5.6-sol",
+                "us-east-1",
+                Dimension.INPUT_TOKENS,
+                routing=routing,
+                context=context,
+            )
+            for context in ("", "long")
+        ]
+        assert [price.amount if price else None for price in prices] == [
+            Decimal(short),
+            Decimal(long),
+        ]
+
+    def test_a_model_with_no_long_context_rate_relaxes_onto_its_short_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A long call to a single-tier model bills its only rate, not nothing.
+
+        GPT-5.6 Cyber's card publishes one context window, so the relaxation is
+        the correct answer; returning None would report the call as a catalog
+        gap and cost the operator nothing at all.
+
+        Ref: stdapi/pricing.py:resolve_price
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-cyber.html
+        """
+        index: dict[PriceKey, Price] = {}
+        pricing._apply_default_prices(index)  # noqa: SLF001
+        monkeypatch.setattr(pricing._state, "price_index", index)  # noqa: SLF001
+        price = resolve_price(
+            Service.BEDROCK,
+            "openai.gpt-5.6-cyber",
+            "us-east-1",
+            Dimension.INPUT_TOKENS,
+            context="long",
+        )
+        assert price is not None
+        assert price.amount == Decimal("0.00001375")
 
     def test_gap_model_prices_identically_on_the_mantle_service(
         self, monkeypatch: pytest.MonkeyPatch

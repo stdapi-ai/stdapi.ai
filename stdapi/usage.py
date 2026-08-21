@@ -31,6 +31,7 @@ from stdapi.pricing import (
     Routing,
     Service,
     guardrail_policy_model,
+    long_context_threshold,
     price_catalog_ready,
     resolve_price,
 )
@@ -77,9 +78,6 @@ _DIMENSION_INFO: Final[dict[Dimension, _DimensionInfo]] = {
     Dimension.OUTPUT_SECONDS: _DimensionInfo("output_seconds", "Seconds"),
     Dimension.TEXT_UNITS: _DimensionInfo("text_units", "Count"),
 }
-
-#: Per-call prompt-token threshold (input + cache read/write) for long-context billing.
-_LONG_CONTEXT_THRESHOLD: Final[int] = 200_000
 
 #: Dimensions AWS has no guaranteed Price List coverage for: a miss is a catalog gap.
 _BEST_EFFORT_PRICED_DIMENSIONS: Final[frozenset[Dimension]] = frozenset(
@@ -141,7 +139,7 @@ class UsageLogEntry(TypedDict, total=False):
     region: str
     tier: str  # Service tier: standard, flex, priority, batch
     routing: Literal["global", "latency"]  # Only present for a non-plain profile
-    context: Literal["long"]  # Only present when the prompt exceeded 200K tokens
+    context: Literal["long"]  # Only present past the model's long-context boundary
     cost: str  # Exact plain-decimal text -- see format_cost
     currency: str
     costs: dict[str, str]  # Populated when dimensions spanned more than one currency
@@ -849,7 +847,7 @@ def record_bedrock_usage(
     # explicitly (see ModelInvocationState).
     effective_tier = tier or state.service_tier
     # AWS bills the whole call at the long-context rate when the prompt
-    # (fresh + cache read/write tokens) exceeds the threshold.
+    # (fresh + cache read/write tokens) exceeds the model's own boundary.
     prompt_tokens = (
         (input_tokens or 0) + (cached_tokens or 0) + (cache_write_tokens or 0)
     )
@@ -859,7 +857,7 @@ def record_bedrock_usage(
         region,
         tier="standard" if effective_tier == "default" else effective_tier,
         routing=routing if routing is not None else (state.routing or ""),
-        context="long" if prompt_tokens > _LONG_CONTEXT_THRESHOLD else "",
+        context="long" if prompt_tokens > long_context_threshold(model) else "",
         quantities={
             Dimension.INPUT_TOKENS: input_tokens or 0,
             Dimension.OUTPUT_TOKENS: output_tokens or 0,

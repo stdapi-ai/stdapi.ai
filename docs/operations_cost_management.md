@@ -208,7 +208,7 @@ Read all of these from AWS Cost Explorer, filtered on Amazon Bedrock.
 
 ### Long-Context Pricing
 
-Some 1M-context-capable models (currently Claude Sonnet 4, via the `context-1m` `anthropic-beta` flag) are billed by AWS at a higher rate — roughly double for input-side tokens — when a call's prompt (input + cache read/write tokens) exceeds 200K tokens. stdapi.ai detects this per model call and prices the whole call at the published long-context rate, reporting it with `"context": "long"` in the usage entry. When AWS publishes no long-context rate for a model, the standard rate is used as the best available estimate.
+Some 1M-context-capable models are billed by AWS at a higher rate — roughly double for input-side tokens — once a call's prompt (input + cache read/write tokens) passes the boundary that model publishes. **That boundary differs per model**: Claude Sonnet 4 (via the `context-1m` `anthropic-beta` flag) switches at 200K tokens, while the OpenAI GPT-5.6 models bill their short-context rate all the way to 272K. stdapi.ai applies each model's own boundary, prices the whole call at the published long-context rate, and reports it with `"context": "long"` in the usage entry. When AWS publishes no long-context rate for a model, the standard rate is used as the best available estimate.
 
 ### Built-in Tool Pricing
 
@@ -232,7 +232,6 @@ Multimodal embedding inputs are billed by AWS per media unit on top of (or inste
 - **Client disconnect during streaming**: streamed chat responses still record their final usage after a disconnect. For streamed responses on other routes and for image generation jobs, AWS bills the input tokens and everything generated up to the cancellation, but no usage is recorded for that call. No estimate is substituted.
 - **Rerank queries with more than 100 documents**: AWS bills one search unit per 100 documents; the document count isn't visible at recording time, so one unit per query is recorded.
 - **Reserved capacity pricing**: if a request explicitly asks for AWS's Reserved Capacity service tier, its cost is computed at the standard on-demand rate instead — Reserved Capacity uses a separate monthly-commitment pricing model this app doesn't ingest. Avoid relying on this app's cost figures for Reserved Capacity workloads.
-- **Long-context prompts on OpenAI's hosted GPT models**: their model cards price a 272K short-context and a 1M long-context tier, and the built-in rates carry the short-context one only. A prompt past that boundary is therefore costed at the short-context rate — an under-estimate of 2× on input and 1.5× on output for GPT-5.6 Luna, Sol and Terra.
 - Some very new or region-specific models may have no published price anywhere yet — AWS publishes pricing after model availability, sometimes with a delay.
 - **AWS GovCloud**: the Price List API has no GovCloud endpoint, so catalog prices cannot be fetched there — usage is still recorded, a startup warning is emitted, and only `COST_PRICE_OVERRIDES` entries produce costs.
 

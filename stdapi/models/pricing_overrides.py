@@ -18,6 +18,12 @@ HOW TO FIX an "unpriced model" (also printed by the coverage test on failure):
   4. A card quoting a separate "Global CRIS" rate needs that one too, in
      DEFAULT_MODEL_GLOBAL_PRICES; without it a globally-routed call is
      reported at the pricier In-Region rate.
+  5. A card splitting its rates into a short and a long context window needs
+     DEFAULT_MODEL_LONG_CONTEXT_PRICES (and its Global twin) plus the boundary
+     in MODEL_LONG_CONTEXT_THRESHOLDS. All three go together: without the rates
+     a long prompt is reported at the cheaper short-context rate, and without
+     the boundary it is reported at the wrong one from whichever side of the
+     default 200K the model's own window falls.
 """
 
 from typing import Final
@@ -141,8 +147,8 @@ DEFAULT_MODEL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
     "stability.stable-fast-upscale-v1:0": {Dimension.OUTPUT_IMAGES: "0.03"},
     "stability.stable-outpaint-v1:0": {Dimension.OUTPUT_IMAGES: "0.06"},
     # OpenAI frontier models: model-card In-Region per-1M rates / 1e6 (verified
-    # 2026-08-17), absent from the Price List API outside GovCloud. GPT-5.6
-    # takes the 272K short-context tier, this table having no context axis.
+    # 2026-08-21), absent from the Price List API outside GovCloud. GPT-5.6
+    # takes the 272K short-context tier; the 1M one is priced below.
     # The cards price Geo cross-Region identically to In-Region, so these also
     # serve a "us."/"eu." profile; the Global profile has its own table below.
     # Dated aliases share these via MODEL_KEY_OVERRIDES.
@@ -215,5 +221,79 @@ DEFAULT_MODEL_GLOBAL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
         Dimension.CACHE_WRITE_TOKENS: "0.0000025",
         Dimension.CACHE_READ_TOKENS: "0.0000002",
         Dimension.OUTPUT_TOKENS: "0.000012",
+    },
+}
+
+#: Prompt size at which a model leaves its short-context rate, where its own source says.
+MODEL_LONG_CONTEXT_THRESHOLDS: Final[dict[str, int]] = {
+    # The GPT-5.6 cards split their rates at a 272K short context window, not
+    # at the 200K DEFAULT_LONG_CONTEXT_THRESHOLD most models switch at. Cyber
+    # is here for the same reason though it publishes no long rate: its window
+    # is 272K, so a 250K prompt to it is not a long-context call and must not
+    # be recorded as one.
+    "openai.gpt-5.6-cyber": 272_000,
+    "openai.gpt-5.6-luna": 272_000,
+    "openai.gpt-5.6-sol": 272_000,
+    "openai.gpt-5.6-terra": 272_000,
+    "openai.gpt-daybreak-blue-5.6-sol": 272_000,
+}
+
+#: In-Region rates past MODEL_LONG_CONTEXT_THRESHOLDS, for the cards publishing one.
+DEFAULT_MODEL_LONG_CONTEXT_PRICES: Final[dict[str, dict[Dimension, str]]] = {
+    # Model-card "Long Context Window (1M)" In-Region per-1M rates / 1e6
+    # (verified 2026-08-21): 2x the short-context rate on input and both cache
+    # dimensions, 1.5x on output. AWS bills the whole call at these once the
+    # prompt crosses the boundary. A model absent here publishes no long rate
+    # and keeps its short one, resolve_price relaxing the context axis rather
+    # than leaving the call unpriced.
+    "openai.gpt-5.6-luna": {
+        Dimension.INPUT_TOKENS: "0.00000044",
+        Dimension.CACHE_WRITE_TOKENS: "0.00000055",
+        Dimension.CACHE_READ_TOKENS: "0.000000044",
+        Dimension.OUTPUT_TOKENS: "0.00000198",
+    },
+    "openai.gpt-5.6-sol": {
+        Dimension.INPUT_TOKENS: "0.000011",
+        Dimension.CACHE_WRITE_TOKENS: "0.00001375",
+        Dimension.CACHE_READ_TOKENS: "0.0000011",
+        Dimension.OUTPUT_TOKENS: "0.0000495",
+    },
+    "openai.gpt-5.6-terra": {
+        Dimension.INPUT_TOKENS: "0.0000044",
+        Dimension.CACHE_WRITE_TOKENS: "0.0000055",
+        Dimension.CACHE_READ_TOKENS: "0.00000044",
+        Dimension.OUTPUT_TOKENS: "0.0000198",
+    },
+    # Daybreak Blue: same rates as GPT-5.6 Sol above.
+    "openai.gpt-daybreak-blue-5.6-sol": {
+        Dimension.INPUT_TOKENS: "0.000011",
+        Dimension.CACHE_WRITE_TOKENS: "0.00001375",
+        Dimension.CACHE_READ_TOKENS: "0.0000011",
+        Dimension.OUTPUT_TOKENS: "0.0000495",
+    },
+}
+
+#: Global cross-Region rates for the long-context models above whose card publishes one.
+DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES: Final[dict[str, dict[Dimension, str]]] = {
+    # Model-card "Long Context Window (1M)" / "Global CRIS" per-1M rates / 1e6
+    # (verified 2026-08-21). Same routing scope as DEFAULT_MODEL_GLOBAL_PRICES:
+    # bedrock-runtime's "global." profile only.
+    "openai.gpt-5.6-luna": {
+        Dimension.INPUT_TOKENS: "0.0000004",
+        Dimension.CACHE_WRITE_TOKENS: "0.0000005",
+        Dimension.CACHE_READ_TOKENS: "0.00000004",
+        Dimension.OUTPUT_TOKENS: "0.0000018",
+    },
+    "openai.gpt-5.6-sol": {
+        Dimension.INPUT_TOKENS: "0.00001",
+        Dimension.CACHE_WRITE_TOKENS: "0.0000125",
+        Dimension.CACHE_READ_TOKENS: "0.000001",
+        Dimension.OUTPUT_TOKENS: "0.000045",
+    },
+    "openai.gpt-5.6-terra": {
+        Dimension.INPUT_TOKENS: "0.000004",
+        Dimension.CACHE_WRITE_TOKENS: "0.000005",
+        Dimension.CACHE_READ_TOKENS: "0.0000004",
+        Dimension.OUTPUT_TOKENS: "0.000018",
     },
 }

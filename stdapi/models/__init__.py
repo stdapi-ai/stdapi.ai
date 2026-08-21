@@ -67,10 +67,13 @@ from stdapi.input_file import (
 from stdapi.models.capabilities import ROUTE_CAPABILITIES, Capability
 from stdapi.models.deprecation import DEPRECATED_MODELS
 from stdapi.models.pricing_overrides import (
+    DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES,
     DEFAULT_MODEL_GLOBAL_PRICES,
+    DEFAULT_MODEL_LONG_CONTEXT_PRICES,
     DEFAULT_MODEL_PRICE_REGIONS,
     DEFAULT_MODEL_PRICES,
     MODEL_KEY_OVERRIDES,
+    MODEL_LONG_CONTEXT_THRESHOLDS,
 )
 from stdapi.monitoring import (
     REQUEST_ID,
@@ -85,6 +88,7 @@ from stdapi.pricing import (
     batch_priced_models,
     refresh_price_catalog_for_new_models,
     register_default_prices,
+    register_long_context_thresholds,
     register_model_key_overrides,
     resolve_model_key,
 )
@@ -185,6 +189,16 @@ register_default_prices(DEFAULT_MODEL_PRICES, DEFAULT_MODEL_PRICE_REGIONS)
 register_default_prices(
     DEFAULT_MODEL_GLOBAL_PRICES, DEFAULT_MODEL_PRICE_REGIONS, routing="global"
 )
+register_default_prices(
+    DEFAULT_MODEL_LONG_CONTEXT_PRICES, DEFAULT_MODEL_PRICE_REGIONS, context="long"
+)
+register_default_prices(
+    DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES,
+    DEFAULT_MODEL_PRICE_REGIONS,
+    routing="global",
+    context="long",
+)
+register_long_context_thresholds(MODEL_LONG_CONTEXT_THRESHOLDS)
 
 
 def _request_routing(resolved_model_id: str, latency: str | None) -> Routing:

@@ -495,6 +495,7 @@ def register_default_prices(
     prices: Mapping[str, Mapping[Dimension, str]],
     regions: Iterable[str],
     routing: Routing = "",
+    context: ContextLength = "",
 ) -> None:
     """Register built-in default prices for models absent from the Price List API.
 
@@ -505,15 +506,19 @@ def register_default_prices(
     only to models with no published row at all (see
     :func:`_apply_default_prices`); ``cost_price_overrides`` still wins.
 
-    A *routing*-qualified table names only the models AWS publishes a distinct
-    rate for. A model left out of it keeps its plain rate alone, which
-    :func:`resolve_price` relaxes onto -- never leaving the call unpriced.
+    A *routing*- or *context*-qualified table names only the models AWS
+    publishes a distinct rate for. A model left out of it keeps its plain rate
+    alone, which :func:`resolve_price` relaxes onto -- never leaving the call
+    unpriced.
 
     Args:
         prices: Model ID to per-dimension USD price (exact decimal text).
         regions: Regions the prices apply to, per the pricing page.
         routing: Serving profile the rates are published for -- "" for the
             plain/In-Region rate, "global" for the Global cross-Region one.
+        context: Context-length tier the rates are published for -- "" for the
+            short-context rate, "long" for the one that applies past the
+            model's :func:`long_context_threshold`.
     """
     # Only bedrock-runtime offers cross-Region inference, so a Mantle-keyed
     # routed row could never be resolved. Plain rates key under both: the
@@ -530,9 +535,59 @@ def register_default_prices(
                 for service in services:
                     _DEFAULT_PRICES[
                         PriceKey(
-                            service, model, region, dimension, "standard", "", routing
+                            service,
+                            model,
+                            region,
+                            dimension,
+                            "standard",
+                            "",
+                            routing,
+                            "",
+                            context,
                         )
                     ] = Price(Decimal(amount), "USD")
+
+
+#: Prompt-token boundary past which a call bills at the long-context rate.
+DEFAULT_LONG_CONTEXT_THRESHOLD: Final[int] = 200_000
+
+#: Per-model boundaries, populated by register_long_context_thresholds().
+_LONG_CONTEXT_THRESHOLDS: dict[str, int] = {}
+
+
+def register_long_context_thresholds(thresholds: Mapping[str, int]) -> None:
+    """Register the prompt size at which a model switches to its long-context rate.
+
+    Called by ``stdapi.models`` at import time, after the model-key overrides,
+    so entries key the same way prices do. A model left out keeps
+    :data:`DEFAULT_LONG_CONTEXT_THRESHOLD`; register only the models whose own
+    source publishes a different boundary, since a wrong one mis-prices in
+    whichever direction it errs.
+
+    Args:
+        thresholds: Model ID to its boundary, in prompt tokens (fresh input
+            plus cache read and cache write).
+    """
+    _LONG_CONTEXT_THRESHOLDS.update(
+        {
+            resolve_model_key(model_id): threshold
+            for model_id, threshold in thresholds.items()
+        }
+    )
+
+
+def long_context_threshold(model_id: str) -> int:
+    """Return the prompt size past which *model_id* bills at its long-context rate.
+
+    Args:
+        model_id: The backend model ID AWS bills.
+
+    Returns:
+        The boundary in prompt tokens.
+    """
+    return _LONG_CONTEXT_THRESHOLDS.get(
+        resolve_model_key(model_id), DEFAULT_LONG_CONTEXT_THRESHOLD
+    )
 
 
 #: AWS tier-price ratios: flex/batch = 0.5 (50% discount), priority = 1.75 (75% premium).
