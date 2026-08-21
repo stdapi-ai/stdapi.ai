@@ -232,6 +232,13 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     - Request `json` or `text`, or send the same audio to `amazon.transcribe`, which produces timestamps, SRT/VTT subtitles, speaker diarization and longer recordings — see [Transcriptions](api_openai_audio_transcriptions.md).
     - The same model and the same limits apply on [Translations](api_openai_audio_translations.md).
 
+??? failure "`400 Bad Request` — every transcription fails after setting an output encryption key"
+    The message is Amazon Transcribe's own failure reason for the job, and it names KMS. Only requests that stage audio in a bucket are affected: [`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN`](operations_configuration.md#aws-transcribe-output-encryption-key-arn) encrypts the job's output, so streamed transcriptions, which write nothing, keep working — which is what makes the failure look model-specific at first.
+
+    - Grant the task role `kms:GenerateDataKey` and `kms:Decrypt` on that key, **and** allow the same role in the key's own policy — a grant on only one of the two denies the job. See [Speech-to-Text](operations_iam_permissions.md#speech-to-text-optional).
+    - With [`AWS_TRANSCRIBE_REGION`](operations_configuration.md#aws-transcribe-region) unset, a job runs in whichever candidate Region has a co-located bucket, so a single-Region key fails as soon as failover moves the job. Use a [multi-Region key](https://docs.aws.amazon.com/kms/latest/developerguide/multi-region-keys-overview.html), or pin the Region.
+    - A key policy conditioned on the [encryption context](operations_configuration.md#aws-transcribe-output-encryption-key-arn) must not require `stdapi-ai.user_id`: it is sent only when the request identifies an end user, so requiring it denies every anonymous call.
+
 ??? failure "`amazon.nova-2-sonic-v1:0` is missing from `/v1/models` or returns `404`"
     The model is not offered in every AWS Region, and the catalog only lists what the configured Regions serve.
 

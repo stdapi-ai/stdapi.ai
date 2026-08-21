@@ -345,6 +345,8 @@ The [Terraform module](operations_getting_started.md) provisions:
 | **ECS Fargate** service           | The dominant infrastructure cost; 0.25 vCPU / 512 MiB ARM64 by default, times `autoscaling_min_capacity` |
 | **Application Load Balancer**     | Hourly rate plus LCU; skipped when you attach your own                    |
 | **S3 buckets** (regional)         | Input files, generated media; see `AWS_S3_VIDEOS_EXPIRES_AFTER`           |
+| **S3 vector bucket** (optional)   | Created with `aws_s3_vectors_bucket_create`; billed on stored vectors and on the bytes each search reads — see [Vector Stores](#vector-stores) |
+| **SQS queue** + dead-letter queue (optional) | Created with `aws_sqs_vector_store_queue_create`; a handful of requests per attached file, plus one long poll per task every 20 seconds |
 | **CloudWatch** logs, metrics, alarms | Grows with log verbosity and EMF metric volume                         |
 | **KMS**, IAM, networking          | Keys and roles; NAT/VPC endpoints only when the module creates the network |
 | **WAF** (optional)                | Per-rule and per-request charges when `alb_waf_enabled = true`            |

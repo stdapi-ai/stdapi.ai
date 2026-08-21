@@ -30,6 +30,8 @@ stdapi.ai is configured entirely through environment variables, which are read o
     - **IAM Permissions** to access required AWS services (see the [IAM Permissions](operations_iam_permissions.md) guide)
     - **S3 Bucket** (optional, but recommended for production use with file operations)
 
+<span id="granian-host"></span>
+
 !!! info "Container Runtime"
     Both the AWS Marketplace and community Docker images run using [Granian](https://github.com/emmett-framework/granian), a high-performance Python ASGI server. In addition to the stdapi.ai-specific configuration variables documented below, you can also use Granian environment variables to configure the server runtime (e.g., `GRANIAN_PORT`, `GRANIAN_WORKERS`, `GRANIAN_THREADS`, etc.).
 
@@ -318,6 +320,7 @@ Publishing where tokens come from lets an AI agent authenticate itself — see [
 | [`TRUSTED_HOSTS`](#trusted-hosts)                                                   | None     | JSON array of trusted Host header values (prefer ALB host-based routing; see details) |
 | [`ENABLE_PROXY_HEADERS`](#enable-proxy-headers)                                     | `false`  | Trust X-Forwarded-* headers from reverse proxies (only enable behind trusted proxy)   |
 | [`PROXY_TRUSTED_HOSTS`](#proxy-trusted-hosts)                                       | `*`      | Peer IPs/ranges whose X-Forwarded-* headers are trusted (restrict from `*` for safety) |
+| [`GRANIAN_HOST`](#granian-host)                                                     | `0.0.0.0` | Listener bind address; `::` binds a dual-stack socket answering IPv4 and IPv6 clients |
 | [`GRANIAN_SSL_CERTIFICATE`](#graniansslcertificate)                                 | None     | Path to SSL certificate file for end-to-end encryption                                |
 | [`GRANIAN_SSL_KEYFILE`](#graniansslkeyfile)                                         | None     | Path to SSL private key file (PKCS#8) for end-to-end encryption                       |
 | [`GRANIAN_SSL_KEYFILE_PASSWORD`](#graniansslkeyfilepassword)                        | None     | Password for the SSL private key file                                                 |
@@ -2196,6 +2199,9 @@ export AUTHENTICATION_MODE=cognito
 :octicons-package-24: **Purpose**
 :   Identifier of the user pool whose tokens authenticate clients. Setting it enables the method; the pool's AWS Region is read from the identifier itself, and the public signing keys are loaded from that Region at startup.
 
+:octicons-gear-24: **Default**
+:   None — user pool tokens are not accepted
+
 :octicons-alert-24: **Requirement**
 :   `AWS_COGNITO_CLIENT_IDS` must be set too
 
@@ -2210,6 +2216,9 @@ export AWS_COGNITO_USER_POOL_ID=eu-west-3_a1b2c3d4e
 
 :octicons-package-24: **Purpose**
 :   Comma-separated app client IDs whose tokens are accepted. A token issued to any other app client of the pool is rejected.
+
+:octicons-gear-24: **Default**
+:   Empty — startup fails when a user pool is configured without it
 
 :octicons-alert-24: **Requirement**
 :   Required whenever `AWS_COGNITO_USER_POOL_ID` is set
@@ -4544,7 +4553,7 @@ Every field below is designed around an **Amazon Bedrock** model call. An alias 
 |----------------------|-----------------------------------------------------------------------------------------------|
 | `model`              | **Required.** Model ID or ARN the alias resolves to                                            |
 | `service_tier`       | Service tier for requests naming the alias, on a model served through the Bedrock Converse or InvokeModel APIs — see [Default Model Service Tiers](#default-model-service-tiers-section) |
-| `guardrail_id`       | ID of an [Amazon Bedrock Guardrail](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html) to apply, requires `guardrail_version` |
+| `guardrail_id`       | ID of an [Amazon Bedrock Guardrail](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html) to apply, requires `guardrail_version`; `guardrail_identifier` is accepted as the same field |
 | `guardrail_version`  | Version of that guardrail                                                                      |
 | `guardrail_trace`    | Guardrail trace level: `disabled`, `enabled` or `enabled_full`                                 |
 | `metadata`           | Key-value metadata attached to the model call, for audit reporting — it reaches [Amazon Bedrock model invocation logs](https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html), which you enable and deliver yourself, and nothing else: it is not a cost allocation tag, see [AWS Cost Attribution](operations_cost_management.md#aws-cost-attribution) |

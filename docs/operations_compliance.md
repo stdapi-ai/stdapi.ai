@@ -242,6 +242,13 @@ For higher compliance needs, AWS KMS supports additional controls: custom key po
 !!! tip "Bring your own CMK"
     To use an existing CMK, create the S3 bucket and CloudWatch log groups outside the Terraform module and pass them via `aws_s3_bucket` and related parameters. See [Advanced Deployment](operations_deploy_advanced.md#integration-with-existing-infrastructure).
 
+Two stores are encrypted under a key you name rather than the bucket's own, so their key policy can be scoped to this workload instead of to everything the bucket holds:
+
+| Setting                                                                                                     | Encrypts                                                                        | Default when unset                          |
+|-------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------|---------------------------------------------|
+| [`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN`](operations_configuration.md#aws-transcribe-output-encryption-key-arn) | Each transcription job's output, with the job's request identifiers as the KMS encryption context | The bucket's own default encryption          |
+| [`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`](operations_configuration.md#aws-bedrock-session-encryption-key-arn)     | The Amazon Bedrock session storage behind stored responses, chat completions and conversations | The AWS-managed key                          |
+
 ---
 
 ## :material-shield-star: AWS Security Hub, GuardDuty & DNS Firewall Integration

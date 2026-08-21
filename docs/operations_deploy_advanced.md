@@ -263,6 +263,9 @@ After deployment, add a target group pointing to port 8000, with a health check 
          -d '{"model": "anthropic.claude-sonnet-5", "max_tokens": 1024, "messages": [{"role": "user", "content": "Hello"}]}'
        ```
 
+       !!! warning "Service discovery in an IPv6-enabled subnet needs a dual-stack listener"
+           The image listens on IPv4 only (`GRANIAN_HOST=0.0.0.0`), while ECS service discovery publishes an `AAAA` record for every task in an IPv6-enabled subnet. Clients that prefer that record — Node.js among them — then fail with `ECONNREFUSED` while Python clients fall back to the `A` record and hide the problem. Set `GRANIAN_HOST=::` in the task environment for a socket that answers both families; the module sets it for you when the VPC has IPv6 enabled. If `PROXY_TRUSTED_HOSTS` is also set, add the IPv4-mapped ranges alongside the plain ones — see [`PROXY_TRUSTED_HOSTS`](operations_configuration.md#proxy-trusted-hosts).
+
     **Use cases:**
 
     - Connect to existing internal ALB
@@ -295,18 +298,23 @@ Beyond the inbound API traffic, the server reaches out to the AWS endpoints behi
 | `bedrock-mantle.<region>.api.aws` | The models served through Amazon Bedrock Mantle |
 | The other AWS service endpoints you enable | Amazon Polly, Amazon Transcribe, Amazon Translate, Amazon Comprehend, Amazon S3, AWS STS, AWS Price List |
 | `cognito-idp.<region>.amazonaws.com` | The user pool key set, when Amazon Cognito authentication is enabled |
+| `s3vectors.<region>.amazonaws.com` | The [Vector Stores API](api_openai_vector_stores.md), when `AWS_S3_VECTORS_BUCKET` is set — in that bucket's Region only |
+| `sqs.<region>.amazonaws.com` | [Durable vector store indexing](operations_resilience.md#vector-store-indexing), when `AWS_SQS_VECTOR_STORE_QUEUE_URL` is set — in the queue's Region only |
 
 Bedrock Mantle is a separate endpoint from classic Bedrock, on a different domain (`api.aws`, not `amazonaws.com`). A network policy that allows the one and not the other is the usual reason a deployment lists every classic model and no Mantle model at all.
 
 ### Private deployments
 
-Each of those endpoints has an interface VPC endpoint service, so a deployment with no internet egress reaches them privately. Bedrock Mantle's is:
+Most of those endpoints have an interface VPC endpoint service, so a deployment with no internet egress reaches them privately. Bedrock Mantle's is:
 
 ```text
 com.amazonaws.<region>.bedrock-mantle
 ```
 
-Enable private DNS on it, so `bedrock-mantle.<region>.api.aws` resolves to the endpoint. When the Terraform module builds the VPC it provisions the interface endpoints itself; deploying into your own VPC (`subnet_ids`) makes every endpoint yours to create.
+Enable private DNS on it, so `bedrock-mantle.<region>.api.aws` resolves to the endpoint. When the Terraform module builds the VPC it provisions the interface endpoints itself — including `com.amazonaws.<region>.sqs` when the indexing queue lives in the deployment Region. Deploying into your own VPC (`subnet_ids`) makes every endpoint yours to create.
+
+!!! warning "Amazon S3 Vectors is not among the endpoints the module creates"
+    A deployment with no internet egress and no route to `s3vectors.<region>.amazonaws.com` serves every other route normally and fails every vector store call. Confirm the service offers an interface endpoint in your Region before planning a fully private deployment on it, or keep egress to that one endpoint open.
 
 ### Proxied deployments
 

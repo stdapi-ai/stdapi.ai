@@ -398,6 +398,7 @@ Key practices recommended by AWS:
 
 - :material-check: **Use SSM Parameter Store or Secrets Manager** — always use encrypted secret storage for production API keys; never pass keys as plain environment variables.
 - :material-check: **Rotate API keys** — Secrets Manager supports [automated secret rotation](https://docs.aws.amazon.com/secretsmanager/latest/userguide/rotating-secrets.html) via Lambda; note that stdapi.ai reads the key once at startup, so a container restart is required after rotation.
+- :material-check: **Share the Realtime signing key** — the [ephemeral client secrets](api_openai_realtime.md#ephemeral-client-secrets) minted for browser clients are signed, not stored, so every instance must sign with the same key. It is derived from the deployment's API key by default; a deployment running with no API key at all falls back to a per-process random key and must set [`REALTIME_CLIENT_SECRET_KEY`](operations_configuration.md#realtime-client-secret-key) instead. Treat it as a secret and store it the same way: anyone holding it can mint a client secret this deployment accepts.
 
 !!! tip "Eliminate key rotation with AWS native auth"
     When using API key authentication, rotation requires updating SSM/Secrets Manager and performing a rolling ECS task replacement. This is predictable but adds a deployment step.
