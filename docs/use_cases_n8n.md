@@ -56,6 +56,77 @@ flowchart LR
   stdapi --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Polly"]
 ```
 
+## :material-sitemap: Architecture
+
+The diagram below is the topology the [Terraform sample](#terraform-deployment) builds: n8n and the stdapi.ai gateway both on ECS Fargate in one VPC you own, with n8n's own workflow state in Aurora PostgreSQL alongside them.
+
+```mermaid
+%%{init: {'flowchart': {'htmlLabels': true}} }%%
+flowchart LR
+  user["👤 Your users<br/>(browser)"]
+
+  subgraph public["Your VPC · public subnets"]
+    alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:40px;width:auto;vertical-align:middle;' /> Application Load Balancer<br/>HTTPS · ACM certificate"]
+  end
+
+  subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
+    n8n["<img src='../styles/logo_n8n.svg' style='height:40px;width:auto;vertical-align:middle;' /> n8n<br/>ECS Fargate"]
+    stdapi["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
+    aurora["Aurora PostgreSQL<br/>n8n workflows · credentials · executions"]
+    egress["NAT gateways<br/>multi-region Bedrock access"]
+  end
+
+  subgraph regional["AWS service endpoints · your account, the regions you configure"]
+    bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
+    transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Transcribe"]
+    polly["<img src='../styles/logo_amazon_polly.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Polly"]
+    comprehend["<img src='../styles/logo_amazon_comprehend.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Comprehend"]
+    s3["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3<br/>SSE-KMS"]
+    cw["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon CloudWatch<br/>logs · metrics"]
+  end
+
+  user -->|"HTTPS · TLS 1.2+"| alb
+  alb -->|"HTTP · private subnet"| n8n
+  n8n -->|"OpenAI + Anthropic dialects · API key<br/>HTTP over Cloud Map private DNS, no public endpoint"| stdapi
+  n8n -->|"TLS, no cert verification<br/>security-group restricted"| aurora
+  stdapi --> egress
+  egress -->|"HTTPS · SigV4"| bedrock
+  egress -->|"HTTPS · SigV4"| transcribe
+  egress -->|"HTTPS · SigV4"| polly
+  egress -->|"HTTPS · SigV4"| comprehend
+  egress -->|"S3 gateway endpoint"| s3
+  egress --> cw
+```
+
+Two properties are worth reading off the picture. n8n is the only service with a public address — the ALB forwards nothing but n8n traffic, and the stdapi.ai gateway has no listener of its own, reachable only through Cloud Map private DNS inside the VPC. Customer data then splits in two: n8n's own workflow definitions, credentials and execution history live in Aurora, inside the account boundary, while whatever a workflow sends to a model passes through the gateway straight to Amazon Bedrock and the other AWS AI services behind it — no third party sits between your workflows and your models.
+
+### What Each AWS Service Does Here
+
+| AWS service | Role in this integration | Where it is configured |
+| --- | --- | --- |
+| **Amazon ECS on AWS Fargate** | Runs n8n and the stdapi.ai gateway as separate services, plus a one-shot "import" task that seeds the credential and sample workflows | Terraform sample (`n8n.tf`, `main.tf`) |
+| **Elastic Load Balancing** | The single public entry point; terminates TLS with an ACM certificate and forwards only to n8n | Terraform sample (`alb.tf`) |
+| **AWS Cloud Map** | Private DNS name that lets n8n reach the gateway without exposing it | Terraform sample (`service_discovery_dns_name`) |
+| **Amazon Bedrock** | Chat, text and image generation, embeddings, video generation | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
+| **Amazon Transcribe** | Speech-to-text, behind `POST /v1/audio/transcriptions` and `/v1/audio/translations` | [Audio Transcription (STT)](#audio-transcription-stt) |
+| **Amazon Polly** | Spoken replies, behind `POST /v1/audio/speech` | [Audio Generation (TTS)](#audio-generation-tts) |
+| **Amazon Comprehend** | Toxicity fallback for `POST /v1/moderations` when no guardrail is configured | [Comprehend Moderation](operations_iam_permissions.md#comprehend-moderation) |
+| **Amazon Aurora PostgreSQL** | n8n's own database — workflow definitions, credentials and execution history; Serverless v2, storage encrypted | Terraform sample (`postgres.tf`) |
+| **Amazon S3** | The gateway's Files API uploads, long text-to-speech input, and generated image/video output | [S3 storage](operations_compliance.md#s3-data-storage) |
+| **AWS KMS** | Two customer-managed keys: one for the gateway's S3 bucket and CloudWatch Logs, another for Aurora storage and the Postgres secret | Terraform sample |
+| **AWS Secrets Manager** | Holds the Aurora master password, read only at deploy time — via the RDS Data API — to provision n8n's database role | Terraform sample (`postgres.tf`) |
+| **Amazon CloudWatch** | Container logs, gateway request logs and, optionally, EMF usage metrics | [Logging & monitoring](operations_logging_monitoring.md) |
+| **AWS IAM** | Separate least-privilege task roles for n8n and the gateway; the gateway's role grants only the AI-service and S3 actions it calls | [IAM permissions](operations_iam_permissions.md) |
+
+### Security Measures in This Flow
+
+- **Authentication** — n8n reaches the gateway with a stdapi.ai [API key](operations_authentication_security.md#api-key-authentication) that Terraform generates (`api_key_create = true`) and seeds directly into n8n's own credential store at first start.
+- **Encryption in transit** — HTTPS with TLS 1.2+ from the browser to the ALB; HTTP from n8n to the gateway, confined to the private subnet and reachable only through Cloud Map private DNS; TLS without certificate verification from n8n to Aurora, a connection that never leaves the VPC and is already restricted by security group; HTTPS with SigV4 from the gateway to each AWS service.
+- **Encryption at rest** — SSE-KMS on the gateway's S3 bucket and CloudWatch Logs; separately, encrypted Aurora storage and the Postgres secret under the VPC module's own KMS key.
+- **Least privilege** — each ECS task assumes its own role; the gateway's role carries no permission for Aurora or its Secrets Manager secret, and n8n's role carries none for Amazon Bedrock, Transcribe, Polly or Comprehend.
+- **Content policy** — a [Bedrock guardrail](operations_configuration.md#bedrock-guardrails) configured on the gateway applies to every route n8n uses, including the mapping [Text Moderation](#text-moderation) already documents for `omni-moderation-latest`.
+- **Data handling** — the gateway is stateless and holds request bodies in memory only, so nothing a workflow sends to a model is persisted outside Amazon Bedrock's own call; n8n's own workflow data — credentials, executions — stays in Aurora inside the account boundary.
+
 ## :material-check-circle: Prerequisites
 
 !!! info "What You'll Need"
@@ -448,6 +519,33 @@ cd samples/getting_started_n8n/terraform
 tofu init
 tofu apply
 ```
+
+## :material-gauge: Operating This Integration
+
+### What It Costs to Run
+
+| Charge | Driver |
+| --- | --- |
+| stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
+| ECS Fargate | Two steady services — n8n and the gateway — each sized independently, plus the one-shot import task that seeds credentials and workflows |
+| Load balancing and networking | One ALB, plus the NAT gateways the private subnets egress through for multi-region Bedrock access |
+| Aurora Serverless v2 | Scales with query load; the sample sets a minimum capacity of zero ACUs |
+| Model and AI-service usage | Amazon Bedrock, Transcribe, Polly and Comprehend at AWS rates, billed to your account with no markup |
+
+Read a model's price before a workflow sends anything to it with [`GET /model_pricing`](api_model_pricing.md). Setting [`COST_TRACKING=true`](operations_cost_management.md#cost-tracking-real-time-aws-pricing) additionally puts a per-request cost on each usage entry — estimated from published AWS prices, not read back from your invoice.
+
+### What to Watch
+
+The gateway writes one structured `request` event per call, carrying the request id, path, status code, `execution_time_ms`, the model that served it (`model_id`), and the token, character and second counts AWS billed. A workflow that fires on a schedule has no one watching its output in real time, so whether its calls are succeeding matters more than for an interactive chat session:
+
+```sql
+fields model_id, path, status_code
+| filter type = "request" and status_code >= 400
+| stats count(*) as failures by model_id, path, status_code
+| sort failures desc
+```
+
+Turning on [`CLOUDWATCH_METRICS`](operations_logging_monitoring.md#cloudwatch-metrics-emf) republishes the same counts as CloudWatch metrics in the `stdapi` namespace, dimensioned by `Model`, so an alarm can fire on a rising failure count without a scheduled query.
 
 ## :material-alert-outline: Known Limitations
 

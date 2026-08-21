@@ -47,6 +47,73 @@ flowchart LR
   stdapi --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Polly"]
 ```
 
+## :material-sitemap: Architecture
+
+The diagram below is the topology the [Terraform sample](#terraform-deployment) builds: a public-facing Home Assistant behind an ALB, wyoming-openai as a sidecar in the same ECS task, and the stdapi.ai gateway as a separate, internally-reachable service in the same VPC.
+
+```mermaid
+%%{init: {'flowchart': {'htmlLabels': true}} }%%
+flowchart LR
+  user["👤 Household members<br/>(browser · Assist microphone)"]
+
+  subgraph public["Your VPC · public subnets"]
+    alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:40px;width:auto;vertical-align:middle;' /> Application Load Balancer<br/>HTTPS · ACM cert, when a custom domain is set"]
+  end
+
+  subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
+    ha["Home Assistant<br/>ECS Fargate task"]
+    wyoming["wyoming-openai<br/>sidecar in the same task"]
+    efs["Amazon EFS<br/>recorder DB · .storage · configuration.yaml<br/>encrypted · one task only"]
+    stdapi["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
+    egress["NAT gateway<br/>or interface VPC endpoints"]
+  end
+
+  subgraph regional["AWS service endpoints · your account, the regions you configure"]
+    transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Transcribe"]
+    polly["<img src='../styles/logo_amazon_polly.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Polly"]
+    s3["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3<br/>SSE-KMS"]
+    cw["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon CloudWatch<br/>container logs"]
+  end
+
+  user -->|"HTTPS · TLS 1.2+"| alb
+  alb -->|"HTTP · private subnet"| ha
+  ha -->|"Wyoming · TCP · localhost, same task"| wyoming
+  wyoming -->|"OpenAI API · API key<br/>private DNS, no public endpoint"| stdapi
+  ha --> efs
+  ha -->|"S3 gateway endpoint · seeds configuration.yaml, first boot only"| s3
+  stdapi --> egress
+  egress -->|"HTTPS · SigV4"| transcribe
+  egress -->|"HTTPS · SigV4"| polly
+  egress -->|"S3 gateway endpoint · stages audio for non-streaming transcription"| s3
+  egress --> cw
+```
+
+The ALB is the only public address in the picture, and it forwards only to Home Assistant — stdapi.ai has no listener of its own and is reached exclusively through AWS Cloud Map private DNS from the wyoming-openai sidecar. A household's state (recorder database, `.storage`, `configuration.yaml`) comes to rest on the single EFS volume mounted into the Home Assistant task, never on the gateway; the gateway itself is stateless and only its egress path crosses the VPC boundary, over HTTPS with SigV4, to Amazon Transcribe and Amazon Polly.
+
+### What Each AWS Service Does Here
+
+| AWS service | Role in this integration | Where it is configured |
+| --- | --- | --- |
+| **Amazon ECS on AWS Fargate** | Runs Home Assistant and wyoming-openai as containers in one task, and the stdapi.ai gateway as a separate service | Terraform sample (`home_assistant.tf`) |
+| **Elastic Load Balancing** | Public entry point for Home Assistant; terminates TLS when a custom domain and certificate are configured | Terraform sample (`alb.tf`) |
+| **AWS Cloud Map** | Private DNS name wyoming-openai uses to reach the gateway, with no public endpoint | Terraform sample (`service_discovery_dns_name`) |
+| **Amazon Transcribe** | Speech-to-text behind `POST /v1/audio/transcriptions` | `STT_MODELS` (wyoming-openai) |
+| **Amazon Polly** | Text-to-speech behind `POST /v1/audio/speech`, streamed as concurrent per-sentence calls | `TTS_MODELS` / `TTS_STREAMING_MODELS` (wyoming-openai) |
+| **Amazon EFS** | Home Assistant's recorder database, `.storage`, and `configuration.yaml`; a second concurrent writer would corrupt it, so the task is pinned to exactly one | Terraform sample (`home_assistant.tf`, EFS mount point) |
+| **Amazon S3** | Seeds `configuration.yaml` on first boot through a read-only S3 Files mount, and on the gateway side stages audio for non-streaming transcription | Terraform sample (config seed) / gateway module default bucket |
+| **AWS KMS** | Customer-managed keys encrypting the EFS volume and the S3 buckets | ECS module and gateway module defaults |
+| **Amazon CloudWatch** | Container logs for both ECS services | ECS module and gateway module defaults |
+| **AWS IAM** | Separate task roles; the gateway's role grants only the Transcribe and Polly actions it invokes | [IAM permissions](operations_iam_permissions.md) |
+
+### Security Measures in This Flow
+
+- **Authentication** — wyoming-openai calls the gateway with a stdapi.ai [API key](operations_authentication_security.md#api-key-authentication) that Terraform generates (`api_key_create = true`) and injects as `STT_OPENAI_KEY`/`TTS_OPENAI_KEY` container secrets; the sample's ALB security group additionally restricts inbound traffic to the deploying operator's own IP address.
+- **Encryption in transit** — HTTPS from the browser to the ALB when a custom domain and certificate are configured; Wyoming stays inside the ECS task over localhost; HTTPS with SigV4 from the gateway to Amazon Transcribe and Amazon Polly.
+- **Encryption at rest** — the EFS volume backing Home Assistant's state and both S3 buckets (config seed, gateway staging) use customer-managed KMS keys.
+- **Least privilege** — the gateway's task role grants only the Transcribe and Polly actions it invokes; Home Assistant's task role carries none of them.
+- **Content policy** — a [Bedrock guardrail](operations_configuration.md#bedrock-guardrails), if configured on the gateway, checks the text to synthesize as `INPUT` on `/v1/audio/speech` and the produced transcript as `OUTPUT` on `/v1/audio/transcriptions`, through the ApplyGuardrail API rather than a native chat-style integration.
+- **Data handling** — the gateway holds request audio in memory, or briefly in its own S3 bucket when staging a non-streaming transcription job, and does not persist it; Home Assistant's own recordings and conversation history stay on the EFS volume in your account.
+
 ## :material-check-circle: Prerequisites
 
 !!! info "What You'll Need"
@@ -150,6 +217,36 @@ tofu apply
 ```
 
 Three steps stay manual after `tofu apply`, for reasons specific to Home Assistant: creating the owner account through the onboarding wizard, adding the Wyoming integration (**Settings → Devices & Services**), and pointing an Assist pipeline at it. See the sample's README for the exact steps.
+
+---
+
+## :material-gauge: Operating This Integration
+
+### What It Costs to Run
+
+| Charge | Driver |
+| --- | --- |
+| stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
+| ECS Fargate | Two services — the Home Assistant + wyoming-openai task, pinned to exactly one, and the gateway, sized independently |
+| Load balancing and networking | One ALB, plus the NAT gateway(s) the private subnets egress through |
+| Amazon EFS | Standing storage and throughput for the recorder database, `.storage`, and `configuration.yaml` |
+| Amazon Polly | Billed per character of text synthesized, not per token |
+| Amazon Transcribe | Billed per second of audio transcribed, not per token |
+
+Read a model's price before you send anything to it with [`GET /model_pricing`](api_model_pricing.md). Setting [`COST_TRACKING=true`](operations_cost_management.md#cost-tracking-real-time-aws-pricing) additionally puts a per-request cost on each usage entry — estimated from published AWS prices, not read back from your invoice.
+
+### What to Watch
+
+The gateway logs Polly usage — `input_characters`, always on the `request` event — and Transcribe usage — `input_seconds`, on `request` normally or on `request_stream` if you turn on `STT_STREAMING_MODELS` — with `execution_time_ms` on every entry. Turning on [`CLOUDWATCH_METRICS`](operations_logging_monitoring.md#cloudwatch-metrics-emf) republishes those counts as EMF metrics in the `stdapi` namespace, dimensioned by `Model`: `Count` for characters, `Seconds` for audio duration.
+
+```sql
+fields path, execution_time_ms
+| filter type = "request" and (path = "/v1/audio/transcriptions" or path = "/v1/audio/speech")
+| stats count(*) as calls, avg(execution_time_ms) as avg_ms, pct(execution_time_ms, 95) as p95_ms by path
+| sort path
+```
+
+A rising p95 on either path is what a household notices as a slow turn, before it shows up in any cost report.
 
 ---
 

@@ -50,6 +50,69 @@ flowchart LR
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
+## :material-sitemap: Architecture
+
+The diagram below is the topology the [Terraform sample](#terraform-deployment) builds: LobeHub sits behind a public load balancer with its own self-hosted Postgres database, while the stdapi.ai gateway has no public endpoint of its own.
+
+```mermaid
+%%{init: {'flowchart': {'htmlLabels': true}} }%%
+flowchart LR
+  user["👤 Your users<br/>(browser)"]
+
+  subgraph public["Your VPC · public subnets"]
+    alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:40px;width:auto;vertical-align:middle;' /> Application Load Balancer<br/>fronts LobeHub only"]
+  end
+
+  subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
+    lobehub2["LobeHub<br/>ECS Fargate"]
+    stdapi2["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
+    postgres["ParadeDB Postgres<br/>ECS Fargate · EFS-backed"]
+    valkey["ElastiCache Valkey<br/>TLS + auth token"]
+    egress["NAT gateways"]
+  end
+
+  subgraph regional["AWS service endpoints · your account, the regions you configure"]
+    bedrock2["<img src='../styles/logo_amazon_bedrock.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
+    s3["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3<br/>SSE-KMS"]
+  end
+
+  user -->|"HTTPS or HTTP · restricted to your IP"| alb
+  alb -->|"HTTP · private subnet"| lobehub2
+  lobehub2 -->|"OpenAI API · API key<br/>Cloud Map private DNS, no public endpoint"| stdapi2
+  lobehub2 -->|"private subnet"| postgres
+  lobehub2 -->|"TLS · auth token"| valkey
+  lobehub2 -->|"S3 gateway endpoint · IAM user access key"| s3
+  stdapi2 --> egress
+  egress -->|"HTTPS · SigV4"| bedrock2
+  stdapi2 -->|"S3 gateway endpoint · task role"| s3
+```
+
+Two things stand out. LobeHub is the only service with a public address — the gateway resolves entirely through AWS Cloud Map private DNS, so no third party, and no public listener of its own, sits between your users and the models. And Amazon S3 is the one destination both applications reach directly through the account's S3 gateway endpoint rather than the NAT gateways, each under its own credential: LobeHub's static IAM user key for its uploads bucket, the gateway's task role for its own bucket of temporary multimodal objects.
+
+### What Each AWS Service Does Here
+
+| AWS service | Role in this integration | Where it is configured |
+| --- | --- | --- |
+| **Amazon ECS on AWS Fargate** | Runs LobeHub, the stdapi.ai gateway and the self-hosted ParadeDB Postgres task as independent services | Terraform sample |
+| **Elastic Load Balancing** | The only public entry point; optionally terminates TLS with an ACM certificate on your domain, otherwise serves plain HTTP; forwards only to LobeHub | Terraform sample (`alb.tf`) |
+| **AWS Cloud Map** | Private DNS names LobeHub uses to reach the gateway, and the gateway uses to reach Postgres — neither is exposed outside the VPC | Terraform sample (`service_discovery_dns_name`) |
+| **Amazon Bedrock** | Chat, vision, image generation and knowledge-base embeddings | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
+| **Amazon S3** | Two separate buckets: LobeHub's file, avatar and knowledge-base uploads, and the gateway's own temporary multimodal objects | [S3 storage](operations_compliance.md#s3-data-storage) |
+| **Amazon ElastiCache (Valkey)** | LobeHub's cache and session state, reached over `rediss://` with an auth token | Terraform sample (`valkey.tf`) |
+| **Self-hosted PostgreSQL (ParadeDB)** | LobeHub's application database and the `pg_search`/`pgvector` store behind its knowledge base; not an AWS managed service, see [Postgres, ParadeDB, and RDS](#postgres-paradedb-and-rds) | Terraform sample (`postgres.tf`) |
+| **AWS KMS** | Customer-managed keys encrypting the S3 buckets, the Valkey replication group, and the EFS volume behind Postgres | Terraform sample |
+| **AWS IAM** | Separate least-privilege ECS task roles per service, plus a dedicated IAM user with a static access key for LobeHub's own S3 client | [IAM permissions](operations_iam_permissions.md) |
+| **Amazon CloudWatch** | Container logs, Container Insights, gateway request logs and EMF usage metrics | [Logging & monitoring](operations_logging_monitoring.md) |
+
+### Security Measures in This Flow
+
+- **Authentication** — LobeHub signs in its own users; every call it makes to the gateway carries a stdapi.ai [API key](operations_authentication_security.md#api-key-authentication) that Terraform generates and injects as an ECS `secrets` entry, never a plain environment variable.
+- **Encryption in transit** — HTTPS to the ALB when a domain and certificate are configured (plain HTTP otherwise, restricted to the deployer's IP), private-subnet HTTP from the ALB to LobeHub, TLS with an auth token to Valkey, and HTTPS with SigV4 from the gateway to Amazon Bedrock and S3. The one exception is the LobeHub-to-Postgres connection, which stays on plaintext TCP inside the private subnet.
+- **Encryption at rest** — SSE-KMS on both S3 buckets, an encrypted Valkey replication group, and a KMS-encrypted, transit-encrypted EFS volume behind the self-hosted Postgres.
+- **Least privilege** — each ECS task assumes its own role; the ALB's security group admits only the deployer's current IP, not the open internet; LobeHub's S3 access runs through a dedicated IAM user scoped to one bucket and one KMS key, because LobeHub's own S3 client needs a static access key and cannot assume the task role.
+- **Content policy** — a [Bedrock guardrail](operations_configuration.md#bedrock-guardrails) configured on the gateway applies to chat, vision and image generation alike, since LobeHub reaches all three through the same connection.
+- **Data handling** — the gateway is stateless and holds request bodies in memory only; LobeHub's own content — chat history, uploaded files, knowledge-base embeddings — lives in the Postgres and S3 resources this sample creates, not in a service operated by LobeHub or stdapi.ai.
+
 ## :material-check-circle: Prerequisites
 
 !!! info "What You'll Need"
@@ -148,6 +211,37 @@ This is the only sample here with a self-hosted datastore, and it exists solely 
 
 !!! danger "Not suitable for production data"
     Running PostgreSQL on EFS is fine for evaluating LobeHub and is **not suitable for production data you care about**. EFS is NFS, and PostgreSQL's durability guarantees assume a local block device — the failure mode is silent data corruption, not a clear error. The task is pinned to exactly one instance, since two writers against one data directory would corrupt it; that also means no high availability, and a restart during a write is a real risk. If you take LobeHub to production, run Postgres on something durable — EC2 with EBS, or a managed ParadeDB offering — and point `DATABASE_URL` at it. Every other sample in this documentation uses RDS or ElastiCache precisely to avoid this.
+
+---
+
+## :material-gauge: Operating This Integration
+
+### What It Costs to Run
+
+| Charge | Driver |
+| --- | --- |
+| stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
+| ECS Fargate | Three services — LobeHub, the gateway, and the self-hosted ParadeDB Postgres task, which is pinned to exactly one instance |
+| Load balancing and networking | One ALB fronting LobeHub, plus the NAT gateways the private subnets egress through |
+| Amazon EFS | Backing storage for the Postgres data directory |
+| ElastiCache Valkey | A standing node cost (`cache.t4g.micro` in the sample) |
+| Amazon S3 | Storage for LobeHub's uploads and the gateway's temporary multimodal objects |
+| Model and AI-service usage | Amazon Bedrock at AWS rates, billed to your account with no markup |
+
+Check a model's price before routing traffic to it with [`GET /model_pricing`](api_model_pricing.md). Turning on [`COST_TRACKING`](operations_cost_management.md#cost-tracking-real-time-aws-pricing) puts a per-request cost on each usage entry — estimated from published AWS prices, not read back from your invoice — and is off by default.
+
+### What to Watch
+
+The gateway writes one structured `request` (or `request_stream` for streamed chat) event per call, carrying the request id, path, status code, `execution_time_ms`, the model that served it, and the AWS-billed token, character or second counts recorded in its nested `usage` list. Turning on [`CLOUDWATCH_METRICS`](operations_logging_monitoring.md#cloudwatch-metrics-emf) republishes those same counts as flat CloudWatch EMF metrics in the `stdapi` namespace, dimensioned by `Model` — with a second `[Model, Currency]` set for the `Cost` metric — so a dashboard can plot token consumption without parsing the JSON logs.
+
+```sql
+fields Model, InputTokens, OutputTokens
+| filter _aws.CloudWatchMetrics is not null
+| stats sum(InputTokens) as input_tokens, sum(OutputTokens) as output_tokens, count(*) as calls by Model
+| sort input_tokens + output_tokens desc
+```
+
+For the prompts and completions themselves rather than metadata, turn on Amazon Bedrock's own [model invocation logging](operations_compliance.md#amazon-bedrock-invocation-logging), which stays off by default and is configured entirely on the AWS side.
 
 ---
 

@@ -53,6 +53,80 @@ flowchart LR
   stdapi --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Polly"]
 ```
 
+## :material-sitemap: Architecture
+
+The diagram below is the topology the [Terraform sample](#terraform-deployment) builds: a browser-facing chat application and its AI gateway, both on ECS Fargate, in one VPC you own.
+
+```mermaid
+%%{init: {'flowchart': {'htmlLabels': true}} }%%
+flowchart LR
+  user["👤 Your users<br/>(browser)"]
+
+  subgraph public["Your VPC · public subnets"]
+    alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:40px;width:auto;vertical-align:middle;' /> Application Load Balancer<br/>HTTPS · ACM certificate"]
+  end
+
+  subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
+    openwebui["<img src='../styles/logo_openwebui.svg' style='height:40px;width:auto;vertical-align:middle;' /> Open WebUI<br/>ECS Fargate"]
+    stdapi["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
+    tools["SearXNG · Playwright<br/>ECS Fargate"]
+    aurora["Aurora PostgreSQL<br/>Serverless v2 + pgvector"]
+    valkey["ElastiCache Valkey<br/>TLS + auth token"]
+    egress["NAT gateways<br/>or interface VPC endpoints"]
+  end
+
+  subgraph regional["AWS service endpoints · your account, the regions you configure"]
+    bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
+    polly["<img src='../styles/logo_amazon_polly.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Polly"]
+    transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Transcribe"]
+    s3["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3<br/>SSE-KMS"]
+    cw["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon CloudWatch<br/>logs · metrics · alarms"]
+  end
+
+  user -->|"HTTPS · TLS 1.2+"| alb
+  alb -->|"HTTP · private subnet"| openwebui
+  openwebui -->|"OpenAI + Cohere API · API key<br/>private DNS, no public endpoint"| stdapi
+  openwebui --> aurora
+  openwebui --> valkey
+  openwebui --> tools
+  openwebui --> egress
+  stdapi --> egress
+  egress -->|"HTTPS · SigV4"| bedrock
+  egress -->|"HTTPS · SigV4"| polly
+  egress -->|"HTTPS · SigV4"| transcribe
+  egress -->|"S3 gateway endpoint"| s3
+  egress --> cw
+```
+
+Two properties of this topology are worth reading off the picture. The gateway has **no listener of its own**: Open WebUI resolves it through AWS Cloud Map private DNS inside the VPC, so the load balancer is the only thing with a public address, and it only ever forwards to Open WebUI. And every store that holds your users' content — the Aurora database, the Valkey cache, the S3 bucket — sits inside the account boundary; nothing in the picture is operated by a third party.
+
+### What Each AWS Service Does Here
+
+| AWS service | Role in this integration | Where it is configured |
+| --- | --- | --- |
+| **Amazon ECS on AWS Fargate** | Runs Open WebUI, the stdapi.ai gateway, SearXNG and Playwright as separate services with independent auto-scaling | Terraform sample |
+| **Elastic Load Balancing** | The single public entry point; terminates TLS with an ACM certificate and forwards only to Open WebUI | Terraform sample |
+| **AWS Cloud Map** | Private DNS name that lets Open WebUI reach the gateway without exposing it | Terraform sample (`service_discovery_dns_name`) |
+| **Amazon Bedrock** | Chat completions, embeddings, reranking, image generation and editing | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
+| **Amazon Transcribe** | Voice input, behind `POST /v1/audio/transcriptions` | `AUDIO_STT_MODEL` (above) |
+| **Amazon Polly** | Spoken replies, behind `POST /v1/audio/speech` | `AUDIO_TTS_MODEL` (above) |
+| **Amazon Aurora PostgreSQL** | Open WebUI's own database, and the pgvector store its RAG pipeline queries; Serverless v2, storage encrypted | Terraform sample |
+| **Amazon ElastiCache (Valkey)** | WebSocket session state and model-list cache, reached over `rediss://` with an auth token | Terraform sample |
+| **Amazon S3** | Open WebUI file uploads under an `openwebui/` prefix, plus the gateway's temporary multimodal objects | [S3 storage](operations_compliance.md#s3-data-storage) |
+| **AWS KMS** | Customer-managed keys encrypting the S3 bucket and the Aurora cluster storage | Terraform sample |
+| **AWS Secrets Manager** | Holds the Aurora master password; the task reads it at start-up | Terraform sample |
+| **Amazon CloudWatch** | Container logs, Container Insights, gateway request logs and EMF usage metrics | [Logging & monitoring](operations_logging_monitoring.md) |
+| **AWS IAM** | Separate least-privilege task roles for each service; the gateway's role grants only the model and AI-service actions it invokes | [IAM permissions](operations_iam_permissions.md) |
+
+### Security Measures in This Flow
+
+- **Authentication** — Open WebUI signs in its own users; every call it then makes to the gateway carries a stdapi.ai [API key](operations_authentication_security.md#api-key-authentication) that Terraform generates and injects into the container environment.
+- **Encryption in transit** — HTTPS from the browser to the ALB, whose listener supports TLS 1.2 and 1.3; private-VPC traffic from the ALB to the container; HTTPS with SigV4 from the gateway to each AWS service.
+- **Encryption at rest** — SSE-KMS on the S3 bucket, encrypted Aurora storage, and TLS plus an auth token on the Valkey connection.
+- **Least privilege** — each ECS task assumes its own role; the gateway's role carries no permission for the Aurora cluster, and Open WebUI's role carries none for Amazon Bedrock.
+- **Content policy** — a [Bedrock guardrail](operations_configuration.md#bedrock-guardrails) configured on the gateway applies to each route Open WebUI uses, not only to chat, and stays in force unless the deployment explicitly allows a per-request override.
+- **Data handling** — the gateway is stateless and holds request bodies in memory only; CloudWatch receives request metadata, not prompts, unless payload logging is explicitly turned on for debugging.
+
 ## :material-check-circle: Prerequisites
 
 !!! info "What You'll Need"
@@ -247,6 +321,38 @@ tofu apply
 
 !!! note "Requires a sibling checkout for now"
     This example pins the ECS module to a local path, because the S3 Files support it relies on is not yet in a published module release. Clone [JGoutin/terraform-aws-ecs](https://github.com/JGoutin/terraform-aws-ecs) next to your `samples` checkout until that release ships.
+
+---
+
+## :material-gauge: Operating This Integration
+
+### What It Costs to Run
+
+| Charge | Driver |
+| --- | --- |
+| stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
+| ECS Fargate | Four services — Open WebUI, the gateway, SearXNG, Playwright — each sized and auto-scaled independently |
+| Load balancing and networking | One ALB, plus the NAT gateways the private subnets egress through |
+| Aurora Serverless v2 | Scales with query load; the sample sets a minimum capacity of zero ACUs |
+| ElastiCache Valkey | A standing node cost |
+| Model and AI-service usage | Amazon Bedrock, Polly and Transcribe at AWS rates, billed to your account with no markup |
+
+Read a model's price before you send anything to it with [`GET /model_pricing`](api_model_pricing.md). Setting [`COST_TRACKING=true`](operations_cost_management.md#cost-tracking-real-time-aws-pricing) additionally puts a per-request cost on each usage entry — estimated from published AWS prices, not read back from your invoice.
+
+### What to Watch
+
+Both containers log to CloudWatch: Open WebUI writes its audit trail to stdout (`ENABLE_AUDIT_STDOUT=true`), and the gateway writes one structured `request` event per call carrying the request id, path, status code, `execution_time_ms`, the model that served it, and the token counts AWS billed. Turning on [`CLOUDWATCH_METRICS`](operations_logging_monitoring.md#cloudwatch-metrics-emf) republishes those counts as CloudWatch metrics in the `stdapi` namespace, dimensioned by `Model`, so a dashboard can plot chat, embedding, image and speech consumption side by side.
+
+For a chat deployment the useful first question is which feature is consuming the models — the Core Connection, RAG, images or voice all arrive on different paths:
+
+```sql
+fields path, execution_time_ms
+| filter type = "request"
+| stats count(*) as calls, pct(execution_time_ms, 95) as p95_ms by path
+| sort calls desc
+```
+
+Amazon Bedrock [model invocation logging](operations_compliance.md#amazon-bedrock-invocation-logging) is the AWS-side counterpart — off by default, and the record to enable when you need the prompts and completions themselves rather than metadata.
 
 ---
 

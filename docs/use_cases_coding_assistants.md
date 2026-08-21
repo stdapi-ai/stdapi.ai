@@ -51,6 +51,66 @@ flowchart LR
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
+## :material-sitemap: Architecture
+
+There is no per-developer infrastructure in this integration: every IDE and terminal assistant on the team points at the same shared gateway deployment, the public-facing topology built by the [Terraform samples](https://github.com/stdapi-ai/samples/tree/main/getting_started_production) for a stdapi.ai endpoint reachable from outside the VPC.
+
+```mermaid
+%%{init: {'flowchart': {'htmlLabels': true}} }%%
+flowchart LR
+  dev["<img src='../styles/logo_vscode.svg' style='height:40px;width:auto;vertical-align:middle;' /> Developer workstations<br/>IDE / terminal + coding assistant"]
+
+  waf["AWS WAF (optional)<br/>rate limit · anonymous-IP block"]
+
+  subgraph public["Your VPC · public subnets"]
+    alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:40px;width:auto;vertical-align:middle;' /> Application Load Balancer<br/>HTTPS · ACM certificate<br/>custom domain via Route 53"]
+  end
+
+  subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
+    gateway["stdapi.ai gateway<br/>ECS Fargate · stateless"]
+    egress["NAT gateways<br/>or interface VPC endpoints"]
+  end
+
+  subgraph regional["AWS service endpoints · your account, the regions you configure"]
+    bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
+    s3["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3<br/>SSE-KMS"]
+    cw["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon CloudWatch<br/>logs · metrics · alarms"]
+  end
+
+  dev -->|"HTTPS · TLS 1.2+ · API key or Cognito token"| alb
+  waf -.->|"optional · alb_waf_enabled"| alb
+  alb -->|"HTTP · private subnet"| gateway
+  gateway -->|"S3 gateway endpoint · always provisioned"| s3
+  gateway --> egress
+  egress -->|"HTTPS · SigV4"| bedrock
+  egress --> cw
+```
+
+The Application Load Balancer, optionally fronted by AWS WAF, is the only address any developer's machine ever reaches — everything past it lives in private app subnets with no inbound route from the internet. Source code sent for a completion or a chat turn crosses the ALB, reaches the gateway task over the private network, and leaves again over SigV4-signed HTTPS straight to Amazon Bedrock; the gateway container is stateless and keeps no request body or completion on disk once the response is sent.
+
+### What Each AWS Service Does Here
+
+| AWS service | Role in this integration | Where it is configured |
+| --- | --- | --- |
+| **Elastic Load Balancing** | The single public entry point for every developer's IDE or terminal; terminates TLS | `alb_enabled`, `alb_public` |
+| **AWS WAF** | Optional edge protection in front of the ALB — rate limiting and anonymous-IP blocking | `alb_waf_enabled`, `alb_waf_rate_limit`, `alb_waf_block_anonymous_ips` |
+| **AWS Certificate Manager / Route 53** | Issues and DNS-validates the TLS certificate for your own domain, and publishes the record that resolves to it | `alb_domain_name` |
+| **Amazon ECS on AWS Fargate** | Runs the stdapi.ai gateway container in private app subnets, with at least one task per Availability Zone | `autoscaling_min_capacity` |
+| **Amazon Bedrock** | Serves chat completions, tool calling and reasoning for every model the team's assistants call | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
+| **Amazon S3** | Holds the gateway's temporary multimodal objects, KMS-encrypted, reached through the always-provisioned S3 gateway endpoint | `aws_s3_bucket_create` |
+| **AWS KMS** | Customer-managed keys encrypting the S3 bucket(s) | Terraform module |
+| **Amazon CloudWatch** | Container logs, gateway request logs, and optional EMF usage metrics | [Logging & monitoring](operations_logging_monitoring.md) |
+| **AWS IAM** | Least-privilege task role restricted to the model and AI-service actions the gateway actually invokes | [IAM permissions](operations_iam_permissions.md) |
+
+### Security Measures in This Flow
+
+- **Authentication** — see [One Key for the Team, or One Identity per Developer](#one-key-for-the-team-or-one-identity-per-developer) above for the choice between a shared API key and a per-developer credential.
+- **Encryption in transit** — HTTPS from every workstation to the ALB, whose listener supports TLS 1.2 and 1.3; a private-subnet hop from the ALB to the gateway task; SigV4-signed HTTPS from the gateway to Amazon Bedrock.
+- **Encryption at rest** — SSE-KMS on the S3 bucket(s), with automatic key rotation.
+- **Least privilege** — the gateway's task role carries only the model and AI-service actions it calls, and its security group accepts inbound traffic only from the ALB's security group, on the container port.
+- **Content policy** — an optional [Bedrock guardrail](operations_configuration.md#bedrock-guardrails) applies to every route a coding assistant reaches, chat included, and stays in force unless the deployment explicitly allows a per-request override.
+- **Data handling** — the gateway is stateless and holds request bodies in memory only; CloudWatch receives request metadata, not the source code or the model's replies, unless payload logging is explicitly turned on for debugging.
+
 ## :material-check-circle: Prerequisites
 
 !!! info "What You'll Need"
@@ -518,6 +578,36 @@ stdapi.ai works well when running locally with Docker, making it ideal for your 
     ANTHROPIC_BASE_URL: http://localhost:8000/anthropic
     ANTHROPIC_AUTH_TOKEN: your_stdapi_key
     ```
+
+---
+
+## :material-gauge: Operating This Integration
+
+### What It Costs to Run
+
+| Charge | Driver |
+| --- | --- |
+| stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial |
+| ECS Fargate | One shared gateway service for the whole team, sized and auto-scaled independently of developer count |
+| Elastic Load Balancing | One ALB serving every developer's connections |
+| NAT gateways | Standing charge for the default private-subnet egress path |
+| AWS WAF | Optional — only when `alb_waf_enabled = true` |
+| Amazon Bedrock usage | Model tokens at AWS rates — the variable charge, and the one prompt caching reduces most |
+
+Coding assistants resend large amounts of repeated context — the system prompt, tool definitions, and often the same files — on every turn, which makes prompt caching the main lever on that variable charge; see the caching notes under [Using Non-Claude Models](#using-non-claude-models) above for when `cache_control` helps and when `DISABLE_PROMPT_CACHING=1` is the right call instead. Read a model's price before you send anything to it with [`GET /model_pricing`](api_model_pricing.md). Setting [`COST_TRACKING=true`](operations_cost_management.md#cost-tracking-real-time-aws-pricing) additionally puts a per-request cost on each usage entry — estimated from published AWS prices, not read back from your invoice.
+
+### What to Watch
+
+The gateway writes one structured `request` (or `request_stream` for streamed replies) event per call, carrying the request id, path, status code, `execution_time_ms`, the model that served it, and the AWS-billed token counts — including `cached_tokens` and `cache_write_tokens` from Bedrock prompt caching. Turning on [`CLOUDWATCH_METRICS`](operations_logging_monitoring.md#cloudwatch-metrics-emf) republishes those counts as EMF metrics in the `stdapi` namespace, dimensioned by `Model`. On a shared deployment, the useful first question is which developer and which model are driving the traffic:
+
+```sql
+fields aws_role_session_name, model_id
+| filter type = "request" and ispresent(aws_role_session_name)
+| stats count(*) as calls, pct(execution_time_ms, 95) as p95_ms by aws_role_session_name, model_id
+| sort calls desc
+```
+
+`aws_role_session_name` is the identity AWS billed the call under, and it is populated by [per-user cost attribution](operations_cost_management.md#per-user-attribution) — which is an enforced boundary only with `AUTHENTICATION_MODE=cognito`. Under a shared API key the field is absent, and the `request_user_id` an assistant declares is a label rather than a boundary; on that setup, group by `model_id` alone and read the per-team split from Cost Explorer instead.
 
 ---
 

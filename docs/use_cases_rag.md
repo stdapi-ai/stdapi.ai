@@ -58,6 +58,72 @@ flowchart LR
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
+## :material-sitemap: Architecture
+
+The two modes differ in who runs the pipeline and where its state lives. Managed retrieval puts chunking, embedding, indexing and search inside the gateway, backed by a vector bucket and a durable indexing queue in your account; the assembled pipeline keeps your framework in charge of chunking, indexing and search, and calls stdapi.ai only for the embedding, reranking and generation steps in between.
+
+```mermaid
+%%{init: {'flowchart': {'htmlLabels': true}} }%%
+flowchart LR
+  app["Your application or RAG framework<br/>(Haystack, LlamaIndex, ...)"]
+  ownvdb["Your vector database<br/>(pgvector, Qdrant, ...)<br/>assembled pipeline only"]
+
+  subgraph public["Your VPC · public subnets"]
+    alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:40px;width:auto;vertical-align:middle;' /> Application Load Balancer<br/>document parsing only"]
+  end
+
+  subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
+    docling["Docling Serve<br/>ECS Fargate · document parsing"]
+    stdapi["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
+    egress["NAT gateways<br/>or interface VPC endpoints"]
+  end
+
+  subgraph endpoints["AWS service endpoints · your account, the regions you configure"]
+    bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
+    s3["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3<br/>files and vector store records"]
+    s3vectors["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3 Vectors<br/>vector indexes — managed retrieval only"]
+    sqs["Amazon SQS<br/>durable indexing queue + DLQ — managed retrieval only"]
+  end
+
+  app -->|"HTTPS · API key<br/>parse PDFs/office documents"| alb
+  alb -->|"HTTP · private subnet"| docling
+  docling -->|"OpenAI API · API key<br/>optional VLM pipeline"| stdapi
+
+  app -->|"managed: upload, attach, search a store<br/>then generate the answer"| stdapi
+  app -.->|"assembled: embed passages, embed the query,<br/>rerank, then generate the answer"| stdapi
+  app -.->|"assembled: index and search vectors yourself"| ownvdb
+
+  stdapi --> egress
+  egress -->|"HTTPS · SigV4<br/>embed · rerank · generate"| bedrock
+  egress -->|"HTTPS · SigV4<br/>vector store records"| s3
+  egress -->|"HTTPS · SigV4<br/>index and search vectors"| s3vectors
+  egress -.->|"SendMessage / ReceiveMessage<br/>any task may resume a job"| sqs
+```
+
+Two things are worth reading off the picture. In managed retrieval, your documents and their vectors come to rest inside your account — the general-purpose bucket holds the vector store's records, the S3 Vectors bucket holds the indexed embeddings, and the SQS queue makes an indexing job outlive the task that accepted it: this is the one deployment shape on this page where the gateway is not stateless. In the assembled pipeline the gateway stays exactly as stateless as everywhere else on this site — it holds no vectors at all, which land wherever your own framework's vector database puts them, never in this picture.
+
+### What Each AWS Service Does Here
+
+| AWS service | Role in this integration | Where it is configured |
+| --- | --- | --- |
+| **Amazon ECS on AWS Fargate** | Runs the stdapi.ai gateway and, for the document-parsing stage, Docling Serve, as independent services | Terraform sample |
+| **Elastic Load Balancing** | Public entry point for Docling Serve's document-parsing API; the gateway itself has no listener of its own | Terraform sample |
+| **Amazon Bedrock** | Embedding, reranking and generation models for both modes, plus the vision model behind Docling's optional VLM pipeline | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
+| **Amazon S3** | Holds the Vector Stores API's own records — the stores, their attached files and file batches | [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) |
+| **Amazon S3 Vectors** | Holds the indexed embeddings of every managed vector store, one index per store | [`AWS_S3_VECTORS_BUCKET`](operations_configuration.md#aws-s3-vectors-bucket) |
+| **Amazon SQS** | Carries indexing jobs so an attach survives the task that accepted it, redriving a job that keeps failing to its dead-letter queue | [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url) |
+| **AWS KMS** | Customer-managed keys encrypting the S3 bucket, the S3 Vectors bucket and the SQS queue, each independently | Terraform sample |
+| **AWS IAM** | Least-privilege task role for the gateway; the Vector Stores, durable indexing and knowledge base permissions are granted only when their feature is enabled | [IAM permissions](operations_iam_permissions.md#vector-stores-optional) |
+
+### Security Measures in This Flow
+
+- **Authentication** — every call your application or framework makes to the gateway carries a stdapi.ai [API key](operations_authentication_security.md#api-key-authentication); Docling's optional VLM pipeline authenticates the same way when it calls the gateway for vision inference.
+- **Encryption in transit** — HTTPS from wherever your application or framework runs to the gateway, and HTTPS with SigV4 from the gateway to Amazon Bedrock, Amazon S3, Amazon S3 Vectors and Amazon SQS.
+- **Encryption at rest** — SSE-KMS on the S3 bucket holding vector store records, and on the S3 Vectors bucket and the SQS queue, each behind its own key: `aws_s3_vectors_kms_key_arn` and `aws_sqs_vector_store_queue_kms_key_arn` when you bring your own bucket or queue, a dedicated key created for you otherwise.
+- **Least privilege** — the gateway's task role is granted the Vector Stores, durable indexing and knowledge base actions only when the corresponding feature is configured, scoped to the ARNs of the bucket, the queue and the knowledge bases you name.
+- **Content policy** — a [Bedrock guardrail](operations_configuration.md#bedrock-guardrails) applies to embeddings and reranking through the ApplyGuardrail API rather than Bedrock's native integration, checking each text input before it is embedded or reranked, and its consumed units are reported — unlike the native integration chat routes use.
+- **Data handling** — uploaded files and their [S3 storage](operations_compliance.md#s3-data-storage) stay in your account, and an Amazon Bedrock knowledge base you already operate is [addressed as a vector store](api_openai_vector_stores.md#knowledge-base-stores) — searched and extended, never recreated.
+
 ## :material-database-search: Managed Retrieval with Vector Stores { #managed-retrieval }
 
 Upload your files, attach them to a vector store, and search it. Nothing else runs.
@@ -244,6 +310,37 @@ Frameworks that drive the Responses API can take the [managed](#managed-retrieva
 
 !!! warning "n8n cannot rerank through stdapi.ai"
     n8n's Cohere Reranker node has no base URL field—see [n8n Integration: Known Limitations](use_cases_n8n.md#known-limitations) for a workaround.
+
+---
+
+## :material-gauge: Operating This Integration
+
+### What It Costs to Run
+
+| Charge | Driver |
+| --- | --- |
+| stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
+| Amazon ECS on AWS Fargate | The gateway, and — for the document-parsing stage — Docling Serve, each sized independently |
+| Amazon Bedrock — ingestion | One embedding call per indexed passage, paid once when a file is attached |
+| Amazon Bedrock — query | One embedding call per search query; the assembled pipeline adds a reranking call, and either mode adds a generation call whenever a chat model answers from the retrieved passages |
+| Amazon S3 Vectors | Storage and request charges for the vector indexes themselves — see [Vector Stores pricing](operations_cost_management.md#vector-stores) for what is and is not in stdapi.ai's usage log |
+| Amazon S3 | Standard storage for the vector store's own records and any uploaded files |
+| Amazon SQS | No standing charge — billed per request, so an idle queue between indexing jobs costs nothing |
+
+Read a model's price before you send anything to it with [`GET /model_pricing`](api_model_pricing.md). Setting [`COST_TRACKING=true`](operations_cost_management.md#cost-tracking-real-time-aws-pricing) additionally puts a per-request cost on each usage entry — estimated from published AWS prices, not read back from your invoice — though the vector bucket's own storage and request charges never appear in it; read those from AWS Cost Explorer instead.
+
+### What to Watch
+
+The gateway logs one `request` event per call and, for managed indexing, a separate `background` event named `vector_store_indexing` correlated to it by `id` — group on that field to see how long a file's indexing actually took after the attach call returned. The dead-letter queue behind [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](operations_configuration.md#aws-sqs-vector-store-queue-url) is the signal that a document failed to index: a file still failing after its queue's redrive policy exhausts its deliveries lands there instead of being silently dropped, so a non-empty dead-letter queue means a document needs attention. Turning on [`CLOUDWATCH_METRICS`](operations_logging_monitoring.md#cloudwatch-metrics-emf) republishes the same billed quantities as EMF metrics in the `stdapi` namespace, dimensioned by `Model`.
+
+```sql
+fields @timestamp, event, execution_time_ms, id
+| filter type = "background" and event = "vector_store_indexing"
+| sort @timestamp desc
+| limit 100
+```
+
+Watch the dead-letter queue depth alongside this query — a job that never appears here again after being sent once, with the primary queue's `ApproximateNumberOfMessagesVisible` back at zero, finished; one that keeps reappearing is heading for the dead-letter queue instead.
 
 ---
 

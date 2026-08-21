@@ -36,6 +36,92 @@ client = OpenAI(base_url="https://your-endpoint/v1", api_key="YOUR_KEY")
 # Then name a model from the catalogue — the rest of your application is unchanged
 ```
 
+## :material-sitemap: Reference Architecture
+
+Every guide below plugs a different tool into the same deployment. That deployment is a container on Amazon ECS running with the AWS Fargate launch type, in the private subnets of a VPC the [Terraform module](operations_getting_started.md) creates in your own account.
+
+```mermaid
+%%{init: {'flowchart': {'htmlLabels': true}} }%%
+flowchart LR
+  ext["Tools and applications<br/>outside the VPC"]
+
+  subgraph public["Your VPC · public subnets — provisioned only when you enable the load balancer"]
+    waf["AWS WAF<br/>optional rate limiting and IP rules"]
+    alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:40px;width:auto;vertical-align:middle;' /> Application Load Balancer<br/>HTTPS · ACM certificate"]
+  end
+
+  subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
+    inapp["Tools you deploy<br/>into the same VPC"]
+    stdapi["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
+    egress["NAT gateways<br/>or interface VPC endpoints"]
+  end
+
+  subgraph regional["AWS service endpoints · your account, the regions you enable"]
+    bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
+    polly["<img src='../styles/logo_amazon_polly.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Polly"]
+    transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Transcribe"]
+    translate["<img src='../styles/logo_amazon_translate.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Translate"]
+    comprehend["<img src='../styles/logo_amazon_comprehend.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Comprehend"]
+    s3["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3<br/>SSE-KMS"]
+    cw["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon CloudWatch"]
+  end
+
+  ext -->|"HTTPS · API key, Cognito token,<br/>OIDC or SigV4"| alb
+  waf -.->|"optional · inspects each request"| alb
+  alb -->|"HTTP · private subnet"| stdapi
+  inapp -.->|"private DNS · no public endpoint needed"| stdapi
+  stdapi --> egress
+  egress -->|"HTTPS · SigV4"| bedrock
+  egress -->|"HTTPS · SigV4"| polly
+  egress -->|"HTTPS · SigV4"| transcribe
+  egress -->|"HTTPS · SigV4"| translate
+  egress -->|"HTTPS · SigV4"| comprehend
+  egress -->|"S3 gateway endpoint"| s3
+  egress --> cw
+```
+
+Two paths reach the gateway, and which one you use decides how much of the diagram you need. A tool running on a laptop or in another account comes in through the load balancer, so the public subnets, the certificate and the optional WAF apply. A tool you deploy into the same VPC — which is what the Open WebUI, LobeHub, n8n, RAGFlow and Home Assistant samples do — resolves the gateway through private DNS, and the deployment then has no public endpoint at all.
+
+### What Each AWS Service Does
+
+| AWS service | Role in a stdapi.ai deployment | Where it is configured |
+| --- | --- | --- |
+| **Amazon ECS on AWS Fargate** | Runs the gateway container; auto-scales on CPU, memory or request count, with a default minimum of one task per Availability Zone | [`autoscaling_*` inputs](operations_deploy_advanced.md) |
+| **Elastic Load Balancing** | Public HTTPS entry point when you enable it, with an ACM certificate and an optional custom domain | `alb_enabled`, `alb_public`, `alb_domain_name` |
+| **AWS WAF** | Optional rate limiting per source IP and blocking of known anonymous IPs, in front of the load balancer | `alb_waf_enabled` |
+| **Amazon Bedrock** | Every text, image, video, embedding and reranking model the catalogue serves, through Converse and InvokeModel | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
+| **Amazon Bedrock Guardrails** | Content policy applied to requests and responses across routes, natively on chat and through `ApplyGuardrail` elsewhere | [Bedrock Guardrails](operations_configuration.md#bedrock-guardrails) |
+| **Amazon Polly** | Speech synthesis behind `/v1/audio/speech` | [Audio Speech API](api_openai_audio_speech.md) |
+| **Amazon Transcribe** | Speech recognition, including streaming and speaker diarization, behind `/v1/audio/transcriptions` | [Audio Transcriptions API](api_openai_audio_transcriptions.md) |
+| **Amazon Translate** | Turns transcribed speech into English behind `/v1/audio/translations` | [Audio Translations API](api_openai_audio_translations.md) |
+| **Amazon Comprehend** | Toxicity detection behind `/v1/moderations` when no guardrail is configured, and language detection for voice routing | [Moderations API](api_openai_moderations.md) |
+| **Amazon S3** | Temporary multimodal inputs and outputs, and asynchronous job results; regional buckets are created for the Bedrock regions you enable | [S3 Data Storage](operations_compliance.md#s3-data-storage) |
+| **AWS KMS** | Customer-managed keys encrypting every bucket the module creates | [KMS Encryption](operations_compliance.md#kms-encryption) |
+| **Amazon CloudWatch** | Container logs, structured request logs, Container Insights, EMF usage metrics and optional alarms | [Logging & monitoring](operations_logging_monitoring.md) |
+| **AWS IAM** | The task role the gateway assumes, scoped to the models and services it actually invokes | [IAM permissions](operations_iam_permissions.md) |
+| **Amazon Cognito** | Optional user-pool tokens as the client credential, and the identity that per-user cost attribution is derived from | [Cognito tokens](operations_authentication_security.md#amazon-cognito-user-pool-tokens) |
+
+Amazon SQS, Amazon S3 Vectors, AWS Systems Manager and AWS Secrets Manager join the list only when the features that use them are enabled — durable vector-store indexing and externally stored API keys respectively.
+
+### Where the Boundaries Are
+
+The gateway holds request data in memory and writes nothing to disk; it is stateless between requests, so replacing a task loses no user data. Clients authenticate with an [API key, a Cognito token, an OIDC or IAM Identity Center identity, or SigV4](operations_authentication_security.md); traffic is HTTPS from the client to the load balancer and HTTPS with SigV4 from the container to each AWS service, with the hop in between staying inside the VPC. At rest, the buckets are encrypted with KMS keys in your account, and CloudWatch receives request metadata rather than prompt content unless payload logging is turned on for debugging. The full statement of what is stored, where, and for how long is on the [data sovereignty & compliance](operations_compliance.md) page.
+
+## :material-chart-box: What the Deployment Reports
+
+The gateway emits one structured event per request. The table below maps the operational questions a new deployment raises to the place its answer already exists.
+
+| What you want to know | Where the answer is |
+| --- | --- |
+| What a model costs before you call it | [`GET /model_pricing`](api_model_pricing.md) returns the published AWS price for every model in the catalogue |
+| How many requests, and how slow | The `request` event carries `path`, `status_code` and `execution_time_ms`; [three ready-made queries](operations_logging_monitoring.md#cloudwatch-logs-insights-queries) cover request tracing, errors and P95/P99 latency |
+| How many tokens, characters or audio seconds AWS billed | The `usage` list on each event, broken down by service, model, operation, region and tier — these are AWS-reported quantities, not estimates |
+| The same figures as graphable metrics | [`CLOUDWATCH_METRICS=true`](operations_logging_monitoring.md#cloudwatch-metrics-emf) publishes them as EMF metrics in the `stdapi` namespace, dimensioned by `Model` |
+| What a request is estimated to have cost | [`COST_TRACKING=true`](operations_cost_management.md#cost-tracking-real-time-aws-pricing) adds a per-request cost — opt-in, off by default, and estimated from published AWS prices rather than read back from your invoice |
+| What it actually cost, per team or per end user | [AWS cost attribution](operations_cost_management.md#aws-cost-attribution) in Cost Explorer, from the invoice |
+| Where a request went inside your application | The `x-request-id` response header, plus [OpenTelemetry traces](operations_logging_monitoring.md#opentelemetry-integration) when an exporter endpoint is configured |
+| The prompts and completions themselves | [Amazon Bedrock model invocation logging](operations_compliance.md#amazon-bedrock-invocation-logging) — an AWS-side feature, off by default, writing to S3 or CloudWatch Logs |
+
 ## :material-view-grid: Choose Your Integration
 
 Pick the category that matches your goal — categories marked :material-book-open-variant: have a dedicated step-by-step guide.

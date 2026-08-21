@@ -50,6 +50,75 @@ flowchart LR
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
+## :material-sitemap: Architecture
+
+The diagram below is the topology the [Terraform sample](#terraform-deployment) builds: RAGFlow and the stdapi.ai gateway as separate ECS Fargate services in one VPC, with OpenSearch, Aurora and Valkey as the managed stores behind RAGFlow.
+
+```mermaid
+%%{init: {'flowchart': {'htmlLabels': true}} }%%
+flowchart LR
+  user["👤 Your users<br/>(browser)"]
+
+  subgraph public["Your VPC · public subnets"]
+    alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:40px;width:auto;vertical-align:middle;' /> Application Load Balancer<br/>fronts RAGFlow only"]
+  end
+
+  subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
+    ragflow["RAGFlow<br/>ECS Fargate"]
+    stdapi["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
+    opensearch["Amazon OpenSearch Service<br/>document + vector index"]
+    aurora["Aurora PostgreSQL<br/>Serverless v2 · metadata"]
+    valkey["ElastiCache Valkey<br/>TLS via loopback sidecar"]
+    egress["NAT gateways<br/>or interface VPC endpoints"]
+  end
+
+  subgraph regional["AWS service endpoints · your account, the regions you configure"]
+    bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
+    s3["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3<br/>SSE-KMS"]
+    cw["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon CloudWatch<br/>logs"]
+  end
+
+  user -->|"HTTPS · TLS 1.2+ (ACM certificate, when a custom domain is configured)"| alb
+  alb -->|"HTTP · private subnet"| ragflow
+  ragflow -->|"OpenAI + Cohere API · API key<br/>Cloud Map private DNS, no public endpoint"| stdapi
+  ragflow -->|"HTTPS · basic auth<br/>certificate not verified"| opensearch
+  ragflow -->|"PostgreSQL · username + password"| aurora
+  ragflow -->|"TLS via loopback sidecar · auth token"| valkey
+  ragflow --> egress
+  stdapi --> egress
+  egress -->|"HTTPS · SigV4"| bedrock
+  egress -->|"S3 gateway endpoint"| s3
+  egress --> cw
+```
+
+Two things are worth reading off the picture. RAGFlow's documents and their vectors come to rest inside the account: source files land in the shared S3 bucket, and their parsed chunks and embeddings land in the OpenSearch domain — neither is reachable outside the VPC. And the gateway holds neither: it serves the `Embed` and `Rerank` calls RAGFlow sends it and returns the result, with no database of its own to persist anything in.
+
+### What Each AWS Service Does Here
+
+| AWS service | Role in this integration | Where it is configured |
+| --- | --- | --- |
+| **Amazon ECS on AWS Fargate** | Runs RAGFlow (three containers: `main`, a TLS sidecar for Valkey, and a one-shot bootstrap) and the stdapi.ai gateway as separate services | `ragflow.tf`, Terraform sample |
+| **Elastic Load Balancing** | The only public entry point; forwards only to RAGFlow; TLS with an ACM certificate and a Route 53 alias record when a custom domain is configured, otherwise plain HTTP on the load balancer's own DNS name | `alb.tf` |
+| **AWS Cloud Map** | Private DNS name that lets RAGFlow reach the gateway without exposing it publicly | `main.tf` (`service_discovery_dns_name`) |
+| **Amazon Bedrock** | Chat completions for synthesis, embeddings for indexing, reranking for retrieval — RAGFlow never calls it directly | [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) |
+| **Amazon OpenSearch Service** | RAGFlow's document and vector index; a single-node VPC domain with fine-grained access control and enforced HTTPS | `opensearch.tf` |
+| **Amazon Aurora PostgreSQL** | RAGFlow's metadata database (knowledge bases, chat sessions, users); Serverless v2, initialized over the RDS Data API | `postgres.tf` |
+| **Amazon ElastiCache (Valkey)** | RAGFlow's cache and task queue (Redis Streams on database 1), reached through a `socat` sidecar that terminates TLS on loopback | `valkey.tf` |
+| **Amazon S3** | Shared with the gateway's own bucket; RAGFlow stores documents and generated files under its own prefix, reached through its own ECS task role | [S3 storage](operations_compliance.md#s3-data-storage), `ragflow.tf` |
+| **AWS Secrets Manager** | Holds the Aurora master username and password, read by the one-time provisioners that create RAGFlow's login role and grant it schema privileges | `postgres.tf` |
+| **AWS KMS** | One customer-managed key (from the VPC module) encrypts OpenSearch, Aurora and Valkey storage; the gateway module's own key encrypts the shared S3 bucket | `network.tf`, `ragflow.tf` |
+| **AWS IAM** | Separate task roles per service; RAGFlow's (`aws_iam_policy.ragflow`) is scoped to its own S3 prefix and its own KMS key actions — it carries no permission for Amazon Bedrock | `ragflow.tf`, [IAM permissions](operations_iam_permissions.md) |
+| **Amazon CloudWatch** | Container logs for every task through the ECS `awslogs` driver, plus the gateway's structured request events | [Logging & Monitoring](operations_logging_monitoring.md) |
+
+### Security Measures in This Flow
+
+- **Authentication** — RAGFlow calls the gateway with a stdapi.ai [API key](operations_authentication_security.md#api-key-authentication) that Terraform generates and injects into the container environment; the ALB's security group restricts inbound traffic to the deploying operator's current IP address.
+- **Encryption in transit** — HTTPS from the browser to the ALB when a custom domain is configured (otherwise plain HTTP), private-VPC HTTP from the ALB to RAGFlow, and HTTPS with SigV4 from the gateway to Amazon Bedrock. The OpenSearch and Valkey hops carry their own caveats, covered in [Security Notes](#security-notes) below rather than repeated here.
+- **Encryption at rest** — SSE-KMS on the shared S3 bucket, and KMS-encrypted storage for OpenSearch, Aurora and Valkey.
+- **Least privilege** — RAGFlow's task role is scoped to its own S3 prefix and its own KMS key actions and carries no Bedrock permission; only the gateway's task role can call Amazon Bedrock.
+- **Content policy** — a [Bedrock guardrail](operations_configuration.md#bedrock-guardrails) configured on the gateway applies to chat, embeddings and reranking alike, since all three reach Bedrock through the same deployment.
+- **Data handling** — the gateway is stateless and holds request bodies in memory only for the duration of a call; the documents themselves persist in S3 and OpenSearch, inside the account, and no third party sits between RAGFlow's users and the models it calls.
+
 ## :material-check-circle: Prerequisites
 
 !!! info "What You'll Need"
@@ -152,6 +221,39 @@ The sample encrypts every hop and keeps every secret out of plain environment va
 
 - **RAGFlow does not validate the OpenSearch certificate.** Its OpenSearch client hardcodes `verify_certs=False`, with no configuration switch to change it. The connection is still encrypted and the domain still enforces HTTPS and TLS 1.2, but the certificate chain is not checked. The mitigation is placement: the domain has no public endpoint, lives in private subnets, and its security group admits only the RAGFlow task.
 - **RAGFlow's Redis client cannot speak TLS.** It builds the client with no `ssl` parameter, and ElastiCache only offers AUTH tokens on encrypted clusters. Rather than disabling encryption, the task runs a `socat` sidecar that terminates TLS on loopback: the cluster keeps in-transit encryption and its AUTH token, and the plaintext hop never leaves the task's own network namespace.
+
+---
+
+## :material-gauge: Operating This Integration
+
+### What It Costs to Run
+
+| Charge | Driver |
+| --- | --- |
+| stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
+| ECS Fargate | The RAGFlow task (4 vCPU / 16 GB, three containers, one of which — the bootstrap — runs once per task start) and the gateway task, each billed for the vCPU and memory reserved while running |
+| Load balancing and networking | One ALB fronting RAGFlow, plus the NAT gateways (or interface VPC endpoints) the private subnets egress through |
+| Amazon OpenSearch Service | A standing charge: one `t3.small.search` data node plus 20 GiB of `gp3` storage, independent of query volume |
+| Aurora PostgreSQL | A standing charge: the Serverless v2 instance stays provisioned even when its capacity scales down to the configured 0 ACU floor |
+| ElastiCache Valkey | A standing per-node charge: one `cache.t4g.micro` node, no replicas |
+| Model usage | Amazon Bedrock chat, embedding and rerank calls at AWS rates, billed to your account with no markup |
+
+Read a model's price before sending it anything with [`GET /model_pricing`](api_model_pricing.md). Setting [`COST_TRACKING=true`](operations_cost_management.md#cost-tracking-real-time-aws-pricing) adds a per-request cost estimate to each usage entry — estimated from published AWS prices, not read back from your invoice.
+
+### What to Watch
+
+Every task's containers write their own logs to CloudWatch through the ECS `awslogs` driver; the gateway additionally writes one structured `request` event per call, carrying the request id, path, status code, `execution_time_ms`, the model that served it, and the token or search-unit counts AWS billed. Turning on [`CLOUDWATCH_METRICS`](operations_logging_monitoring.md#cloudwatch-metrics-emf) republishes those counts as EMF metrics in the `stdapi` namespace, dimensioned by `Model`.
+
+For a retrieval pipeline the useful first question is the split between embedding, reranking and generation, since each stage in this sample resolves to a different model:
+
+```sql
+fields model_id, execution_time_ms
+| filter type = "request" and ispresent(model_id)
+| stats count(*) as calls, pct(execution_time_ms, 95) as p95_ms by model_id
+| sort calls desc
+```
+
+Amazon Bedrock [model invocation logging](operations_compliance.md#amazon-bedrock-invocation-logging) is the AWS-side counterpart — off by default, and the record to enable when you need the prompts, chunks and completions themselves rather than metadata.
 
 ---
 
