@@ -875,6 +875,23 @@ a.logo-item:focus-visible span { color: var(--primary-dark); }
 }
 .md-typeset .footer-line p { margin: 0; font-size: 0.7rem; }
 
+/* --- Mermaid diagrams --- */
+
+/* Material renders each diagram into a shadow root attached to this element,
+   so page CSS reaches the host and nothing below it: a descendant selector
+   never matches the SVG or its labels. Only inherited properties and custom
+   properties cross that boundary; everything about the diagram's own geometry
+   is set through the `%%{init}%%` directive in the Markdown block, where the
+   diagrams keep Mermaid's `useMaxWidth` default so an SVG wider than the
+   column scales down to it instead of spilling over the table of contents.
+   `overflow-x` remains as a backstop for a diagram that opts out of that. */
+.md-typeset .mermaid {
+  overflow-x: auto;
+  max-width: 100%;
+  text-align: center;
+  padding-bottom: 0.2rem;
+}
+
 /* --- Responsive --- */
 @media (max-width: 1220px) {
   .usecases { grid-template-columns: repeat(2, 1fr); }

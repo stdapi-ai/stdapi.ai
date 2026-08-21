@@ -46,7 +46,7 @@ LobeHub (formerly LobeChat) is an open-source, self-hosted AI chat platform with
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true}} }%%
 flowchart LR
-  lobehub["LobeHub"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
+  lobehub["<img src='../styles/logo_lobehub.svg' style='height:64px;width:auto;vertical-align:middle;' /> LobeHub"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
@@ -55,8 +55,8 @@ flowchart LR
 The diagram below is the topology the [Terraform sample](#terraform-deployment) builds: LobeHub sits behind a public load balancer with its own self-hosted Postgres database, while the stdapi.ai gateway has no public endpoint of its own.
 
 ```mermaid
-%%{init: {'flowchart': {'htmlLabels': true}} }%%
-flowchart LR
+%%{init: {'flowchart': {'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 40, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
+flowchart TB
   user["👤 Your users<br/>(browser)"]
 
   subgraph public["Your VPC · public subnets"]
@@ -64,11 +64,11 @@ flowchart LR
   end
 
   subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
-    lobehub2["LobeHub<br/>ECS Fargate"]
+    lobehub2["<img src='../styles/logo_lobehub.svg' style='height:40px;width:auto;vertical-align:middle;' /> LobeHub<br/>ECS Fargate"]
     stdapi2["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
     postgres["ParadeDB Postgres<br/>ECS Fargate · EFS-backed"]
-    valkey["ElastiCache Valkey<br/>TLS + auth token"]
-    egress["NAT gateways"]
+    valkey["<img src='../styles/logo_amazon_elasticache.svg' style='height:40px;width:auto;vertical-align:middle;' /> ElastiCache Valkey<br/>TLS + auth token"]
+    egress["<img src='../styles/logo_amazon_vpc.svg' style='height:40px;width:auto;vertical-align:middle;' /> NAT gateways · one per AZ<br/>+ free S3 gateway endpoint"]
   end
 
   subgraph regional["AWS service endpoints · your account, the regions you configure"]
@@ -78,10 +78,10 @@ flowchart LR
 
   user -->|"HTTPS or HTTP · restricted to your IP"| alb
   alb -->|"HTTP · private subnet"| lobehub2
-  lobehub2 -->|"OpenAI API · API key<br/>Cloud Map private DNS, no public endpoint"| stdapi2
+  lobehub2 -->|"OpenAI API · API key<br/>Cloud Map private DNS<br/>no public endpoint"| stdapi2
   lobehub2 -->|"TLS · verify-full"| postgres
   lobehub2 -->|"TLS · auth token"| valkey
-  lobehub2 -->|"S3 gateway endpoint · IAM user access key"| s3
+  lobehub2 -->|"S3 gateway endpoint<br/>IAM user access key"| s3
   stdapi2 --> egress
   egress -->|"HTTPS · SigV4"| bedrock2
   stdapi2 -->|"S3 gateway endpoint · task role"| s3
@@ -224,7 +224,7 @@ Running PostgreSQL over NFS is a supported configuration, not a compromise: the 
 | --- | --- |
 | stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
 | ECS Fargate | Three services — LobeHub, the gateway, and the self-hosted ParadeDB Postgres task, which is pinned to exactly one instance |
-| Load balancing and networking | One ALB fronting LobeHub, plus the NAT gateways the private subnets egress through |
+| Load balancing and networking | One ALB fronting LobeHub, plus the NAT gateways the private subnets egress through — the S3 gateway endpoint alongside them carries no charge |
 | Amazon EFS | Backing storage for the Postgres data directory |
 | ElastiCache Valkey | A standing cost for two nodes — a primary and its failover replica (`cache.t4g.micro` each in the sample) |
 | Amazon S3 | Storage for LobeHub's uploads and the gateway's temporary multimodal objects |

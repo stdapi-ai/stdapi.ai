@@ -45,7 +45,7 @@ Open WebUI is the leading open-source ChatGPT alternative. It provides a feature
 </div>
 
 ```mermaid
-%%{init: {'flowchart': {'htmlLabels': true, 'useMaxWidth': false}} }%%
+%%{init: {'flowchart': {'htmlLabels': true}} }%%
 flowchart LR
   openwebui["<img src='../styles/logo_openwebui.svg' style='height:64px;width:auto;vertical-align:middle;' /> Open WebUI"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
@@ -58,7 +58,7 @@ flowchart LR
 The diagram below is the topology the [Terraform sample](#terraform-deployment) builds: a browser-facing chat application and its AI gateway, both on ECS Fargate, in one VPC you own.
 
 ```mermaid
-%%{init: {'flowchart': {'htmlLabels': true, 'useMaxWidth': false, 'nodeSpacing': 20, 'rankSpacing': 40}} }%%
+%%{init: {'flowchart': {'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 40, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
 flowchart TB
   user["👤 Your users<br/>(browser)"]
 

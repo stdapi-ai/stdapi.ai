@@ -1,0 +1,44 @@
+/*
+Per-page third-party trademark notice rendered by overrides/partials/copyright.html.
+
+Kept in its own stylesheet so it stays next to the mechanism it belongs to. Colors
+come from the theme's footer variables, so the notice follows the light and dark
+schemes without a scheme-specific rule.
+*/
+
+/* Full-width row of its own, below the copyright line and the social icons. */
+.md-trademarks {
+  color: var(--md-footer-fg-color--lighter);
+  flex: 0 0 100%;
+  font-size: 0.55rem;
+  line-height: 1.6;
+  order: 1;
+  /* Inset with padding, not margin: the flex basis is already 100% of the
+     container, so a horizontal margin pushes the row past the page width. */
+  padding: 0 0.6rem 0.6rem;
+  text-wrap: pretty;
+}
+
+/* The marks themselves read a shade brighter than the disclaimer around them. */
+.md-trademarks__marks {
+  color: var(--md-footer-fg-color--light);
+}
+
+.md-trademarks a {
+  color: var(--md-footer-fg-color--light);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.md-trademarks a:focus,
+.md-trademarks a:hover {
+  color: var(--md-accent-fg-color);
+}
+
+/* On a phone the notice is the longest thing in the footer: give it more air. */
+@media screen and (max-width: 44.9375em) {
+  .md-trademarks {
+    line-height: 1.7;
+    padding-bottom: 0.8rem;
+  }
+}

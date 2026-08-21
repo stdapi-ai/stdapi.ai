@@ -1,0 +1,34 @@
+{#-
+  Overrides the theme partial to add the per-page third-party trademark notice.
+
+  The copyright line above is untouched; the notice is a separate, subdued block
+  that names only the marks the page actually uses. `docs_hooks/trademarks.py`
+  derives that list from the page's own content, so nothing is declared by hand.
+-#}
+<div class="md-copyright">
+  {% if config.copyright %}
+    <div class="md-copyright__highlight">
+      {{ config.copyright }}
+    </div>
+  {% endif %}
+  {% if not config.extra.generator == false %}
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  {% endif %}
+</div>
+{% if page and page.meta and page.meta.trademarks %}
+  <aside class="md-trademarks" aria-label="Third-party trademark notice">
+    <span class="md-trademarks__marks">
+      Trademarks on this page:
+      {%- for group in page.meta.trademarks %}
+        {{ group.labels }}{{ " (" ~ group.owner ~ ")" if group.owner }}{{ "; " if not loop.last else "." }}
+      {%- endfor %}
+    </span>
+    These are trademarks or registered trademarks of their respective owners, used
+    here for identification only. Their owners are not affiliated with, and do not
+    endorse or sponsor, stdapi.ai or JGoutin-dev SARL.
+    <a href="{{ 'trademarks/' | url }}">All trademarks</a>
+  </aside>
+{% endif %}

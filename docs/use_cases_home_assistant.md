@@ -41,7 +41,7 @@ Home Assistant's Assist voice pipeline speaks [Wyoming](https://github.com/OHF-V
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true}} }%%
 flowchart LR
-  ha["Home Assistant\nAssist"] -->|Wyoming| proxy["wyoming-openai"]
+  ha["Home Assistant<br/>Assist"] -->|Wyoming| proxy["wyoming-openai"]
   proxy -->|OpenAI API| stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
   stdapi --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Transcribe"]
   stdapi --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Polly"]
@@ -52,8 +52,8 @@ flowchart LR
 The diagram below is the topology the [Terraform sample](#terraform-deployment) builds: a public-facing Home Assistant behind an ALB, wyoming-openai as a sidecar in the same ECS task, and the stdapi.ai gateway as a separate, internally-reachable service in the same VPC.
 
 ```mermaid
-%%{init: {'flowchart': {'htmlLabels': true}} }%%
-flowchart LR
+%%{init: {'flowchart': {'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 40, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
+flowchart TB
   user["👤 Household members<br/>(browser · Assist microphone)"]
 
   subgraph public["Your VPC · public subnets"]
@@ -63,9 +63,9 @@ flowchart LR
   subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
     ha["Home Assistant<br/>ECS Fargate task"]
     wyoming["wyoming-openai<br/>sidecar in the same task"]
-    efs["Amazon EFS<br/>recorder DB · .storage · configuration.yaml<br/>encrypted · one task only"]
+    efs["<img src='../styles/logo_amazon_efs.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon EFS<br/>recorder DB · .storage · configuration.yaml<br/>encrypted · one task only"]
     stdapi["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
-    egress["NAT gateway<br/>or interface VPC endpoints"]
+    egress["<img src='../styles/logo_amazon_vpc.svg' style='height:40px;width:auto;vertical-align:middle;' /> NAT gateways<br/>one per Availability Zone"]
   end
 
   subgraph regional["AWS service endpoints · your account, the regions you configure"]
@@ -73,18 +73,20 @@ flowchart LR
     polly["<img src='../styles/logo_amazon_polly.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Polly"]
     s3["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3<br/>SSE-KMS"]
     cw["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon CloudWatch<br/>container logs"]
+    transcribe ~~~ s3
+    polly ~~~ cw
   end
 
   user -->|"HTTPS · TLS 1.2+"| alb
   alb -->|"HTTP · private subnet"| ha
-  ha -->|"Wyoming · TCP · localhost, same task"| wyoming
+  ha -->|"Wyoming · TCP<br/>localhost, same task"| wyoming
   wyoming -->|"OpenAI API · API key<br/>private DNS, no public endpoint"| stdapi
   ha --> efs
-  ha -->|"S3 gateway endpoint · seeds configuration.yaml, first boot only"| s3
+  ha -->|"HTTPS · SigV4<br/>seeds configuration.yaml, first boot only"| s3
   stdapi --> egress
   egress -->|"HTTPS · SigV4"| transcribe
   egress -->|"HTTPS · SigV4"| polly
-  egress -->|"S3 gateway endpoint · stages audio for non-streaming transcription"| s3
+  egress -->|"HTTPS · SigV4<br/>stages audio for non-streaming transcription"| s3
   egress --> cw
 ```
 
@@ -228,7 +230,7 @@ Three steps stay manual after `tofu apply`, for reasons specific to Home Assista
 | --- | --- |
 | stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
 | ECS Fargate | Two services — the Home Assistant + wyoming-openai task, pinned to exactly one, and the gateway, sized independently |
-| Load balancing and networking | One ALB, plus the NAT gateway(s) the private subnets egress through |
+| Load balancing and networking | One ALB, plus the NAT gateways — one per Availability Zone — the private subnets egress through |
 | Amazon EFS | Standing storage and throughput for the recorder database, `.storage`, and `configuration.yaml` |
 | Amazon Polly | Billed per character of text synthesized, not per token |
 | Amazon Transcribe | Billed per second of audio transcribed, not per token |

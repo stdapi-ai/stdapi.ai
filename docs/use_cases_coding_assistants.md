@@ -56,31 +56,32 @@ flowchart LR
 There is no per-developer infrastructure in this integration: every IDE and terminal assistant on the team points at the same shared gateway deployment, the public-facing topology built by the [Terraform samples](https://github.com/stdapi-ai/samples/tree/main/getting_started_production) for a stdapi.ai endpoint reachable from outside the VPC.
 
 ```mermaid
-%%{init: {'flowchart': {'htmlLabels': true}} }%%
-flowchart LR
+%%{init: {'flowchart': {'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 40, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
+flowchart TB
   dev["<img src='../styles/logo_vscode.svg' style='height:40px;width:auto;vertical-align:middle;' /> Developer workstations<br/>IDE / terminal + coding assistant"]
 
-  waf["AWS WAF (optional)<br/>rate limit · anonymous-IP block"]
+  waf["<img src='../styles/logo_amazon_waf.svg' style='height:40px;width:auto;vertical-align:middle;' /> AWS WAF (optional)<br/>rate limit · anonymous-IP block"]
 
   subgraph public["Your VPC · public subnets"]
     alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:40px;width:auto;vertical-align:middle;' /> Application Load Balancer<br/>HTTPS · ACM certificate<br/>custom domain via Route 53"]
   end
 
   subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
-    gateway["stdapi.ai gateway<br/>ECS Fargate · stateless"]
-    egress["NAT gateways<br/>or interface VPC endpoints"]
+    gateway["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai gateway<br/>ECS Fargate · stateless"]
+    egress["<img src='../styles/logo_amazon_vpc.svg' style='height:40px;width:auto;vertical-align:middle;' /> NAT gateways · one per AZ<br/>+ free S3 gateway endpoint"]
   end
 
   subgraph regional["AWS service endpoints · your account, the regions you configure"]
     bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
     s3["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3<br/>SSE-KMS"]
     cw["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon CloudWatch<br/>logs · metrics · alarms"]
+    bedrock ~~~ s3
   end
 
-  dev -->|"HTTPS · TLS 1.2+ · API key or Cognito token"| alb
+  dev -->|"HTTPS · TLS 1.2+<br/>API key or Cognito token"| alb
   waf -.->|"optional · alb_waf_enabled"| alb
   alb -->|"HTTP · private subnet"| gateway
-  gateway -->|"S3 gateway endpoint · always provisioned"| s3
+  gateway -->|"S3 gateway endpoint<br/>always provisioned"| s3
   gateway --> egress
   egress -->|"HTTPS · SigV4"| bedrock
   egress --> cw
@@ -590,7 +591,8 @@ stdapi.ai works well when running locally with Docker, making it ideal for your 
 | stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial |
 | ECS Fargate | One shared gateway service for the whole team, sized and auto-scaled independently of developer count |
 | Elastic Load Balancing | One ALB serving every developer's connections |
-| NAT gateways | Standing charge for the default private-subnet egress path |
+| NAT gateways | Standing charge, plus data processing, for the private-subnet egress path — every AWS service call except S3 |
+| S3 gateway endpoint | Nothing: a gateway endpoint has no hourly or data charge, and keeps the S3 traffic off the NAT gateways |
 | AWS WAF | Optional — only when `alb_waf_enabled = true` |
 | Amazon Bedrock usage | Model tokens at AWS rates — the variable charge, and the one prompt caching reduces most |
 

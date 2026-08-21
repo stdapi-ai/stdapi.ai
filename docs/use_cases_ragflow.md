@@ -46,7 +46,7 @@ RAGFlow is an open-source (Apache-2.0) RAG engine built around deep document und
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true}} }%%
 flowchart LR
-  ragflow["RAGFlow"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
+  ragflow["<img src='../styles/logo_ragflow.svg' style='height:64px;width:auto;vertical-align:middle;' /> RAGFlow"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
@@ -55,8 +55,8 @@ flowchart LR
 The diagram below is the topology the [Terraform sample](#terraform-deployment) builds: RAGFlow and the stdapi.ai gateway as separate ECS Fargate services in one VPC, with OpenSearch, Aurora and Valkey as the managed stores behind RAGFlow.
 
 ```mermaid
-%%{init: {'flowchart': {'htmlLabels': true}} }%%
-flowchart LR
+%%{init: {'flowchart': {'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 40, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
+flowchart TB
   user["👤 Your users<br/>(browser)"]
 
   subgraph public["Your VPC · public subnets"]
@@ -64,12 +64,13 @@ flowchart LR
   end
 
   subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
-    ragflow["RAGFlow<br/>ECS Fargate"]
+    ragflow["<img src='../styles/logo_ragflow.svg' style='height:40px;width:auto;vertical-align:middle;' /> RAGFlow<br/>ECS Fargate"]
     stdapi["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
-    opensearch["Amazon OpenSearch Service<br/>document + vector index"]
-    aurora["Aurora PostgreSQL<br/>Serverless v2 · metadata"]
-    valkey["ElastiCache Valkey<br/>TLS via loopback sidecar"]
-    egress["NAT gateways<br/>or interface VPC endpoints"]
+    opensearch["<img src='../styles/logo_amazon_opensearch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon OpenSearch Service<br/>document + vector index"]
+    aurora["<img src='../styles/logo_amazon_aurora.svg' style='height:40px;width:auto;vertical-align:middle;' /> Aurora PostgreSQL<br/>Serverless v2 · metadata"]
+    valkey["<img src='../styles/logo_amazon_elasticache.svg' style='height:40px;width:auto;vertical-align:middle;' /> ElastiCache Valkey<br/>TLS via loopback sidecar"]
+    egress["<img src='../styles/logo_amazon_vpc.svg' style='height:40px;width:auto;vertical-align:middle;' /> NAT gateways<br/>one per Availability Zone"]
+    opensearch ~~~ valkey
   end
 
   subgraph regional["AWS service endpoints · your account, the regions you configure"]
@@ -78,16 +79,16 @@ flowchart LR
     cw["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon CloudWatch<br/>logs"]
   end
 
-  user -->|"HTTPS · TLS 1.2+ (ACM certificate, when a custom domain is configured)"| alb
+  user -->|"HTTPS · TLS 1.2+<br/>(ACM certificate, when a custom<br/>domain is configured)"| alb
   alb -->|"HTTP · private subnet"| ragflow
-  ragflow -->|"OpenAI + Cohere API · API key<br/>Cloud Map private DNS, no public endpoint"| stdapi
+  ragflow -->|"OpenAI + Cohere API · API key<br/>Cloud Map private DNS<br/>no public endpoint"| stdapi
   ragflow -->|"HTTPS · basic auth<br/>certificate not verified"| opensearch
   ragflow -->|"PostgreSQL · username + password"| aurora
   ragflow -->|"TLS via loopback sidecar · auth token"| valkey
   ragflow --> egress
   stdapi --> egress
   egress -->|"HTTPS · SigV4"| bedrock
-  egress -->|"S3 gateway endpoint"| s3
+  egress -->|"HTTPS · SigV4"| s3
   egress --> cw
 ```
 
@@ -232,7 +233,7 @@ The sample encrypts every hop and keeps every secret out of plain environment va
 | --- | --- |
 | stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
 | ECS Fargate | The RAGFlow task (4 vCPU / 16 GB, three containers, one of which — the bootstrap — runs once per task start) and the gateway task, each billed for the vCPU and memory reserved while running |
-| Load balancing and networking | One ALB fronting RAGFlow, plus the NAT gateways (or interface VPC endpoints) the private subnets egress through |
+| Load balancing and networking | One ALB fronting RAGFlow, plus the NAT gateways the private subnets egress through |
 | Amazon OpenSearch Service | A standing charge: one `t3.small.search` data node plus 20 GiB of `gp3` storage, independent of query volume |
 | Aurora PostgreSQL | A standing charge: the Serverless v2 instance stays provisioned even when its capacity scales down to the configured 0 ACU floor |
 | ElastiCache Valkey | A standing per-node charge: one `cache.t4g.micro` node, no replicas |

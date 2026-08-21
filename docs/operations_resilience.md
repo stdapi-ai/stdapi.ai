@@ -122,7 +122,7 @@ export AWS_BEDROCK_REGION_ROUTING_UNAVAILABLE_BACKOFF_SECONDS=30
 5. **Client-side backoff hint** — If every attempt is exhausted, the resulting `429` response carries a `retry-after` header set to the shortest quota backoff applied during the request, i.e. the delay after which the first blocked region rejoins the rotation. OpenAI, Anthropic and Cohere SDKs honour it natively, so clients wait exactly as long as needed instead of applying a blind exponential backoff — note that all three cap a server-supplied delay at 60 s and fall back to their own backoff beyond that, so an escalated quota backoff is only partly respected. The header is omitted when no quota backoff was recorded (for example on a single-region deployment, where no routing state exists).
 
 ```mermaid
-%%{init: {'flowchart': {'htmlLabels': true}} }%%
+%%{init: {'flowchart': {'htmlLabels': true, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
 flowchart LR
     client["Your App"] -->|API request| stdapi
 
@@ -366,7 +366,7 @@ The Terraform module deploys stdapi.ai following AWS best practices for high ava
 </div>
 
 ```mermaid
-%%{init: {'flowchart': {'htmlLabels': true}} }%%
+%%{init: {'flowchart': {'htmlLabels': true, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
 flowchart TB
     client["Your App"]
 
@@ -496,7 +496,7 @@ Additional Bedrock regions (without ECS) can be added to `AWS_BEDROCK_REGIONS` i
 | Bedrock quota | One region's quota | Multiple independent quotas |
 
 ```mermaid
-%%{init: {'flowchart': {'htmlLabels': true}} }%%
+%%{init: {'flowchart': {'htmlLabels': true, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
 flowchart LR
     client["Your App"]
     ga["<img src='../styles/logo_amazon_global_accelerator.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>Global Accelerator"]

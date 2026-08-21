@@ -42,7 +42,7 @@ These are three of the most widely used Python frameworks for building LLM-backe
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true}} }%%
 flowchart LR
-  app["Your Python App\n(LangChain, pydantic-ai, Agents SDK)"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
+  app["Your Python App<br/>(LangChain, pydantic-ai, Agents SDK)"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
@@ -51,8 +51,8 @@ flowchart LR
 Unlike the other integration guides on this site, there is no application sample to deploy here — your LangChain, pydantic-ai or OpenAI Agents SDK process is code you already own. The decision that shapes everything else is where that process runs relative to the gateway's VPC: deployed as another ECS Fargate service (or any other workload) inside the same VPC, it reaches the gateway over private DNS and needs no public endpoint at all; running anywhere else — a laptop, a different account, another cloud — it reaches the gateway through a public Application Load Balancer instead.
 
 ```mermaid
-%%{init: {'flowchart': {'htmlLabels': true}} }%%
-flowchart LR
+%%{init: {'flowchart': {'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 40, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
+flowchart TB
   extapp["Your Python App<br/>(outside the VPC)"]
 
   subgraph public["Your VPC · public subnets"]
@@ -62,7 +62,7 @@ flowchart LR
   subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
     intapp["Your Python App<br/>(in-VPC, e.g. ECS Fargate)"]
     stdapi["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
-    egress["NAT gateways<br/>or interface VPC endpoints"]
+    egress["<img src='../styles/logo_amazon_vpc.svg' style='height:40px;width:auto;vertical-align:middle;' /> NAT gateways · one per AZ<br/>+ free S3 gateway endpoint"]
   end
 
   subgraph regional["AWS service endpoints · your account, the regions you configure"]
@@ -73,6 +73,7 @@ flowchart LR
 
   extapp -->|"HTTPS · TLS 1.2+ · bearer token"| alb
   alb -->|"HTTP · private subnet"| stdapi
+  alb ~~~ intapp
   intapp -.->|"OpenAI/Anthropic API · bearer token<br/>Cloud Map private DNS, no public endpoint"| stdapi
   stdapi --> egress
   egress -->|"HTTPS · SigV4"| bedrock
@@ -282,7 +283,7 @@ agent = Agent(
 | --- | --- |
 | stdapi.ai licence | $0.10 per gateway container-hour, metered through AWS Marketplace, with a 14-day free trial on the licence |
 | ECS Fargate | The gateway service, sized and auto-scaled independently of your application's own compute |
-| Load balancing and networking | An ALB plus the NAT gateways or interface VPC endpoints the private subnets egress through — the ALB drops out entirely when your application runs in the same VPC and reaches the gateway over Cloud Map private DNS |
+| Load balancing and networking | An ALB plus the NAT gateways the private subnets egress through, next to the S3 gateway endpoint, which carries no charge — the ALB drops out entirely when your application runs in the same VPC and reaches the gateway over Cloud Map private DNS |
 | Model and AI-service usage | Amazon Bedrock at AWS rates, billed to your account with no markup |
 
 Read a model's price before your application sends anything to it with [`GET /model_pricing`](api_model_pricing.md). Setting [`COST_TRACKING=true`](operations_cost_management.md#cost-tracking-real-time-aws-pricing) additionally puts a per-request cost on each usage entry — estimated from published AWS prices, not read back from your invoice.

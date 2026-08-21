@@ -110,6 +110,7 @@ nav:
           - RAGFlow Integration: use_cases_ragflow.md
           - Home Assistant Voice: use_cases_home_assistant.md
       - Releases & Roadmap: roadmap.md
+      - Trademarks: trademarks.md
   - Contact: contact.md
 
 repo_url: https://github.com/stdapi-ai/stdapi.ai
@@ -132,9 +133,13 @@ plugins:
 hooks:
   - docs_hooks/fastapi_openapi.py
   - docs_hooks/markdown_for_agents.py
+  # Listed last so its on_post_build step runs after the agent-readable copies of
+  # the pages have been written, and can fill the trademarks table in its copy.
+  - docs_hooks/trademarks.py
 
 extra_css:
   - styles/theme.css
+  - styles/trademarks.css
 
 extra_javascript:
   - js/home-carousel.js

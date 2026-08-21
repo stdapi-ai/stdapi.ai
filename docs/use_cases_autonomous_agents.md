@@ -39,7 +39,7 @@ Unlike IDE coding assistants, autonomous agent CLIs plan and execute multi-step 
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true}} }%%
 flowchart LR
-  agent["Autonomous Agent CLI\n(Hermes, OpenClaw)"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
+  agent["<img src='../styles/logo_hermes_agent.svg' style='height:64px;width:auto;vertical-align:middle;' /> <img src='../styles/logo_openclaw.svg' style='height:64px;width:auto;vertical-align:middle;' /><br/>Autonomous Agent CLI<br/>(Hermes, OpenClaw)"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
@@ -48,8 +48,8 @@ flowchart LR
 The diagram below is the shape the [Hermes](https://github.com/stdapi-ai/samples/tree/main/getting_started_hermes) and [OpenClaw](https://github.com/stdapi-ai/samples/tree/main/getting_started_openclaw) Terraform samples share: the agent CLI and the stdapi.ai gateway run as separate ECS Fargate tasks in the same private app subnets, with only the agent's own web surface reachable — through an Application Load Balancer — from outside the VPC. Hermes exposes that ALB as two listeners (gateway API and dashboard); OpenClaw multiplexes both onto one. The diagram collapses either shape into a single listener box.
 
 ```mermaid
-%%{init: {'flowchart': {'htmlLabels': true}} }%%
-flowchart LR
+%%{init: {'flowchart': {'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 40, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
+flowchart TB
   user["👤 You<br/>(browser · operator)"]
   internet["Internet<br/>image registry · tool destinations"]
 
@@ -58,9 +58,9 @@ flowchart LR
   end
 
   subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
-    agent["Agent CLI<br/>(Hermes or OpenClaw) · ECS Fargate"]
+    agent["<img src='../styles/logo_hermes_agent.svg' style='height:40px;width:auto;vertical-align:middle;' /> <img src='../styles/logo_openclaw.svg' style='height:40px;width:auto;vertical-align:middle;' /><br/>Agent CLI<br/>(Hermes or OpenClaw) · ECS Fargate"]
     stdapi["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
-    egress["NAT gateways<br/>or interface VPC endpoints"]
+    egress["<img src='../styles/logo_amazon_vpc.svg' style='height:40px;width:auto;vertical-align:middle;' /> NAT gateways<br/>one per Availability Zone"]
   end
 
   subgraph regional["AWS service endpoints · your account, the regions you configure"]
@@ -69,14 +69,14 @@ flowchart LR
     cw["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon CloudWatch<br/>logs · metrics · alarms"]
   end
 
-  user -->|"HTTPS (custom domain) or HTTP · from the deploying IP only"| alb
+  user -->|"HTTPS (custom domain) or HTTP<br/>from the deploying IP only"| alb
   alb -->|"HTTP · private subnet"| agent
   agent -->|"OpenAI/Anthropic-compatible API · API key<br/>Cloud Map private DNS, no public endpoint"| stdapi
   agent -->|"HTTPS · image pull, plus the tool<br/>destinations you configure"| egress
   egress --> internet
   stdapi -->|"HTTPS · SigV4"| egress
   egress -->|"HTTPS · SigV4"| bedrock
-  egress -->|"S3 gateway endpoint"| s3
+  egress -->|"HTTPS · SigV4"| s3
   egress --> cw
 ```
 

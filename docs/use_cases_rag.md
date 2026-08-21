@@ -54,7 +54,7 @@ stdapi.ai serves all three from Amazon Bedrock through standard, unmodified clie
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true}} }%%
 flowchart LR
-  rag["Your RAG Framework\n(Haystack, LlamaIndex, ...)"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
+  rag["Your RAG Framework<br/>(Haystack, LlamaIndex, ...)"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
@@ -63,8 +63,8 @@ flowchart LR
 The two modes differ in who runs the pipeline and where its state lives. Managed retrieval puts chunking, embedding, indexing and search inside the gateway, backed by a vector bucket and a durable indexing queue in your account; the assembled pipeline keeps your framework in charge of chunking, indexing and search, and calls stdapi.ai only for the embedding, reranking and generation steps in between.
 
 ```mermaid
-%%{init: {'flowchart': {'htmlLabels': true}} }%%
-flowchart LR
+%%{init: {'flowchart': {'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 40, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
+flowchart TB
   app["Your application or RAG framework<br/>(Haystack, LlamaIndex, ...)"]
   ownvdb["Your vector database<br/>(pgvector, Qdrant, ...)<br/>assembled pipeline only"]
 
@@ -73,25 +73,27 @@ flowchart LR
   end
 
   subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
-    docling["Docling Serve<br/>ECS Fargate · document parsing"]
+    docling["<img src='../styles/logo_docling.svg' style='height:40px;width:auto;vertical-align:middle;' /> Docling Serve<br/>ECS Fargate · document parsing"]
     stdapi["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
-    egress["NAT gateways<br/>or interface VPC endpoints"]
+    egress["<img src='../styles/logo_amazon_vpc.svg' style='height:40px;width:auto;vertical-align:middle;' /> NAT gateways<br/>one per Availability Zone"]
   end
 
   subgraph endpoints["AWS service endpoints · your account, the regions you configure"]
     bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
     s3["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3<br/>files and vector store records"]
-    s3vectors["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3 Vectors<br/>vector indexes — managed retrieval only"]
-    sqs["Amazon SQS<br/>durable indexing queue + DLQ — managed retrieval only"]
+    s3vectors["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3 Vectors<br/>vector indexes<br/>managed retrieval only"]
+    sqs["<img src='../styles/logo_amazon_sqs.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon SQS<br/>durable indexing queue + DLQ<br/>managed retrieval only"]
+    bedrock ~~~ s3vectors
+    s3 ~~~ sqs
   end
 
   app -->|"HTTPS · API key<br/>parse PDFs/office documents"| alb
   alb -->|"HTTP · private subnet"| docling
   docling -->|"OpenAI API · API key<br/>optional VLM pipeline"| stdapi
 
-  app -->|"managed: upload, attach, search a store<br/>then generate the answer"| stdapi
-  app -.->|"assembled: embed passages, embed the query,<br/>rerank, then generate the answer"| stdapi
-  app -.->|"assembled: index and search vectors yourself"| ownvdb
+  app -->|"managed: upload, attach,<br/>search a store, then<br/>generate the answer"| stdapi
+  app -.->|"assembled: embed passages,<br/>embed the query, rerank,<br/>then generate the answer"| stdapi
+  app -.->|"assembled: index and<br/>search vectors yourself"| ownvdb
 
   stdapi --> egress
   egress -->|"HTTPS · SigV4<br/>embed · rerank · generate"| bedrock

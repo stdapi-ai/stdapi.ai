@@ -61,8 +61,8 @@ flowchart LR
 The diagram below is the topology the [Terraform sample](#terraform-deployment) builds: n8n and the stdapi.ai gateway both on ECS Fargate in one VPC you own, with n8n's own workflow state in Aurora PostgreSQL alongside them.
 
 ```mermaid
-%%{init: {'flowchart': {'htmlLabels': true}} }%%
-flowchart LR
+%%{init: {'flowchart': {'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 40, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
+flowchart TB
   user["👤 Your users<br/>(browser)"]
 
   subgraph public["Your VPC · public subnets"]
@@ -72,8 +72,8 @@ flowchart LR
   subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
     n8n["<img src='../styles/logo_n8n.svg' style='height:40px;width:auto;vertical-align:middle;' /> n8n<br/>ECS Fargate"]
     stdapi["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
-    aurora["Aurora PostgreSQL<br/>n8n workflows · credentials · executions"]
-    egress["NAT gateways<br/>multi-region Bedrock access"]
+    aurora["<img src='../styles/logo_amazon_aurora.svg' style='height:40px;width:auto;vertical-align:middle;' /> Aurora PostgreSQL<br/>n8n workflows · credentials · executions"]
+    egress["<img src='../styles/logo_amazon_vpc.svg' style='height:40px;width:auto;vertical-align:middle;' /> NAT gateways · one per AZ<br/>multi-region Bedrock access"]
   end
 
   subgraph regional["AWS service endpoints · your account, the regions you configure"]
@@ -83,18 +83,20 @@ flowchart LR
     comprehend["<img src='../styles/logo_amazon_comprehend.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Comprehend"]
     s3["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3<br/>SSE-KMS"]
     cw["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon CloudWatch<br/>logs · metrics"]
+    bedrock ~~~ polly ~~~ s3
+    transcribe ~~~ comprehend ~~~ cw
   end
 
   user -->|"HTTPS · TLS 1.2+"| alb
   alb -->|"HTTP · private subnet"| n8n
-  n8n -->|"OpenAI + Anthropic dialects · API key<br/>HTTP over Cloud Map private DNS, no public endpoint"| stdapi
+  n8n -->|"OpenAI + Anthropic dialects · API key<br/>HTTP over Cloud Map private DNS<br/>no public endpoint"| stdapi
   n8n -->|"TLS, no cert verification<br/>security-group restricted"| aurora
   stdapi --> egress
   egress -->|"HTTPS · SigV4"| bedrock
   egress -->|"HTTPS · SigV4"| transcribe
   egress -->|"HTTPS · SigV4"| polly
   egress -->|"HTTPS · SigV4"| comprehend
-  egress -->|"S3 gateway endpoint"| s3
+  egress -->|"HTTPS · SigV4"| s3
   egress --> cw
 ```
 

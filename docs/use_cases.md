@@ -41,19 +41,19 @@ client = OpenAI(base_url="https://your-endpoint/v1", api_key="YOUR_KEY")
 Every guide below plugs a different tool into the same deployment. That deployment is a container on Amazon ECS running with the AWS Fargate launch type, in the private subnets of a VPC the [Terraform module](operations_getting_started.md) creates in your own account.
 
 ```mermaid
-%%{init: {'flowchart': {'htmlLabels': true}} }%%
-flowchart LR
+%%{init: {'flowchart': {'htmlLabels': true, 'nodeSpacing': 20, 'rankSpacing': 40, 'subGraphTitleMargin': {'top': 8, 'bottom': 10}}} }%%
+flowchart TB
   ext["Tools and applications<br/>outside the VPC"]
 
   subgraph public["Your VPC · public subnets — provisioned only when you enable the load balancer"]
-    waf["AWS WAF<br/>optional rate limiting and IP rules"]
+    waf["<img src='../styles/logo_amazon_waf.svg' style='height:40px;width:auto;vertical-align:middle;' /> AWS WAF<br/>optional rate limiting<br/>and IP rules"]
     alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:40px;width:auto;vertical-align:middle;' /> Application Load Balancer<br/>HTTPS · ACM certificate"]
   end
 
   subgraph private["Your VPC · private app subnets — no inbound route from the internet"]
     inapp["Tools you deploy<br/>into the same VPC"]
     stdapi["<img src='../styles/logo.svg' style='height:40px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
-    egress["NAT gateways<br/>or interface VPC endpoints"]
+    egress["<img src='../styles/logo_amazon_vpc.svg' style='height:40px;width:auto;vertical-align:middle;' /> NAT gateways · one per AZ<br/>+ free S3 gateway endpoint"]
   end
 
   subgraph regional["AWS service endpoints · your account, the regions you enable"]
@@ -64,12 +64,16 @@ flowchart LR
     comprehend["<img src='../styles/logo_amazon_comprehend.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon Comprehend"]
     s3["<img src='../styles/logo_amazon_s3.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon S3<br/>SSE-KMS"]
     cw["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:40px;width:auto;vertical-align:middle;' /> Amazon CloudWatch"]
+    bedrock ~~~ transcribe ~~~ comprehend ~~~ cw
+    polly ~~~ translate ~~~ s3
   end
 
+  ext ~~~ waf
   ext -->|"HTTPS · API key, Cognito token,<br/>OIDC or SigV4"| alb
-  waf -.->|"optional · inspects each request"| alb
+  waf -.->|"optional<br/>inspects each request"| alb
   alb -->|"HTTP · private subnet"| stdapi
-  inapp -.->|"private DNS · no public endpoint needed"| stdapi
+  alb ~~~ inapp
+  inapp -.->|"private DNS<br/>no public endpoint needed"| stdapi
   stdapi --> egress
   egress -->|"HTTPS · SigV4"| bedrock
   egress -->|"HTTPS · SigV4"| polly
