@@ -24,7 +24,7 @@ A few rates AWS publishes without a model — because one flat rate covers every
 
 Prices are indexed **eagerly**: models not currently accessible to your account can still be priced. An empty `prices` list means AWS publishes no rows for that model (or none match the filters). A missing variant row means AWS publishes no distinct rate for it — billing then falls back the same way cost tracking does.
 
-This endpoint responds without contacting AWS, so it is fast enough to call inline. It requires cost tracking to be enabled (`COST_TRACKING=true`), and returns a retry-later `503` while the price catalog is still loading after startup.
+This endpoint responds without contacting AWS, so it is fast enough to call inline. It requires cost tracking to be enabled (`COST_TRACKING=true`), and returns a retry-later `503` while the price catalog is still loading after startup. To compare prices without a running server, the [Models](models.md) page publishes them side by side, per region and per service tier.
 
 ## Query Parameters
 

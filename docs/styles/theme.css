@@ -207,6 +207,12 @@ a.logo-item:hover, a.logo-item:focus-visible {
   color: #ea7f73;
 }
 
+/* Inline code inside a link takes a darkened accent that lands at 4.42:1 on
+   the code background, just under AA. Same hue, lifted clear. */
+[data-md-color-scheme="slate"] .md-typeset a > code {
+  color: #f68a30;
+}
+
 /* Feature compatibility table */
 .feature-table table {
   font-size: 0.9em;

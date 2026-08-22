@@ -1,0 +1,1686 @@
+/* Models page: catalogue table, scatter chart, comparison and detail panels. */
+
+/* The table is the page. Give it the whole viewport rather than the prose
+   column, so fewer columns fall off the right edge in the first place. */
+body:has(.models-app) .md-grid {
+  max-width: 100%;
+}
+
+body:has(.models-app) .md-content__inner {
+  padding-inline: 0.8rem;
+}
+
+.models-app {
+  /* Room for the selection tray, which floats over the end of the page. */
+  padding-bottom: 3.2rem;
+  --models-border: color-mix(in srgb, var(--md-default-fg-color) 16%, transparent);
+  /* A control's only boundary has to clear 3:1; a table rule does not — 50%
+     measures ≈3.3:1 against the page surface. */
+  --models-control-border: color-mix(in srgb, var(--md-default-fg-color) 50%, transparent);
+  /* Opaque, not translucent: these paint sticky cells, and anything scrolling
+     underneath would otherwise read straight through them. */
+  --models-hover: color-mix(in srgb, var(--md-default-fg-color) 5%, var(--md-default-bg-color));
+  --models-head: color-mix(in srgb, var(--md-default-fg-color) 4%, var(--md-default-bg-color));
+  --models-good: #0ca30c;
+  --models-bad: #d03b3b;
+  /* Categorical slots 1-3: the largest set that clears colour-vision and
+     contrast separation on every pair, which is what a scatter needs. */
+  --viz-1: #2a78d6;
+  --viz-2: #eb6834;
+  --viz-3: #1baf7a;
+  --viz-other: color-mix(in srgb, var(--md-default-fg-color) 58%, transparent);
+  margin: 1.2rem 0 2rem;
+  font-size: 0.72rem;
+}
+
+[data-md-color-scheme="slate"] .models-app {
+  /* The status greens and reds are stepped for the dark surface. */
+  --models-good: #3ac13a;
+  --models-bad: #ef6a6a;
+  --viz-1: #3987e5;
+  --viz-2: #d95926;
+  --viz-3: #199e70;
+}
+
+.models-app[hidden] {
+  display: none;
+}
+
+.models-icon {
+  width: 1.05em;
+  height: 1.05em;
+  flex: none;
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vertical-align: -0.15em;
+}
+
+/* Summary tiles ------------------------------------------------------------ */
+
+.models-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.8rem;
+}
+
+.models-stat {
+  display: flex;
+  flex-direction: column;
+  min-width: 6.5rem;
+  padding: 0.45rem 0.8rem;
+  border: 1px solid var(--models-border);
+  border-radius: 0.25rem;
+  background: var(--models-head);
+}
+
+.models-stat-value {
+  font-size: 1.15rem;
+  font-weight: 700;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+.models-stat-label {
+  opacity: 0.75;
+  font-size: 0.65rem;
+}
+
+/* Toolbar ------------------------------------------------------------------ */
+
+.models-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.7rem;
+  align-items: center;
+  margin-bottom: 0.6rem;
+}
+
+.models-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 1 1 16rem;
+  min-width: 11rem;
+  padding: 0 0.5rem;
+  border: 1px solid var(--models-control-border);
+  border-radius: 0.25rem;
+  background: var(--md-default-bg-color);
+}
+
+.models-search-wrap:focus-within {
+  border-color: var(--md-accent-fg-color);
+}
+
+.models-search {
+  flex: 1;
+  padding: 0.35rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--md-typeset-color);
+  font: inherit;
+}
+
+.models-search:focus {
+  outline: none;
+}
+
+.models-chips,
+.models-views {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.models-chips-icon {
+  opacity: 0.6;
+  margin-right: 0.1rem;
+}
+
+.models-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.28rem 0.65rem;
+  border: 1px solid var(--models-control-border);
+  border-radius: 1rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1.3;
+}
+
+.models-chip:hover {
+  border-color: var(--md-accent-fg-color);
+}
+
+.models-chip[aria-pressed="true"] {
+  background: var(--md-accent-fg-color);
+  border-color: var(--md-accent-fg-color);
+  color: var(--primary-dark, #1a2430);
+  font-weight: 600;
+}
+
+.models-labelled {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
+}
+
+.models-labelled > span {
+  opacity: 0.75;
+}
+
+.models-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.models-count {
+  margin-left: auto;
+  opacity: 0.75;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.models-filter {
+  padding: 0.2rem 0.35rem;
+  border: 1px solid var(--models-control-border);
+  border-radius: 0.2rem;
+  background: var(--md-default-bg-color);
+  color: var(--md-typeset-color);
+  font: inherit;
+  font-size: 0.68rem;
+  max-width: 11rem;
+}
+
+.models-filter:focus-visible,
+.models-search:focus-visible,
+.models-chip:focus-visible {
+  outline: 2px solid var(--md-accent-fg-color);
+  outline-offset: 1px;
+}
+
+/* Column chooser ----------------------------------------------------------- */
+
+.md-typeset details.models-columns,
+.models-columns {
+  display: inline-block;
+  border: 1px solid var(--models-border);
+  border-left-width: 1px;
+  border-radius: 0.25rem;
+  margin: 0 0 0.7rem;
+  padding: 0;
+  background: none;
+  box-shadow: none;
+  font-size: inherit;
+}
+
+.md-typeset details.models-columns[open] {
+  display: block;
+}
+
+.md-typeset .models-columns > summary {
+  background: none;
+  border: 0;
+}
+
+.md-typeset .models-columns > summary::before,
+.md-typeset .models-columns > summary::after {
+  display: none;
+}
+
+.models-columns > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  padding: 0.3rem 0.7rem;
+  margin: 0;
+  font-weight: 600;
+  list-style: none;
+}
+
+.models-columns > summary::-webkit-details-marker {
+  display: none;
+}
+
+.models-columns-help {
+  display: block;
+  opacity: 0.7;
+  font-size: 0.62rem;
+  line-height: 1.4;
+  padding-left: 1.25rem;
+}
+
+.models-columns-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 0.25rem 0.9rem;
+  padding: 0 0.7rem 0.7rem;
+}
+
+.models-columns-grid label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+}
+
+/* Table -------------------------------------------------------------------- */
+
+.models-table-wrap {
+  position: relative;
+}
+
+.models-scroll-hint {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 0 0 0.35rem;
+  font-size: 0.66rem;
+  opacity: 0.75;
+}
+
+.models-scroll-hint[hidden] {
+  display: none;
+}
+
+/* Bounded height, or the sticky header sticks to the top of a 6000px-tall box
+   nobody can see and the horizontal scrollbar sits below the fold. Tall
+   enough that a normal viewport is not scrolling 8000px inside a 7-row
+   window before the wheel reaches the end and hands off to the page. */
+.models-scroll {
+  max-height: min(82vh, 60rem);
+  overflow: auto;
+  overscroll-behavior-x: contain;
+  border: 1px solid var(--models-border);
+  border-radius: 0.25rem;
+  scrollbar-width: thin;
+}
+
+/* A visible edge is the only honest signal that the table continues. */
+.models-table-wrap::after {
+  content: "";
+  position: absolute;
+  top: var(--models-scroll-top, 0);
+  bottom: 0;
+  right: 0;
+  width: 2.2rem;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  background: linear-gradient(
+    to right,
+    transparent,
+    color-mix(in srgb, var(--md-default-fg-color) 18%, transparent)
+  );
+  border-radius: 0 0.25rem 0.25rem 0;
+}
+
+.models-table-wrap.can-scroll-right::after {
+  opacity: 1;
+}
+
+table.models-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  margin: 0;
+  font-size: inherit;
+}
+
+table.models-table th,
+table.models-table td {
+  padding: 0.3rem 0.55rem;
+  border-bottom: 1px solid var(--models-border);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+  background: var(--md-default-bg-color);
+}
+
+/* The filter row is <td>, not <th> — both need to stick, or scrolling the
+   table loses the per-column filters while the headings stay in view. */
+table.models-table thead th,
+table.models-table thead td {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--md-default-bg-color);
+  box-shadow: inset 0 -1px 0 var(--models-border);
+}
+
+table.models-table thead tr.models-filters th,
+table.models-table thead tr.models-filters td {
+  top: var(--models-head-height, 1.95rem);
+  background: var(--models-head);
+  padding: 0.2rem 0.35rem;
+}
+
+/* The picker and the model name stay put, so a reader never loses the row they
+   are reading while scrolling sideways through the wider columns. */
+table.models-table .models-pick {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+}
+
+table.models-table .models-sticky {
+  position: sticky;
+  left: 1.8rem;
+  z-index: 2;
+}
+
+table.models-table thead .models-pick {
+  z-index: 4;
+}
+
+table.models-table thead .models-sticky {
+  z-index: 4;
+}
+
+.can-scroll-left table.models-table .models-sticky::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 0.4rem;
+  transform: translateX(100%);
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--md-default-fg-color) 16%, transparent),
+    transparent
+  );
+  pointer-events: none;
+}
+
+table.models-table td.models-pick,
+table.models-table th.models-pick {
+  width: 1.6rem;
+  padding-right: 0.2rem;
+}
+
+table.models-table tbody tr:hover td {
+  background: var(--models-hover);
+}
+
+/* The badge says "legacy"; dimming the name as well only costs contrast. */
+table.models-table tbody tr.is-legacy .models-badge--legacy {
+  font-weight: 600;
+}
+
+.models-sort {
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  font-weight: 700;
+  color: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.models-filter-none {
+  display: block;
+  min-height: 1.2rem;
+}
+
+/* The mark itself is never recoloured; only what sits behind it changes, and
+   only for the marks that would otherwise be invisible. */
+.models-logo {
+  width: 1.1rem;
+  height: 1.1rem;
+  object-fit: contain;
+  flex: none;
+}
+
+.models-logo--on-light,
+.models-logo--on-dark {
+  border-radius: 0.2rem;
+  padding: 0.1rem;
+  box-sizing: content-box;
+}
+
+.models-logo--on-light {
+  background: #f3f3f1;
+}
+
+.models-logo--on-dark {
+  background: #26262b;
+}
+
+[data-md-color-scheme="default"] .models-logo--on-light {
+  background: none;
+  padding: 0;
+}
+
+[data-md-color-scheme="default"] .models-logo--on-dark {
+  background: #26262b;
+}
+
+.models-id {
+  display: block;
+  opacity: 0.78;
+  font-family: var(--md-code-font-family, monospace);
+  font-size: 0.62rem;
+  white-space: nowrap;
+}
+
+.models-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--md-typeset-a-color);
+  cursor: pointer;
+  text-align: left;
+}
+
+.models-link:hover {
+  text-decoration: underline;
+}
+
+.models-badge {
+  display: inline-block;
+  padding: 0 0.35rem;
+  margin-left: 0.25rem;
+  border: 1px solid var(--models-border);
+  border-radius: 0.6rem;
+  font-size: 0.6rem;
+  line-height: 1.5;
+}
+
+.models-badge--legacy {
+  border-color: var(--accent-dark, #ff6f00);
+  color: var(--accent-dark, #ff6f00);
+}
+
+.models-badge--cache {
+  border-color: var(--md-accent-fg-color);
+  color: var(--md-accent-fg-color);
+}
+
+.models-num,
+.models-price {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.models-empty {
+  padding: 1.2rem;
+  text-align: center;
+  opacity: 0.75;
+}
+
+/* Chart -------------------------------------------------------------------- */
+
+.models-chart-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.models-chart {
+  border: 1px solid var(--models-border);
+  border-radius: 0.25rem;
+  padding: 0.6rem;
+}
+
+.models-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0.5rem;
+}
+
+.models-legend-title {
+  opacity: 0.75;
+  margin-right: 0.2rem;
+}
+
+.models-legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--models-control-border);
+  border-radius: 1rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.66rem;
+}
+
+.models-legend-chip[aria-pressed="true"] {
+  border-color: currentcolor;
+  font-weight: 600;
+}
+
+.models-legend-count {
+  opacity: 0.78;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Always starts its own line under the chips, however many wrap. */
+.models-legend-note {
+  flex-basis: 100%;
+  opacity: 0.7;
+  font-size: 0.62rem;
+}
+
+.models-swatch {
+  width: 0.75rem;
+  height: 0.75rem;
+  flex: none;
+}
+
+.models-plot {
+  width: 100%;
+  height: auto;
+}
+
+.models-grid {
+  stroke: var(--models-border);
+  stroke-width: 1;
+}
+
+.models-axis-label,
+.models-axis-title {
+  fill: var(--md-typeset-color);
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.models-axis-title {
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.9;
+}
+
+.models-dot {
+  cursor: pointer;
+  stroke: var(--md-default-bg-color);
+  stroke-width: 1.5;
+}
+
+.models-dot:hover {
+  stroke: var(--md-accent-fg-color);
+  stroke-width: 2;
+}
+
+.series-1 {
+  fill: var(--viz-1);
+}
+
+.series-2 {
+  fill: var(--viz-2);
+}
+
+.series-3 {
+  fill: var(--viz-3);
+}
+
+.series-other {
+  fill: var(--viz-other);
+}
+
+.models-legend-chip.series-1 {
+  border-color: var(--viz-1);
+}
+
+.models-legend-chip.series-2 {
+  border-color: var(--viz-2);
+}
+
+.models-legend-chip.series-3 {
+  border-color: var(--viz-3);
+}
+
+/* Comparison and detail ----------------------------------------------------- */
+
+.models-panel {
+  margin-top: 1rem;
+  border: 1px solid var(--models-border);
+  border-radius: 0.25rem;
+  padding: 0.8rem 1rem;
+}
+
+.models-panel[hidden] {
+  display: none;
+}
+
+.models-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+
+.models-panel-head h2,
+.models-panel-head h3 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.models-close {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--models-control-border);
+  border-radius: 0.2rem;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 0.15rem 0.55rem;
+}
+
+.models-close:hover {
+  border-color: var(--md-accent-fg-color);
+}
+
+/* Horizontal scrolling is the wrapping .models-scroll region's job, not the
+   grid's — the same split the price table uses. */
+.models-compare-grid {
+  display: grid;
+  gap: 0 1rem;
+}
+
+/* Overrides .models-scroll's vertical cap: the comparison has no vertical
+   overflow of its own, only horizontal, and clipping it into a short nested
+   scroller is worse than the sideways scroll it was meant to fix. */
+.models-compare-scroll {
+  max-height: none;
+  overflow-y: visible;
+}
+
+.models-compare-grid dt {
+  grid-column: 1;
+  font-weight: 600;
+  opacity: 0.8;
+  padding: 0.25rem 0;
+  border-top: 1px solid var(--models-border);
+}
+
+.models-compare-grid dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15rem 0.3rem;
+  margin: 0;
+  padding: 0.25rem 0.35rem;
+  border-top: 1px solid var(--models-border);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.models-compare-grid dd .models-tag {
+  margin-right: 0;
+}
+
+.models-compare-head {
+  border-top: 0 !important;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.models-compare-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* Never colour alone: the winner also carries a mark and the word. */
+.models-compare-grid dd.is-best {
+  background: color-mix(in srgb, var(--models-good) 14%, transparent);
+  color: var(--models-good);
+  font-weight: 700;
+  border-radius: 0.2rem;
+}
+
+.models-compare-grid dd.is-worst {
+  background: color-mix(in srgb, var(--models-bad) 12%, transparent);
+  color: var(--models-bad);
+  border-radius: 0.2rem;
+}
+
+.models-verdict {
+  width: 0.85em;
+  height: 0.85em;
+}
+
+.models-verdict-label {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.models-facts {
+  display: grid;
+  grid-template-columns: minmax(8rem, auto) 1fr;
+  gap: 0.15rem 0.9rem;
+  margin: 0 0 0.8rem;
+}
+
+.models-facts dt {
+  font-weight: 600;
+  opacity: 0.75;
+}
+
+.models-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* These sit inside a wide panel: without ruled columns the eye has nothing to
+   follow across a row, and stretched cells put the value a screen from its label. */
+.md-typeset .models-detail-table {
+  width: auto;
+  min-width: min(100%, 34rem);
+  border-collapse: collapse;
+  font-size: 0.68rem;
+  margin: 0.2rem 0 0;
+}
+
+.md-typeset .models-detail-table th,
+.md-typeset .models-detail-table td {
+  padding: 0.22rem 0.7rem;
+  border: 0;
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--md-default-fg-color) 10%, transparent);
+  white-space: nowrap;
+  background: none;
+}
+
+.md-typeset .models-detail-table th {
+  text-align: left;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+  border-bottom-color: var(--models-border);
+}
+
+.md-typeset .models-detail-table th + th,
+.md-typeset .models-detail-table td + td {
+  border-left: 1px solid
+    color-mix(in srgb, var(--md-default-fg-color) 8%, transparent);
+}
+
+.md-typeset .models-detail-table tbody tr:nth-child(odd) td {
+  background: color-mix(in srgb, var(--md-default-fg-color) 3%, transparent);
+}
+
+.md-typeset .models-detail-table tbody tr:hover td {
+  background: var(--models-hover);
+}
+
+.md-typeset .models-detail-table td.models-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.models-prose-text {
+  margin: 0.2rem 0 0.8rem;
+  max-width: 62ch;
+  font-size: 0.72rem;
+  line-height: 1.55;
+}
+
+.models-note {
+  opacity: 0.75;
+  font-size: 0.66rem;
+  margin-top: 0.5rem;
+}
+
+/* Page furniture ------------------------------------------------------------ */
+
+.models-howto {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(17rem, 100%), 1fr));
+  gap: 0.5rem 1.4rem;
+  margin: 1.5rem 0;
+  font-size: 0.76rem;
+}
+
+.md-typeset .models-howto p {
+  margin: 0;
+  padding-left: 1.6rem;
+  text-indent: -1.6rem;
+  line-height: 1.55;
+}
+
+.md-typeset .models-howto .twemoji,
+.md-typeset .models-howto svg {
+  width: 1.1rem;
+  height: 1.1rem;
+  vertical-align: -0.2rem;
+  margin-right: 0.35rem;
+}
+
+.models-sources {
+  opacity: 0.9;
+  font-size: 0.76rem;
+}
+
+.md-typeset .models-sources h2 {
+  font-size: 1rem;
+}
+
+.md-typeset .models-sources table {
+  font-size: 0.72rem;
+}
+
+@media screen and (max-width: 60em) {
+  .models-app {
+    font-size: 0.69rem;
+  }
+
+  .models-count {
+    margin-left: 0;
+  }
+}
+
+@media screen and (max-width: 48em) {
+  /* A 314px sticky name column on a 420px screen leaves a slit to scroll in. */
+  table.models-table .models-sticky,
+  table.models-table .models-pick {
+    position: static;
+  }
+
+  .models-stats {
+    gap: 0.3rem;
+  }
+
+  .models-stat {
+    flex: 1 1 6rem;
+    min-width: 0;
+    padding: 0.35rem 0.5rem;
+  }
+
+  .models-stat-value {
+    font-size: 0.95rem;
+  }
+
+  .models-scroll {
+    max-height: none;
+  }
+
+  .models-id {
+    max-width: 11rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .models-tray {
+    left: 0.4rem;
+    right: 0.4rem;
+    transform: none;
+    max-width: none;
+    border-radius: 0.6rem;
+  }
+}
+
+.models-badge--retired {
+  border-color: color-mix(in srgb, var(--md-default-fg-color) 45%, transparent);
+  opacity: 0.85;
+}
+
+/* Modality and geography tags ---------------------------------------------- */
+
+.models-glyph {
+  width: 0.95em;
+  height: 0.95em;
+  flex: none;
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.75;
+}
+
+/* Modalities and geographies are a handful of short chips: keeping them on one
+   line lets the column size to them, instead of stacking four rows deep. */
+td.models-tags {
+  white-space: nowrap;
+}
+
+/* Routes, tools and aliases are long lists, and those do wrap. */
+td.models-tags--wrap {
+  white-space: normal;
+  line-height: 1.7;
+  max-width: 22rem;
+}
+
+.models-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  margin-right: 0.45rem;
+  white-space: nowrap;
+}
+
+.models-tag:last-child {
+  margin-right: 0;
+}
+
+/* Selection tray ------------------------------------------------------------ */
+
+.models-tray {
+  position: fixed;
+  left: 50%;
+  bottom: 0.8rem;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+  max-width: min(60rem, calc(100vw - 1.6rem));
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--models-border);
+  border-radius: 2rem;
+  background: var(--md-default-bg-color);
+  box-shadow: 0 0.3rem 1rem color-mix(in srgb, #000 35%, transparent);
+}
+
+.models-tray[hidden] {
+  display: none;
+}
+
+/*
+ * The tray floats over whatever is at the foot of the page. Its own siblings
+ * (.models-howto, .models-sources, the feedback form) are not the true end of
+ * the document — the site footer is, in a different branch of the page
+ * entirely — so nothing inside the article can reserve enough room with its
+ * own padding. Reserved on <body> instead, at the tray's own measured height
+ * (--models-tray-reserve, kept current by updateTrayReserve() in the JS),
+ * so the last rows of a comparison and the footer below them can both be
+ * scrolled clear of it.
+ */
+@media screen {
+  body:has(.models-app.has-tray) {
+    padding-bottom: var(--models-tray-reserve, 0px);
+  }
+
+  /* Without :has() the reserve has no selector to hang on, so the app keeps a
+     fixed one — smaller than a stacked tray, but not nothing. */
+  @supports not selector(:has(*)) {
+    .models-app.has-tray {
+      padding-bottom: 9rem;
+    }
+  }
+}
+
+.models-tray-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.models-tray-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.2rem 0.15rem 0.5rem;
+  border: 1px solid var(--models-control-border);
+  border-radius: 1rem;
+}
+
+.models-tray-drop {
+  background: none;
+  border: 0;
+  padding: 0 0.15rem;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  opacity: 0.6;
+}
+
+.models-tray-drop:hover {
+  opacity: 1;
+  color: var(--md-accent-fg-color);
+}
+
+.models-tray-open {
+  font-weight: 600;
+}
+
+@media print {
+  .models-tray {
+    display: none;
+  }
+}
+
+.models-columns-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.models-columns-entry label {
+  cursor: pointer;
+}
+
+/* A status line, not an error line: only a refusal is coloured. */
+/* Visually hidden by default: its usual content is the same count already on
+   screen in .models-count, and a screen reader still gets it via aria-live.
+   A warning is new information, so it un-hides. */
+.models-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+  font-size: 0.68rem;
+  opacity: 0.8;
+}
+
+.models-live.is-warning {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0.4rem 0 0;
+  min-height: 1em;
+  overflow: visible;
+  clip-path: none;
+  white-space: normal;
+  color: var(--models-bad);
+  opacity: 1;
+}
+
+.models-panel:focus-visible {
+  outline: 2px solid var(--md-accent-fg-color);
+  outline-offset: 2px;
+}
+
+.models-endpoint {
+  font-size: 0.92em;
+  padding: 0 0.2em;
+  background: color-mix(in srgb, var(--md-default-fg-color) 7%, transparent);
+  border-radius: 0.15rem;
+}
+
+.md-typeset .models-facts dd.models-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.5rem;
+}
+
+.models-prose {
+  max-width: 68ch;
+}
+
+.models-variants {
+  margin: 0.1rem 0 0.7rem;
+  padding-left: 1.1rem;
+  font-size: 0.72rem;
+  line-height: 1.7;
+}
+
+.models-variants li {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.md-typeset .models-prose h3 {
+  margin-top: 0.6rem;
+  font-size: 0.82rem;
+}
+
+/* Bounded and scrollable — 67 checkboxes unbounded pushes the table a
+   screen and a half down, so ticking one and seeing the effect need a scroll
+   the reader did not ask for. */
+.models-columns-body {
+  padding: 0 0.7rem 0.7rem;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.md-typeset .models-columns-group {
+  margin: 0.6rem 0 0.25rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.65;
+}
+
+.models-columns-body .models-columns-grid {
+  padding: 0;
+}
+
+.models-tag-more {
+  opacity: 0.7;
+  font-size: 0.62rem;
+}
+
+td.models-price .models-badge {
+  margin-left: 0.3rem;
+}
+
+.models-logo--service {
+  background: none;
+  padding: 0;
+}
+
+.models-facts dt[title],
+.models-compare-grid dt[title] {
+  cursor: help;
+  text-decoration: underline dotted
+    color-mix(in srgb, var(--md-default-fg-color) 35%, transparent);
+  text-underline-offset: 0.2em;
+}
+
+.models-tray.is-arrived {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.models-flag {
+  font-size: 0.95em;
+  line-height: 1;
+  /* Fall back to the monochrome forms where a colour emoji font is missing. */
+  font-family: "Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji",
+    "Twemoji Mozilla", sans-serif;
+}
+
+/* Chart: value frontier, direct labels and pointer tooltip ------------------ */
+
+.models-chart {
+  position: relative;
+}
+
+.models-frontier {
+  fill: none;
+  stroke: color-mix(in srgb, var(--md-default-fg-color) 58%, transparent);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+
+.models-dot.is-frontier {
+  stroke: var(--md-default-bg-color);
+  stroke-width: 2;
+}
+
+.models-point-label {
+  fill: var(--md-typeset-color);
+  font-size: 10.5px;
+  font-weight: 600;
+  paint-order: stroke;
+  stroke: var(--md-default-bg-color);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.models-tip {
+  position: absolute;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.35rem 0.6rem;
+  transform: translate(-50%, calc(-100% - 0.5rem));
+  border: 1px solid var(--models-control-border);
+  border-radius: 0.25rem;
+  background: var(--md-default-bg-color);
+  box-shadow: 0 0.2rem 0.6rem color-mix(in srgb, #000 40%, transparent);
+  font-size: 0.66rem;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.models-tip[hidden] {
+  display: none;
+}
+
+.models-dot:focus-visible {
+  outline: none;
+  stroke: var(--md-accent-fg-color);
+  stroke-width: 3;
+}
+
+/* Focus, target size and motion ---------------------------------------------- */
+
+/* Material's reset drops the outline from every input, so the page's own ring
+   has to cover the control a reader uses 142 times. */
+.models-app input[type="checkbox"]:focus-visible,
+.models-app summary:focus-visible,
+.models-sort:focus-visible,
+.models-link:focus-visible,
+.models-close:focus-visible,
+.models-tray-drop:focus-visible,
+.models-legend-chip:focus-visible,
+.models-scroll:focus-visible {
+  outline: 2px solid var(--md-accent-fg-color);
+  outline-offset: 2px;
+}
+
+.models-app input[type="checkbox"] {
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0.1rem;
+  accent-color: var(--md-accent-fg-color);
+}
+
+.models-sort {
+  padding: 0.12rem 0.2rem;
+  margin: -0.12rem -0.2rem;
+}
+
+.models-tray-drop {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.3rem;
+  min-height: 1.3rem;
+  border-radius: 50%;
+}
+
+/* Sticky headers and the floating tray hide whatever the browser just scrolled
+   a focused element to, unless it is told to leave room. */
+.models-scroll {
+  scroll-padding-top: calc(var(--models-head-height, 2rem) + 2.4rem);
+  scroll-padding-bottom: 1rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .models-table-wrap::after,
+  .models-tray {
+    transition: none;
+  }
+}
+
+/* Reflow --------------------------------------------------------------------- */
+
+@media screen and (max-width: 38em) {
+  /* Three columns of 10rem cannot reflow into 320px, so the comparison stacks
+     one model per block instead of demanding two-dimensional scrolling. */
+  .models-compare-grid {
+    display: block;
+  }
+
+  .models-compare-grid dt {
+    margin-top: 0.6rem;
+    border-top: 1px solid var(--models-border);
+  }
+
+  .models-compare-grid dd {
+    border-top: 0;
+    padding-left: 0.8rem;
+  }
+
+  .models-compare-grid dd[data-model]::before {
+    content: attr(data-model) ": ";
+    opacity: 0.7;
+    font-weight: 600;
+  }
+
+  .models-compare-grid dd.models-compare-head {
+    padding-left: 0;
+    margin-top: 0.8rem;
+  }
+
+  /* A table this wide has nothing left to show but the sticky name column
+     once it reflows to 320px, so each row's *body* becomes its own stacked
+     card — the same shape the comparison grid above just switched to.
+     Sorting and per-column filtering stay real controls: the heading and
+     filter rows keep their own horizontal scroller instead of disappearing
+     with the rest of the column layout the cards below no longer use, so
+     nothing here is display:none-but-still-focusable. */
+  .models-scroll {
+    overflow-x: visible;
+    max-height: none;
+    border: 0;
+  }
+
+  table.models-table {
+    display: block;
+  }
+
+  table.models-table thead {
+    display: block;
+    overflow-x: auto;
+    max-width: 100%;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Both header rows share one column track list, so a filter always sits
+     under its own heading. Two independently sized flex rows put the Regions
+     box under "Text Arena Elo". */
+  table.models-table thead tr {
+    display: grid;
+    grid-template-columns: 2.4rem;
+    grid-auto-flow: column;
+    grid-auto-columns: 8.5rem;
+    width: max-content;
+    min-width: 100%;
+  }
+
+  table.models-table thead th,
+  table.models-table thead td {
+    position: static;
+    min-width: 0;
+  }
+
+  table.models-table tbody {
+    display: block;
+  }
+
+  table.models-table tbody tr {
+    display: block;
+    margin-bottom: 0.6rem;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid var(--models-border);
+    border-radius: 0.35rem;
+    background: var(--md-default-bg-color);
+  }
+
+  table.models-table tbody tr:hover td {
+    background: none;
+  }
+
+  table.models-table tbody td,
+  table.models-table tbody th {
+    display: block;
+    position: static;
+    width: auto;
+    padding: 0.15rem 0;
+    border: 0;
+    white-space: normal;
+    background: none;
+  }
+
+  table.models-table tbody td.models-tags,
+  table.models-table tbody td.models-tags--wrap {
+    white-space: normal;
+    max-width: none;
+  }
+
+  table.models-table tbody td.models-pick {
+    display: inline-flex;
+    margin-bottom: 0.3rem;
+  }
+
+  table.models-table tbody th.models-cell-name {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    font-size: 0.85rem;
+  }
+
+  /* Wraps instead of stretching the card — an unbroken id was wide enough on
+     its own to bring back the horizontal scrolling stacking is meant to
+     remove. */
+  table.models-table tbody .models-id {
+    max-width: 100%;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    text-overflow: clip;
+  }
+
+  /* The column heading a card cell has no room to show — read back from the
+     attribute renderBody() puts on every cell but the name. */
+  table.models-table tbody td[data-label]::before {
+    content: attr(data-label) ": ";
+    font-weight: 600;
+    opacity: 0.7;
+  }
+}
+
+/* Text for screen readers only. */
+.models-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.models-sort-arrow {
+  color: var(--md-accent-fg-color);
+}
+
+table.models-table th.models-cell-name {
+  font-weight: inherit;
+}
+
+.models-facts-groups {
+  margin-bottom: 0.6rem;
+}
+
+.md-typeset .models-facts-group {
+  margin: 0.7rem 0 0.15rem;
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.65;
+}
+
+.md-typeset .models-facts {
+  margin: 0;
+}
+
+.md-typeset .models-facts dd.models-tags,
+.md-typeset .models-facts dd.models-tags--wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.5rem;
+  white-space: normal;
+  max-width: none;
+}
+
+.md-typeset .models-facts dd.models-num,
+.md-typeset .models-facts dd.models-price {
+  text-align: left;
+}
+
+/* Comparison: what one model has and another does not is the comparison. */
+/* Dimmed, but only as far as the tinted background of a best/worst cell still
+   clears 4.5:1 — the line-through is what says "absent", not the colour. */
+.models-compare-grid .models-tag.is-absent {
+  color: color-mix(in srgb, var(--md-default-fg-color) 85%, var(--md-default-bg-color));
+  text-decoration: line-through;
+}
+
+.models-compare-grid .models-tag.is-distinct {
+  font-weight: 700;
+}
+
+.models-compare-grid .models-tag.is-distinct::after {
+  content: "";
+  width: 0.3rem;
+  height: 0.3rem;
+  border-radius: 50%;
+  background: var(--md-accent-fg-color);
+}
+
+/* Starting points and modality pickers -------------------------------------- */
+
+.models-starts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0.6rem;
+}
+
+.models-starts-title,
+.models-modalities-title {
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+.models-start[aria-pressed="true"] {
+  background: var(--md-accent-fg-color);
+  border-color: var(--md-accent-fg-color);
+  color: var(--primary-dark, #1a2430);
+  font-weight: 600;
+}
+
+.models-modalities {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.models-chip--tiny {
+  padding: 0.18rem 0.45rem;
+  font-size: 0.66rem;
+}
+
+.models-legend-chip.is-off {
+  color: color-mix(in srgb, var(--md-default-fg-color) 70%, var(--md-default-bg-color));
+  text-decoration: line-through;
+}
+
+/* Refinements panel --------------------------------------------------------- */
+
+.models-panels {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.7rem;
+}
+
+.models-panels > details {
+  align-self: flex-start;
+}
+
+/* Both summaries carry an icon and a badge slot, so both are the same height
+   whether or not the badge is showing. */
+.models-columns > summary {
+  min-height: 1.75rem;
+  box-sizing: border-box;
+}
+
+.models-columns > summary > .models-icon {
+  flex: none;
+}
+
+.md-typeset details.models-refine-panel {
+  margin: 0;
+}
+
+.models-refine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding: 0.2rem 0.7rem 0.7rem;
+}
+
+.models-refine-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  padding: 0 0.25rem;
+  border-radius: 0.6rem;
+  background: var(--md-accent-fg-color);
+  color: var(--primary-dark, #1a2430);
+  font-size: 0.6rem;
+  font-weight: 700;
+}
+
+.models-refine-count[hidden] {
+  visibility: hidden;
+}
+
+/*
+ * Windows High Contrast replaces every author colour, which would flatten the
+ * plot into one indistinguishable mass. The four marker shapes still separate
+ * the series, so they are outlined rather than filled, and the highlight and
+ * verdict colours fall back to the system's own text and border keywords.
+ * Placed last so it wins the specificity tie against .is-off and .is-absent.
+ */
+@media (forced-colors: active) {
+  .series-1,
+  .series-2,
+  .series-3,
+  .series-other {
+    fill: Canvas;
+    stroke: CanvasText;
+    stroke-width: 1.5;
+  }
+
+  .models-dot:hover,
+  .models-dot:focus-visible {
+    fill: Highlight;
+  }
+
+  .models-legend-chip.is-off {
+    color: inherit;
+    opacity: 1;
+    text-decoration: line-through;
+  }
+
+  .models-compare-grid dd.is-best,
+  .models-compare-grid dd.is-worst {
+    background: none;
+    color: CanvasText;
+  }
+
+  .models-compare-grid .models-tag.is-absent {
+    color: inherit;
+    opacity: 1;
+  }
+
+  .models-chip[aria-pressed="true"] {
+    background: Highlight;
+    color: HighlightText;
+  }
+}
+
+.models-tray-summary {
+  display: none;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+@media screen and (max-width: 26.25em) {
+  /* Three chips stack tall enough at this width to cover the chart and the
+     panel below the tray, so the per-model list gives way to one line. */
+  .models-tray-list {
+    display: none;
+  }
+
+  .models-tray-summary {
+    display: inline;
+  }
+}

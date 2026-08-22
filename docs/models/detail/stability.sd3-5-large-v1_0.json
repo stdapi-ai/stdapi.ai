@@ -1,0 +1,1 @@
+{"id":"stability.sd3-5-large-v1:0","prices":{"id":"stability.sd3-5-large-v1:0","service":"bedrock-runtime","default_tier":"standard","default_routings":["us-west-2"],"prices":[{"region":"us-west-2","dimension":"output_images","tier":"standard","routing":"us-west-2","unit_price":"0.08","currency":"USD"}]}}

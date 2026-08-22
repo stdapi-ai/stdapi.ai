@@ -11,7 +11,7 @@ Discover how to integrate stdapi.ai with popular AI applications and tools. stda
 **Why use stdapi.ai for integrations?**
 
 - **Three client-side changes** - Point your application at the new base URL and API key, and update the model name if the one it already sends isn't in this deployment's catalogue
-- **Access 100+ models** - Claude, OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen, GLM, Nova, Llama, Stability AI, and more
+- **Access [100+ models](models.md)** - Claude, OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen, GLM, Nova, Llama, Stability AI, and more
 - **Enterprise data control** - The gateway runs in your own AWS account — no third party sits between your users and your models
 - **Pay-per-use pricing** - Pay Amazon Bedrock rates for actual usage, with no markup and no per-seat fees
 - **AWS-native features** - Leverage prompt caching, reasoning modes, and guardrails through standard OpenAI, Anthropic, and Cohere APIs
@@ -27,7 +27,7 @@ Every integration on this page follows the same four steps, and that's the whole
 1. **Deploy** stdapi.ai — [on AWS](operations_getting_started.md) or [locally with Docker](operations_getting_started_local.md)
 2. **Copy** your endpoint URL and API key
 3. **Paste** them into your tool's AI-provider settings (or your SDK's `base_url`)
-4. **Name** a model this deployment serves — [`GET /search_models`](api_search_models.md) lists them, and a name the catalogue does not hold returns `404` rather than a lookalike
+4. **Name** a model this deployment serves — the [Models](models.md) page shows them and [`GET /search_models`](api_search_models.md) lists what your deployment actually serves; a name the catalogue does not hold returns `404` rather than a lookalike
 
 ```python
 from openai import OpenAI

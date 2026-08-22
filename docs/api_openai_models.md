@@ -13,7 +13,7 @@ Discover and list available Amazon Bedrock models across all configured regions 
 <div class="grid cards" markdown>
 
 - :material-view-grid: __Complete Catalog__
-  <br>Browse all available models across Amazon Bedrock regions. Chat, embeddings, images, and specialized AI services.
+  <br>Browse all available models across Amazon Bedrock regions. Chat, embeddings, images, and specialized AI services. See the [Models](models.md) page for a browsable table.
 
 - :material-sync: __Always Up-to-Date__
   <br>Dynamic model discovery automatically shows new models as they become available in Amazon Bedrock.

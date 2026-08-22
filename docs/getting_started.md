@@ -6,7 +6,7 @@ keywords: stdapi.ai getting started, try stdapi.ai, OpenAI gateway AWS, Anthropi
 
 # :material-rocket-launch: Get Started
 
-Pick the path that fits where you are right now. Both use the same OpenAI, Anthropic, and Cohere-compatible API, and both are adopted the same way: point your client at the deployment's base URL, give it that deployment's API key, and change the model name only where it differs. Usually it does not — each model is published under the name its provider uses, so a client already asking for `claude-opus-5` or `gpt-5.6-sol` changes nothing but the base URL. Where a name *does* differ, [`MODEL_ALIASES`](operations_configuration.md#model-aliases) maps the name your application already sends onto a model the deployment serves. What the base URL buys is the catalogue behind it: it spans every provider your regions offer, not one vendor's list. [`GET /search_models`](api_search_models.md) lists it.
+Pick the path that fits where you are right now. Both use the same OpenAI, Anthropic, and Cohere-compatible API, and both are adopted the same way: point your client at the deployment's base URL, give it that deployment's API key, and change the model name only where it differs. Usually it does not — each model is published under the name its provider uses, so a client already asking for `claude-opus-5` or `gpt-5.6-sol` changes nothing but the base URL. Where a name *does* differ, [`MODEL_ALIASES`](operations_configuration.md#model-aliases) maps the name your application already sends onto a model the deployment serves. What the base URL buys is the catalogue behind it: it spans every provider your regions offer, not one vendor's list. [`GET /search_models`](api_search_models.md) lists it. The [Models](models.md) page shows the same catalogue now, before you deploy.
 
 Looking for reference documentation rather than a quickstart? See [Features](features.md) for what the gateway does, and the [API Overview](api_overview.md) for endpoints, parameters, and SDK usage.
 
@@ -86,6 +86,7 @@ You can start local and migrate to AWS later — same API, same SDKs, same clien
 - :material-star-four-points-outline: [**Features**](features.md) — What the gateway supports, substantiated claim by claim
 - :material-book-open-variant: [**API Overview**](api_overview.md) — Endpoints, parameters, and SDK usage
 - :material-magnify: [**Search Models**](api_search_models.md) — Find the right model ID by modality, route, region, or streaming support
+- :material-view-list: [**Models**](models.md) — Browse every model with modalities, regions, AWS prices and leaderboard scores
 - :material-puzzle: [**Use Cases**](use_cases.md) — Open WebUI, n8n, coding assistants, and more
 - :material-cog: [**Configuration**](operations_configuration.md) — Every environment variable and option
 - :material-wrench: [**Troubleshooting**](operations_troubleshooting.md) — Common first-deployment errors and fixes

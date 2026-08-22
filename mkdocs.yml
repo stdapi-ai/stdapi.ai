@@ -46,6 +46,7 @@ theme:
 nav:
   - Home: index.md
   - Features: features.md
+  - Models: models.md
   - Get Started:
       - Overview: getting_started.md
       - Deploy on AWS: operations_getting_started.md
@@ -129,6 +130,28 @@ plugins:
   - privacy
   - redoc-tag
   - meta
+  # Ships the built assets without the comments and indentation the sources are
+  # written with. Listed last so it minifies final output, and Mermaid diagrams
+  # are kept out of the whitespace collapse because their syntax is
+  # newline-sensitive.
+  - minify:
+      minify_html: true
+      minify_js: true
+      minify_css: true
+      htmlmin_opts:
+        remove_comments: true
+        pre_tags:
+          - pre
+          - textarea
+          - script
+          - style
+      js_files:
+        - js/models-table.js
+        - js/home-carousel.js
+      css_files:
+        - styles/models-table.css
+        - styles/theme.css
+        - styles/trademarks.css
 
 hooks:
   - docs_hooks/fastapi_openapi.py
@@ -191,6 +214,8 @@ extra:
       link: getting_started.md
     - label: API overview
       link: api_overview.md
+    - label: Models
+      link: models.md
     - label: Troubleshooting
       link: operations_troubleshooting.md
     - label: View on GitHub

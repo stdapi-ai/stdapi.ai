@@ -8,6 +8,9 @@ keywords: AWS Bedrock model search, model discovery API, filter models by modali
 
 Discover available models by capability — filter by modality, route, region, streaming support, Batch API support, or legacy status. This endpoint is purpose-built for AI agents that need to identify the right model ID before invoking another endpoint.
 
+!!! tip "Browsing rather than calling?"
+    The [Models](models.md) page publishes the same catalogue as an interactive table — with AWS prices, regional availability and public leaderboard scores — before you have a deployment.
+
 ## Quick Start
 
 | Endpoint | Method | MCP Tool |

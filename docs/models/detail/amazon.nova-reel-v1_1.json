@@ -1,0 +1,1 @@
+{"id":"amazon.nova-reel-v1:1","prices":{"id":"amazon.nova-reel-v1:1","service":"bedrock-runtime","default_tier":"standard","default_routings":["us-east-1"],"prices":[{"region":"us-east-1","dimension":"output_seconds","tier":"standard","routing":"us-east-1","spec":"hd","unit_price":"0.08","currency":"USD"}]}}

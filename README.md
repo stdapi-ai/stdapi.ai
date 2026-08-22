@@ -5,7 +5,7 @@
 
 **OpenAI, Anthropic & Cohere Compatible API Gateway for Amazon Bedrock and AWS AI Services**
 
-Run your favorite OpenAI, Anthropic, and Cohere-compatible applications on Amazon Bedrock. Access 100+ models including Claude, OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
+Run your favorite OpenAI, Anthropic, and Cohere-compatible applications on Amazon Bedrock. Access [100+ models](https://stdapi.ai/models/) including Claude, OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
 
 ---
 
@@ -133,7 +133,7 @@ Prefer a hands-off setup? A [managed deployment service](https://aws.amazon.com/
 
 ## 🎯 Why stdapi.ai?
 
-- **🔌 Same API, wider catalogue** — Adoption is quick: standard OpenAI, Anthropic and Cohere SDKs connect on the base URL alone, and hundreds of applications and tools build on them; the model you then name is drawn from every provider in the catalogue below, not one vendor's list. Twenty clients are driven end to end against a live gateway by the [automated test suite](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests): **Claude Code**, **Codex**, **pi**, **OpenClaw**, **Hermes**, **Qwen Code**, **n8n**, **Haystack**, **Open WebUI**, **wyoming-openai**, **LangChain**, **Pydantic AI**, **LiteLLM**, **Docling Serve**, **OpenAI Agents SDK**, **LiveKit Agents**, **Pipecat**, **inspect-ai**, **Agno**, **LlamaIndex**.
+- **🔌 Same API, wider catalogue** — Adoption is quick: standard OpenAI, Anthropic and Cohere SDKs connect on the base URL alone, and hundreds of applications and tools build on them; the model you then name is drawn from every provider in [the catalogue](https://stdapi.ai/models/), not one vendor's list. Twenty clients are driven end to end against a live gateway by the [automated test suite](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests): **Claude Code**, **Codex**, **pi**, **OpenClaw**, **Hermes**, **Qwen Code**, **n8n**, **Haystack**, **Open WebUI**, **wyoming-openai**, **LangChain**, **Pydantic AI**, **LiteLLM**, **Docling Serve**, **OpenAI Agents SDK**, **LiveKit Agents**, **Pipecat**, **inspect-ai**, **Agno**, **LlamaIndex**.
 - **🔒 Runs in your AWS account** — No third party sits between your users and your models. Amazon Bedrock does not share your prompts with model providers or use them for training. Configure region allow-lists to match your own requirements — AWS compliance certifications apply to the AWS services and regions you choose, and are not inherited by stdapi.ai or by your application. **[Compliance guide →](https://stdapi.ai/operations_compliance/)**
 - **🌍 Add a region, add its quota** — Every AWS region has its own Bedrock quota, and every region you enable adds its own. Eligible throttling and availability failures retry in another enabled region, with no client changes. Streaming retries only before the stream opens, and asynchronous jobs stay in the region that accepted them. **[Resilience guide →](https://stdapi.ai/operations_resilience/)**
 - **💰 Pay only what you use** — Amazon Bedrock rates with 0% markup: model usage is billed to you directly by AWS, with no minimum commitment. Each end user's model calls can run under their own short-lived role session, so AWS reports their spend separately in Cost Explorer and the CUR — from the invoice, not from an estimate. The gateway license itself is metered per container-hour.
@@ -147,7 +147,7 @@ Prefer a hands-off setup? A [managed deployment service](https://aws.amazon.com/
 
 **Measured, not asserted:** `<1 ms` gateway overhead (0.8 ms of gateway CPU on a 2.5 KB chat request) · **6,000+ automated test cases** run against real AWS services, at **95%+ branch coverage** · **20 third-party clients** driven end to end against a live gateway · **80+ API operations** exposed as MCP tools.
 
-**[See all features →](https://stdapi.ai/features/)** · **[Browse the test suite →](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests)**
+**[See all features →](https://stdapi.ai/features/)** · **[Browse every model →](https://stdapi.ai/models/)** · **[Browse the test suite →](https://github.com/stdapi-ai/stdapi.ai/tree/main/tests)**
 
 ---
 
@@ -259,7 +259,7 @@ We welcome contributions! Whether it's bug reports, new features, documentation 
 
 <div align="center">
 
-**Ready to run 100+ AI models securely on AWS?**
+**Ready to run [100+ AI models](https://stdapi.ai/models/) securely on AWS?**
 
 [Start 14-Day Free Trial on AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) · [Deployment guide](https://stdapi.ai/operations_getting_started/) · [Terraform examples](https://github.com/stdapi-ai/samples) · [Try Locally with Docker](#-try-it-locally-with-docker)
 

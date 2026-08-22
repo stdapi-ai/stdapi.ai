@@ -81,7 +81,7 @@ stdapi.ai maps as many parameters as possible to Bedrock equivalents — across 
 
 ## :material-brain: 100+ Models Across 10+ Providers
 
-Access every model available on Amazon Bedrock through a single, consistent API — including OpenAI GPT, xAI Grok, and [other frontier models](#bedrock-mantle-models).
+Access every model available on Amazon Bedrock through a single, consistent API — including OpenAI GPT, xAI Grok, and [other frontier models](#bedrock-mantle-models). [Browse the full list](models.md).
 
 <div class="grid cards" markdown>
 
@@ -123,12 +123,15 @@ Access every model available on Amazon Bedrock through a single, consistent API 
 
 </div>
 
+This is a hand-picked sample, not the full roster — the [Models](models.md) page lists every model this gateway actually serves, generated from the live catalogue.
+
 ### Model Management
 
 - **Automatic model discovery** — Configured regions are scanned at startup, so there is no model list to maintain by hand and nothing to keep in step with Bedrock's catalogue
 - **Aliases** — A model is published under whichever names you choose, with Claude and OpenAI names resolving on their own; an alias can carry [its own service tier, guardrail, metadata and parameters](operations_configuration.md#model-aliases-configuration), so one model serves several policies under several names
 - **Deprecation handled for you** — Models AWS has retired drop out of the list your users pick from, so nobody builds on a model about to be withdrawn, and requests naming one are redirected to its replacement; a workload that still depends on one can [keep it listed](operations_configuration.md#bedrock-legacy)
 - **Capability discovery** — The [catalogue](api_search_models.md) advertises what each model can actually do — modality, route, streaming, speech to speech, transcription and translation, the search surfaces, and Batch API support — filterable over HTTP and through the same tool an agent reads before it calls anything
+- **Published, not just discoverable** — The [Models](models.md) page lists every model this gateway serves on AWS, with modalities, regional availability, AWS prices and independent leaderboard scores
 
 ---
 
@@ -474,7 +477,7 @@ Passing an HTTP test says nothing about whether a real coding agent, chatbot or 
 
 ### Every model is measured, not assumed
 
-Model documentation describes what a model is supposed to accept. What it actually accepts is something else, and it changes between generations of the same model family. Each supported model is **probed empirically** for the parameters and features it genuinely honours — including the parameters it accepts and then quietly ignores, which are the ones that silently produce a wrong answer. The results are recorded and the behaviour is pinned by tests.
+Model documentation describes what a model is supposed to accept. What it actually accepts is something else, and it changes between generations of the same model family. Each supported model is **probed empirically** for the parameters and features it genuinely honours — including the parameters it accepts and then quietly ignores, which are the ones that silently produce a wrong answer. The results are recorded and the behaviour is pinned by tests. [See what each model reports](models.md).
 
 ### Beyond automated tests
 

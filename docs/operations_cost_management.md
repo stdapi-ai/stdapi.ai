@@ -22,7 +22,7 @@ stdapi.ai **adds no markup**: model usage is billed to you by AWS at the same ra
 
 ## :material-tag-search: Knowing the Price Before You Call
 
-The [Model Pricing API](api_model_pricing.md) (`GET /model_pricing`) exposes the AWS unit prices stdapi.ai resolved for each model, from the same published-price catalog it uses to estimate costs. Use it for cost-aware model selection — comparing candidates before routing traffic, rather than discovering the rate afterwards in the logs.
+The [Model Pricing API](api_model_pricing.md) (`GET /model_pricing`) exposes the AWS unit prices stdapi.ai resolved for each model, from the same published-price catalog it uses to estimate costs. Use it for cost-aware model selection — comparing candidates before routing traffic, rather than discovering the rate afterwards in the logs. Without a deployment, the [Models](models.md) page publishes the same rates per region and tier.
 
 ---
 

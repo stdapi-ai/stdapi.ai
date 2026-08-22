@@ -360,10 +360,10 @@ _REGISTRY: tuple[_Entry, ...] = (
         assets=("xai",),
     ),
     _Entry(
-        label="Z.ai, GLM",
-        marks=("Z.ai", "GLM"),
+        label="Z.ai, Zhipu AI, GLM",
+        marks=("Z.ai", "Zhipu AI", "GLM"),
         owner="Z.ai",
-        pattern=r"\bZ\.ai\b|\bGLM\b",
+        pattern=r"\bZ\.ai\b|\bZhipu AI\b|\bGLM\b",
         assets=("zai",),
     ),
 )

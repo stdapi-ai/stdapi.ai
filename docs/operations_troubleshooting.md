@@ -240,7 +240,7 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     - A key policy conditioned on the [encryption context](operations_configuration.md#aws-transcribe-output-encryption-key-arn) must not require `stdapi-ai.user_id`: it is sent only when the request identifies an end user, so requiring it denies every anonymous call.
 
 ??? failure "`amazon.nova-2-sonic-v1:0` is missing from `/v1/models` or returns `404`"
-    The model is not offered in every AWS Region, and the catalog only lists what the configured Regions serve.
+    The model is not offered in every AWS Region, and the catalog only lists what the configured Regions serve. [Check the model's regions](models.md).
 
     - Add a Region that offers it to [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions); `us-east-1`, `us-west-2`, `ap-northeast-1` and `eu-north-1` did at the time of writing, while `eu-west-3` and `eu-central-1` did not.
     - Request model access for it in the Amazon Bedrock console for that Region.

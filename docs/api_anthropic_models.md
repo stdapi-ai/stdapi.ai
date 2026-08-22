@@ -24,7 +24,7 @@ Discover and list available Amazon Bedrock text models through an Anthropic-comp
 <div class="grid cards" markdown>
 
 - :material-view-grid: __Text Model Catalog__
-  <br>Browse the available Bedrock text models across regions.
+  <br>Browse the available Bedrock text models across regions. See the [Models](models.md) page for a browsable table.
 
 - :material-sync: __Always Up-to-Date__
   <br>Dynamic model discovery automatically shows new models as they become available in Bedrock.

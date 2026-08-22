@@ -1,0 +1,39 @@
+{
+  "_readme": [
+    "Human decisions about how leaderboard entries map onto Bedrock model IDs.",
+    "They outrank both the deterministic rules and the matching model, and a",
+    "pinned rejection can never be resurrected by a later run.",
+    "",
+    "Shape: {\"<bedrock model id>\": {\"<source>/<board>\": {\"match\": \"<entry name>\"",
+    "or null to reject, \"reason\": \"why\"}}}.",
+    "",
+    "Review docs_gen/model_catalog/state/unmatched.json after every run: its",
+    "entries_shared_by_several_models section is where a wrong match shows up."
+  ],
+  "anthropic.claude-sonnet-4-6": {
+    "epoch/math_level_5": {
+      "match": null,
+      "reason": "matched claude-sonnet-4-20250514, a different model generation"
+    },
+    "epoch/aider_polyglot_external": {
+      "match": null,
+      "reason": "matched claude-sonnet-4-20250514, a different model generation"
+    }
+  },
+  "qwen.qwen3-235b-a22b-2507-v1:0": {
+    "lmarena/text": {
+      "match": null,
+      "reason": "matched qwen3-235b-a22b, a different release of the model"
+    }
+  },
+  "qwen.qwen3-235b-a22b-2507": {
+    "epoch/math_level_5": {
+      "match": null,
+      "reason": "matched qwen3-235b-a22b, a different release of the model"
+    },
+    "epoch/aider_polyglot_external": {
+      "match": null,
+      "reason": "matched Qwen3-235B-A22B, a different release of the model"
+    }
+  }
+}

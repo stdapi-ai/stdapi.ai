@@ -1,0 +1,19 @@
+{
+ "_readme": [
+  "Vendor pages backing the hand-checked values on the Models page.",
+  "Written by the generator from state/enrichment.json; do not edit.",
+  "One entry per published value an overlay entry states, whether the",
+  "overlay filled it or an automatic source arrived at the same value.",
+  "Values no overlay entry covers are sourced by the page's own table."
+ ],
+ "models": {
+  "a.gone": {
+   "parameters": {
+    "checked": "2026-08-22",
+    "source": "https://example.invalid/card",
+    "source_name": "Vendor model card",
+    "value": "7B"
+   }
+  }
+ }
+}

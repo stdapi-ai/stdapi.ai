@@ -345,7 +345,7 @@ curl -X POST "$BASE/v1/images/variations" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: multipart/form-data" \
   -F image=@input.png \
-  -F model="amazon.titan-image-generator-v2:0"
+  -F model="amazon.nova-canvas-v1:0"
 ```
 
 **Create multiple variations:**
@@ -355,7 +355,7 @@ curl -X POST "$BASE/v1/images/variations" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: multipart/form-data" \
   -F image=@input.png \
-  -F model="amazon.titan-image-generator-v2:0" \
+  -F model="amazon.nova-canvas-v1:0" \
   -F n=3
 ```
 
@@ -366,7 +366,7 @@ curl -X POST "$BASE/v1/images/variations" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: multipart/form-data" \
   -F image=@input.png \
-  -F model="amazon.titan-image-generator-v2:0" \
+  -F model="amazon.nova-canvas-v1:0" \
   -F response_format="b64_json"
 ```
 

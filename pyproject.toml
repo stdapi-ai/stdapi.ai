@@ -61,6 +61,7 @@ lint = [
     "stdapi[opentelemetry, uvicorn]",
     "mypy",
     "ruff",
+    {include-group = "docs-gen"},
     "types-aiobotocore[bedrock, bedrock-agent-runtime, bedrock-runtime, polly, comprehend, meteringmarketplace, pricing, s3, sts, transcribe, translate]>=3.8",
     "types-PyYAML",
 ]
@@ -68,12 +69,23 @@ docs = [
     "stdapi",
     "mkdocs-material",
     "mkdocs-redoc-tag",
+    # Ships the built HTML, CSS and JS without the comments and indentation the
+    # sources are written with: the Models page alone loads 82 KB of assets.
+    "mkdocs-minify-plugin",
+]
+# Only the Models page generator; the site build never needs it, so it stays out
+# of the "docs" group the documentation workflow installs.
+docs-gen = [
+    "stdapi",
+    # Reads the leaderboard snapshots the sources publish as Parquet.
+    "pyarrow>=17",
 ]
 dev = [
     "stdapi[opentelemetry, uvicorn, granian, mcp]",
     {include-group = "test"},
     {include-group = "lint"},
     {include-group = "docs"},
+    {include-group = "docs-gen"},
 ]
 
 [tool.uv]
@@ -146,6 +158,9 @@ runtime-evaluated-base-classes = [
 extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.BackgroundTasks"]
 
 [tool.ruff.lint.per-file-ignores]
+"docs_gen/**/__main__.py" = [
+    "T201", # a command line generator reports on stdout
+]
 "tests/*.py" = [
     "S101", # assert
     "ARG002", # parametrize comments
@@ -154,7 +169,7 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Backgroun
 ]
 
 [tool.mypy]
-files = ["stdapi", "tests"]
+files = ["stdapi", "tests", "docs_gen"]
 check_untyped_defs = true
 disallow_any_generics = true
 disallow_incomplete_defs = true
@@ -171,6 +186,11 @@ warn_unused_ignores = true
 
 # The generated bidirectional AWS clients ship no py.typed marker; everything
 # they are built on (smithy_*, awscrt) is typed.
+# pyarrow ships no py.typed marker; the generator only reads a table from it.
+[[tool.mypy.overrides]]
+module = ["pyarrow.*"]
+ignore_missing_imports = true
+
 [[tool.mypy.overrides]]
 module = [
     "aws_sdk_polly.*",

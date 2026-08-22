@@ -1,0 +1,1846 @@
+{
+ "_readme": [
+  "Facts looked up from each vendor's own documentation, one at a time.",
+  "Each was proposed by one agent from a cited page and then independently",
+  "re-checked against that page by another; only the ones that survived are here.",
+  "",
+  "An entry only fills a field the automatic sources left empty. To refresh one,",
+  "edit the value and move its `checked` date.",
+  "",
+  "See provenance.json for what the last run actually used."
+ ],
+ "ai21.jamba-1-5-large-v1:0": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/ai21labs/AI21-Jamba-1.5-Large",
+   "source_name": "AI21 Jamba 1.5 Large model card (Hugging Face)",
+   "value": "94B"
+  },
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-ai21-labs-jamba-1-5-large.html",
+   "source_name": "AWS Bedrock model card - Jamba 1.5 Large (also stated on the AI21 Hugging Face card)",
+   "value": "256K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/ai21labs/AI21-Jamba-1.5-Large",
+   "source_name": "AI21 Labs Hugging Face model card - Jamba 1.5 family (hybrid SSM-Transformer)",
+   "value": "Jamba"
+  },
+  "knowledge_cutoff": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/ai21labs/AI21-Jamba-1.5-Large",
+   "source_name": "AI21 Labs Hugging Face model card - AI21-Jamba-1.5-Large (knowledge cutoff March 5, 2024)",
+   "value": "2024-03-05"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-ai21-labs-jamba-1-5-large.html",
+   "source_name": "AWS Bedrock model card - Jamba 1.5 Large (Max output tokens: 4K)",
+   "value": 4096
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/ai21labs/AI21-Jamba-1.5-Large",
+   "source_name": "AI21 Labs Hugging Face model card - weights published under the Jamba Open Model License",
+   "value": true
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/ai21labs/AI21-Jamba-1.5-Large",
+   "source_name": "AI21 Jamba 1.5 Large model card (Hugging Face)",
+   "value": "398B"
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-ai21-labs-jamba-1-5-large.html",
+   "source_name": "AWS Bedrock model card - Jamba 1.5 Large (Client-side tool calling supported); AI21 HF card documents tool use API",
+   "value": true
+  }
+ },
+ "ai21.jamba-1-5-mini-v1:0": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/ai21labs/AI21-Jamba-1.5-Mini",
+   "source_name": "AI21 Jamba 1.5 Mini model card (Hugging Face)",
+   "value": "12B"
+  },
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-ai21-labs-jamba-1-5-mini.html",
+   "source_name": "AWS Bedrock model card - Jamba 1.5 Mini (also stated on the AI21 Hugging Face card)",
+   "value": "256K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/ai21labs/AI21-Jamba-1.5-Mini",
+   "source_name": "AI21 Labs Hugging Face model card - Jamba 1.5 family (hybrid SSM-Transformer)",
+   "value": "Jamba"
+  },
+  "knowledge_cutoff": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/ai21labs/AI21-Jamba-1.5-Mini",
+   "source_name": "AI21 Labs Hugging Face model card - AI21-Jamba-1.5-Mini (knowledge cutoff March 5, 2024)",
+   "value": "2024-03-05"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-ai21-labs-jamba-1-5-mini.html",
+   "source_name": "AWS Bedrock model card - Jamba 1.5 Mini (Max output tokens: 4K)",
+   "value": 4096
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/ai21labs/AI21-Jamba-1.5-Mini",
+   "source_name": "AI21 Labs Hugging Face model card - weights published under the Jamba Open Model License",
+   "value": true
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/ai21labs/AI21-Jamba-1.5-Mini",
+   "source_name": "AI21 Jamba 1.5 Mini model card (Hugging Face)",
+   "value": "52B"
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/ai21labs/AI21-Jamba-1.5-Mini",
+   "source_name": "AI21 Labs Hugging Face model card - documented tool use support",
+   "value": true
+  }
+ },
+ "amazon.nova-2-sonic-v1:0": {
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-2-sonic.html",
+   "source_name": "AWS Bedrock model card - Nova 2 Sonic",
+   "value": "1M"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-2-sonic.html",
+   "source_name": "AWS Bedrock model card - Nova 2 Sonic",
+   "value": "Amazon Nova 2"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-2-sonic.html",
+   "source_name": "AWS Bedrock model card - Nova 2 Sonic (Max output tokens: 64K)",
+   "value": 64000
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/nova/latest/nova2-userguide/using-conversational-speech.html",
+   "source_name": "Amazon Nova 2 User Guide - Speech-to-Speech (function calling and asynchronous tool handling)",
+   "value": true
+  }
+ },
+ "amazon.nova-premier-v1:0": {
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-premier.html",
+   "source_name": "AWS Bedrock model card - Nova Premier",
+   "value": "1M"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/nova/latest/userguide/what-is-nova.html",
+   "source_name": "Amazon Nova User Guide - understanding model specifications",
+   "value": "Amazon Nova"
+  },
+  "knowledge_cutoff": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-premier.html",
+   "source_name": "AWS Bedrock model card - Nova Premier",
+   "value": "2024-10"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-premier.html",
+   "source_name": "AWS Bedrock model card - Nova Premier",
+   "value": 25000
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/nova/latest/userguide/what-is-nova.html",
+   "source_name": "Amazon Nova User Guide - What is Amazon Nova (Bedrock API-only access)",
+   "value": false
+  },
+  "reasoning": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-premier.html",
+   "source_name": "AWS Bedrock model card - Nova Premier (Reasoning: Supported)",
+   "value": true
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-premier.html",
+   "source_name": "AWS Bedrock model card - Nova Premier (Client-side tool calling supported)",
+   "value": true
+  }
+ },
+ "amazon.nova-sonic-v1:0": {
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/nova/latest/userguide/what-is-nova.html",
+   "source_name": "Amazon Nova User Guide - creative and speech model specifications (Input Context Window: 300K)",
+   "value": "300K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/nova/latest/userguide/what-is-nova.html",
+   "source_name": "Amazon Nova User Guide - model categories (Nova Sonic, Speech category)",
+   "value": "Amazon Nova"
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/nova/latest/userguide/what-is-nova.html",
+   "source_name": "Amazon Nova User Guide - What is Amazon Nova (Bedrock API-only access)",
+   "value": false
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/nova/latest/userguide/what-is-nova.html",
+   "source_name": "Amazon Nova User Guide - speech model specs (Knowledge Bases supported through tool use / function calling)",
+   "value": true
+  }
+ },
+ "anthropic.claude-3-5-sonnet-20240620-v1:0": {
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://www.anthropic.com/news/claude-3-5-sonnet",
+   "source_name": "Anthropic \u2014 Introducing Claude 3.5 Sonnet (June 20, 2024 launch post): \"$3 per million input tokens and $15 per million output tokens, with a 200K token context window\"",
+   "value": "200K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://www.anthropic.com/news/claude-3-5-sonnet",
+   "source_name": "Anthropic \u2014 Introducing Claude 3.5 Sonnet (first model of the Claude 3.5 model family)",
+   "value": "Claude 3.5"
+  },
+  "knowledge_cutoff": {
+   "checked": "2026-08-22",
+   "source": "https://assets.anthropic.com/m/1cd9d098ac3e6467/original/Claude-3-Model-Card-October-Addendum.pdf",
+   "source_name": "Anthropic \u2014 Claude 3 Model Card October Addendum, \u00a71.1 Knowledge Cutoff: \"The knowledge cutoff for the upgraded Claude 3.5 Sonnet is April 2024, same as that of the original Claude 3.5 Sonnet model.\"",
+   "value": "2024-04"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://platform.claude.com/docs/en/release-notes/overview",
+   "source_name": "Anthropic Claude Platform release notes \u2014 July 15th, 2024 (\"Generate outputs up to 8,192 tokens in length from Claude Sonnet 3.5\") and August 19th, 2024 (\"8,192-token outputs on Claude Sonnet 3.5 are out of beta\")",
+   "value": 8192
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://www.anthropic.com/news/claude-3-5-sonnet",
+   "source_name": "Anthropic \u2014 Introducing Claude 3.5 Sonnet: \"When instructed and provided with the relevant tools, Claude 3.5 Sonnet can independently write, edit, and execute code\"",
+   "value": true
+  }
+ },
+ "anthropic.claude-3-5-sonnet-20241022-v2:0": {
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://platform.claude.com/docs/en/release-notes/overview",
+   "source_name": "Anthropic release notes \u2014 October 22nd, 2024 refers to the upgraded model as \"Claude Sonnet 3.5\"",
+   "value": "Claude 3.5"
+  },
+  "knowledge_cutoff": {
+   "checked": "2026-08-22",
+   "source": "https://assets.anthropic.com/m/1cd9d098ac3e6467/original/Claude-3-Model-Card-October-Addendum.pdf",
+   "source_name": "Anthropic \u2014 Claude 3 Model Card October Addendum, \u00a71.1: \"The knowledge cutoff for the upgraded Claude 3.5 Sonnet is April 2024\"",
+   "value": "2024-04"
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://platform.claude.com/docs/en/release-notes/overview",
+   "source_name": "Anthropic release notes \u2014 October 22nd, 2024: \"We've added Anthropic-defined computer use tools to our API for use with the new Claude Sonnet 3.5\"",
+   "value": true
+  }
+ },
+ "anthropic.claude-3-7-sonnet-20250219-v1:0": {
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://www.anthropic.com/news/claude-3-7-sonnet",
+   "source_name": "Anthropic \u2014 Claude 3.7 Sonnet launch post",
+   "value": "Claude 3.7"
+  },
+  "knowledge_cutoff": {
+   "checked": "2026-08-22",
+   "source": "https://www-cdn.anthropic.com/9ff93dfa8f445c932415d335c88852ef47f1201e/claude-3-7-sonnet-system-card.pdf",
+   "source_name": "Anthropic \u2014 Claude 3.7 Sonnet System Card: \"While trained on publicly available information on the internet through November 2024, Claude 3.7 Sonnet's knowledge cut-off date is the end of October 2024.\" (reachable via https://anthropic.com/claude-3-7-sonnet-system-card)",
+   "value": "2024-10"
+  },
+  "reasoning": {
+   "checked": "2026-08-22",
+   "source": "https://www.anthropic.com/news/claude-3-7-sonnet",
+   "source_name": "Anthropic \u2014 Claude 3.7 Sonnet and Claude Code: \"Claude 3.7 Sonnet can produce near-instant responses or extended, step-by-step thinking that is made visible to the user.\"",
+   "value": true
+  }
+ },
+ "anthropic.claude-3-haiku-20240307-v1:0": {
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-3-haiku.html",
+   "source_name": "AWS Bedrock model card \u2014 Claude 3 Haiku: \"Context window: 200K tokens\"",
+   "value": "200K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://www-cdn.anthropic.com/de8ba9b01c9ab7cbabf5c33b80b7bbc618857627/Model_Card_Claude_3.pdf",
+   "source_name": "Anthropic \u2014 Claude 3 Model Card (\"the Claude 3 model family\")",
+   "value": "Claude 3"
+  },
+  "knowledge_cutoff": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-3-haiku.html",
+   "source_name": "AWS Bedrock model card \u2014 Claude 3 Haiku: \"Knowledge cutoff: Aug 2023\"; matches Anthropic's Claude 3 Model Card (\"The knowledge cutoff for the Claude 3 models is August 2023\")",
+   "value": "2023-08"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-3-haiku.html",
+   "source_name": "AWS Bedrock model card \u2014 Claude 3 Haiku: \"Max output tokens: 4K\" (4,096)",
+   "value": 4096
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+   "source_name": "Anthropic \u2014 Model deprecations: retired weights are preserved internally, not published",
+   "value": false
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://www-cdn.anthropic.com/de8ba9b01c9ab7cbabf5c33b80b7bbc618857627/Model_Card_Claude_3.pdf",
+   "source_name": "Anthropic \u2014 Claude 3 Model Card: \"The model family also excels at tool use, also known as function calling\"",
+   "value": true
+  }
+ },
+ "anthropic.claude-3-sonnet-20240229-v1:0": {
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://www.anthropic.com/news/claude-3-family",
+   "source_name": "Anthropic \u2014 Introducing the next generation of Claude: \"The Claude 3 family of models will initially offer a 200K context window upon launch.\"",
+   "value": "200K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://www-cdn.anthropic.com/de8ba9b01c9ab7cbabf5c33b80b7bbc618857627/Model_Card_Claude_3.pdf",
+   "source_name": "Anthropic \u2014 Claude 3 Model Card (\"the Claude 3 model family\")",
+   "value": "Claude 3"
+  },
+  "knowledge_cutoff": {
+   "checked": "2026-08-22",
+   "source": "https://www-cdn.anthropic.com/de8ba9b01c9ab7cbabf5c33b80b7bbc618857627/Model_Card_Claude_3.pdf",
+   "source_name": "Anthropic \u2014 Claude 3 Model Card: \"The knowledge cutoff for the Claude 3 models is August 2023.\"",
+   "value": "2023-08"
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+   "source_name": "Anthropic \u2014 Model deprecations: retired weights are preserved internally, not published",
+   "value": false
+  },
+  "reasoning": {
+   "checked": "2026-08-22",
+   "source": "https://www-cdn.anthropic.com/de8ba9b01c9ab7cbabf5c33b80b7bbc618857627/Model_Card_Claude_3.pdf",
+   "source_name": "Anthropic \u2014 Claude 3 Model Card: no extended-thinking/reasoning mode is described for any Claude 3 model; thinking first shipped with Claude Sonnet 3.7 (release notes, Feb 24, 2025)",
+   "value": false
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://www-cdn.anthropic.com/de8ba9b01c9ab7cbabf5c33b80b7bbc618857627/Model_Card_Claude_3.pdf",
+   "source_name": "Anthropic \u2014 Claude 3 Model Card: \"The model family also excels at tool use, also known as function calling\"",
+   "value": true
+  }
+ },
+ "anthropic.claude-haiku-4-5": {
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-4-5.html",
+   "source_name": "AWS Bedrock model card \u2014 Claude Haiku 4.5: \"Context window: 200K tokens\" (Anthropic's models overview says \"200k tokens\"); this card also lists the bedrock-mantle model ID `anthropic.claude-haiku-4-5`",
+   "value": "200K"
+  },
+  "knowledge_cutoff": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-4-5.html",
+   "source_name": "AWS Bedrock model card \u2014 Claude Haiku 4.5: \"Knowledge cutoff: Feb 2025\"; Anthropic's models overview lists \"Reliable knowledge cutoff: Feb 2025\" (and a broader \"Training data cutoff: Jul 2025\")",
+   "value": "2025-02"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://platform.claude.com/docs/en/about-claude/models/overview",
+   "source_name": "Anthropic \u2014 Models overview, latest models comparison: Claude Haiku 4.5 \"Max output: 64k tokens\" (AWS model card: \"Max output tokens: 64K\")",
+   "value": 64000
+  },
+  "reasoning": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-4-5.html",
+   "source_name": "AWS Bedrock model card \u2014 Claude Haiku 4.5: \"Reasoning: Supported\"; Anthropic's models overview lists Extended thinking (thinking.type: \"enabled\") = Yes",
+   "value": true
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-4-5.html",
+   "source_name": "AWS Bedrock model card \u2014 Claude Haiku 4.5: \"Client-side tool calling\" listed as supported on the bedrock-runtime endpoint",
+   "value": true
+  }
+ },
+ "anthropic.claude-sonnet-4-20250514-v1:0": {
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4.html",
+   "source_name": "AWS Bedrock model card \u2014 Claude Sonnet 4: \"Context window: 200K tokens\" (Anthropic's Bedrock page also states Sonnet 4 has a 200k-token context window; the 1M-token beta was retired April 30, 2026)",
+   "value": "200K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html",
+   "source_name": "AWS Bedrock models at a glance \u2014 Claude Sonnet 4 is listed under \"Claude 4.x\"; Anthropic launched it as part of Claude 4 (release notes, May 22, 2025: \"Claude Opus 4 and Claude Sonnet 4\")",
+   "value": "Claude 4"
+  },
+  "knowledge_cutoff": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4.html",
+   "source_name": "AWS Bedrock model card \u2014 Claude Sonnet 4: \"Knowledge cutoff: Mar 2025\"",
+   "value": "2025-03"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4.html",
+   "source_name": "AWS Bedrock model card \u2014 Claude Sonnet 4: \"Max output tokens: 64K\"",
+   "value": 64000
+  },
+  "reasoning": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4.html",
+   "source_name": "AWS Bedrock model card \u2014 Claude Sonnet 4: \"Reasoning: Supported\" and \"extended thinking with tool use\"",
+   "value": true
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4.html",
+   "source_name": "AWS Bedrock model card \u2014 Claude Sonnet 4: \"Client-side tool calling\" listed as supported on the bedrock-runtime endpoint",
+   "value": true
+  }
+ },
+ "deepseek.r1-v1:0": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/deepseek-ai/DeepSeek-R1/raw/main/README.md",
+   "source_name": "DeepSeek-R1 Hugging Face model card (Model Downloads table: #Total Params 671B, #Activated Params 37B)",
+   "value": "37B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/deepseek-ai/DeepSeek-R1/raw/main/README.md",
+   "source_name": "DeepSeek-R1 Hugging Face model card (Model Downloads table: #Total Params 671B, #Activated Params 37B)",
+   "value": "671B"
+  }
+ },
+ "deepseek.v3-v1:0": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/deepseek-ai/DeepSeek-V3/raw/main/README.md",
+   "source_name": "DeepSeek-V3 Hugging Face model card (\"671B total parameters with 37B activated for each token\"; note also states the 685B HF repo size is 671B main + 14B MTP)",
+   "value": "37B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/deepseek-ai/DeepSeek-V3/raw/main/README.md",
+   "source_name": "DeepSeek-V3 Hugging Face model card (\"671B total parameters with 37B activated for each token\"; note also states the 685B HF repo size is 671B main + 14B MTP)",
+   "value": "671B"
+  }
+ },
+ "deepseek.v3.1": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/deepseek-ai/DeepSeek-V3.1/raw/main/README.md",
+   "source_name": "DeepSeek-V3.1 Hugging Face model card (Model Downloads table: DeepSeek-V3.1 | 671B | 37B | 128K)",
+   "value": "37B"
+  },
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://api-docs.deepseek.com/news/news250821/",
+   "source_name": "DeepSeek API Docs \u2014 DeepSeek-V3.1 Release",
+   "value": "128K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/deepseek-ai/DeepSeek-V3.1",
+   "source_name": "Hugging Face \u2014 deepseek-ai/DeepSeek-V3.1",
+   "value": "DeepSeek-V3"
+  },
+  "knowledge_cutoff": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-1.html",
+   "source_name": "AWS Bedrock model card \u2014 DeepSeek-V3.1",
+   "value": "2025-01"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-1.html",
+   "source_name": "AWS Bedrock model card \u2014 DeepSeek-V3.1",
+   "value": 8192
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/deepseek-ai/DeepSeek-V3.1",
+   "source_name": "Hugging Face \u2014 deepseek-ai/DeepSeek-V3.1",
+   "value": true
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/deepseek-ai/DeepSeek-V3.1/raw/main/README.md",
+   "source_name": "DeepSeek-V3.1 Hugging Face model card (Model Downloads table: DeepSeek-V3.1 | 671B | 37B | 128K)",
+   "value": "671B"
+  },
+  "reasoning": {
+   "checked": "2026-08-22",
+   "source": "https://api-docs.deepseek.com/news/news250821/",
+   "source_name": "DeepSeek API Docs \u2014 DeepSeek-V3.1 Release",
+   "value": true
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://api-docs.deepseek.com/news/news250821/",
+   "source_name": "DeepSeek API Docs \u2014 DeepSeek-V3.1 Release",
+   "value": true
+  }
+ },
+ "google.gemma-3-12b-it": {
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/google/gemma-3-12b-it",
+   "source_name": "Hugging Face model card \u2014 gemma-3-12b-it (\"12B params\", dense)",
+   "value": "12B"
+  }
+ },
+ "google.gemma-3-27b-it": {
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/google/gemma-3-27b-it",
+   "source_name": "Hugging Face model card \u2014 gemma-3-27b-it (\"Model size: 27B params\", dense)",
+   "value": "27B"
+  }
+ },
+ "google.gemma-3-4b-it": {
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/google/gemma-3-4b-it",
+   "source_name": "Hugging Face model card \u2014 gemma-3-4b-it (\"4B params\", dense)",
+   "value": "4B"
+  }
+ },
+ "google.gemma-4-26b-a4b": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://ai.google.dev/gemma/docs/core/model_card_4",
+   "source_name": "Google Gemma 4 model card \u2014 26B A4B MoE (25.2B total, 3.8B active; corroborated by the Bedrock model card)",
+   "value": "3.8B"
+  },
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://ai.google.dev/gemma/docs/core/model_card_4",
+   "source_name": "Google Gemma 4 model card (ai.google.dev)",
+   "value": "256K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://ai.google.dev/gemma/docs/core",
+   "source_name": "Google Gemma 4 model overview (ai.google.dev)",
+   "value": "Gemma 4"
+  },
+  "knowledge_cutoff": {
+   "checked": "2026-08-22",
+   "source": "https://ai.google.dev/gemma/docs/core/model_card_4",
+   "source_name": "Google Gemma 4 model card (ai.google.dev)",
+   "value": "2025-01"
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/google/gemma-4-26B-A4B-it",
+   "source_name": "Hugging Face - google/gemma-4-26B-A4B-it (Apache 2.0)",
+   "value": true
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://ai.google.dev/gemma/docs/core/model_card_4",
+   "source_name": "Google Gemma 4 model card \u2014 26B A4B MoE (25.2B total, 3.8B active; corroborated by the Bedrock model card)",
+   "value": "25.2B"
+  },
+  "reasoning": {
+   "checked": "2026-08-22",
+   "source": "https://ai.google.dev/gemma/docs/core/model_card_4",
+   "source_name": "Google Gemma 4 model card (ai.google.dev)",
+   "value": true
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://ai.google.dev/gemma/docs/core/model_card_4",
+   "source_name": "Google Gemma 4 model card (ai.google.dev)",
+   "value": true
+  }
+ },
+ "google.gemma-4-31b": {
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://ai.google.dev/gemma/docs/core/model_card_4",
+   "source_name": "Google Gemma 4 model card (ai.google.dev)",
+   "value": "256K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://ai.google.dev/gemma/docs/core",
+   "source_name": "Google Gemma 4 model overview (ai.google.dev)",
+   "value": "Gemma 4"
+  },
+  "knowledge_cutoff": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/google/gemma-4-31B-it",
+   "source_name": "Hugging Face - google/gemma-4-31B-it",
+   "value": "2025-01"
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/google/gemma-4-31B-it",
+   "source_name": "Hugging Face - google/gemma-4-31B-it (Apache 2.0)",
+   "value": true
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://ai.google.dev/gemma/docs/core/model_card_4",
+   "source_name": "Google Gemma 4 model card \u2014 31B Dense (30.7B total parameters)",
+   "value": "30.7B"
+  },
+  "reasoning": {
+   "checked": "2026-08-22",
+   "source": "https://ai.google.dev/gemma/docs/core/model_card_4",
+   "source_name": "Google Gemma 4 model card (ai.google.dev)",
+   "value": true
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://ai.google.dev/gemma/docs/core/model_card_4",
+   "source_name": "Google Gemma 4 model card (ai.google.dev)",
+   "value": true
+  }
+ },
+ "google.gemma-4-e2b": {
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://ai.google.dev/gemma/docs/core/model_card_4",
+   "source_name": "Google Gemma 4 model card (ai.google.dev)",
+   "value": "128K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://ai.google.dev/gemma/docs/core",
+   "source_name": "Google Gemma 4 model overview (ai.google.dev)",
+   "value": "Gemma 4"
+  },
+  "knowledge_cutoff": {
+   "checked": "2026-08-22",
+   "source": "https://ai.google.dev/gemma/docs/core/model_card_4",
+   "source_name": "Google Gemma 4 model card (ai.google.dev)",
+   "value": "2025-01"
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/google/gemma-4-E2B-it",
+   "source_name": "Hugging Face - google/gemma-4-E2B-it (Apache 2.0)",
+   "value": true
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://ai.google.dev/gemma/docs/core/model_card_4",
+   "source_name": "Google Gemma 4 model card \u2014 E2B: \"2.3B effective (5.1B with embeddings)\"; dense with Per-Layer Embeddings, not MoE",
+   "value": "5.1B"
+  },
+  "reasoning": {
+   "checked": "2026-08-22",
+   "source": "https://ai.google.dev/gemma/docs/core/model_card_4",
+   "source_name": "Google Gemma 4 model card (ai.google.dev)",
+   "value": true
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://ai.google.dev/gemma/docs/core/model_card_4",
+   "source_name": "Google Gemma 4 model card (ai.google.dev)",
+   "value": true
+  }
+ },
+ "meta.llama3-1-70b-instruct-v1:0": {
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/meta-llama/Llama-3.1-70B-Instruct",
+   "source_name": "Hugging Face model card \u2014 Llama-3.1-70B-Instruct (Params: 70B, dense)",
+   "value": "70B"
+  }
+ },
+ "meta.llama3-1-8b-instruct-v1:0": {
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct",
+   "source_name": "Hugging Face model card \u2014 Llama-3.1-8B-Instruct (Params: 8B, dense)",
+   "value": "8B"
+  }
+ },
+ "meta.llama3-3-70b-instruct-v1:0": {
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct",
+   "source_name": "Hugging Face model card \u2014 Llama-3.3-70B-Instruct (Params: 70B, dense)",
+   "value": "70B"
+  }
+ },
+ "meta.llama3-70b-instruct-v1:0": {
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://github.com/meta-llama/llama3/blob/main/MODEL_CARD.md",
+   "source_name": "Meta Llama 3 model card (GitHub, meta-llama/llama3)",
+   "value": "8K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://github.com/meta-llama/llama3/blob/main/MODEL_CARD.md",
+   "source_name": "Meta Llama 3 model card (GitHub, meta-llama/llama3)",
+   "value": "Llama 3"
+  },
+  "knowledge_cutoff": {
+   "checked": "2026-08-22",
+   "source": "https://github.com/meta-llama/llama3/blob/main/MODEL_CARD.md",
+   "source_name": "Meta Llama 3 model card (GitHub, meta-llama/llama3)",
+   "value": "2023-12"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-70b-instruct.html",
+   "source_name": "AWS Bedrock model card - Llama 3 70B Instruct",
+   "value": 8192
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/meta-llama/Meta-Llama-3-70B-Instruct",
+   "source_name": "Hugging Face - meta-llama/Meta-Llama-3-70B-Instruct",
+   "value": true
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/meta-llama/Meta-Llama-3-70B-Instruct",
+   "source_name": "Hugging Face model card \u2014 Meta-Llama-3-70B-Instruct (Params: 70B, dense)",
+   "value": "70B"
+  },
+  "reasoning": {
+   "checked": "2026-08-22",
+   "source": "https://github.com/meta-llama/llama3/blob/main/MODEL_CARD.md",
+   "source_name": "Meta Llama 3 model card (GitHub, meta-llama/llama3)",
+   "value": false
+  }
+ },
+ "meta.llama3-8b-instruct-v1:0": {
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://github.com/meta-llama/llama3/blob/main/MODEL_CARD.md",
+   "source_name": "Meta Llama 3 model card (GitHub, meta-llama/llama3)",
+   "value": "8K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://github.com/meta-llama/llama3/blob/main/MODEL_CARD.md",
+   "source_name": "Meta Llama 3 model card (GitHub, meta-llama/llama3)",
+   "value": "Llama 3"
+  },
+  "knowledge_cutoff": {
+   "checked": "2026-08-22",
+   "source": "https://github.com/meta-llama/llama3/blob/main/MODEL_CARD.md",
+   "source_name": "Meta Llama 3 model card (GitHub, meta-llama/llama3)",
+   "value": "2023-03"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-8b-instruct.html",
+   "source_name": "AWS Bedrock model card - Llama 3 8B Instruct",
+   "value": 8192
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct",
+   "source_name": "Hugging Face - meta-llama/Meta-Llama-3-8B-Instruct",
+   "value": true
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct",
+   "source_name": "Hugging Face model card \u2014 Meta-Llama-3-8B-Instruct (Params: 8B, dense)",
+   "value": "8B"
+  }
+ },
+ "meta.llama4-maverick-17b-instruct-v1:0": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/meta-llama/Llama-4-Maverick-17B-128E-Instruct",
+   "source_name": "Hugging Face model card \u2014 Llama-4-Maverick-17B-128E-Instruct (17B activated, 400B total)",
+   "value": "17B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/meta-llama/Llama-4-Maverick-17B-128E-Instruct",
+   "source_name": "Hugging Face model card \u2014 Llama-4-Maverick-17B-128E-Instruct (17B activated, 400B total)",
+   "value": "400B"
+  }
+ },
+ "meta.llama4-scout-17b-instruct-v1:0": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/meta-llama/Llama-4-Scout-17B-16E-Instruct",
+   "source_name": "Hugging Face model card \u2014 Llama-4-Scout-17B-16E-Instruct (17B activated, 109B total)",
+   "value": "17B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/meta-llama/Llama-4-Scout-17B-16E-Instruct",
+   "source_name": "Hugging Face model card \u2014 Llama-4-Scout-17B-16E-Instruct (17B activated, 109B total)",
+   "value": "109B"
+  }
+ },
+ "minimax.minimax-m2": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/MiniMaxAI/MiniMax-M2",
+   "source_name": "MiniMax-M2 model card (Hugging Face)",
+   "value": "10B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/MiniMaxAI/MiniMax-M2",
+   "source_name": "MiniMax-M2 model card (Hugging Face)",
+   "value": "230B"
+  }
+ },
+ "minimax.minimax-m2.1": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://www.minimax.io/news/post-training-experience-and-insights-for-agent-models",
+   "source_name": "MiniMax M2.1 post-training report (minimax.io)",
+   "value": "10B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://www.minimax.io/news/post-training-experience-and-insights-for-agent-models",
+   "source_name": "MiniMax M2.1 post-training report (minimax.io)",
+   "value": "230B"
+  }
+ },
+ "minimax.minimax-m2.5": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/MiniMaxAI/MiniMax-M2.5",
+   "source_name": "MiniMax-M2.5 repo metadata and config.json (Hugging Face)",
+   "value": "10B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/MiniMaxAI/MiniMax-M2.5",
+   "source_name": "MiniMax-M2.5 repo metadata and config.json (Hugging Face)",
+   "value": "230B"
+  }
+ },
+ "mistral.devstral-2-123b": {
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/mistralai/Devstral-2-123B-Instruct-2512",
+   "source_name": "Hugging Face model card: mistralai/Devstral-2-123B-Instruct-2512 (corroborated by the AWS Bedrock model card, which says \"123-billion parameter coding model\")",
+   "value": "123B"
+  }
+ },
+ "mistral.magistral-small-2509": {
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/mistralai/Magistral-Small-2509",
+   "source_name": "Hugging Face model card: mistralai/Magistral-Small-2509 \u2014 \"a small, efficient reasoning model with 24B parameters\"",
+   "value": "24B"
+  }
+ },
+ "mistral.ministral-3-3b-instruct": {
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://mistral.ai/news/mistral-3/",
+   "source_name": "Mistral AI announcement \"Introducing Mistral 3\" \u2014 Ministral 3 series at \"3B, 8B, and 14B parameters\" (HF card breaks it down as a 3.4B language model plus a 0.4B vision encoder; the vendor markets it as 3B)",
+   "value": "3B"
+  }
+ },
+ "mistral.mistral-7b-instruct-v0:2": {
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://docs.mistral.ai/models/model-cards/mistral-7b-0-2",
+   "source_name": "Mistral AI docs \u2014 Mistral 7B v0.2 model card (open-mistral-7b)",
+   "value": "32K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://docs.mistral.ai/models/model-cards/mistral-7b-0-2",
+   "source_name": "Mistral AI docs \u2014 Mistral 7B v0.2 model card",
+   "value": "Mistral 7B"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-7b-instruct.html",
+   "source_name": "AWS Bedrock model card \u2014 Mistral 7B Instruct (mistral.mistral-7b-instruct-v0:2), \"Max output tokens: 4K\"",
+   "value": 4096
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://docs.mistral.ai/models/model-cards/mistral-7b-0-2",
+   "source_name": "Mistral AI docs \u2014 Mistral 7B v0.2 model card: Apache 2.0, instruct and base weights published",
+   "value": true
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2",
+   "source_name": "Hugging Face model card: mistralai/Mistral-7B-Instruct-v0.2 \u2014 \"7B params\"",
+   "value": "7B"
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-7b-instruct.html",
+   "source_name": "AWS Bedrock model card \u2014 Mistral 7B Instruct: \"Client-side tool calling\" listed under Not Supported",
+   "value": false
+  }
+ },
+ "mistral.mistral-large-2402-v1:0": {
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://docs.mistral.ai/models/model-cards/mistral-large-1-0-24-02",
+   "source_name": "Mistral AI docs \u2014 Mistral Large 1.0 (24.02) model card, API name mistral-large-2402: \"32k\"",
+   "value": "32K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://docs.mistral.ai/models/model-cards/mistral-large-1-0-24-02",
+   "source_name": "Mistral AI docs \u2014 Mistral Large 1.0 (24.02) model card",
+   "value": "Mistral Large"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large.html",
+   "source_name": "AWS Bedrock model card \u2014 Mistral Large (mistral.mistral-large-2402-v1:0), \"Max output tokens: 4K\"",
+   "value": 4096
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://mistral.ai/news/mistral-large/",
+   "source_name": "Mistral AI news \u2014 \"Au Large\" (mistral-large-2402): native function calling; corroborated by the AWS Bedrock model card listing Client-side tool calling as supported",
+   "value": true
+  }
+ },
+ "mistral.mistral-large-2407-v1:0": {
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://docs.mistral.ai/models/model-cards/mistral-large-2-0-24-07",
+   "source_name": "Mistral AI docs \u2014 Mistral Large 2.0 (24.07) model card, API name mistral-large-2407: \"128k\"",
+   "value": "128K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://docs.mistral.ai/models/model-cards/mistral-large-2-0-24-07",
+   "source_name": "Mistral AI docs \u2014 Mistral Large 2.0 (24.07) model card",
+   "value": "Mistral Large"
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://docs.mistral.ai/models/model-cards/mistral-large-2-0-24-07",
+   "source_name": "Mistral AI docs \u2014 Mistral Large 2.0 model card: \"open weights under a MRL license\" (Mistral-Large-Instruct-2407 on Hugging Face; research/non-commercial)",
+   "value": true
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/mistralai/Mistral-Large-Instruct-2407",
+   "source_name": "Hugging Face model card: mistralai/Mistral-Large-Instruct-2407 \u2014 \"an advanced dense Large Language Model (LLM) of 123B parameters\"",
+   "value": "123B"
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://mistral.ai/news/mistral-large-2407/",
+   "source_name": "Mistral AI news \u2014 \"Large Enough\" (Mistral Large 2, mistral-large-2407): trained for parallel and sequential function calls",
+   "value": true
+  }
+ },
+ "mistral.mistral-large-3-675b-instruct": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://mistral.ai/news/mistral-3/",
+   "source_name": "Mistral AI announcement \"Introducing Mistral 3\" and docs.mistral.ai Mistral Large 3 page \u2014 granular MoE with \"41B active and 675B total parameters\"",
+   "value": "41B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://mistral.ai/news/mistral-3/",
+   "source_name": "Mistral AI announcement \"Introducing Mistral 3\" and docs.mistral.ai Mistral Large 3 page \u2014 granular MoE with \"41B active and 675B total parameters\"",
+   "value": "675B"
+  }
+ },
+ "mistral.mistral-small-2402-v1:0": {
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://docs.mistral.ai/models/model-cards/mistral-small-1-0-24-02",
+   "source_name": "Mistral AI docs \u2014 Mistral Small 1.0 (24.02) model card, API name mistral-small-2402: \"32k\"",
+   "value": "32K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://docs.mistral.ai/models/model-cards/mistral-small-1-0-24-02",
+   "source_name": "Mistral AI docs \u2014 Mistral Small 1.0 (24.02) model card",
+   "value": "Mistral Small"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-small.html",
+   "source_name": "AWS Bedrock model card \u2014 Mistral Small (mistral.mistral-small-2402-v1:0), \"Max output tokens: 4K\"",
+   "value": 4096
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://docs.mistral.ai/models/model-cards/mistral-small-1-0-24-02",
+   "source_name": "Mistral AI docs \u2014 Mistral Small 1.0 model card (no weights published, unlike the open-weight cards which link Instruct/Base weights)",
+   "value": false
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://mistral.ai/news/mistral-large/",
+   "source_name": "Mistral AI news \u2014 \"Au Large\" (announces mistral-small-2402 alongside mistral-large-2402 with native function calling); corroborated by the AWS Bedrock model card listing Client-side tool calling as supported",
+   "value": true
+  }
+ },
+ "mistral.mixtral-8x7b-instruct-v0:1": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://mistral.ai/news/mixtral-of-experts",
+   "source_name": "Mistral AI announcement \"Mixtral of experts\" \u2014 \"Mixtral has 46.7B total parameters but only uses 12.9B parameters per token\"",
+   "value": "12.9B"
+  },
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://docs.mistral.ai/models/model-cards/mixtral-8x7b-0-1",
+   "source_name": "Mistral AI docs \u2014 Mixtral 8x7B v0.1 model card (open-mixtral-8x7b): \"32k\"; matches max_position_embeddings=32768 in the Hugging Face config.json",
+   "value": "32K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://docs.mistral.ai/models/model-cards/mixtral-8x7b-0-1",
+   "source_name": "Mistral AI docs \u2014 Mixtral 8x7B v0.1 model card",
+   "value": "Mixtral"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mixtral-8x7b-instruct.html",
+   "source_name": "AWS Bedrock model card \u2014 Mixtral 8x7B Instruct (mistral.mixtral-8x7b-instruct-v0:1), \"Max output tokens: 4K\"",
+   "value": 4096
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/mistralai/Mixtral-8x7B-Instruct-v0.1",
+   "source_name": "Hugging Face \u2014 mistralai/Mixtral-8x7B-Instruct-v0.1 model card (Apache 2.0, weights downloadable); Mistral docs card links Instruct and Base weights",
+   "value": true
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://mistral.ai/news/mixtral-of-experts",
+   "source_name": "Mistral AI announcement \"Mixtral of experts\" \u2014 \"Mixtral has 46.7B total parameters but only uses 12.9B parameters per token\"",
+   "value": "46.7B"
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mixtral-8x7b-instruct.html",
+   "source_name": "AWS Bedrock model card \u2014 Mixtral 8x7B Instruct: \"Client-side tool calling\" listed under Not Supported",
+   "value": false
+  }
+ },
+ "mistral.voxtral-small-24b-2507": {
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/mistralai/Voxtral-Small-24B-2507",
+   "source_name": "Hugging Face model card: mistralai/Voxtral-Small-24B-2507 \u2014 \"Voxtral Small 1.0 (24B)\", model size \"24B params\"",
+   "value": "24B"
+  }
+ },
+ "moonshot.kimi-k2-thinking": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/moonshotai/Kimi-K2-Thinking",
+   "source_name": "Kimi K2 Thinking model card (Hugging Face)",
+   "value": "32B"
+  },
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/moonshotai/Kimi-K2-Thinking",
+   "source_name": "Hugging Face \u2014 moonshotai/Kimi-K2-Thinking model card",
+   "value": "256K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/moonshotai/Kimi-K2-Thinking",
+   "source_name": "Hugging Face \u2014 moonshotai/Kimi-K2-Thinking model card",
+   "value": "Kimi K2"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-thinking.html",
+   "source_name": "AWS Bedrock model card \u2014 Kimi K2 Thinking",
+   "value": 16384
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/moonshotai/Kimi-K2-Thinking",
+   "source_name": "Hugging Face \u2014 moonshotai/Kimi-K2-Thinking (Modified MIT License, weights published)",
+   "value": true
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/moonshotai/Kimi-K2-Thinking",
+   "source_name": "Kimi K2 Thinking model card (Hugging Face)",
+   "value": "1T"
+  },
+  "reasoning": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/moonshotai/Kimi-K2-Thinking",
+   "source_name": "Hugging Face \u2014 moonshotai/Kimi-K2-Thinking model card",
+   "value": true
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/moonshotai/Kimi-K2-Thinking",
+   "source_name": "Hugging Face \u2014 moonshotai/Kimi-K2-Thinking model card",
+   "value": true
+  }
+ },
+ "moonshotai.kimi-k2-thinking": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/moonshotai/Kimi-K2-Thinking",
+   "source_name": "Kimi K2 Thinking model card (Hugging Face)",
+   "value": "32B"
+  },
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/moonshotai/Kimi-K2-Thinking",
+   "source_name": "Hugging Face \u2014 moonshotai/Kimi-K2-Thinking model card",
+   "value": "256K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/moonshotai/Kimi-K2-Thinking",
+   "source_name": "Hugging Face \u2014 moonshotai/Kimi-K2-Thinking model card",
+   "value": "Kimi K2"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-thinking.html",
+   "source_name": "AWS Bedrock model card \u2014 Kimi K2 Thinking",
+   "value": 16384
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/moonshotai/Kimi-K2-Thinking",
+   "source_name": "Hugging Face \u2014 moonshotai/Kimi-K2-Thinking (Modified MIT License, weights published)",
+   "value": true
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/moonshotai/Kimi-K2-Thinking",
+   "source_name": "Kimi K2 Thinking model card (Hugging Face)",
+   "value": "1T"
+  },
+  "reasoning": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/moonshotai/Kimi-K2-Thinking",
+   "source_name": "Hugging Face \u2014 moonshotai/Kimi-K2-Thinking model card",
+   "value": true
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/moonshotai/Kimi-K2-Thinking",
+   "source_name": "Hugging Face \u2014 moonshotai/Kimi-K2-Thinking model card",
+   "value": true
+  }
+ },
+ "moonshotai.kimi-k2.5": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/moonshotai/Kimi-K2.5",
+   "source_name": "Kimi K2.5 model card (Hugging Face)",
+   "value": "32B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/moonshotai/Kimi-K2.5",
+   "source_name": "Kimi K2.5 model card (Hugging Face)",
+   "value": "1T"
+  }
+ },
+ "nvidia.nemotron-nano-3-30b": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+   "source_name": "NVIDIA Nemotron 3 Nano 30B A3B model card (Hugging Face)",
+   "value": "3.5B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+   "source_name": "NVIDIA Nemotron 3 Nano 30B A3B model card (Hugging Face)",
+   "value": "30B"
+  }
+ },
+ "nvidia.nemotron-super-3-120b": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16",
+   "source_name": "NVIDIA Nemotron 3 Super 120B A12B model card (Hugging Face)",
+   "value": "12B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16",
+   "source_name": "NVIDIA Nemotron 3 Super 120B A12B model card (Hugging Face)",
+   "value": "120B"
+  }
+ },
+ "openai.gpt-5.4-2026-03-05": {
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://developers.openai.com/api/docs/models/gpt-5.4",
+   "source_name": "OpenAI API docs \u2014 GPT-5.4",
+   "value": "1.05M"
+  },
+  "knowledge_cutoff": {
+   "checked": "2026-08-22",
+   "source": "https://developers.openai.com/api/docs/models/gpt-5.4",
+   "source_name": "OpenAI API docs \u2014 GPT-5.4",
+   "value": "2025-08-31"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://developers.openai.com/api/docs/models/gpt-5.4",
+   "source_name": "OpenAI API docs \u2014 GPT-5.4",
+   "value": 128000
+  },
+  "reasoning": {
+   "checked": "2026-08-22",
+   "source": "https://developers.openai.com/api/docs/models/gpt-5.4",
+   "source_name": "OpenAI API docs \u2014 GPT-5.4 (reasoning.effort: none/low/medium/high/xhigh)",
+   "value": true
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://developers.openai.com/api/docs/models/gpt-5.4",
+   "source_name": "OpenAI API docs \u2014 GPT-5.4 (function calling supported)",
+   "value": true
+  }
+ },
+ "openai.gpt-5.5-2026-04-23": {
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://developers.openai.com/api/docs/models/gpt-5.5",
+   "source_name": "OpenAI API docs \u2014 GPT-5.5",
+   "value": "1.05M"
+  },
+  "knowledge_cutoff": {
+   "checked": "2026-08-22",
+   "source": "https://developers.openai.com/api/docs/models/gpt-5.5",
+   "source_name": "OpenAI API docs \u2014 GPT-5.5",
+   "value": "2025-12-01"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://developers.openai.com/api/docs/models/gpt-5.5",
+   "source_name": "OpenAI API docs \u2014 GPT-5.5",
+   "value": 128000
+  },
+  "reasoning": {
+   "checked": "2026-08-22",
+   "source": "https://developers.openai.com/api/docs/models/gpt-5.5",
+   "source_name": "OpenAI API docs \u2014 GPT-5.5 (reasoning.effort: none/low/medium/high/xhigh)",
+   "value": true
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://developers.openai.com/api/docs/models/gpt-5.5",
+   "source_name": "OpenAI API docs \u2014 GPT-5.5 (function calling supported)",
+   "value": true
+  }
+ },
+ "openai.gpt-oss-120b": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/openai/gpt-oss-120b",
+   "source_name": "OpenAI gpt-oss-120b model card (Hugging Face)",
+   "value": "5.1B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/openai/gpt-oss-120b",
+   "source_name": "OpenAI gpt-oss-120b model card (Hugging Face)",
+   "value": "117B"
+  }
+ },
+ "openai.gpt-oss-120b-1:0": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/openai/gpt-oss-120b",
+   "source_name": "OpenAI gpt-oss-120b model card (Hugging Face)",
+   "value": "5.1B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/openai/gpt-oss-120b",
+   "source_name": "OpenAI gpt-oss-120b model card (Hugging Face)",
+   "value": "117B"
+  }
+ },
+ "openai.gpt-oss-20b": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/openai/gpt-oss-20b",
+   "source_name": "OpenAI gpt-oss-20b model card (Hugging Face)",
+   "value": "3.6B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/openai/gpt-oss-20b",
+   "source_name": "OpenAI gpt-oss-20b model card (Hugging Face)",
+   "value": "21B"
+  }
+ },
+ "openai.gpt-oss-20b-1:0": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/openai/gpt-oss-20b",
+   "source_name": "OpenAI gpt-oss-20b model card (Hugging Face)",
+   "value": "3.6B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/openai/gpt-oss-20b",
+   "source_name": "OpenAI gpt-oss-20b model card (Hugging Face)",
+   "value": "21B"
+  }
+ },
+ "qwen.qwen3-235b-a22b-2507": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-235B-A22B-Instruct-2507",
+   "source_name": "Hugging Face model card (Qwen/Qwen3-235B-A22B-Instruct-2507): \"Number of Parameters: 235B in total and 22B activated\"",
+   "value": "22B"
+  },
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-235B-A22B-Instruct-2507",
+   "source_name": "Qwen3-235B-A22B-Instruct-2507 model card (Hugging Face)",
+   "value": "256K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-235B-A22B-Instruct-2507",
+   "source_name": "Qwen3-235B-A22B-Instruct-2507 model card (Hugging Face)",
+   "value": "Qwen3"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-235b-a22b-2507.html",
+   "source_name": "AWS Bedrock model card: Qwen3 235B A22B 2507",
+   "value": 8192
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-235B-A22B-Instruct-2507",
+   "source_name": "Qwen3-235B-A22B-Instruct-2507 model card (Hugging Face), license: apache-2.0",
+   "value": true
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-235B-A22B-Instruct-2507",
+   "source_name": "Hugging Face model card (Qwen/Qwen3-235B-A22B-Instruct-2507): \"Number of Parameters: 235B in total and 22B activated\"",
+   "value": "235B"
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-235B-A22B-Instruct-2507",
+   "source_name": "Qwen3-235B-A22B-Instruct-2507 model card (Hugging Face)",
+   "value": true
+  }
+ },
+ "qwen.qwen3-235b-a22b-2507-v1:0": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-235B-A22B-Instruct-2507",
+   "source_name": "Hugging Face model card (Qwen/Qwen3-235B-A22B-Instruct-2507): \"Number of Parameters: 235B in total and 22B activated\" (the Thinking-2507 card states the same figures)",
+   "value": "22B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-235B-A22B-Instruct-2507",
+   "source_name": "Hugging Face model card (Qwen/Qwen3-235B-A22B-Instruct-2507): \"Number of Parameters: 235B in total and 22B activated\" (the Thinking-2507 card states the same figures)",
+   "value": "235B"
+  }
+ },
+ "qwen.qwen3-32b": {
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-32B",
+   "source_name": "Qwen3-32B model card (Hugging Face) \u2014 32,768 native; AWS Bedrock model card also states 32K",
+   "value": "32K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-32B",
+   "source_name": "Qwen3-32B model card (Hugging Face)",
+   "value": "Qwen3"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-32b.html",
+   "source_name": "AWS Bedrock model card: Qwen3 32B",
+   "value": 8192
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-32B",
+   "source_name": "Qwen3-32B model card (Hugging Face), license: apache-2.0",
+   "value": true
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-32B",
+   "source_name": "Hugging Face model card (Qwen/Qwen3-32B): \"Number of Parameters: 32.8B\" \u2014 dense model",
+   "value": "32.8B"
+  },
+  "reasoning": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-32B",
+   "source_name": "Qwen3-32B model card (Hugging Face) \u2014 seamless switching between thinking and non-thinking mode",
+   "value": true
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-32B",
+   "source_name": "Qwen3-32B model card (Hugging Face) \u2014 agent capabilities, integration with external tools",
+   "value": true
+  }
+ },
+ "qwen.qwen3-32b-v1:0": {
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-32B",
+   "source_name": "Hugging Face model card (Qwen/Qwen3-32B): \"Number of Parameters: 32.8B\" \u2014 dense model",
+   "value": "32.8B"
+  }
+ },
+ "qwen.qwen3-coder-30b-a3b-instruct": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct",
+   "source_name": "Hugging Face model card (Qwen/Qwen3-Coder-30B-A3B-Instruct): \"Number of Parameters: 30.5B in total and 3.3B activated\"",
+   "value": "3.3B"
+  },
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct",
+   "source_name": "Qwen3-Coder-30B-A3B-Instruct model card (Hugging Face) \u2014 262,144 natively; AWS Bedrock model card also states 256K",
+   "value": "256K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct",
+   "source_name": "Qwen3-Coder-30B-A3B-Instruct model card (Hugging Face)",
+   "value": "Qwen3-Coder"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-30b-a3b-instruct.html",
+   "source_name": "AWS Bedrock model card: Qwen3-Coder-30B-A3B-Instruct",
+   "value": 16384
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct",
+   "source_name": "Qwen3-Coder-30B-A3B-Instruct model card (Hugging Face), license: apache-2.0",
+   "value": true
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct",
+   "source_name": "Hugging Face model card (Qwen/Qwen3-Coder-30B-A3B-Instruct): \"Number of Parameters: 30.5B in total and 3.3B activated\"",
+   "value": "30.5B"
+  },
+  "reasoning": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct",
+   "source_name": "Qwen3-Coder-30B-A3B-Instruct model card (Hugging Face) \u2014 supports only non-thinking mode",
+   "value": false
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct",
+   "source_name": "Qwen3-Coder-30B-A3B-Instruct model card (Hugging Face)",
+   "value": true
+  }
+ },
+ "qwen.qwen3-coder-480b-a35b-instruct": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct",
+   "source_name": "Hugging Face model card (Qwen/Qwen3-Coder-480B-A35B-Instruct): \"Number of Parameters: 480B in total and 35B activated\"",
+   "value": "35B"
+  },
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct",
+   "source_name": "Qwen3-Coder-480B-A35B-Instruct model card (Hugging Face) \u2014 262,144 natively",
+   "value": "256K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct",
+   "source_name": "Qwen3-Coder-480B-A35B-Instruct model card (Hugging Face)",
+   "value": "Qwen3-Coder"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-480b-a35b-instruct.html",
+   "source_name": "AWS Bedrock model card: Qwen3 Coder 480B A35B Instruct",
+   "value": 16384
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct",
+   "source_name": "Qwen3-Coder-480B-A35B-Instruct model card (Hugging Face), license: apache-2.0",
+   "value": true
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct",
+   "source_name": "Hugging Face model card (Qwen/Qwen3-Coder-480B-A35B-Instruct): \"Number of Parameters: 480B in total and 35B activated\"",
+   "value": "480B"
+  },
+  "reasoning": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct",
+   "source_name": "Qwen3-Coder-480B-A35B-Instruct model card (Hugging Face) \u2014 supports only non-thinking mode",
+   "value": false
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct",
+   "source_name": "Qwen3-Coder-480B-A35B-Instruct model card (Hugging Face)",
+   "value": true
+  }
+ },
+ "qwen.qwen3-coder-480b-a35b-v1:0": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct",
+   "source_name": "Hugging Face model card (Qwen/Qwen3-Coder-480B-A35B-Instruct): \"Number of Parameters: 480B in total and 35B activated\"",
+   "value": "35B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct",
+   "source_name": "Hugging Face model card (Qwen/Qwen3-Coder-480B-A35B-Instruct): \"Number of Parameters: 480B in total and 35B activated\"",
+   "value": "480B"
+  }
+ },
+ "qwen.qwen3-coder-next": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Coder-Next",
+   "source_name": "Hugging Face model card (Qwen/Qwen3-Coder-Next): \"Number of Parameters: 80B in total and 3B activated\"",
+   "value": "3B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Coder-Next",
+   "source_name": "Hugging Face model card (Qwen/Qwen3-Coder-Next): \"Number of Parameters: 80B in total and 3B activated\"",
+   "value": "80B"
+  }
+ },
+ "qwen.qwen3-next-80b-a3b": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct",
+   "source_name": "Hugging Face model card (Qwen/Qwen3-Next-80B-A3B-Instruct): \"Number of Parameters: 80B in total and 3B activated\" (the Thinking card states the same figures)",
+   "value": "3B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct",
+   "source_name": "Hugging Face model card (Qwen/Qwen3-Next-80B-A3B-Instruct): \"Number of Parameters: 80B in total and 3B activated\" (the Thinking card states the same figures)",
+   "value": "80B"
+  }
+ },
+ "qwen.qwen3-next-80b-a3b-instruct": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct",
+   "source_name": "Hugging Face model card (Qwen/Qwen3-Next-80B-A3B-Instruct): \"Number of Parameters: 80B in total and 3B activated\"",
+   "value": "3B"
+  },
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct",
+   "source_name": "Qwen3-Next-80B-A3B-Instruct model card (Hugging Face) \u2014 262,144 natively; AWS Bedrock model card also states 256K",
+   "value": "256K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct",
+   "source_name": "Qwen3-Next-80B-A3B-Instruct model card (Hugging Face)",
+   "value": "Qwen3-Next"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-next-80b-a3b.html",
+   "source_name": "AWS Bedrock model card: Qwen3 Next 80B A3B",
+   "value": 8192
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct",
+   "source_name": "Qwen3-Next-80B-A3B-Instruct model card (Hugging Face), license: apache-2.0",
+   "value": true
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct",
+   "source_name": "Hugging Face model card (Qwen/Qwen3-Next-80B-A3B-Instruct): \"Number of Parameters: 80B in total and 3B activated\"",
+   "value": "80B"
+  },
+  "reasoning": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct",
+   "source_name": "Qwen3-Next-80B-A3B-Instruct model card (Hugging Face) \u2014 supports only instruct (non-thinking) mode",
+   "value": false
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct",
+   "source_name": "Qwen3-Next-80B-A3B-Instruct model card (Hugging Face)",
+   "value": true
+  }
+ },
+ "qwen.qwen3-vl-235b-a22b": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://arxiv.org/html/2511.21631v2",
+   "source_name": "Qwen3-VL Technical Report (Qwen Team): \"The flagship model, Qwen3-VL-235B-A22B, has 235B total parameters with 22B activated per token.\" (the HF cards for Qwen3-VL-235B-A22B-Instruct/Thinking give no parameter table)",
+   "value": "22B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://arxiv.org/html/2511.21631v2",
+   "source_name": "Qwen3-VL Technical Report (Qwen Team): \"The flagship model, Qwen3-VL-235B-A22B, has 235B total parameters with 22B activated per token.\" (the HF cards for Qwen3-VL-235B-A22B-Instruct/Thinking give no parameter table)",
+   "value": "235B"
+  }
+ },
+ "qwen.qwen3-vl-235b-a22b-instruct": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://arxiv.org/html/2511.21631v2",
+   "source_name": "Qwen3-VL Technical Report (Qwen Team): \"The flagship model, Qwen3-VL-235B-A22B, has 235B total parameters with 22B activated per token.\"",
+   "value": "22B"
+  },
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-VL-235B-A22B-Instruct",
+   "source_name": "Qwen3-VL-235B-A22B-Instruct model card (Hugging Face) \u2014 \"Native 256K context, expandable to 1M\"; config.json max_position_embeddings 262144",
+   "value": "256K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-VL-235B-A22B-Instruct",
+   "source_name": "Qwen3-VL-235B-A22B-Instruct model card (Hugging Face)",
+   "value": "Qwen3-VL"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-vl-235b-a22b.html",
+   "source_name": "AWS Bedrock model card: Qwen3 VL 235B A22B",
+   "value": 8192
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-VL-235B-A22B-Instruct",
+   "source_name": "Qwen3-VL-235B-A22B-Instruct model card (Hugging Face), license: apache-2.0",
+   "value": true
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://arxiv.org/html/2511.21631v2",
+   "source_name": "Qwen3-VL Technical Report (Qwen Team): \"The flagship model, Qwen3-VL-235B-A22B, has 235B total parameters with 22B activated per token.\"",
+   "value": "235B"
+  },
+  "reasoning": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Qwen/Qwen3-VL-235B-A22B-Instruct",
+   "source_name": "Qwen3-VL-235B-A22B-Instruct model card (Hugging Face) \u2014 Instruct edition; Qwen ships reasoning as a separate Qwen3-VL-235B-A22B-Thinking repo",
+   "value": false
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-vl-235b-a22b.html",
+   "source_name": "AWS Bedrock model card: Qwen3 VL 235B A22B \u2014 client-side tool calling supported",
+   "value": true
+  }
+ },
+ "stability.sd3-5-large-v1:0": {
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://stability.ai/news-updates/introducing-stable-diffusion-3-5",
+   "source_name": "Stability AI announcement: Introducing Stable Diffusion 3.5",
+   "value": "8.1B"
+  }
+ },
+ "twelvelabs.pegasus-1-2-v1:0": {
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-twelvelabs-pegasus-v1-2.html",
+   "source_name": "AWS Bedrock model card \u2014 Pegasus v1.2",
+   "value": "Pegasus"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus.html",
+   "source_name": "AWS Bedrock \u2014 TwelveLabs Pegasus 1.2 request parameters (\"maxOutputTokens ... Max: 4096\")",
+   "value": 4096
+  },
+  "reasoning": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus.html",
+   "source_name": "AWS Bedrock \u2014 Pegasus 1.2 parameters (full request schema has no thinking/reasoning parameter)",
+   "value": false
+  }
+ },
+ "writer.palmyra-vision-7b": {
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-writer-palmyra-vision-7b.html",
+   "source_name": "AWS Bedrock model card \u2014 Palmyra Vision 7B (\"Context window: 4K tokens\")",
+   "value": "4K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-writer-palmyra-vision-7b.html",
+   "source_name": "AWS Bedrock model card \u2014 Palmyra Vision 7B",
+   "value": "Palmyra"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-writer-palmyra-vision-7b.html",
+   "source_name": "AWS Bedrock model card \u2014 Palmyra Vision 7B (\"Max output tokens: 4K\")",
+   "value": 4096
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/Writer/palmyra-vision",
+   "source_name": "Hugging Face \u2014 Writer/palmyra-vision (\"Palmyra_vision 7B\", safetensors weights published)",
+   "value": true
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-writer-palmyra-vision-7b.html",
+   "source_name": "AWS Bedrock model card \u2014 Palmyra Vision 7B (client-side tool calling supported)",
+   "value": true
+  }
+ },
+ "zai.glm-4.6": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://docs.bigmodel.cn/cn/guide/models/text/glm-4.6",
+   "source_name": "Z.ai/Zhipu developer docs for GLM-4.6 (\u603b\u53c2\u6570\u91cf 355B / \u6fc0\u6d3b\u53c2\u6570 32B); also listed as \"355B-A32B\" in the zai-org/GLM-4.5 GitHub README model table",
+   "value": "32B"
+  },
+  "context_window": {
+   "checked": "2026-08-22",
+   "source": "https://docs.z.ai/guides/llm/glm-4.6",
+   "source_name": "Z.ai docs \u2014 GLM-4.6 (\"context window has been expanded from 128K to 200K tokens\")",
+   "value": "200K"
+  },
+  "family": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/zai-org/GLM-4.6",
+   "source_name": "Hugging Face \u2014 zai-org/GLM-4.6 model card",
+   "value": "GLM"
+  },
+  "max_output_tokens": {
+   "checked": "2026-08-22",
+   "source": "https://docs.z.ai/api-reference/llm/chat-completion",
+   "source_name": "Z.ai API reference \u2014 chat completion (\"GLM-4.6 series supports 128K maximum output\")",
+   "value": 131072
+  },
+  "open_weights": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/zai-org/GLM-4.6",
+   "source_name": "Hugging Face \u2014 zai-org/GLM-4.6 (MIT license, 357B params, weights published)",
+   "value": true
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://docs.bigmodel.cn/cn/guide/models/text/glm-4.6",
+   "source_name": "Z.ai/Zhipu developer docs for GLM-4.6 (\u603b\u53c2\u6570\u91cf 355B / \u6fc0\u6d3b\u53c2\u6570 32B); also listed as \"355B-A32B\" in the zai-org/GLM-4.5 GitHub README model table",
+   "value": "355B"
+  },
+  "reasoning": {
+   "checked": "2026-08-22",
+   "source": "https://docs.z.ai/guides/llm/glm-4.6",
+   "source_name": "Z.ai docs \u2014 GLM-4.6 (thinking.type: enabled)",
+   "value": true
+  },
+  "tool_call": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/zai-org/GLM-4.6",
+   "source_name": "Hugging Face \u2014 zai-org/GLM-4.6 model card (\"supports tool use during inference\")",
+   "value": true
+  }
+ },
+ "zai.glm-4.7": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://github.com/zai-org/GLM-4.5/blob/main/README.md",
+   "source_name": "zai-org GitHub README model table (GLM-4.7 and GLM-4.7-FP8: 355B-A32B); confirmed by the repo config.json matching the GLM-4.5/4.6 geometry (5120 hidden, 92 layers, 160 routed + 1 shared expert, top-8)",
+   "value": "32B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://github.com/zai-org/GLM-4.5/blob/main/README.md",
+   "source_name": "zai-org GitHub README model table (GLM-4.7 and GLM-4.7-FP8: 355B-A32B); confirmed by the repo config.json matching the GLM-4.5/4.6 geometry (5120 hidden, 92 layers, 160 routed + 1 shared expert, top-8)",
+   "value": "355B"
+  }
+ },
+ "zai.glm-4.7-flash": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/zai-org/GLM-4.7-Flash/raw/main/README.md",
+   "source_name": "GLM-4.7-Flash Hugging Face model card (\"GLM-4.7-Flash is a 30B-A3B MoE model\"); same 30B-A3B entry in the zai-org GitHub README table",
+   "value": "3B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/zai-org/GLM-4.7-Flash/raw/main/README.md",
+   "source_name": "GLM-4.7-Flash Hugging Face model card (\"GLM-4.7-Flash is a 30B-A3B MoE model\"); same 30B-A3B entry in the zai-org GitHub README table",
+   "value": "30B"
+  }
+ },
+ "zai.glm-5": {
+  "active_parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/zai-org/GLM-5/raw/main/README.md",
+   "source_name": "GLM-5 Hugging Face model card (\"GLM-5 scales from 355B parameters (32B active) to 744B parameters (40B active)\"); zai-org/GLM-5 GitHub README table lists GLM-5 as 744B-A40B",
+   "value": "40B"
+  },
+  "parameters": {
+   "checked": "2026-08-22",
+   "source": "https://huggingface.co/zai-org/GLM-5/raw/main/README.md",
+   "source_name": "GLM-5 Hugging Face model card (\"GLM-5 scales from 355B parameters (32B active) to 744B parameters (40B active)\"); zai-org/GLM-5 GitHub README table lists GLM-5 as 744B-A40B",
+   "value": "744B"
+  }
+ }
+}

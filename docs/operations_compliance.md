@@ -125,7 +125,7 @@ The default isolation guarantee is enforced by the **Model Deployment Account** 
 
 > *"Model providers don't have any access to those accounts. [...] Because the model providers don't have access to those accounts, they don't have access to Amazon Bedrock logs or to customer prompts and completions."*
 
-This means that regardless of the geographic origin of a model, inference runs on AWS-owned infrastructure and — unless `provider_data_share` mode is explicitly configured — your prompts never reach the model provider.
+This means that regardless of the geographic origin of a model, inference runs on AWS-owned infrastructure and — unless `provider_data_share` mode is explicitly configured — your prompts never reach the model provider. See [which models run in which geography](models.md).
 
 ### Abuse Detection
 

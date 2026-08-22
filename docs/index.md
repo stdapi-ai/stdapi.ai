@@ -13,7 +13,7 @@ hide:
 
 # Your OpenAI &amp; Anthropic apps on AWS. Not just chat.
 
-An AI gateway you run in your own AWS account. Point Claude Code, Open WebUI, n8n, OpenClaw — or your own code — at it, and they reach 100+ models including Claude, OpenAI GPT, DeepSeek and Nova, at AWS Bedrock rates with zero markup. Adoption is quick: they point at your gateway instead of the vendor's, and the model they name is now drawn from all of them, not one vendor's list.
+An AI gateway you run in your own AWS account. Point Claude Code, Open WebUI, n8n, OpenClaw — or your own code — at it, and they reach [100+ models](models.md) including Claude, OpenAI GPT, DeepSeek and Nova, at AWS Bedrock rates with zero markup. Adoption is quick: they point at your gateway instead of the vendor's, and the model they name is now drawn from all of them, not one vendor's list.
 
 <div class="buttons" markdown>
 [Start 14-day free trial](operations_getting_started.md){ .md-button .md-button--primary }
@@ -233,6 +233,8 @@ Bedrock, Bedrock Mantle, Polly, Transcribe and Comprehend all surface as models 
 - <code>100+</code> models across 10+ providers in a typical multi-region catalog
 - <code>4</code> text APIs on every model — passthrough or converted automatically
 
+[:octicons-arrow-right-24: Browse every model, price and score](models.md)
+
 </div>
 </div>
 </div>
@@ -312,7 +314,7 @@ No subscriptions, no minimums, no markup on model usage. Optional cost tracking 
 Per-request cost figures are estimated from published AWS prices, not read back from your invoice; per-user attribution is off by default and needs a role you create.
 { .panel-stats__note }
 
-[:octicons-arrow-right-24: Cost management documentation](operations_cost_management.md)
+[:octicons-arrow-right-24: Cost management documentation](operations_cost_management.md) &nbsp;·&nbsp; [compare model prices](models.md)
 
 </div>
 </div>

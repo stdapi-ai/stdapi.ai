@@ -1,0 +1,1 @@
+{"id":"amazon.transcribe","prices":{"id":"amazon.transcribe","service":"transcribe","default_tier":"standard","default_routings":["af-south-1"],"prices":[{"region":"af-south-1","dimension":"input_seconds","tier":"standard","routing":"af-south-1","unit_price":"0.0001","currency":"USD"}]}}

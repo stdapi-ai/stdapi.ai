@@ -302,7 +302,7 @@ Using a **legacy** model (one AWS has scheduled for end-of-life) also emits a `w
 Model 'anthropic.claude-haiku-4-5-20251001-v1:0' is legacy and will reach end-of-life on 2027-06-19. Please migrate to a supported model.
 ```
 
-Models whose EOL date falls within the current cache window are **proactively excluded** at cache refresh time, so they are never served to clients even if AWS has not yet removed them from the available models list.
+Models whose EOL date falls within the current cache window are **proactively excluded** at cache refresh time, so they are never served to clients even if AWS has not yet removed them from the available models list. See [which models are marked legacy](models.md).
 
 #### Strict Mode
 
