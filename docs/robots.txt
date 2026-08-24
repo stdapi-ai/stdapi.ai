@@ -2,5 +2,5 @@ User-Agent: *
 Content-Signal: ai-train=yes, search=yes, ai-input=yes
 Allow: /
 
-Sitemap: /sitemap.xml
-Llms-Txt: /llms.txt
+Sitemap: https://stdapi.ai/sitemap.xml
+Llms-Txt: https://stdapi.ai/llms.txt
