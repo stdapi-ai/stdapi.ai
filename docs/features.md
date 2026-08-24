@@ -79,7 +79,7 @@ stdapi.ai maps as many parameters as possible to Bedrock equivalents — across 
 
 ---
 
-## :material-brain: 100+ Models Across 10+ Providers
+## :material-brain: 100+ Models Across 20+ Providers
 
 Access every model available on Amazon Bedrock through a single, consistent API — including OpenAI GPT, xAI Grok, and [other frontier models](#bedrock-mantle-models). [Browse the full list](models.md).
 

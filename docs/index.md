@@ -230,7 +230,7 @@ Bedrock, Bedrock Mantle, Polly, Transcribe and Comprehend all surface as models 
 <div class="panel-stats" markdown>
 
 - <code>0</code> configuration — one catalog spanning Bedrock, Mantle, Polly, Transcribe and Comprehend
-- <code>100+</code> models across 10+ providers in a typical multi-region catalog
+- <code>100+</code> models across 20+ providers in a typical multi-region catalog
 - <code>4</code> text APIs on every model — passthrough or converted automatically
 
 [:octicons-arrow-right-24: Browse every model, price and score](models.md)

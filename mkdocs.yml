@@ -1,6 +1,6 @@
 ---
 site_name: stdapi.ai
-site_description: "Deploy OpenAI, Anthropic, and Cohere-compatible applications on Amazon Bedrock with no code changes. Access 100+ models including Claude, OpenAI GPT, xAI Grok, Amazon Nova for chat, video generation, and content moderation, with enterprise compliance, pay-per-use pricing, and AWS data sovereignty."
+site_description: "Self-hosted OpenAI, Anthropic and Cohere compatible API gateway for Amazon Bedrock. Point your applications at it and reach 100+ models across 20+ providers including Claude, OpenAI GPT, xAI Grok and Amazon Nova, for chat, images, video, speech, transcription, embeddings and moderation — in your own AWS account, at AWS rates with no markup."
 site_url: https://stdapi.ai
 site_author: JGoutin-dev
 exclude_docs: |
@@ -172,6 +172,7 @@ plugins:
 hooks:
   - docs_hooks/fastapi_openapi.py
   - docs_hooks/markdown_for_agents.py
+  - docs_hooks/blog_rss.py
   # Listed last so its on_post_build step runs after the agent-readable copies of
   # the pages have been written, and can fill the trademarks table in its copy.
   - docs_hooks/trademarks.py

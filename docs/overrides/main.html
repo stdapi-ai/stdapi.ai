@@ -9,7 +9,11 @@
   <meta property="og:url" content="{{ page.canonical_url }}">
   <meta property="og:title" content="{% if page.meta and page.meta.title %}{{ page.meta.title }}{% elif page.title and not page.is_homepage %}{{ page.title }} - {{ config.site_name }}{% else %}{{ config.site_name }}{% endif %}">
   <meta property="og:description" content="{% if page.meta and page.meta.description %}{{ page.meta.description }}{% else %}{{ config.site_description }}{% endif %}">
-  <meta property="og:image" content="{{ config.site_url }}styles/og-image.svg">
+  <meta property="og:image" content="{{ config.site_url }}styles/og-image.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="stdapi.ai — AI gateway for AWS Bedrock">
   <meta property="og:locale" content="en_US">
 
   {# Twitter Card Meta Tags #}
@@ -17,12 +21,16 @@
   <meta name="twitter:site" content="@stdapi_ai">
   <meta name="twitter:title" content="{% if page.meta and page.meta.title %}{{ page.meta.title }}{% elif page.title and not page.is_homepage %}{{ page.title }} - {{ config.site_name }}{% else %}{{ config.site_name }}{% endif %}">
   <meta name="twitter:description" content="{% if page.meta and page.meta.description %}{{ page.meta.description }}{% else %}{{ config.site_description }}{% endif %}">
-  <meta name="twitter:image" content="{{ config.site_url }}styles/og-image.svg">
+  <meta name="twitter:image" content="{{ config.site_url }}styles/og-image.png">
+  <meta name="twitter:image:alt" content="stdapi.ai — AI gateway for AWS Bedrock">
 
   {# Meta Keywords - Optional but included for legacy SEO tools #}
   {% if page.meta and page.meta.keywords %}
   <meta name="keywords" content="{{ page.meta.keywords }}">
   {% endif %}
+
+  {# Blog RSS feed, emitted by docs_hooks/blog_rss.py #}
+  <link rel="alternate" type="application/rss+xml" title="{{ config.site_name }} Blog" href="{{ config.site_url }}feed_rss_created.xml">
 
   {# Markdown for Agents — advertise raw markdown alternate #}
   {% if page and page.file and page.file.src_uri != 'api_reference.md' %}
@@ -76,22 +84,24 @@
           "priceCurrency": "USD",
           "description": "Open source (AGPL) with commercial licensing available"
         },
-        "softwareVersion": "1.4.0",
-        "description": "OpenAI-compatible API gateway for AWS Bedrock. Deploy any OpenAI app on AWS with no code changes.",
+        "description": "Self-hosted OpenAI, Anthropic and Cohere compatible API gateway for Amazon Bedrock, Bedrock Mantle, Polly, Transcribe and Comprehend. Runs in your own AWS account.",
         "url": "{{ config.site_url }}",
         "downloadUrl": "{{ config.repo_url }}",
         "featureList": [
           "OpenAI-compatible API",
-          "AWS Bedrock integration",
-          "100+ AI models support",
-          "Enterprise compliance",
-          "Pay-per-use pricing",
+          "Anthropic-compatible API",
+          "Cohere-compatible API",
+          "Amazon Bedrock integration",
+          "100+ AI models across 20+ providers",
+          "Speech, transcription, images, video and embeddings",
+          "Model Context Protocol server",
+          "Runs in your own AWS account",
+          "Pay-per-use AWS pricing with no markup",
           "Multi-region support",
           "Prompt caching",
-          "Function calling",
-          "Multi-modal support"
+          "Function calling"
         ],
-        "screenshot": "{{ config.site_url }}styles/logo.svg"
+        "screenshot": "{{ config.site_url }}styles/og-image.png"
       }
     ]
   }

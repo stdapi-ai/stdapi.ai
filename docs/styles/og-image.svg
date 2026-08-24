@@ -55,7 +55,7 @@
   <text x="595" y="255" font-family="Helvetica, Arial, sans-serif" font-size="84" font-weight="800" fill="url(#title)" letter-spacing="-2">stdapi.ai</text>
 
   <text x="595" y="310" font-family="Helvetica, Arial, sans-serif" font-size="28" font-weight="500" fill="#ffffff">AI Gateway for AWS Bedrock</text>
-  <text x="595" y="348" font-family="Helvetica, Arial, sans-serif" font-size="22" font-weight="400" fill="#d4dae3">OpenAI &amp; Anthropic compatible — 100+ models</text>
+  <text x="595" y="348" font-family="Helvetica, Arial, sans-serif" font-size="22" font-weight="400" fill="#d4dae3">OpenAI, Anthropic &amp; Cohere compatible — 100+ models</text>
 
   <g font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="600" fill="#ffac31">
     <g transform="translate(595, 395)">
