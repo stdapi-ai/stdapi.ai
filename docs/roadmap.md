@@ -12,7 +12,7 @@ keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, API gate
 
 See [Release History below](#release-history) for the full changelog of all releases.
 
-**Latest: v1.16.0** – Four new API surfaces — conversations, batches, vector stores and realtime speech — plus retrieval a model calls for itself, a vector store served from your own Amazon Bedrock knowledge base, long and streamed text-to-speech, live transcription, per-caller authentication, and end-user cost attribution on the AWS bill. See the [full release notes](#v1160-conversations-batches-vector-stores-realtime-speech-per-user-identity) below.
+**Latest: v1.16.1** – A maintenance update to v1.16.0, which added four new API surfaces — conversations, batches, vector stores and realtime speech — plus retrieval a model calls for itself, a vector store served from your own Amazon Bedrock knowledge base, long and streamed text-to-speech, live transcription, per-caller authentication, and end-user cost attribution on the AWS bill. See the [full release notes](#v1160-conversations-batches-vector-stores-realtime-speech-per-user-identity-with-v1161-maintenance-update) below.
 
 ---
 
@@ -24,7 +24,7 @@ Pending features and current deployment state are tracked on the [GitHub Project
 
 ## :material-history: Release History
 
-### v1.16.0 – Conversations, Batches, Vector Stores, Realtime Speech & Per-User Identity
+### v1.16.0 – Conversations, Batches, Vector Stores, Realtime Speech & Per-User Identity (with v1.16.1 maintenance update)
 
 This release adds four API surfaces and finishes the speech story. **New APIs**: [**Conversations**](api_openai_conversations.md) keep a thread server-side, so a client continues it by id instead of resending the history; the OpenAI [**Batch API**](api_openai_batches.md) and Anthropic [**Message Batches API**](api_anthropic_batches.md) run large request sets asynchronously at the discounted batch price; [**Vector Stores**](api_openai_vector_stores.md) index and search files by meaning — or address [a knowledge base you already run](api_openai_vector_stores.md#knowledge-base-stores) — with a model reaching either kind for itself through [`file_search`](api_openai_responses.md#file-search); and the [**Realtime API**](api_openai_realtime.md) holds a spoken conversation over one WebSocket. **Speech**: 100,000-character [synthesis](api_openai_audio_speech.md#long-input) spoken as it is produced, [live transcription](api_openai_audio_transcriptions.md#streaming) needing no bucket, and [**Amazon Nova Sonic**](api_openai_audio_transcriptions.md#amazon-nova-sonic) as the lowest-cost speech-to-text backend here. **Identity per caller**: [Amazon Cognito tokens](operations_configuration.md#cognito-authentication) alongside or instead of the API key, [published discovery](operations_configuration.md#oauth-discovery) so an agent authenticates itself, and [per-user cost attribution](operations_cost_management.md#per-user-attribution) reporting each end user's spend from the AWS invoice rather than an estimate.
 
@@ -153,6 +153,10 @@ This release adds four API surfaces and finishes the speech story. **New APIs**:
 - **Addresses and listings are the ones this deployment serves**: a custom [route prefix](operations_configuration.md#openai-routes-prefix) still quoted default paths to [`search_models`](api_search_models.md) and to video job polling, neither recoverable client-side; and a file's `created_at` and its place in a listing came from two different clocks, so a [multipart upload](api_openai_files.md#uploads-api) sat among older files reporting a later time. The [Anthropic listing](api_anthropic_files.md#list-files) also answered oldest first, hiding every recent file, and now runs newest first as upstream does
 - **Diagnostics name their cause**: an unreachable Region rendered six different conditions as one identical sentence, and the slow startup beside it was the container metadata lookup retrying, unreported; a request abandoned mid-flight left its OpenTelemetry trace current, so later work was recorded under a closed request's trace id; and behind a proxy, `client_ip` recorded the load balancer whatever [`PROXY_TRUSTED_HOSTS`](operations_configuration.md#proxy-trusted-hosts) allowed
 - **The API describes itself, not the service behind it**: a synthesis limit credited to the service enforcing it, prices credited to their catalogue and a moderation route naming the engine underneath all shipped in the OpenAPI document and in the tool descriptions agents read before calling
+
+#### Fixes & Maintenance (v1.16.1)
+
+- Update `cryptography` to 50.0.1, rebuilt against OpenSSL 4.0.2
 
 ### v1.15.0 – Reliability, Performance & Feature Completeness
 

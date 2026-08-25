@@ -12,7 +12,7 @@ SERVER_ID = webuuid()
 SERVER_NAME = f"{gethostname()[:128]}-{getpid()}-{SERVER_ID}"
 
 #: Server version
-SERVER_VERSION = "1.16.0"
+SERVER_VERSION = "1.16.1"
 
 #: Product code
 PRODUCT_CODE = "72gxmztpjz2hm5qnkkg0iiazo"
