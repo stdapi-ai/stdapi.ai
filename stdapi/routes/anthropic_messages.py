@@ -16,7 +16,10 @@ from stdapi.models import (
 )
 from stdapi.models.capabilities import register_route_capability
 from stdapi.models.chat import get_chat_model, serves_via_mantle
-from stdapi.models.chat._adapters._anthropic_message import count_tokens_via_bedrock
+from stdapi.models.chat._adapters._anthropic_message import (
+    count_tokens_via_bedrock,
+    warn_mcp_connector_ignored,
+)
 from stdapi.models.chat._mantle._convert import messages_payload
 from stdapi.monitoring import REQUEST_ID, log_request_params, log_response_params
 from stdapi.region_routing import REGION_ROUTER
@@ -210,6 +213,7 @@ async def create_message(
     log_request_params(
         request, user_id=request.metadata.user_id if request.metadata else None
     )
+    warn_mcp_connector_ignored(request)
     return await get_chat_model(
         (
             await validate_model(
@@ -290,6 +294,7 @@ async def count_tokens(
         ApiError: If model is invalid or does not support text output.
     """
     log_request_params(request)
+    warn_mcp_connector_ignored(request)
     model = await validate_model(
         request.model, input_modality="TEXT", output_modality="TEXT"
     )
