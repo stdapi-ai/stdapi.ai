@@ -133,6 +133,9 @@ class EventLog(TypedDict):
     # Role session name the AWS usage was billed under, as the CUR reports it
     aws_role_session_name: NotRequired[str]
 
+    # Key ID of the tenant whose AWS account the model invocations were billed to
+    aws_tenant_key_id: NotRequired[str]
+
     # Edge correlation headers from the incoming request, when present
     amzn_trace_id: NotRequired[str]  # X-Amzn-Trace-Id (ALB / X-Ray)
     apigw_request_id: NotRequired[str]  # x-amz-apigw-id (API Gateway)
@@ -175,6 +178,23 @@ PRINCIPAL: ContextVar[Principal | None] = ContextVar("principal", default=None)
 
 
 @dataclass(frozen=True, slots=True)
+class TenantAwsCredential:
+    """Cross-account AWS role a tenant registered against its API key.
+
+    Neither field is a secret: the role ARN is public-by-design, and the
+    external ID is only meaningful when presented by this deployment's own
+    IAM principal (AWS's confused-deputy pattern).
+
+    Attributes:
+        role_arn: IAM role in the tenant's own AWS account.
+        external_id: Server-minted ``ExternalId`` the role's trust policy requires.
+    """
+
+    role_arn: str
+    external_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class Tenant:
     """Tenant whose API key the gateway verified for the current request.
 
@@ -189,6 +209,8 @@ class Tenant:
         models_deny: Patterns refusing a resolved model ID, checked first.
         endpoints_allow: Patterns the route path template must match, when set.
         endpoints_deny: Patterns refusing a route path template, checked first.
+        aws_credential: Cross-account role this tenant's model invocations
+            run under, when the tenant registered one.
     """
 
     key_id: str
@@ -197,6 +219,7 @@ class Tenant:
     models_deny: tuple[str, ...] = ()
     endpoints_allow: tuple[str, ...] | None = None
     endpoints_deny: tuple[str, ...] = ()
+    aws_credential: TenantAwsCredential | None = None
 
     @staticmethod
     def _allows(
@@ -244,6 +267,21 @@ class Tenant:
 
 #: Verified tenant of the current request; None when no tenant key was presented.
 TENANT: ContextVar[Tenant | None] = ContextVar("tenant", default=None)
+
+
+def tenant_aws_credential() -> TenantAwsCredential | None:
+    """Return the AWS credential the current request's tenant registered, if any.
+
+    Returns:
+        The credential the request's model invocations must be signed with, or
+        ``None`` when tenant AWS credentials are disabled, the request carries
+        no verified tenant, or the tenant registered no credential.
+    """
+    if not SETTINGS.tenant_aws_credentials:
+        return None
+    tenant = TENANT.get()
+    return tenant.aws_credential if tenant is not None else None
+
 
 #: Request ID (x-request-id header)
 REQUEST_ID: ContextVar[str] = ContextVar("request_id")
@@ -1005,7 +1043,7 @@ def _api_error_sse_event(exc: ApiError) -> ServerSentEvent:
             format_http_error(
                 REQUEST.get(),
                 exc.status,
-                hide_security_details(exc.status, exc.args[0]),
+                hide_security_details(exc.status, exc.args[0], disclosed=exc.disclosed),
                 exc.param,
                 exc.code,
             )[0]

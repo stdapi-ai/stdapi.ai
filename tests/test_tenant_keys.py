@@ -45,6 +45,7 @@ from stdapi.aws_dynamodb import (
     delete_item,
     get_item,
     put_item,
+    query_partition,
 )
 from stdapi.config import SETTINGS, _Settings
 from stdapi.monitoring import (
@@ -429,6 +430,54 @@ class TestMinting:
         tenant_keys._CACHE.clear()  # noqa: SLF001
         with pytest.raises(ApiError):
             await verify_tenant_key(key)
+
+    async def test_an_out_of_spec_credential_record_never_aborts_the_pass(
+        self, tenant_backend: SSMClient
+    ) -> None:
+        """A record written by the operator's own tooling is skipped, not fatal.
+
+        The docs invite any tool that can write a DynamoDB item to declare a
+        tenant, so an item whose sort key is not one this server writes is a
+        realistic input. Reconciliation must report it and carry on: raising
+        would abort startup on every instance and kill the reconciliation loop
+        on the running ones.
+
+        Ref: stdapi/tenant_keys.py:_drop_orphan
+             stdapi/aws_dynamodb.py:item_key
+        """
+        await put_item({PARTITION_KEY: "TENANT", SORT_KEY: "secret#abc#def"})
+        await put_item(_tenant_item("v" + "0" * 15))
+
+        await reconcile_tenant_keys()
+
+        assert await get_item("TENANT", "secret#abc#def") is not None
+        assert await get_item("TENANT", "secret#v" + "0" * 15) is not None
+
+    async def test_a_tenant_recreated_during_the_pass_keeps_its_credential(
+        self, tenant_backend: SSMClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An orphan is confirmed against the table before its key is revoked.
+
+        Tooling that replaces a tenant record destroys and recreates it seconds
+        apart; a pass whose listing fell in that gap would otherwise revoke a
+        key already delivered, and mint a fresh secret the tenant never gets.
+
+        Ref: stdapi/tenant_keys.py:_drop_orphan
+        """
+        key_id = "y" + "0" * 15
+        await _declare_and_mint(tenant_backend, key_id=key_id)
+        listed = await query_partition("TENANT", consistent=True)
+
+        async def _listing_taken_in_the_gap(
+            *_args: object, **_kwargs: object
+        ) -> list[Item]:
+            return [item for item in listed if item[SORT_KEY] != f"tenant#{key_id}"]
+
+        monkeypatch.setattr(tenant_keys, "query_partition", _listing_taken_in_the_gap)
+
+        await reconcile_tenant_keys()
+
+        assert await get_item("TENANT", f"secret#{key_id}") is not None
 
     async def test_a_parameter_holding_something_else_is_never_recorded(
         self, tenant_backend: SSMClient
@@ -1826,10 +1875,15 @@ class TestRealBackends:
     Parameter Store's create-once write (``Overwrite=False``) is the mint's
     idempotency lock; the offline stand-in agrees, but the real service is the
     authority.
+
+    These call the module in process, so they take ``sandbox_dynamodb``: it
+    binds the table access to a client opened on the loop the test runs on,
+    which the app's own pool cannot be, and without it every one of them raises
+    :class:`TableUnavailableError` instead.
     """
 
     async def test_racing_mints_deliver_exactly_one_key(
-        self, sandbox_dynamodb_table: str, monkeypatch: pytest.MonkeyPatch
+        self, sandbox_dynamodb: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Four concurrent mints against the real services agree on one secret.
 
@@ -1848,7 +1902,7 @@ class TestRealBackends:
         from stdapi.aws import _CLIENTS  # noqa: PLC0415
         from stdapi.config import AWS_REGION  # noqa: PLC0415
 
-        monkeypatch.setattr(SETTINGS, "aws_dynamodb_table", sandbox_dynamodb_table)
+        del sandbox_dynamodb
         monkeypatch.setattr(SETTINGS, "tenant_key_ssm_parameter_prefix", _PREFIX)
         key_id = token_hex(8)
         parameter = f"{_PREFIX}/{key_id}"

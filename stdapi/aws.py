@@ -22,7 +22,7 @@ from botocore.utils import parse_timestamp
 from pydantic_core import to_json
 
 from stdapi import server
-from stdapi.api_errors import ApiError
+from stdapi.api_errors import ApiError, TenantCredentialError
 from stdapi.aws_bedrock_mantle import mantle_http_session
 from stdapi.config import AWS_REGION, AWS_SESSION, SETTINGS
 
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from botocore.model import OperationModel
     from types_aiobotocore_bedrock.literals import RegionName
 
-    from stdapi.monitoring import EventLog
+    from stdapi.monitoring import EventLog, TenantAwsCredential
 
     class AwsEnvironment(TypedDict):
         """AWS environment."""
@@ -313,10 +313,11 @@ class AWSConnectionManager:
                     (service, region or SETTINGS.aws_bedrock_regions[0])
                     for service, region in self._client_specs
                 },
-                # Only consumer is the per-end-user role session.
+                # Consumers are the per-end-user and per-tenant role sessions.
                 *(
                     (("sts", _STS_REGION),)
                     if SETTINGS.aws_bedrock_user_role_arn
+                    or SETTINGS.tenant_aws_credentials
                     else ()
                 ),
             ]
@@ -910,50 +911,324 @@ def verify_user_role_identity() -> None:
 
 
 def verify_bidi_user_role_policy(service: str) -> None:
-    """Refuse a real-time model session no end user role can be attributed with.
+    """Refuse a real-time model session the request's signing policy cannot cover.
 
     A bidirectional stream is signed as it opens, from the server's own
     credentials, and keeps that identity for its whole life: unlike a request,
-    it has no point where the end user's session can be substituted. A
-    deployment that requires every model invocation to name its end user is
-    therefore served by refusing the session rather than by reporting its usage
-    under the server. Streams of every other service are unaffected: they are
-    not model invocations.
+    it has no point where another session can be substituted. A deployment
+    that requires every model invocation to name its end user, or a tenant
+    whose invocations must run under its own AWS account, is therefore served
+    by refusing the session rather than by silently signing (and billing) it
+    as the server. Streams of every other service are unaffected: they are not
+    model invocations.
 
     Args:
         service: AWS service name of the stream about to open.
 
     Raises:
-        ApiError: The deployment requires an end user identity that a real-time
-            model session cannot carry.
+        ApiError: The deployment requires an end user identity, or the API key
+            carries an AWS credential, that a real-time model session cannot
+            be signed with.
     """
+    if service != _BIDI_MODEL_SERVICE:
+        return
+    # Imported here: stdapi.monitoring transitively imports this module.
+    from stdapi.monitoring import tenant_aws_credential  # noqa: PLC0415
+
+    if tenant_aws_credential() is not None:
+        raise ApiError(TENANT_REALTIME_MESSAGE, status=400)
     if (
-        service == _BIDI_MODEL_SERVICE
-        and SETTINGS.aws_bedrock_user_role_arn is not None
+        SETTINGS.aws_bedrock_user_role_arn is not None
         and SETTINGS.aws_bedrock_user_role_require_identity
     ):
         raise ApiError(_IDENTITY_UNATTRIBUTABLE_MESSAGE, status=400)
 
 
+#: Lifetime of a tenant role session; the one-hour ceiling role chaining imposes.
+_TENANT_SESSION_DURATION: Final = 3600
+
+#: Tenant role sessions kept per process, keyed by a credential digest (bounded LRU).
+_TENANT_ROLE_CACHE: dict[str, _TenantRoleCredentials] = {}
+
+#: Maximum tenants whose role session is cached; the least recently used is dropped.
+_TENANT_ROLE_CACHE_MAX: int = 4096
+
+# Deliberate exception to the no-AWS-details register of the sibling messages
+# above: these reach whoever holds a key that registered an AWS credential, and
+# every detail they name -- the account, the role, its trust policy -- is the
+# tenant's own resource, never this deployment's.
+#: Client-facing message when the tenant's registered role cannot be assumed.
+TENANT_CREDENTIAL_FAILURE_MESSAGE: Final = (
+    "The AWS credential registered for this API key could not be used. "
+    "Ask your administrator to verify the role and its trust policy."
+)
+
+#: Client-facing message when the tenant's own AWS account denies an invocation.
+TENANT_ACCESS_DENIED_MESSAGE: Final = (
+    "Your AWS account does not have access to this model. Grant the role "
+    "registered for this API key access to it, or select another model."
+)
+
+#: Client-facing message when the tenant's role session could not be opened now.
+TENANT_SESSION_UNAVAILABLE_MESSAGE: Final = (
+    "The AWS credential registered for this API key could not be used right "
+    "now. Retry the request; if the failure continues, contact the service "
+    "operator."
+)
+
+#: AWS error codes naming the tenant's own role registration as the fault.
+_TENANT_ROLE_FAULT_CODES: Final = frozenset(
+    {
+        "AccessDenied",
+        "AccessDeniedException",
+        "MalformedPolicyDocument",
+        "MalformedPolicyDocumentException",
+        "InvalidParameterValue",
+        "NoSuchEntity",
+        "ValidationError",
+    }
+)
+
+#: Client-facing message of a real-time session under a tenant AWS credential.
+TENANT_REALTIME_MESSAGE: Final = (
+    "This API key carries an AWS credential of its own, which a real-time "
+    "session cannot be signed with. Use a non-realtime endpoint instead."
+)
+
+
+class _TenantRoleCredentials(AioDeferredRefreshableCredentials):
+    """A tenant's cross-account role session, reopened before it expires.
+
+    Attributes:
+        key_id: Tenant key the session belongs to, for targeted eviction.
+    """
+
+    def __init__(self, key_id: str, credential: TenantAwsCredential) -> None:
+        """Prepare a tenant's role session, opened on first use.
+
+        Args:
+            key_id: Tenant key the credential is registered against.
+            credential: The registered cross-account role and ExternalId.
+        """
+        super().__init__(
+            lambda: _assume_tenant_role(key_id, credential), "stdapi-tenant-role"
+        )
+        self.key_id = key_id
+        self._advisory_refresh_timeout = int(
+            _TENANT_SESSION_DURATION * _ADVISORY_REFRESH_RATIO
+        )
+        self._mandatory_refresh_timeout = int(
+            _TENANT_SESSION_DURATION * _MANDATORY_REFRESH_RATIO
+        )
+
+
+async def _assume_tenant_role(
+    key_id: str, credential: TenantAwsCredential
+) -> dict[str, Any]:
+    """Open a role session in one tenant's own AWS account.
+
+    The server-minted ExternalId is presented on every call: the tenant's
+    trust policy requires it, which is what stops another customer who learned
+    the role ARN from routing this deputy at it (AWS confused-deputy pattern).
+
+    Args:
+        key_id: Tenant key the credential is registered against.
+        credential: The registered cross-account role and ExternalId.
+
+    Returns:
+        The session credentials, in the form botocore refreshes from.
+    """
+    sts = get_client("sts", _STS_REGION)
+    credentials = (
+        await sts.assume_role(
+            RoleArn=credential.role_arn,
+            RoleSessionName=f"stdapi-ai-tenant-{key_id}",
+            ExternalId=credential.external_id,
+            DurationSeconds=_TENANT_SESSION_DURATION,
+        )
+    )["Credentials"]
+    return {
+        "access_key": credentials["AccessKeyId"],
+        "secret_key": credentials["SecretAccessKey"],
+        "token": credentials["SessionToken"],
+        "expiry_time": credentials["Expiration"].isoformat(),
+    }
+
+
+def _tenant_session_key(key_id: str, credential: TenantAwsCredential) -> str:
+    """Return the cache key of one tenant credential's role session.
+
+    Args:
+        key_id: Tenant key the credential is registered against.
+        credential: The registered cross-account role and ExternalId.
+
+    Returns:
+        A fixed-size digest, so a rotated role or ExternalId opens a fresh
+        session instead of reusing the previous one's.
+    """
+    material = f"{key_id}\0{credential.role_arn}\0{credential.external_id}"
+    return blake2b(material.encode(), digest_size=16).hexdigest()
+
+
+async def tenant_role_credentials(
+    key_id: str, credential: TenantAwsCredential
+) -> _TenantRoleCredentials:
+    """Return the session credentials of one tenant's registered role.
+
+    Sessions are cached per credential and reopened as they approach expiry,
+    so a tenant costs one AWS STS call per hour, not one per request.
+
+    Args:
+        key_id: Tenant key the credential is registered against.
+        credential: The registered cross-account role and ExternalId.
+
+    Returns:
+        The tenant's role session credentials.
+
+    Raises:
+        TenantCredentialError: The registration itself is at fault -- trust
+            revoked, ExternalId mismatch, role deleted. 403 with a fixed
+            message the tenant can act on, naming none of the failure's AWS
+            details.
+        ApiError: AWS STS could not be reached, throttled the call, or this
+            deployment's own session is gone. 503, because none of that is the
+            tenant's registration and an SDK retries a 503 where it would give
+            up on a 403.
+
+    Both are chained to nothing, so no AWS code or ARN can leak and the Bedrock
+    region router never reads the AWS STS failure as a failed region.
+    """
+    session_key = _tenant_session_key(key_id, credential)
+    credentials = _TENANT_ROLE_CACHE.pop(session_key, None)
+    if credentials is None:
+        if len(_TENANT_ROLE_CACHE) >= _TENANT_ROLE_CACHE_MAX:
+            del _TENANT_ROLE_CACHE[next(iter(_TENANT_ROLE_CACHE))]
+        credentials = _TenantRoleCredentials(key_id, credential)
+    # Re-inserted last, so the least recently used tenant is the one dropped.
+    _TENANT_ROLE_CACHE[session_key] = credentials
+    try:
+        await credentials.get_frozen_credentials()
+    except (BotoCoreError, ClientError, RuntimeError) as exception:
+        # Dropped so the next request retries with a session of its own.
+        _TENANT_ROLE_CACHE.pop(session_key, None)
+        from stdapi.monitoring import REQUEST_LOG, log_error_details  # noqa: PLC0415
+
+        # Only the codes AWS returns for the registration itself are the
+        # tenant's fault. A throttled or unreachable AWS STS, and this
+        # deployment's own session expiring, are this deployment's problem and
+        # clear on their own: answering those with the tenant's 403 sends it
+        # auditing a trust policy that is fine, and stops its SDK retrying.
+        registration = (
+            isinstance(exception, ClientError)
+            and exception.response["Error"]["Code"] in _TENANT_ROLE_FAULT_CODES
+        )
+        if REQUEST_LOG.get(None) is not None:
+            log_error_details(
+                f"Opening the role session of tenant key '{key_id}' failed "
+                f"({type(exception).__name__}: {exception})",
+                level="warning" if registration else "error",
+            )
+        if registration:
+            raise TenantCredentialError(TENANT_CREDENTIAL_FAILURE_MESSAGE) from None
+        raise ApiError(TENANT_SESSION_UNAVAILABLE_MESSAGE, status=503) from None
+    return credentials
+
+
+def drop_tenant_sessions(key_id: str) -> None:
+    """Drop one tenant's cached role sessions, so the next request reopens them.
+
+    Args:
+        key_id: Tenant key whose sessions must be dropped.
+    """
+    for session_key in [
+        session_key
+        for session_key, credentials in _TENANT_ROLE_CACHE.items()
+        if credentials.key_id == key_id
+    ]:
+        _TENANT_ROLE_CACHE.pop(session_key, None)
+
+
+def clear_tenant_role_cache() -> None:
+    """Drop every cached tenant role session."""
+    _TENANT_ROLE_CACHE.clear()
+
+
+def signed_as_tenant(operation_name: str) -> bool:
+    """Whether the current request signed *operation_name* with its tenant's credential.
+
+    Args:
+        operation_name: AWS API operation the failing call invoked.
+
+    Returns:
+        True when the request's tenant registered an AWS credential and this
+        invocation was signed with it, so the identity AWS evaluated belongs
+        to the tenant's own account rather than to this deployment.
+    """
+    if (
+        not SETTINGS.tenant_aws_credentials
+        or operation_name not in USER_ROLE_OPERATIONS
+    ):
+        return False
+    # Imported here: stdapi.monitoring transitively imports this module.
+    from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
+
+    log = REQUEST_LOG.get(None)
+    return log is not None and bool(log.get("aws_tenant_key_id"))
+
+
+async def request_signing_credentials() -> AioDeferredRefreshableCredentials | None:
+    """Return the credentials the current request's model invocations run under.
+
+    The tenant's registered credential wins over the per-end-user role: the
+    first moves the spend to another AWS account, the second only attributes
+    it within this one.
+
+    Returns:
+        The tenant's or the end user's session credentials, or None to keep
+        the server's own identity.
+
+    Raises:
+        ApiError: The applicable session could not be opened, or the request
+            identifies no end user where the configuration requires one.
+    """
+    # Imported here: stdapi.monitoring transitively imports this module.
+    from stdapi.monitoring import (  # noqa: PLC0415
+        REQUEST_LOG,
+        TENANT,
+        tenant_aws_credential,
+    )
+
+    if (tenant := TENANT.get()) is not None and (
+        credential := tenant_aws_credential()
+    ) is not None:
+        credentials = await tenant_role_credentials(tenant.key_id, credential)
+        if (log := REQUEST_LOG.get(None)) is not None:
+            log["aws_tenant_key_id"] = tenant.key_id
+        return credentials
+    return await request_user_role_credentials()
+
+
 async def _set_request_credentials(context: dict[str, Any]) -> None:
-    """Sign the request being built as the end user, if it has one.
+    """Sign the request being built as its tenant or end user, if it has one.
 
     Args:
         context: The request context botocore signs from.
     """
-    if (credentials := await request_user_role_credentials()) is not None:
+    if (credentials := await request_signing_credentials()) is not None:
         context.setdefault("signing", {})["request_credentials"] = credentials
 
 
-def _sign_as_user(
+def _sign_model_invocation(
     model: OperationModel, context: dict[str, Any], **_kwargs: object
 ) -> Awaitable[None] | None:
-    """Attribute a Bedrock model invocation to its end user (``before-parameter-build``).
+    """Sign a Bedrock model invocation per request (``before-parameter-build``).
 
-    Registered once for the Bedrock runtime, so every other AWS service keeps
-    the server's own identity by construction. Returns the coroutine doing the
-    work instead of being one, so a deployment without the feature pays only
-    this comparison.
+    Signs as the tenant's registered AWS credential when the request's API key
+    carries one, else as the request's end user when the deployment attributes
+    usage per end user. Registered once for the Bedrock runtime, so every
+    other AWS service keeps the server's own identity by construction. Returns
+    the coroutine doing the work instead of being one, so a deployment without
+    either feature pays only this comparison.
 
     Args:
         model: Operation model of the call.
@@ -961,13 +1236,13 @@ def _sign_as_user(
         **_kwargs: Unused botocore event arguments.
 
     Returns:
-        The awaitable resolving the end user's credentials, or None to sign
+        The awaitable resolving the request's credentials, or None to sign
         with the server's own.
     """
     if (
         SETTINGS.aws_bedrock_user_role_arn is None
-        or model.name not in USER_ROLE_OPERATIONS
-    ):
+        and not SETTINGS.tenant_aws_credentials
+    ) or model.name not in USER_ROLE_OPERATIONS:
         return None
     return _set_request_credentials(context)
 
@@ -975,7 +1250,7 @@ def _sign_as_user(
 # On the shared session, so the ".no-retry" pool signs invocations the same way.
 AWS_SESSION.register(
     "before-parameter-build.bedrock-runtime",
-    _sign_as_user,
+    _sign_model_invocation,
     unique_id="stdapi-user-role",
 )
 

@@ -87,6 +87,7 @@ from stdapi.monitoring import (
     build_metadata,
     log_background_event,
     log_error_details,
+    tenant_aws_credential,
 )
 from stdapi.pricing import (
     Routing,
@@ -992,8 +993,20 @@ class ModelBase[RequestT, ResponseT]:
             attribution (async invocations report no token usage).
 
         Raises:
-            ApiError: When invocation fails or results cannot be retrieved.
+            ApiError: When invocation fails, results cannot be retrieved, or
+                the API key carries a tenant AWS credential the asynchronous
+                job cannot run under.
         """
+        if tenant_aws_credential() is not None:
+            # StartAsyncInvoke is not tenant-signed: the job writes to this
+            # deployment's S3 bucket and bills its account, which a key that
+            # carries its own credential must never do silently.
+            msg = (
+                "This model generates asynchronously on this deployment's own "
+                "AWS account, which is not available for API keys that carry "
+                "an AWS credential of their own."
+            )
+            raise ApiError(msg)
         candidates = await compute_candidate_regions(self._model_id, s3_required=True)
         effective_region = (
             REGION_ROUTER.ordered_regions(self._model_id, candidates)
@@ -1953,6 +1966,56 @@ def runtime_twin(model_id: str) -> str | None:
         model is not Mantle-served or exists on that endpoint under no name.
     """
     return _MANTLE_RUNTIME_TWINS.get(model_id)
+
+
+def _pin_tenant_billable_service(
+    model: ModelDetails, model_id: str
+) -> tuple[ModelDetails, str]:
+    """Steer a tenant-credentialed request onto the service its credential pays for.
+
+    Amazon Bedrock Mantle rides this deployment's own HTTP session and a
+    Marketplace endpoint is this deployment's own provisioned resource: a
+    tenant-signed request can pay for neither, so serving one there would land
+    the spend on the operator's bill. A Mantle-served model that also exists
+    on bedrock-runtime (the GPT-5.6 family by default) is pinned to its
+    runtime twin, where the tenant's credential signs and pays; a model with
+    no runtime home is refused with the reason.
+
+    Args:
+        model: The resolved model.
+        model_id: The resolved model ID, named in the refusal.
+
+    Returns:
+        The model and ID to serve — the runtime twin's for a dual-homed
+        Mantle model, unchanged otherwise.
+
+    Raises:
+        ApiError: The model exists only on a service the tenant's credential
+            cannot pay for.
+    """
+    if tenant_aws_credential() is None:
+        return model, model_id
+    if model.service == MANTLE_SERVICE:
+        twin_id = runtime_twin(model.id)
+        twin = _ALL_MODELS.get(twin_id) if twin_id else None
+        if twin is not None:
+            return twin, twin.id
+        msg = (
+            f"The model `{model_id}` is only served through Amazon Bedrock "
+            "Mantle, which runs on this deployment's own AWS account, so it "
+            "is not available for API keys that carry an AWS credential of "
+            "their own. Select a model served by the Amazon Bedrock runtime."
+        )
+        raise ApiError(msg)
+    if model.service == MARKETPLACE_SERVICE:
+        msg = (
+            f"The model `{model_id}` is served by an Amazon Bedrock "
+            "Marketplace endpoint of this deployment's own AWS account, so it "
+            "is not available for API keys that carry an AWS credential of "
+            "their own. Select a model served by the Amazon Bedrock runtime."
+        )
+        raise ApiError(msg)
+    return model, model_id
 
 
 #: Output modalities the Batch API serves: chat completions, and embeddings.
@@ -3684,7 +3747,7 @@ async def compute_candidate_regions(
     return regions
 
 
-async def route_and_execute[T](
+async def route_and_execute[T](  # noqa: C901, PLR0912 - one guard per router write
     model_id: str,
     candidates: list[RegionName],
     fn: Callable[[RegionName], Awaitable[T]],
@@ -3708,6 +3771,12 @@ async def route_and_execute[T](
     reached Bedrock and is billed regardless, so failing over would double-bill
     the invocation instead of recovering it.
 
+    A tenant-credentialed request keeps the failover walk but neither reads
+    nor writes the router's health state: Bedrock quota is per account per
+    region, so a throttle of the tenant's own account says nothing about this
+    deployment's, and writing it would let one throttled tenant put a region
+    on backoff for every other caller.
+
     Args:
         model_id: Used for router health bookkeeping.
         candidates: From ``compute_candidate_regions``. Single-element means region-locked.
@@ -3727,6 +3796,7 @@ async def route_and_execute[T](
     """
     if not REGION_ROUTER or len(candidates) == 1:
         return await _execute_pinned(candidates[0], fn)
+    router = None if tenant_aws_credential() is not None else REGION_ROUTER
 
     last_exc: (
         ClientError
@@ -3744,7 +3814,9 @@ async def route_and_execute[T](
     # ``retry-after`` the client receives never reflects.
     remaining = list(candidates)
     for _ in range(min(SETTINGS.aws_bedrock_max_retries + 1, len(candidates))):
-        region = REGION_ROUTER.ordered_regions(model_id, remaining)[0]
+        region = (
+            router.ordered_regions(model_id, remaining)[0] if router else remaining[0]
+        )
         remaining.remove(region)
         try:
             result = await fn(region)
@@ -3752,21 +3824,28 @@ async def route_and_execute[T](
             if not exc.failover:
                 raise
             last_exc = exc
-            REGION_ROUTER.mark_error(model_id, region, _mantle_failover_label(exc))
+            if router:
+                router.mark_error(model_id, region, _mantle_failover_label(exc))
         except (ClientError, ApiError) as exc:
             if (code := _retryable_error_code(exc)) is None:
                 raise
             last_exc = exc
-            REGION_ROUTER.mark_error(model_id, region, code)
+            if router:
+                router.mark_error(model_id, region, code)
         except (
             ModelRegionUnavailableError,
             BotocoreConnectionError,
             HTTPClientError,
         ) as exc:
             last_exc = exc
-            REGION_ROUTER.mark_error(model_id, region, _region_failover_label(exc))
+            # Always derived: it re-raises a ReadTimeoutError, which must not
+            # be failed over (and double-billed) on the routerless walk either.
+            label = _region_failover_label(exc)
+            if router:
+                router.mark_error(model_id, region, label)
         else:
-            REGION_ROUTER.mark_success(model_id, region)
+            if router:
+                router.mark_success(model_id, region)
             return result
 
     if isinstance(last_exc, ModelRegionUnavailableError):
@@ -4318,10 +4397,13 @@ async def validate_model(
         # The pattern was an input; everything downstream names the model it chose.
         model_id = original_id = model.id
 
-    # On the resolved ID, after aliases, wildcards, ARNs and deprecation
-    # fallbacks, so no indirection can launder a model the tenant may not use.
-    # The refusal is the not-found shape: to a tenant, a model outside its
-    # scope does not exist.
+    # Before the scope check, so the check applies to the ID actually served.
+    model, model_id = _pin_tenant_billable_service(model, model_id)
+
+    # On the resolved ID, after aliases, wildcards, ARNs, deprecation
+    # fallbacks and the tenant service pin, so no indirection can launder a
+    # model the tenant may not use. The refusal is the not-found shape: to a
+    # tenant, a model outside its scope does not exist.
     if (
         tenant_scope
         and (tenant := TENANT.get()) is not None

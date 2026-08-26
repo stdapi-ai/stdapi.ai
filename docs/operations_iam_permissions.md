@@ -553,6 +553,32 @@ Required, together with the [shared table permissions](#shared-table), when [ten
 
 ---
 
+## :material-account-key: Tenant AWS Credentials (Optional) { #tenant-aws-credentials }
+
+**Environment Variables**: [`TENANT_AWS_CREDENTIALS`](operations_configuration.md#tenant-aws-credentials)
+
+Required when [tenant AWS credentials](operations_authentication_security.md#tenant-aws-credentials) are enabled: the gateway assumes each tenant's registered cross-account role to run that tenant's model invocations under the tenant's own account. Grant `sts:AssumeRole` on the tenant roles alone — list them, or constrain a pattern — never on `*`, and require an `ExternalId` to be presented so no code path can ever assume a role without the confused-deputy check.
+
+??? example "Tenant Role Assumption IAM Policy Statement"
+    ```json
+    {
+      "Sid": "TenantRoleAssumption",
+      "Effect": "Allow",
+      "Action": "sts:AssumeRole",
+      "Resource": [
+        "arn:aws:iam::TENANT_ACCOUNT_ID:role/TENANT_ROLE_NAME"
+      ],
+      "Condition": {
+        "StringLike": { "sts:ExternalId": "?*" }
+      }
+    }
+    ```
+
+    !!! info "The other half lives in the tenant's account"
+        Each tenant role's **trust policy** must allow this deployment's account (or role) to call `sts:AssumeRole` on it, conditioned on the `ExternalId` the gateway minted for that tenant — the shape is shown in [Tenant AWS credentials](operations_authentication_security.md#tenant-aws-credentials). The role's permission policy is the tenant's to scope: the Bedrock invocation actions on the models it wants to serve.
+
+---
+
 ## :material-book-search: Knowledge Base Vector Stores (Optional) { #knowledge-base-vector-stores }
 
 **Environment Variables**: [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration.md#aws-bedrock-knowledge-base-ids)

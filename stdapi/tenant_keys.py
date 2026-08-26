@@ -14,8 +14,10 @@ server never write the same item:
   name, ``disabled``, and the scope patterns. Rewritten freely by tooling
   such as the Terraform module.
 - ``pk=TENANT``, ``sk=secret#<key id>`` -- the server-minted credential:
-  ``secret_hash`` and ``salt``. Never written by the operator, so the
-  operator's tooling never sees, stores or transports the secret.
+  ``secret_hash``, ``salt`` and the ``external_id`` a cross-account role's
+  trust policy must require, which the operator reads from here. Never
+  written by the operator, so the operator's tooling never sees, stores or
+  transports the secret.
 
 Minting closes the gap between the two: a tenant record with no secret record
 is pending, and the reconciliation loop mints a secret for it, delivers the
@@ -23,7 +25,8 @@ full key to AWS Systems Manager Parameter Store as a ``SecureString`` under
 ``tenant_key_ssm_parameter_prefix``, and records the salted hash. The
 parameter's create-once semantics make the mint idempotent across instances
 and crashes: whoever created the parameter defined the secret, and everyone
-else derives the hash from it.
+else derives the hash from it, retrying past the throttle Parameter Store
+answers a genuine race with.
 
 Validated keys are cached in-process for ``tenant_key_cache_seconds`` (60 s
 by default), which is also the revocation window: a key revoked or edited in
@@ -65,6 +68,7 @@ from stdapi.config import AWS_REGION, SETTINGS
 from stdapi.monitoring import (
     EventLog,
     Tenant,
+    TenantAwsCredential,
     add_server_warning,
     log_background_event,
     log_error_details,
@@ -129,6 +133,20 @@ _DUMMY_SALT: Final = token_bytes(_SALT_SIZE)
 
 #: Region the minted keys are delivered through.
 _SSM_REGION: RegionName = AWS_REGION  # type: ignore[assignment]
+
+#: Parameter Store's answer to concurrent writes of one parameter, which the mint races into.
+_THROTTLED: Final = "TooManyUpdates"
+
+#: Attempts at the create-once write before the mint is left to the next reconciliation.
+_MINT_ATTEMPTS: Final = 5
+
+#: Seconds between those attempts, long enough for the winner's write to land.
+_MINT_RETRY_SECONDS: Final = 0.2
+
+#: Matcher a tenant record's cross-account IAM role ARN must satisfy.
+_ROLE_ARN_RE: Final = re_compile(
+    r"^arn:aws[a-z-]*:iam::\d{12}:role/[\w+=,.@/-]+$"
+).match
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,6 +295,49 @@ def _patterns(item: Item, attribute: str, key_id: str) -> tuple[str, ...] | None
     return tuple(value)  # type: ignore[arg-type]
 
 
+def _aws_credential(
+    key_id: str, tenant_item: Item, secret_item: Item
+) -> TenantAwsCredential | None:
+    """Read the cross-account AWS credential off a key's records, if declared.
+
+    Fails closed on every half-configured state: a declared role must never be
+    silently ignored, or the tenant's usage lands on the deployment's bill
+    while the operator believes it does not.
+
+    Args:
+        key_id: The key both records belong to.
+        tenant_item: The operator-declared tenant record.
+        secret_item: The server-minted credential record.
+
+    Returns:
+        The credential, or None when the record declares no role.
+
+    Raises:
+        FeatureUnavailableError: The role ARN is malformed, the feature is
+            disabled while a role is declared, or the external ID is not
+            minted yet.
+    """
+    role_arn = tenant_item.get("aws_role_arn")
+    if role_arn is None:
+        return None
+    if not isinstance(role_arn, str) or not _ROLE_ARN_RE(role_arn):
+        raise _malformed_record(key_id, "'aws_role_arn' is not an IAM role ARN")
+    if not SETTINGS.tenant_aws_credentials:
+        raise _malformed_record(
+            key_id,
+            "it declares 'aws_role_arn' while tenant_aws_credentials is "
+            "disabled; enable the setting or remove the attribute",
+        )
+    external_id = secret_item.get("external_id")
+    if not isinstance(external_id, str) or not external_id:
+        raise _malformed_record(
+            key_id,
+            "its ExternalId is not minted yet; the server mints one within "
+            "a minute of the role being declared",
+        )
+    return TenantAwsCredential(role_arn=role_arn, external_id=external_id)
+
+
 def _build_entry(key_id: str, tenant_item: Item, secret_item: Item) -> _Entry:
     """Assemble a cache entry from the two records of one key.
 
@@ -307,6 +368,7 @@ def _build_entry(key_id: str, tenant_item: Item, secret_item: Item) -> _Entry:
             models_deny=_patterns(tenant_item, "models_deny", key_id) or (),
             endpoints_allow=_patterns(tenant_item, "endpoints_allow", key_id),
             endpoints_deny=_patterns(tenant_item, "endpoints_deny", key_id) or (),
+            aws_credential=_aws_credential(key_id, tenant_item, secret_item),
         ),
         disabled=bool(tenant_item.get("disabled")),
         secret_hash=secret_hash,
@@ -451,6 +513,11 @@ async def _mint(key_id: str, name: str) -> None:
     and any other instance -- or a retry after a crash between delivery and
     recording -- reads the parameter back and records the same secret's hash.
 
+    A genuine race is not answered with that create-once refusal, though:
+    Parameter Store throttles concurrent writes of one name with
+    :data:`_THROTTLED` before either write lands, so a loser has to retry to
+    find the winner's parameter rather than take it for absent.
+
     Args:
         key_id: The key to mint.
         name: The tenant's declared name, for the parameter description.
@@ -468,46 +535,56 @@ async def _mint(key_id: str, name: str) -> None:
         if SETTINGS.tenant_key_ssm_kms_key_id
         else {}
     )
-    try:
-        await ssm_client.put_parameter(
-            Name=parameter,
-            Value=f"{KEY_PREFIX}{key_id}-{secret}",
-            Type="SecureString",
-            Overwrite=False,
-            Description=(
-                f"stdapi.ai API key of tenant '{name}'. "
-                "Deliver it to the tenant, then delete this parameter."
-            ),
-            **key_kwargs,
-        )
-    except ClientError as error:
-        if error.response.get("Error", {}).get("Code") != "ParameterAlreadyExists":
-            raise
-        value = (await ssm_client.get_parameter(Name=parameter, WithDecryption=True))[
-            "Parameter"
-        ]["Value"]
-        recovered = _parse(value) if is_tenant_key(value) else None
-        if recovered is None or recovered[0] != key_id:
-            log_error_details(
-                f"SSM parameter '{parameter}' does not hold tenant key "
-                f"'{key_id}': delete the parameter to let the server mint one",
-                level="warning",
+    for remaining in range(_MINT_ATTEMPTS - 1, -1, -1):
+        try:
+            await ssm_client.put_parameter(
+                Name=parameter,
+                Value=f"{KEY_PREFIX}{key_id}-{secret}",
+                Type="SecureString",
+                Overwrite=False,
+                Description=(
+                    f"stdapi.ai API key of tenant '{name}'. "
+                    "Deliver it to the tenant, then delete this parameter."
+                ),
+                **key_kwargs,
             )
-            return
-        secret = recovered[1]
+        except ClientError as error:
+            code = error.response.get("Error", {}).get("Code")
+            if code == _THROTTLED and remaining:
+                await sleep(_MINT_RETRY_SECONDS)
+                continue
+            if code != "ParameterAlreadyExists":
+                raise
+            value = (
+                await ssm_client.get_parameter(Name=parameter, WithDecryption=True)
+            )["Parameter"]["Value"]
+            recovered = _parse(value) if is_tenant_key(value) else None
+            if recovered is None or recovered[0] != key_id:
+                log_error_details(
+                    f"SSM parameter '{parameter}' does not hold tenant key "
+                    f"'{key_id}': delete the parameter to let the server mint one",
+                    level="warning",
+                )
+                return
+            secret = recovered[1]
+        break
     salt = token_bytes(_SALT_SIZE)
+    # Minted with every key so registering a role later needs no write.
+    external_id = webuuid()
     written = await put_item(
         {
             PARTITION_KEY: _PARTITION,
             SORT_KEY: item_key(_SECRET_KIND, key_id),
             "secret_hash": _hash_secret(secret, salt),
             "salt": salt,
+            "external_id": external_id,
             "minted_at": int(time()),
         },
         condition=f"attribute_not_exists({PARTITION_KEY})",
     )
     log_error_details(
-        f"Minted tenant API key '{key_id}' into SSM parameter '{parameter}'"
+        f"Minted tenant API key '{key_id}' into SSM parameter '{parameter}', "
+        "with an ExternalId for a cross-account role in its credential record"
         if written
         else f"Tenant API key '{key_id}' was minted by another instance",
         level="info",
@@ -526,7 +603,10 @@ async def reconcile_tenant_keys() -> None:
         TableUnavailableError: The partition could not be listed.
     """
     tenants: dict[str, Item] = {}
-    secrets: set[str] = set()
+    secrets: dict[str, Item] = {}
+    # Sort key each credential record was read under, so a record whose key ID
+    # is out of spec is still addressable without rebuilding its key.
+    secret_sort_keys: dict[str, str] = {}
     # Consistent, once a minute: a stale read here could mistake a freshly
     # declared tenant's credential for an orphan and revoke a delivered key.
     for item in await query_partition(_PARTITION, consistent=True):
@@ -537,22 +617,105 @@ async def reconcile_tenant_keys() -> None:
         if kind == _TENANT_KIND and key_id:
             tenants[key_id] = item
         elif kind == _SECRET_KIND and key_id:
-            secrets.add(key_id)
+            secrets[key_id] = item
+            secret_sort_keys[key_id] = sort_key
     pending = {
         key_id: item for key_id, item in tenants.items() if key_id not in secrets
     }
-    orphans = secrets - tenants.keys()
-    if not pending and not orphans:
+    orphans = {
+        key_id: secret_sort_keys[key_id] for key_id in secrets.keys() - tenants.keys()
+    }
+    # Credential records minted before ExternalId existed, now needing one.
+    unminted_external = {
+        key_id: item
+        for key_id, item in secrets.items()
+        if key_id in tenants
+        and tenants[key_id].get("aws_role_arn") is not None
+        and not item.get("external_id")
+    }
+    if not pending and not orphans and not unminted_external:
         return
     with log_background_event("tenant_keys_reconcile", webuuid()):
         for key_id, item in pending.items():
             await _mint_pending(key_id, item)
-        for key_id in orphans:
-            await delete_item(_PARTITION, item_key(_SECRET_KIND, key_id))
+        for key_id, item in unminted_external.items():
+            await _backfill_external_id(key_id, item)
+        for key_id, sort_key in orphans.items():
+            await _drop_orphan(key_id, sort_key)
+
+
+async def _drop_orphan(key_id: str, sort_key: str) -> None:
+    """Remove the credential record of a tenant that no longer exists.
+
+    Deleting one revokes a credential, so the tenant record is re-read
+    immediately before: a tooling-driven destroy-and-recreate would otherwise
+    let a pass started inside that gap revoke a key already delivered.
+
+    Args:
+        key_id: The key the record belongs to.
+        sort_key: The sort key the record was read under, which is what it is
+            deleted by -- a key ID no server ever minted has no rebuildable key.
+
+    Raises:
+        TableUnavailableError: The record could not be re-read or deleted.
+    """
+    if not _KEY_ID_RE(key_id):
+        if key_id not in _REPORTED:
+            _REPORTED.add(key_id)
             log_error_details(
-                f"Removed the credential record of destroyed tenant key '{key_id}'",
-                level="info",
+                f"Credential record '{sort_key}' carries a key ID this server "
+                "never mints and is left untouched: remove it with the tooling "
+                "that wrote it",
+                level="warning",
             )
+        return
+    recreated = await get_item(
+        _PARTITION, item_key(_TENANT_KIND, key_id), consistent=True
+    )
+    if recreated is not None:
+        return
+    await delete_item(_PARTITION, sort_key)
+    log_error_details(
+        f"Revoked the credential record of destroyed tenant key '{key_id}'",
+        level="warning",
+    )
+
+
+async def _backfill_external_id(key_id: str, secret_item: Item) -> None:
+    """Mint the ExternalId of a credential record that predates the feature.
+
+    Create-once: the conditional write makes concurrent instances agree on a
+    single value, exactly like the secret mint itself. Failures are reported
+    rather than raised; the next reconciliation retries.
+
+    Args:
+        key_id: The key whose credential record lacks an ExternalId.
+        secret_item: The credential record, as read by the reconciliation.
+    """
+    external_id = webuuid()
+    try:
+        written = await put_item(
+            {**secret_item, "external_id": external_id},
+            condition="attribute_not_exists(external_id)",
+        )
+    except (ClientError, BotoCoreError, TableUnavailableError) as error:
+        detail = (
+            error.detail
+            if isinstance(error, TableUnavailableError)
+            else type(error).__name__
+        )
+        log_error_details(
+            f"The ExternalId of tenant key '{key_id}' could not be minted: {detail}",
+            level="warning",
+        )
+        return
+    log_error_details(
+        f"Minted the ExternalId of tenant key '{key_id}' into its credential "
+        "record: the tenant must require it in its role's trust policy"
+        if written
+        else f"The ExternalId of tenant key '{key_id}' was minted by another instance",
+        level="info",
+    )
 
 
 def _mint_failure_detail(key_id: str, error: ClientError | BotoCoreError) -> str:

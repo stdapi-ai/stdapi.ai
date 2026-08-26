@@ -55,7 +55,7 @@ from stdapi.models.chat._adapters import _anthropic_message as anthropic_adapter
 from stdapi.models.chat._adapters import _openai_chat_completion as openai_adapter
 from stdapi.models.chat._default import ChatModel
 from stdapi.models.embedding import EmbeddingModelBase, get_embedding_model
-from stdapi.monitoring import log_error_details
+from stdapi.monitoring import log_error_details, tenant_aws_credential
 from stdapi.routes.openai_embeddings import build_embedding_response
 from stdapi.types.openai_chat_completions import CompletionCreateParams
 from stdapi.types.openai_embeddings import EmbeddingCreateParams
@@ -1125,8 +1125,20 @@ async def create_batch(
         The created batch and the state of its jobs.
 
     Raises:
-        ApiError: When the requests cannot be grouped into runnable jobs.
+        ApiError: When the requests cannot be grouped into runnable jobs, or
+            when the API key carries a tenant AWS credential a batch job
+            cannot run under.
     """
+    if tenant_aws_credential() is not None:
+        # Refused rather than run on this deployment's account: a batch job
+        # outlives the one-hour role session role chaining caps a tenant
+        # credential at, and would land hours of spend on someone else's bill.
+        msg = (
+            "The Batch API is not available for API keys that carry an AWS "
+            "credential of their own: a batch job cannot run under it. "
+            "Use the non-batch endpoints instead."
+        )
+        raise ApiError(msg)
     role_arn, bucket = require_batches_enabled()
     groups = _group_by_model(prepared)
     payload = encode_id_payload(bucket)
@@ -1601,6 +1613,7 @@ def _record_media_usage(ref: BatchJobRef, manifest: JsonMapping) -> None:
                 region=ref.region,
                 input_images=count,
                 media_spec=spec,
+                billed_externally=False,
             )
     for key, spec in _SECOND_COUNTERS:
         if count := _counter(manifest, key):
@@ -1610,6 +1623,7 @@ def _record_media_usage(ref: BatchJobRef, manifest: JsonMapping) -> None:
                 region=ref.region,
                 input_seconds=count,
                 media_spec=spec,
+                billed_externally=False,
             )
 
 
@@ -1654,6 +1668,8 @@ async def settle(state: BatchState) -> BatchState:
         totals.output_tokens += counts.get("outputTokenCount", 0)
         totals.cached_tokens += counts.get("cacheReadInputTokenCount", 0)
         if billed:
+            # Always this deployment's own spend: the job ran on its account,
+            # whatever key reads the results back.
             record_bedrock_usage(
                 ref.model_id,
                 tier="batch",
@@ -1662,6 +1678,7 @@ async def settle(state: BatchState) -> BatchState:
                 output_tokens=counts.get("outputTokenCount", 0),
                 cached_tokens=counts.get("cacheReadInputTokenCount", 0),
                 cache_write_tokens=counts.get("cacheWriteInputTokenCount", 0),
+                billed_externally=False,
             )
             if embeddings:
                 _record_media_usage(ref, manifest)

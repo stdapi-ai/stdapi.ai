@@ -564,7 +564,7 @@ async def handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
         *format_http_error(
             request,
             status_code,
-            hide_security_details(status_code, exc.args[0]),
+            hide_security_details(status_code, exc.args[0], disclosed=exc.disclosed),
             exc.param,
             exc.code,
         )
