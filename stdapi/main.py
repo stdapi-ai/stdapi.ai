@@ -89,6 +89,12 @@ from stdapi.region_routing import measure_region_latencies, quota_retry_after
 from stdapi.routes import discover_routers
 from stdapi.routes.core_root import WWW_AUTHENTICATE_CHALLENGE
 from stdapi.server import SERVER_VERSION
+from stdapi.tenant_keys import (
+    close_tenant_key_reconciliation,
+    initialize_tenant_keys,
+    open_tenant_key_reconciliation,
+    tenant_key_client_specs,
+)
 from stdapi.utils import JSONResponse, hide_security_details
 from stdapi.vector_stores.engine import drain_indexing
 from stdapi.vector_stores.jobs import (
@@ -175,7 +181,7 @@ def write_stop_event(start: int, abandoned: dict[str, int]) -> None:
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
+async def lifespan(_: FastAPI) -> AsyncGenerator[None]:  # noqa: PLR0915 - one linear start/stop sequence, a statement per service
     """Manage FastAPI application lifespan: start AWS connections and initialize services.
 
     Args:
@@ -258,6 +264,8 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 # Nothing at all until a table is configured: the features
                 # sharing it are opt-in, and none is enabled by default.
                 *table_client_specs(),
+                # Delivers minted tenant keys; nothing until the feature is on.
+                *tenant_key_client_specs(),
             )
         ):
             # Not botocore clients, but they target the endpoints just resolved above.
@@ -293,6 +301,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                             verify_user_role_access(start_event),
                             verify_knowledge_bases(start_event),
                             verify_table(start_event),
+                            initialize_tenant_keys(start_event),
                             initialize_job_queue(start_event),
                             register(start_event),
                             return_exceptions=True,
@@ -323,6 +332,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 write_log_event(start_event)
                 open_realtime_sessions()
                 open_job_consumer()
+                open_tenant_key_reconciliation()
                 try:
                     yield
                 finally:
@@ -331,6 +341,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                     # Stop taking new jobs before draining what is running:
                     # anything not finished here is redelivered elsewhere.
                     close_job_consumer()
+                    await close_tenant_key_reconciliation()
                     # Drained here, and nowhere else: asking the sessions to
                     # close is what enqueues their teardown, while the AWS
                     # clients and the price catalog that the pending work still

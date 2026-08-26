@@ -499,6 +499,33 @@ Required by the features whose records every instance of a deployment reads and 
 
 ---
 
+## :material-key-multiple: Tenant API Key Delivery (Optional) { #tenant-key-delivery }
+
+**Environment Variables**: [`TENANT_API_KEYS`](operations_configuration.md#tenant-api-keys), [`TENANT_KEY_SSM_PARAMETER_PREFIX`](operations_configuration.md#tenant-key-ssm-parameter-prefix)
+
+Required, together with the [shared table permissions](#shared-table), when [tenant API keys](operations_authentication_security.md#tenant-api-keys) are enabled. The gateway writes each minted key exactly once (`PutParameter` refuses to overwrite), and reads a parameter back only to recover a mint that crashed between delivery and recording. Grant it on the delivery prefix and nothing wider.
+
+??? example "Tenant Key Delivery IAM Policy Statement"
+    ```json
+    {
+      "Sid": "TenantKeyDelivery",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:PutParameter",
+        "ssm:GetParameter"
+      ],
+      "Resource": "arn:aws:ssm:REGION:ACCOUNT_ID:parameter/PREFIX/*"
+    }
+    ```
+
+    !!! info "Replace the Placeholders"
+        `REGION` is the deployment's own Region, `ACCOUNT_ID` your AWS account ID, and `/PREFIX` your [`TENANT_KEY_SSM_PARAMETER_PREFIX`](operations_configuration.md#tenant-key-ssm-parameter-prefix) — the parameter ARN concatenates `parameter` and the prefix's leading slash.
+
+    !!! note "One prefix per deployment"
+        Any principal allowed to read under the prefix can read every tenant's key, and the gateway role itself can read them back. Keep the prefix private to one deployment, and delete each parameter once its key is delivered — the gateway never needs it again.
+
+---
+
 ## :material-book-search: Knowledge Base Vector Stores (Optional) { #knowledge-base-vector-stores }
 
 **Environment Variables**: [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration.md#aws-bedrock-knowledge-base-ids)
