@@ -1,14 +1,16 @@
-"""Unit tests for input-media usage recording in the Nova and Marengo embedding models.
+"""Unit tests for input-media usage recording in the Nova, Marengo and Cohere models.
 
 Covers the ``record_bedrock_usage(input_images=..., input_seconds=..., media_spec=...)``
-call sites in ``amazon_nova_embed.EmbeddingModel`` and
-``twelvelabs_marengo_embed.EmbeddingModel`` -- exercised either through the real
-embed methods with a stubbed ``invoke``/``invoke_async``, or directly against the
+call sites in ``amazon_nova_embed.EmbeddingModel``,
+``twelvelabs_marengo_embed.EmbeddingModel`` and
+``cohere_embed.EmbeddingModel._record_invoke_usage`` -- exercised either through the
+real embed methods with a stubbed ``invoke``/``invoke_async``, or directly against the
 extracted usage-recording helpers when the surrounding method also touches
 S3/region plumbing unrelated to billing.
 
 Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
      https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-marengo-3.html
+     https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v3.html
      stdapi/usage.py:record_bedrock_usage
      stdapi/pricing.py:Dimension
 """
@@ -31,6 +33,7 @@ from stdapi.models.embedding.amazon_nova_embed import (
     _SegmentedEmbeddingParams,
     _SegmentMetadata,
 )
+from stdapi.models.embedding.cohere_embed import EmbeddingModel as CohereEmbeddingModel
 from stdapi.models.embedding.twelvelabs_marengo_embed import (
     EmbeddingModel as MarengoEmbeddingModel,
 )
@@ -49,6 +52,18 @@ _NOVA_MODEL_ID = "amazon.nova-2-multimodal-embeddings-v1:0"
 
 #: Marengo embedding model under test.
 _MARENGO_MODEL_ID = "twelvelabs.marengo-embed-3-0-v1:0"
+
+#: Cohere Embed model billing an embedded image as its own metered unit.
+_COHERE_V3_MODEL_ID = "cohere.embed-multilingual-v3"
+
+#: Cohere Embed model billing an embedded image inside its input token count.
+_COHERE_V4_MODEL_ID = "cohere.embed-v4:0"
+
+#: Cohere Embed answer echoing the metadata of one embedded image.
+_COHERE_IMAGE_RESPONSE = {
+    "embeddings": [[0.1]],
+    "images": [{"width": 256, "height": 256, "format": "image/png", "bit_depth": 32}],
+}
 
 
 def _only_record() -> UsageRecord:
@@ -283,6 +298,108 @@ class TestNovaSegmentedEmbeddingUsage:
             entries,
         )
         assert not usage.USAGE.get()
+
+
+class TestCohereEmbedImageUsage:
+    """``_record_invoke_usage``: images billed beside tokens on Cohere Embed v3.
+
+    Embed v3 meters an embedded image as its own billed unit: an ``input_type=image``
+    invocation comes back with no input-token count at all, so the image count has to
+    be recorded or the request is attributed at zero. Embed v4 bills the same image
+    inside its input token count, and publishes no per-image rate.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v3.html
+         stdapi/models/embedding/cohere_embed.py:EmbeddingModel._record_invoke_usage
+    """
+
+    def test_v3_image_records_one_input_image_and_no_tokens(self) -> None:
+        """The image reported back by Embed v3 is the only quantity recorded.
+
+        This is the shape an image invocation actually produces -- no token
+        count, one image -- so the image is what the request is attributed on.
+
+        Ref: stdapi/usage.py:record_bedrock_usage
+        """
+        model = CohereEmbeddingModel(_COHERE_V3_MODEL_ID)
+        model._record_invoke_usage(  # noqa: SLF001
+            None, None, _COHERE_IMAGE_RESPONSE, region="us-east-1"
+        )
+        record = _only_record()
+        assert record.model == _COHERE_V3_MODEL_ID
+        assert record.quantities[Dimension.INPUT_IMAGES] == 1
+        assert Dimension.INPUT_TOKENS not in record.quantities
+        assert record.input_images_by_spec == {}
+        (key,) = usage.USAGE.get()
+        assert key.region == "us-east-1"
+
+    def test_v3_image_beside_a_token_count_bills_each_quantity_once(self) -> None:
+        """A token count reported with the image is billed once, not twice.
+
+        The image is recorded by a second ``record_bedrock_usage`` call that
+        accumulates into the same record as the base one, so passing the token
+        count again there would silently double the billed tokens.
+
+        Ref: stdapi/usage.py:record_bedrock_usage
+        """
+        model = CohereEmbeddingModel(_COHERE_V3_MODEL_ID)
+        model._record_invoke_usage(  # noqa: SLF001
+            7, None, _COHERE_IMAGE_RESPONSE, region="us-east-1"
+        )
+        record = _only_record()
+        assert record.quantities[Dimension.INPUT_TOKENS] == 7
+        assert record.quantities[Dimension.INPUT_IMAGES] == 1
+
+    def test_v3_image_is_recorded_under_the_call_tier_and_routing(self) -> None:
+        """The image is billed under the same tier and routing as the tokens.
+
+        Both axes key the usage record, so leaving either off the second
+        ``record_bedrock_usage`` call would split one request's usage across two
+        keys -- and price the image against the wrong published rate.
+
+        Ref: stdapi/usage.py:UsageKey
+        """
+        model = CohereEmbeddingModel(_COHERE_V3_MODEL_ID)
+        model._record_invoke_usage(  # noqa: SLF001
+            7,
+            None,
+            _COHERE_IMAGE_RESPONSE,
+            region="us-east-1",
+            tier="flex",
+            routing="global",
+        )
+        record = _only_record()
+        assert record.quantities[Dimension.INPUT_TOKENS] == 7
+        assert record.quantities[Dimension.INPUT_IMAGES] == 1
+        (key,) = usage.USAGE.get()
+        assert key.tier == "flex"
+        assert key.routing == "global"
+
+    def test_v3_text_records_no_input_images(self) -> None:
+        """A text-only Embed v3 answer bills tokens and no image.
+
+        Ref: stdapi/usage.py:record_bedrock_usage
+        """
+        model = CohereEmbeddingModel(_COHERE_V3_MODEL_ID)
+        model._record_invoke_usage(6, None, {"embeddings": [[0.1]]})  # noqa: SLF001
+        record = _only_record()
+        assert record.quantities[Dimension.INPUT_TOKENS] == 6
+        assert Dimension.INPUT_IMAGES not in record.quantities
+
+    def test_v4_image_records_no_input_images(self) -> None:
+        """Embed v4 bills its images as tokens, so none is recorded separately.
+
+        Recording a quantity AWS publishes no rate for would report the image
+        at zero cost and raise a pricing gap that does not exist.
+
+        Ref: stdapi/pricing.py:resolve_price
+        """
+        model = CohereEmbeddingModel(_COHERE_V4_MODEL_ID)
+        model._record_invoke_usage(  # noqa: SLF001
+            330, None, _COHERE_IMAGE_RESPONSE
+        )
+        record = _only_record()
+        assert record.quantities[Dimension.INPUT_TOKENS] == 330
+        assert Dimension.INPUT_IMAGES not in record.quantities
 
 
 class TestMarengoTextImageUsage:
