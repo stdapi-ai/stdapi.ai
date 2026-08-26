@@ -1847,11 +1847,10 @@ class TestAnthropicMessages:
         anthropic_chat_basic_model: str,
         use_official_api: bool,
     ) -> None:
-        """The response ``model`` echoes the requested identifier verbatim.
+        """The response ``model`` names the model that served the request.
 
-        The gateway passes ``request.model`` straight into the response rather than
-        the resolved Bedrock model or inference profile, so aliases come back
-        exactly as sent.
+        Upstream answers with the concrete model, never with whatever spelling
+        the request used, so a response stays attributable to one model.
 
         Ref: https://platform.claude.com/docs/en/api/messages
              stdapi/models/chat/_adapters/_anthropic_message.py:format_response
@@ -1865,7 +1864,7 @@ class TestAnthropicMessages:
         assert response.model is not None
         assert len(response.model) > 0
         if not use_official_api:
-            # Our gateway must echo back the exact requested model name
+            # The fixture names a concrete model, which is what comes back.
             assert response.model == anthropic_chat_basic_model
 
     # --- Response ID format ---
@@ -3073,11 +3072,12 @@ class TestAnthropicMessages:
     def test_model_alias_resolution(
         self, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
-        """An Anthropic-style model alias resolves to its Bedrock model and is echoed back.
+        """An Anthropic-style model alias resolves, and the response names the model.
 
         ``claude-haiku-4-5-20251001`` carries neither the ``anthropic.`` prefix nor
-        a Bedrock version suffix; an unresolvable id would 404, and the response
-        echoes the alias exactly as requested rather than the resolved id.
+        a Bedrock version suffix; an unresolvable id would 404. The response names
+        the model that served the request rather than the alias that asked for it,
+        which is what upstream does and what makes a response attributable.
 
         Ref: https://platform.claude.com/docs/en/api/messages
              stdapi/models/__init__.py:validate_model
@@ -3096,7 +3096,7 @@ class TestAnthropicMessages:
         assert len(response.content) >= 1
         assert response.content[0].type == "text"
         assert response.content[0].text.strip()
-        assert response.model == "claude-haiku-4-5-20251001"
+        assert response.model == "anthropic.claude-haiku-4-5-20251001-v1:0"
         assert response.usage.output_tokens > 0
 
 

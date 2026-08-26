@@ -397,8 +397,11 @@ class SpeechCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=True):
     model: str = Field(
         default=SETTINGS.default_tts_model,
         validation_alias=AliasChoices("model", "Engine"),
+        max_length=255,
         description="TTS model. "
-        "Available: `amazon.polly-standard`, `amazon.polly-neural`, `amazon.polly-long-form`, `amazon.polly-generative`.",
+        "Available: `amazon.polly-standard`, `amazon.polly-neural`, `amazon.polly-long-form`, `amazon.polly-generative`. "
+        "Wildcard patterns are not selectable here: none of these models carries "
+        "a release date, so a pattern never matches; name one of the models above.",
     )
     voice: str = Field(
         default="alloy",
@@ -449,7 +452,13 @@ class TranscriptionCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=
     """
 
     # file: handled in route
-    model: str = Field(..., description="Transcription model to use.")
+    model: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        description="Transcription model to use. "
+        "Wildcard patterns are accepted and select the most recent matching model.",
+    )
     chunking_strategy: ChunkingStrategy = Field(
         default="auto",
         description="Audio chunking: `auto` (VAD) or `server_vad` for manual tuning. "
@@ -569,7 +578,13 @@ class TranslationCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=Tr
     """
 
     # file: handled in route
-    model: str = Field(..., description="Transcription model to use.")
+    model: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        description="Transcription model to use. "
+        "Wildcard patterns are accepted and select the most recent matching model.",
+    )
     prompt: str | None = Field(
         default=None,
         description="Text to guide model style or continue a previous segment. "

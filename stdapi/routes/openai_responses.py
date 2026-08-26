@@ -855,7 +855,10 @@ async def create_response(
     store = bool(request.store)
     model_id = (
         await validate_model(
-            request.model, input_modality="TEXT", output_modality="TEXT"
+            request.model,
+            input_modality="TEXT",
+            output_modality="TEXT",
+            route="openai_response",
         )
     ).id
     # After the model: an alias may carry the guardrail 'moderation' reports on.
@@ -969,7 +972,11 @@ async def count_input_tokens(
     """
     log_request_params(request)
     model = await validate_model(
-        request.model, input_modality="TEXT", output_modality="TEXT", error_status=400
+        request.model,
+        input_modality="TEXT",
+        output_modality="TEXT",
+        route="openai_response_input_tokens",
+        error_status=400,
     )
     reject_unsupported_token_counting(model)
     model_id = model.get_id()
@@ -1039,7 +1046,10 @@ async def compact_response(
     log_request_params(request)
     model_id = (
         await validate_model(
-            request.model, input_modality="TEXT", output_modality="TEXT"
+            request.model,
+            input_modality="TEXT",
+            output_modality="TEXT",
+            route="openai_response_compact",
         )
     ).id
     response_id = f"resp-{REQUEST_ID.get()}"

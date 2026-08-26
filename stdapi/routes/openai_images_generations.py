@@ -243,6 +243,7 @@ async def create_images(
             request.model,
             input_modality="TEXT",
             output_modality="IMAGE",
+            route="openai_image_generation",
             error_status=400,
         )
     ).id

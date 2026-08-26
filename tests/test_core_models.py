@@ -1740,6 +1740,51 @@ class TestModelDiscoveryHints:
         assert not unknown, f"hints name routes the server does not expose: {unknown}"
 
 
+class TestModelFilterDescriptionSurface:
+    """The ``model`` filter's own OpenAPI description matches what it returns.
+
+    An MCP agent reads this description, not the docs page, before deciding
+    whether the first entry of a ``model`` search is the model a request would
+    resolve to. It is not: a tied release date, a route mismatch, a deprecated
+    match or a pending-subscription match all change what a request actually
+    selects, and the description must say so rather than promise otherwise.
+
+    Ref: stdapi/routes/core_models.py:search_models
+         docs/api_search_models.md
+    """
+
+    @staticmethod
+    def _model_parameter_description() -> str:
+        """Return the published ``search_models`` ``model`` parameter description."""
+        spec = app.openapi()
+        return str(
+            next(
+                parameter["description"]
+                for methods in spec["paths"].values()
+                for operation in methods.values()
+                if isinstance(operation, dict)
+                and operation.get("operationId") == "search_models"
+                for parameter in operation.get("parameters", ())
+                if parameter["name"] == "model"
+            )
+        )
+
+    def test_the_description_does_not_promise_the_first_result_is_selected(
+        self,
+    ) -> None:
+        """The description never claims the first entry is what a request would run."""
+        description = self._model_parameter_description()
+        assert "the model that pattern would select on a request comes first" not in (
+            description
+        )
+
+    def test_the_description_says_the_whole_match_set_is_returned(self) -> None:
+        """The description states the caveat the docs page makes: every match, not the pick."""
+        description = self._model_parameter_description()
+        assert "whole match set" in description
+        assert "not just the one it would" in description
+
+
 class TestModelPricingDescriptionSurface:
     """Every published route description names identifiers, not the backend.
 

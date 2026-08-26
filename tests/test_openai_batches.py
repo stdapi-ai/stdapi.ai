@@ -69,6 +69,30 @@ _CACHED_COMPLETION: dict[str, Any] = {
 }
 
 
+#: Alias name the resolution tests write instead of a model ID.
+_ALIAS = "nova-fast"
+
+#: Model ``_ALIAS`` resolves to.
+_ALIAS_TARGET = "amazon.nova-micro-v1:0"
+
+
+def _resolve_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the batch's model validation resolve ``_ALIAS`` to its target.
+
+    The batch doubles answer every name with itself, which is what a catalogue
+    lookup does for a model ID and not what it does for an alias.
+
+    Args:
+        monkeypatch: The test's patcher.
+    """
+    from tests._helpers import make_model_details  # noqa: PLC0415
+
+    async def _validate_model(model_id: str, *_args: object, **_kwargs: object) -> Any:  # noqa: ANN401
+        return make_model_details(_ALIAS_TARGET if model_id == _ALIAS else model_id)
+
+    monkeypatch.setattr(batches, "validate_model", _validate_model)
+
+
 def _create(client: TestClient, file_id: str) -> dict[str, Any]:
     """Submit a batch for *file_id* and return the decoded response body."""
     response = client.post(
@@ -128,6 +152,80 @@ class TestOpenAIBatchValidation:
         error = body["error"]
         assert isinstance(error, dict)
         assert "same model" in error["message"]
+
+    def test_two_names_of_one_model_are_one_model(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A file naming a model twice, once by alias, is one model and one job.
+
+        The names are compared once resolved, so an alias -- or a wildcard
+        pattern -- next to its own target is neither refused as two models nor
+        submitted as two jobs consuming two of the batch's model slots.
+
+        Ref: https://developers.openai.com/api/docs/guides/batch
+             stdapi/batches.py:_group_by_model
+             stdapi/batches.py:prepare_openai_requests
+        """
+        _, bedrock = _batches.install(monkeypatch)
+        _resolve_alias(monkeypatch)
+        lines = chat_lines(50) + chat_lines(50, model=_ALIAS, prefix="alias")
+        file_id = _batches.install_input_file(monkeypatch, lines)
+        body = _create(app_client, file_id)
+        assert body["http_status"] == 200
+        assert [job["modelId"] for job in bedrock.created] == [_ALIAS_TARGET]
+
+    def test_a_model_name_is_resolved_once_for_the_whole_file(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every line naming one model resolves it once, not once per line.
+
+        A pattern is matched against the whole catalogue on each resolution, so
+        resolving per line makes one file scan it up to 50,000 times; worse,
+        the catalogue is refreshed on the way, so the same pattern could pick a
+        newer model half-way down the file and split one batch into two jobs.
+        The name is therefore pinned to what it first resolved to.
+
+        Ref: https://stdapi.ai/api_openai_batches/#model-support
+             stdapi/batches.py:_resolve_model
+        """
+        from tests._helpers import make_model_details  # noqa: PLC0415
+
+        _, bedrock = _batches.install(monkeypatch)
+        pattern = "amazon.nova-mic*"
+        resolutions: list[str] = []
+
+        async def _validate_model(model_id: str, *_args: object, **_kw: object) -> Any:  # noqa: ANN401
+            resolutions.append(model_id)
+            return make_model_details(_ALIAS_TARGET)
+
+        monkeypatch.setattr(batches, "validate_model", _validate_model)
+        file_id = _batches.install_input_file(
+            monkeypatch, chat_lines(200, model=pattern)
+        )
+        body = _create(app_client, file_id)
+        assert body["http_status"] == 200
+        assert resolutions.count(pattern) == 1
+        assert [job["modelId"] for job in bedrock.created] == [_ALIAS_TARGET]
+
+    def test_batch_reports_the_model_that_runs_it(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The batch object names the resolved model, not the name the client wrote.
+
+        A job runs for hours: the name it reports has to stay meaningful after
+        the request that created it, which the caller's own spelling does not.
+
+        Ref: https://developers.openai.com/api/docs/guides/batch.md
+             stdapi/routes/openai_batches.py:_to_batch
+        """
+        _batches.install(monkeypatch)
+        _resolve_alias(monkeypatch)
+        file_id = _batches.install_input_file(
+            monkeypatch, chat_lines(100, model=_ALIAS)
+        )
+        body = _create(app_client, file_id)
+        assert body["http_status"] == 200
+        assert body["model"] == _ALIAS_TARGET
 
     def test_wrong_purpose_is_refused(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch

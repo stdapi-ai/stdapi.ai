@@ -4,9 +4,11 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends, Query, WebSocket
 
+from stdapi.api_errors import ApiError
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.config import SETTINGS
+from stdapi.models import is_model_wildcard
 from stdapi.models.capabilities import Capability, register_route_capability
 from stdapi.monitoring import log_request_params, log_response_params
 from stdapi.realtime import mint_client_secret, serve_realtime_session
@@ -70,10 +72,21 @@ async def create_realtime_client_secret(
 
     Returns:
         The client secret, the moment it expires, and the session it opens.
+
+    Raises:
+        ApiError: When the session names a model pattern.
     """
     log_request_params(request)
     params = request or ClientSecretCreateParams()
     session: SessionConfig = params.session or RealtimeSessionConfig()
+    if session.model is not None and is_model_wildcard(session.model):
+        # The secret outlives the request that minted it, so its model is fixed
+        # here: a pattern would be read again, later, and could mean another model.
+        msg = (
+            "A model pattern is not available on this endpoint. Name the model "
+            "the secret opens a session with."
+        )
+        raise ApiError(msg)
     ttl = (
         params.expires_after.seconds
         if params.expires_after is not None
