@@ -1335,11 +1335,16 @@ def test_a_curated_value_that_really_disagrees_is_reported_not_published() -> No
     assert applied.disputed == ["a.model.context_window 128K vs 256K"]
 
 
-def test_a_citation_survives_the_run_that_retires_its_model() -> None:
+def test_a_citation_survives_the_run_that_retires_its_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A retired model keeps its value, so it must keep its source too.
 
     Ref: docs_gen/model_catalog/enrichment.py
     """
+    # Redirected: the real path holds the committed citations of a real run.
+    written_to = tmp_path / "provenance.json"
+    monkeypatch.setattr(enrichment, "PROVENANCE_PATH", written_to)
     retired = a_row("a.gone", parameters="7B")
     retired.retired = True
     overlay = {
@@ -1353,7 +1358,7 @@ def test_a_citation_survives_the_run_that_retires_its_model() -> None:
         }
     }
     assert enrichment.record_provenance([retired], overlay) == 1
-    written = json.loads(PROVENANCE_PATH.read_text())["models"]
+    written = json.loads(written_to.read_text())["models"]
     assert written["a.gone"]["parameters"]["source"] == "https://example.invalid/card"
 
 

@@ -5445,17 +5445,17 @@
   "reason": "no rule match and no plausible candidate"
  },
  "lmarena/search/openai.gpt-5.4-2026-03-05": {
-  "candidates": "6a80b0725c111f07",
+  "candidates": "18591e9da85bac24",
   "match": "gpt-5.4-search",
   "reason": "Matches the model version and vendor exactly."
  },
  "lmarena/search/openai.gpt-5.5-2026-04-23": {
-  "candidates": "6a80b0725c111f07",
+  "candidates": "18591e9da85bac24",
   "match": "gpt-5.5-search",
-  "reason": "Exact match in model family version and suffix"
+  "reason": "Matches the model version and vendor exactly."
  },
  "lmarena/search/openai.gpt-5.6-luna": {
-  "candidates": "6a80b0725c111f07",
+  "candidates": "18591e9da85bac24",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
@@ -5465,37 +5465,37 @@
   "reason": "the model was not recognised on this board"
  },
  "lmarena/search/openai.gpt-5.6-terra": {
-  "candidates": "6a80b0725c111f07",
+  "candidates": "18591e9da85bac24",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/search/openai.gpt-oss-120b": {
-  "candidates": "6a80b0725c111f07",
+  "candidates": "18591e9da85bac24",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/search/openai.gpt-oss-120b-1:0": {
-  "candidates": "6a80b0725c111f07",
+  "candidates": "18591e9da85bac24",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/search/openai.gpt-oss-20b": {
-  "candidates": "6a80b0725c111f07",
+  "candidates": "18591e9da85bac24",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/search/openai.gpt-oss-20b-1:0": {
-  "candidates": "6a80b0725c111f07",
+  "candidates": "18591e9da85bac24",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/search/openai.gpt-oss-safeguard-120b": {
-  "candidates": "6a80b0725c111f07",
+  "candidates": "18591e9da85bac24",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/search/openai.gpt-oss-safeguard-20b": {
-  "candidates": "6a80b0725c111f07",
+  "candidates": "18591e9da85bac24",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
@@ -5675,7 +5675,7 @@
   "reason": "no rule match and no plausible candidate"
  },
  "lmarena/search/xai.grok-4.6": {
-  "candidates": "bc681f1d1a8e8c69",
+  "candidates": "73dc122a0d959de2",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
@@ -5905,22 +5905,22 @@
   "reason": "the two directions disagreed"
  },
  "lmarena/text/qwen.qwen3-235b-a22b-2507": {
-  "candidates": "fdb5dc8f24548b8d",
+  "candidates": "215a4fbe7d8975ad",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/text/qwen.qwen3-coder-30b-a3b-instruct": {
-  "candidates": "fdb5dc8f24548b8d",
+  "candidates": "215a4fbe7d8975ad",
   "match": null,
-  "reason": "the model was not recognised on this board"
+  "reason": "the two directions disagreed"
  },
  "lmarena/text/qwen.qwen3-coder-30b-a3b-v1:0": {
-  "candidates": "fdb5dc8f24548b8d",
+  "candidates": "215a4fbe7d8975ad",
   "match": null,
   "reason": "the two directions disagreed"
  },
  "lmarena/text/qwen.qwen3-coder-next": {
-  "candidates": "fdb5dc8f24548b8d",
+  "candidates": "215a4fbe7d8975ad",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
@@ -7365,27 +7365,27 @@
   "reason": "no rule match and no plausible candidate"
  },
  "lmarena/vision/anthropic.claude-haiku-4-5": {
-  "candidates": "772708d12d32f6e9",
+  "candidates": "a7adfaa7bb13d8f5",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/vision/anthropic.claude-haiku-4-5-20251001-v1:0": {
-  "candidates": "772708d12d32f6e9",
+  "candidates": "a7adfaa7bb13d8f5",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/vision/anthropic.claude-opus-4-1-20250805-v1:0": {
-  "candidates": "772708d12d32f6e9",
+  "candidates": "a7adfaa7bb13d8f5",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/vision/anthropic.claude-opus-4-5-20251101-v1:0": {
-  "candidates": "772708d12d32f6e9",
+  "candidates": "a7adfaa7bb13d8f5",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/vision/anthropic.claude-sonnet-4-5-20250929-v1:0": {
-  "candidates": "772708d12d32f6e9",
+  "candidates": "a7adfaa7bb13d8f5",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
@@ -7430,17 +7430,17 @@
   "reason": "no rule match and no plausible candidate"
  },
  "lmarena/vision/google.gemma-3-12b-it": {
-  "candidates": "658cc9df1f5848d3",
+  "candidates": "0cf0aecf6e84849c",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/vision/google.gemma-3-4b-it": {
-  "candidates": "658cc9df1f5848d3",
+  "candidates": "0cf0aecf6e84849c",
   "match": null,
   "reason": "the model was not recognised on this board"
  },
  "lmarena/vision/google.gemma-4-e2b": {
-  "candidates": "658cc9df1f5848d3",
+  "candidates": "0cf0aecf6e84849c",
   "match": null,
   "reason": "the model was not recognised on this board"
  },

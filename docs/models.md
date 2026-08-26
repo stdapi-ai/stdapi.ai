@@ -35,7 +35,7 @@ available from any running instance through
 <tr><td>Jamba 1.5 Large (legacy)</td><td><code>ai21.jamba-1-5-large-v1:0</code></td><td>AI21 Labs</td><td>TEXT</td><td>TEXT</td><td>1</td></tr>
 <tr><td>Jamba 1.5 Mini (legacy)</td><td><code>ai21.jamba-1-5-mini-v1:0</code></td><td>AI21 Labs</td><td>TEXT</td><td>TEXT</td><td>1</td></tr>
 <tr><td>Bedrock Guardrail Checks</td><td><code>amazon.bedrock-runtime-guardrail-checks</code></td><td>Amazon</td><td>TEXT</td><td>MODERATION</td><td>7</td></tr>
-<tr><td>Comprehend Toxicity Detection</td><td><code>amazon.comprehend-toxicity</code></td><td>Amazon</td><td>TEXT</td><td>MODERATION</td><td>31</td></tr>
+<tr><td>Comprehend Toxicity Detection</td><td><code>amazon.comprehend-toxicity</code></td><td>Amazon</td><td>TEXT</td><td>MODERATION</td><td>33</td></tr>
 <tr><td>Nova 2 Lite</td><td><code>amazon.nova-2-lite-v1:0</code></td><td>Amazon</td><td>TEXT, IMAGE, VIDEO</td><td>TEXT</td><td>19</td></tr>
 <tr><td>Amazon Nova Multimodal Embeddings</td><td><code>amazon.nova-2-multimodal-embeddings-v1:0</code></td><td>Amazon</td><td>TEXT, IMAGE, AUDIO, VIDEO</td><td>EMBEDDING</td><td>1</td></tr>
 <tr><td>Nova 2 Sonic</td><td><code>amazon.nova-2-sonic-v1:0</code></td><td>Amazon</td><td>SPEECH</td><td>SPEECH, TEXT</td><td>4</td></tr>
@@ -206,7 +206,7 @@ reflects the AWS account this snapshot came from — your own
 ## :material-database-outline: Sources, licences and caveats
 
 <!-- catalog:generated -->
-Snapshot taken on **2026-08-22** from a stdapi.ai instance, covering 138 models across 31 AWS regions. Prices and availability move — before you commit to a number, confirm it against the [Amazon Bedrock pricing page](https://aws.amazon.com/bedrock/pricing/) and your own [`search_models`](api_search_models.md).
+Snapshot taken on **2026-08-26** from a stdapi.ai instance, covering 138 models across 33 AWS regions. Prices and availability move — before you commit to a number, confirm it against the [Amazon Bedrock pricing page](https://aws.amazon.com/bedrock/pricing/) and your own [`search_models`](api_search_models.md).
 <!-- /catalog:generated -->
 
 <!-- catalog:sources -->
@@ -214,14 +214,14 @@ Every number on this page comes from one of the sources below, reproduced unmodi
 
 | Source | Licence | Read on | Used here |
 | --- | --- | --- | --- |
-| The gateway's own [`search_models`](api_search_models.md) and [`model_pricing`](api_model_pricing.md) | — | 2026-08-22 | 138 |
-| [Amazon Bedrock `ListFoundationModels`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_ListFoundationModels.html), read raw so its undocumented fields survive | — | 2026-08-22 | capabilities, APIs, media types, limits |
-| [LMArena Leaderboard](https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-08-19 | 79 of 788 entries |
-| [MTEB — Massive Text Embedding Benchmark](https://github.com/embeddings-benchmark/results) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | 2026-08-22 | 5 of 12 entries |
+| The gateway's own [`search_models`](api_search_models.md) and [`model_pricing`](api_model_pricing.md) | — | 2026-08-26 | 138 |
+| [Amazon Bedrock `ListFoundationModels`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_ListFoundationModels.html), read raw so its undocumented fields survive | — | 2026-08-26 | capabilities, APIs, media types, limits |
+| [LMArena Leaderboard](https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-08-24 | 79 of 793 entries |
+| [MTEB — Massive Text Embedding Benchmark](https://github.com/embeddings-benchmark/results) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | 2026-08-26 | 5 of 12 entries |
 | [Epoch AI — AI Benchmarking Hub](https://epoch.ai/benchmarks/use-this-data) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-08-18 | 59 of 655 entries |
-| [Amazon Bedrock model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html) | [AWS documentation](https://aws.amazon.com/terms/) | 2026-08-22 | 112 of 124 model cards |
-| [models.dev](https://models.dev/) | [MIT](https://github.com/anomalyco/models.dev/blob/dev/LICENSE) | 2026-08-22 | 65 of 120 models |
-| [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) | 2026-08-22 | 2 of 65 entries |
+| [Amazon Bedrock model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html) | [AWS documentation](https://aws.amazon.com/terms/) | 2026-08-26 | 112 of 124 model cards |
+| [models.dev](https://models.dev/) | [MIT](https://github.com/anomalyco/models.dev/blob/dev/LICENSE) | 2026-08-26 | 65 of 120 models |
+| [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) | 2026-08-26 | 2 of 65 entries |
 
 - **LMArena Leaderboard** — Arena Elo ratings by LMArena (Arena Intelligence Inc.), reproduced unmodified under CC BY 4.0. The mapping to Amazon Bedrock model IDs is ours.
 - **MTEB — Massive Text Embedding Benchmark** — Benchmark results from the MTEB results repository, dedicated to the public domain under CC0 1.0. The mapping to Amazon Bedrock model IDs is ours.
