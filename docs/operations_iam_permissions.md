@@ -102,6 +102,45 @@ Required only if you want models sold as third-party AWS Marketplace listings to
 
 ---
 
+## :material-server-network: Bedrock Marketplace Model Endpoints (Optional) { #bedrock-marketplace-endpoints-iam }
+
+**Environment Variables**: [`AWS_BEDROCK_MARKETPLACE_ENDPOINTS_ENABLED`](operations_configuration.md#bedrock-marketplace-endpoints-enabled)
+
+Required only if you want stdapi.ai to publish and serve the Amazon Bedrock Marketplace model endpoints already deployed in this account. The server only discovers and invokes them — it never creates, updates or deletes an endpoint, so it is granted no action that does.
+
+??? example "Bedrock Marketplace Model Endpoints IAM Policy Statements"
+    ```json
+    {
+      "Sid": "BedrockMarketplaceEndpointDiscovery",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:ListMarketplaceModelEndpoints",
+        "bedrock:GetMarketplaceModelEndpoint"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "BedrockMarketplaceEndpointInvoke",
+      "Effect": "Allow",
+      "Action": [
+        "sagemaker:InvokeEndpoint",
+        "sagemaker:InvokeEndpointWithResponseStream"
+      ],
+      "Resource": "arn:aws:sagemaker:*:<account-id>:endpoint/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:CalledViaLast": "bedrock.amazonaws.com"
+        }
+      }
+    }
+    ```
+
+    Neither `ListMarketplaceModelEndpoints` nor `GetMarketplaceModelEndpoint` takes a resource-level scope, hence `Resource: "*"` on discovery. `sagemaker:InvokeEndpoint` is what Amazon Bedrock calls on the server's behalf when it forwards an invocation to the endpoint, which is why it is conditioned on `aws:CalledViaLast: bedrock.amazonaws.com` — under this policy, the role can never call a SageMaker endpoint directly, only through Bedrock.
+
+    See [Set up model access for Amazon Bedrock Marketplace](https://docs.aws.amazon.com/bedrock/latest/userguide/setup-amazon-bedrock-marketplace.html).
+
+---
+
 ## :material-storefront: AWS Marketplace Metering (AWS Marketplace Image Only) { #aws-marketplace-metering }
 
 **Environment Variables**: none (always active on the AWS Marketplace image)
@@ -870,7 +909,7 @@ Required to run each end user's model calls under a role session of their own, s
     }
     ```
 
-**3. Permission policy of the end user role** — everything AWS authorizes against the caller of a model invocation: the invocation actions on the models the deployment serves, and the guardrail the invocation carries:
+**3. Permission policy of the end user role** — everything AWS authorizes against the caller of a model invocation: the invocation actions on the models the deployment serves, the guardrail the invocation carries, and the S3 objects it references:
 
 ??? example "End User Role IAM Policy Statements"
     ```json
@@ -885,7 +924,8 @@ Required to run each end user's model calls under a role session of their own, s
         "arn:aws:bedrock:*:ACCOUNT_ID:inference-profile/*",
         "arn:aws:bedrock:*:ACCOUNT_ID:application-inference-profile/*",
         "arn:aws:bedrock:*:ACCOUNT_ID:default-prompt-router/*",
-        "arn:aws:bedrock:*::foundation-model/*"
+        "arn:aws:bedrock:*::foundation-model/*",
+        "arn:aws:bedrock:*:ACCOUNT_ID:marketplace/model-endpoint/*"
       ]
     },
     {
@@ -895,19 +935,51 @@ Required to run each end user's model calls under a role session of their own, s
         "bedrock:ApplyGuardrail"
       ],
       "Resource": "arn:aws:bedrock:*:ACCOUNT_ID:guardrail/*"
+    },
+    {
+      "Sid": "EndUserS3ReferencedMedia",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": "arn:aws:s3:::AWS_S3_BUCKET_VALUE/*"
     }
     ```
 
-Replace `ACCOUNT_ID` with your AWS account ID, and `stdapi-ai-task-role` with the role the server runs as.
+    **If the buckets it reads use KMS encryption**, also add:
+
+    ```json
+    {
+      "Sid": "EndUserS3ReferencedMediaKMS",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Decrypt"
+      ],
+      "Resource": "arn:aws:kms:REGION:ACCOUNT_ID:key/YOUR_KMS_KEY_ID",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "s3.REGION.amazonaws.com"
+        }
+      }
+    }
+    ```
+
+Replace `ACCOUNT_ID` with your AWS account ID, `stdapi-ai-task-role` with the role the server runs as, and `AWS_S3_BUCKET_VALUE` with each bucket an invocation can reference by URI (see the S3 warning below).
 
 !!! warning "An inference profile needs the foundation models behind it"
     A cross-region inference profile routes to a foundation model in each of its Regions, and AWS authorizes **both** the profile ARN and every foundation model ARN it reaches. A policy naming only `inference-profile/...` fails with an access-denied error naming `foundation-model/...` in a Region you never configured. Keep `arn:aws:bedrock:*::foundation-model/...` alongside the profile, or the call is denied.
+
+!!! warning "A Marketplace model endpoint is authorized against a different resource shape"
+    `bedrock:InvokeModel` on a Marketplace model endpoint is authorized against `arn:aws:bedrock:*:ACCOUNT_ID:marketplace/model-endpoint/*` — **not** against the SageMaker endpoint ARN the request names. A policy that only lists `foundation-model/*` and the inference-profile forms above denies every Marketplace endpoint invocation with an access-denied error, even though the same statement already covers ordinary models. Keep this resource whenever [`AWS_BEDROCK_MARKETPLACE_ENDPOINTS_ENABLED`](operations_configuration.md#bedrock-marketplace-endpoints-enabled) or [`AWS_BEDROCK_ALLOW_MARKETPLACE_ENDPOINT_ARN`](operations_configuration.md#bedrock-allow-marketplace-endpoint-arn) can put an endpoint in front of a request under this role.
+
+!!! warning "Media referenced by S3 URI is read as the end user"
+    An invocation may carry its media as an `s3Location` rather than inline — [large attachments](features.md#attachment-size) the server uploads to a regional bucket, a Files API `file_id`, or an S3 URI the client sent from an [accepted bucket](operations_configuration.md#aws-s3-accepted-buckets) — and Amazon Bedrock then reads that object **with the session that signed the invocation**, not with the server's role: [the assumed role must have the `s3:GetObject` permission to the Amazon S3 URI](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html). Without the `EndUserS3ReferencedMedia` statement, those requests fail with an access-denied error the caller sees as a `403`, while the same request without per-user attribution succeeds. List every bucket a URI can name: [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket), each [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets) bucket, and each [`AWS_S3_ACCEPTED_BUCKETS`](operations_configuration.md#aws-s3-accepted-buckets) bucket — with the KMS statement for every encrypted one. The role needs no write action: the upload the server performs before the invocation keeps the server's own identity.
 
 !!! warning "A configured guardrail is authorized against the end user"
     A guardrail applied **during** an invocation — [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](operations_configuration.md#aws-bedrock-guardrail-identifier), a model alias carrying one, or a request-level `moderation` parameter — is evaluated as part of that invocation, so AWS requires `bedrock:ApplyGuardrail` from the identity making the call. Without the `EndUserApplyGuardrail` statement, every model request fails with an access-denied error as soon as per-user attribution is enabled. See [Set up permissions to use Amazon Bedrock Guardrails](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-permissions.html). Narrow the resource to your guardrail ARN if you prefer.
 
 !!! note "Name every model ARN form the deployment allows"
-    The `Resource` list must cover every ARN a request can resolve to. Add `arn:aws:bedrock:*:ACCOUNT_ID:prompt/*` when [`AWS_BEDROCK_ALLOW_PROMPT_ARN`](operations_configuration.md#bedrock-allow-prompt-arn) is enabled, and keep the application inference profile and prompt router entries above whenever [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](operations_configuration.md#bedrock-allow-application-profile-arn), [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](operations_configuration.md#bedrock-allow-prompt-router-arn) or [`AWS_BEDROCK_MODEL_ARN_MAPPING`](operations_configuration.md#bedrock-model-arn-mapping) can put one in front of a model. An ARN form the end user role does not name is denied under it while it still works on the server's role.
+    The `Resource` list must cover every ARN a request can resolve to. Add `arn:aws:bedrock:*:ACCOUNT_ID:prompt/*` when [`AWS_BEDROCK_ALLOW_PROMPT_ARN`](operations_configuration.md#bedrock-allow-prompt-arn) is enabled, and keep the application inference profile, prompt router and marketplace model endpoint entries above whenever [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](operations_configuration.md#bedrock-allow-application-profile-arn), [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](operations_configuration.md#bedrock-allow-prompt-router-arn), [`AWS_BEDROCK_MARKETPLACE_ENDPOINTS_ENABLED`](operations_configuration.md#bedrock-marketplace-endpoints-enabled), [`AWS_BEDROCK_ALLOW_MARKETPLACE_ENDPOINT_ARN`](operations_configuration.md#bedrock-allow-marketplace-endpoint-arn) or [`AWS_BEDROCK_MODEL_ARN_MAPPING`](operations_configuration.md#bedrock-model-arn-mapping) can put one in front of a model. An ARN form the end user role does not name is denied under it while it still works on the server's role.
 
     Add the [Web Search](#web-search-iam) actions to this role as well if you serve `web_search` requests: AWS evaluates them when the model actually runs a search, which happens inside the invocation the end user signed. A denied search does not fail the request, it degrades the answer.
 
@@ -920,7 +992,7 @@ Replace `ACCOUNT_ID` with your AWS account ID, and `stdapi-ai-task-role` with th
     Where the identity is verified, the session tag makes it testable in a policy: compare it to something on the resource side, so each session reaches only its own data — `"StringEquals": {"aws:ResourceTag/user": "${aws:PrincipalTag/user}"}`, an `s3:prefix` condition, or a `Resource` ARN embedding `${aws:PrincipalTag/user}`. A condition comparing the tag to itself always matches and restricts nothing. A `Deny` on any tag value the deployment does not expect is the other half of the same pattern. Set [`AWS_BEDROCK_USER_ROLE_TAG_KEY`](operations_configuration.md#aws-bedrock-user-role-tag-key) to the key the policy tests.
 
 !!! note "Scope"
-    Only Bedrock model invocations run under the end user role, together with the guardrail applied during them. Standalone guardrail evaluations (the [Moderations API](api_openai_moderations.md)), reranking, video generation and its output files, speech, transcription and translation keep the server's own role, so the end user role needs none of their permissions — and the server's role still needs all of them.
+    Only Bedrock model invocations run under the end user role, together with the guardrail applied during them and the S3 read Amazon Bedrock performs for an `s3Location` they carry. Standalone guardrail evaluations (the [Moderations API](api_openai_moderations.md)), reranking, video generation and its output files, speech, transcription and translation keep the server's own role, so the end user role needs none of their permissions — and the server's role still needs all of them.
 
 ---
 
@@ -1174,6 +1246,7 @@ Required if you configure API authentication. See the [Authentication](operation
 | **Realtime API**                                | `bedrock:InvokeModelWithBidirectionalStream` (already part of the core Bedrock policy above); no additional action | `POST /v1/realtime/client_secrets`, `WS /v1/realtime`                        |
 | **Bedrock Models (Discovery)**                  | `bedrock:ListFoundationModels`<br>`bedrock:GetFoundationModelAvailability`<br>`bedrock:ListProvisionedModelThroughputs`<br>`bedrock:ListInferenceProfiles` | Always required                                                              |
 | **Bedrock Marketplace Auto-Subscribe**          | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions`                                                                                         | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default)                      |
+| **Bedrock Marketplace Model Endpoints**         | `bedrock:ListMarketplaceModelEndpoints`<br>`bedrock:GetMarketplaceModelEndpoint`<br>`sagemaker:InvokeEndpoint`<br>`sagemaker:InvokeEndpointWithResponseStream` (on `arn:aws:sagemaker:*:*:endpoint/*`, conditioned on `aws:CalledViaLast: bedrock.amazonaws.com`) | `AWS_BEDROCK_MARKETPLACE_ENDPOINTS_ENABLED=true` |
 | **AWS Marketplace Metering**                    | `aws-marketplace:RegisterUsage`                                                                                                                             | AWS Marketplace image only (always active); not required for the community image |
 | **Bedrock Inference Profiles & Prompt Routers** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`<br>`bedrock:GetPrompt` and `bedrock:RenderPrompt` (on `arn:aws:bedrock:*:*:prompt/*`) for Prompt Management prompts | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
 | **Bedrock Guardrails & Moderations**            | `bedrock:ApplyGuardrail`                                                                                                                                   | `AWS_BEDROCK_GUARDRAIL_IDENTIFIER`                                           |
@@ -1193,7 +1266,7 @@ Required if you configure API authentication. See the [Authentication](operation
 | **Comprehend Moderations**                      | `comprehend:DetectToxicContent`                                                                                                                            | Moderations API without a configured guardrail                              |
 | **Translation**                                 | `translate:TranslateText`<br>`translate:ListLanguages` (optional; validates the language pair before transcribing)                                          | `AWS_TRANSLATE_REGION`                                                       |
 | **Cost Tracking**                               | `pricing:GetProducts`                                                                                                                                      | `COST_TRACKING=true` (opt-in; `false` by default)                            |
-| **Per-User Cost Attribution**                   | `sts:AssumeRole` and `sts:TagSession` on the end user role, matched by that role's trust policy; on the end user role itself, `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream` on every model ARN form the deployment allows, plus `bedrock:ApplyGuardrail` when a guardrail is configured (see [Per-User Cost Attribution](#per-user-cost-attribution)) | `AWS_BEDROCK_USER_ROLE_ARN`                                                  |
+| **Per-User Cost Attribution**                   | `sts:AssumeRole` and `sts:TagSession` on the end user role, matched by that role's trust policy; on the end user role itself, `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream` on every model ARN form the deployment allows, plus `bedrock:ApplyGuardrail` when a guardrail is configured and `s3:GetObject` (with `kms:Decrypt` via S3) on every bucket an invocation can reference by URI (see [Per-User Cost Attribution](#per-user-cost-attribution)) | `AWS_BEDROCK_USER_ROLE_ARN`                                                  |
 | **SSM Parameter Store**                         | `ssm:GetParameter`<br>`kms:Decrypt` (if encrypted)                                                                                                         | `API_KEY_SSM_PARAMETER`                                                      |
 | **Secrets Manager**                             | `secretsmanager:GetSecretValue`                                                                                                                            | `API_KEY_SECRETSMANAGER_SECRET`                                              |
 

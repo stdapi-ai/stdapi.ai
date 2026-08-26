@@ -172,6 +172,32 @@ async def test_message_delta_always_carries_stop_sequence_key() -> None:
     assert delta_data["delta"]["stop_reason"] == "end_turn"
 
 
+async def test_a_stream_closing_without_a_message_stop_still_ends_the_turn() -> None:
+    """A backend that sends no ``messageStop`` still gets a final ``stop_reason``.
+
+    A deployed Amazon Bedrock Marketplace model endpoint emits
+    ``contentBlockStop`` and then simply closes the stream, so nothing carries a
+    stop reason; ``exclude_none`` would then drop the key from ``message_delta``
+    altogether and an SDK client branching on ``stop_reason`` -- ``tool_use``
+    against ``end_turn`` -- would read the turn as unterminated. The default is
+    the one the non-streamed path answers for the same backend, so the two agree.
+
+    Ref: stdapi/models/chat/_adapters/_anthropic_message.py:_process_stream_events
+         stdapi/models/marketplace_endpoints.py
+         https://platform.claude.com/docs/en/api/messages-streaming
+    """
+    pairs = await _collect(
+        [
+            {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "hi"}}},
+            {"contentBlockStop": {"contentBlockIndex": 0}},
+        ]
+    )
+    (delta_data,) = [data for event, data in pairs if event == "message_delta"]
+
+    assert delta_data["delta"]["stop_reason"] == "end_turn"
+    assert pairs[-1][0] == "message_stop"
+
+
 async def test_message_start_always_carries_stop_reason_and_sequence_keys() -> None:
     """``message_start.message`` always includes ``stop_reason``/``stop_sequence``.
 

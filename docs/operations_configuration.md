@@ -229,6 +229,9 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK`](#bedrock-deprecated-model-fallback)                     | `true`  | Transparently reroute requests using a deprecated model ID to its recommended replacement           |
 | [`AWS_BEDROCK_DEPRECATED_MODELS`](#bedrock-deprecated-models)                                     | `{}`    | Additional deprecated model mappings merged with the built-in registry at startup                   |
 | [`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE`](#bedrock-marketplace-auto-subscribe)                   | `true`  | Allow automatic subscription to new models in AWS Marketplace                                       |
+| [`AWS_BEDROCK_MARKETPLACE_ENDPOINTS_ENABLED`](#bedrock-marketplace-endpoints-enabled)             | `false` | Publish Amazon Bedrock Marketplace model endpoints deployed in this account as chat models           |
+| [`AWS_BEDROCK_MARKETPLACE_ENDPOINT_REGIONS`](#bedrock-marketplace-endpoint-regions)                | All `AWS_BEDROCK_REGIONS` | Regions searched for Marketplace model endpoints; each must also be in `AWS_BEDROCK_REGIONS`  |
+| [`AWS_BEDROCK_ALLOW_MARKETPLACE_ENDPOINT_ARN`](#bedrock-allow-marketplace-endpoint-arn)           | `false` | Allow users to pass a Marketplace model endpoint ARN directly as a model ID                         |
 | [`AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN`](#bedrock-allow-cross-region-profile-arn) | `false` | Allow users to pass cross-region inference profile ARNs directly as model IDs                       |
 | [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](#bedrock-allow-application-profile-arn)   | `false` | Allow users to pass application inference profile ARNs directly as model IDs                        |
 | [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](#bedrock-allow-prompt-router-arn)                         | `false` | Allow users to pass prompt router ARNs directly as model IDs                                        |
@@ -1689,6 +1692,92 @@ export AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=false
 
 !!! info "AWS Documentation"
     For more information about Bedrock model access and marketplace registration, see the [Amazon Bedrock Model Access documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html).
+
+#### `AWS_BEDROCK_MARKETPLACE_ENDPOINTS_ENABLED` { #bedrock-marketplace-endpoints-enabled }
+
+:octicons-package-24: **Purpose**
+:   Publish the Amazon Bedrock Marketplace model endpoints deployed in this account and serve them as ordinary chat models
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false`
+
+:octicons-workflow-24: **Behavior**
+:   When `true`, the server discovers the Marketplace model endpoints deployed in this account and publishes them in the model list. This is serve-only: the server never creates, updates or deletes an endpoint — it only invokes ones the operator already deployed. An endpoint Amazon Bedrock has not yet registered, or that SageMaker has not brought into service, is not published; it appears at the next model-cache refresh once it is
+
+:octicons-lock-24: **IAM Permissions Required**
+:   `bedrock:ListMarketplaceModelEndpoints`, `bedrock:GetMarketplaceModelEndpoint`, `sagemaker:InvokeEndpoint`, `sagemaker:InvokeEndpointWithResponseStream` — see [Bedrock Marketplace Model Endpoints IAM](operations_iam_permissions.md#bedrock-marketplace-endpoints-iam)
+
+```bash
+# Disabled (default) - Marketplace model endpoints are never published
+# No environment variable needed
+
+# Publish Marketplace model endpoints deployed in this account
+export AWS_BEDROCK_MARKETPLACE_ENDPOINTS_ENABLED=true
+```
+
+!!! warning "Off by Default: Paid, Hourly-Billed Infrastructure"
+    A Marketplace model endpoint runs on dedicated instances billed by the instance-hour for as long as it exists, whether or not it is called, and reaching it needs extra IAM permissions beyond the core Bedrock policy. See [Bedrock Marketplace Model Endpoints cost](operations_cost_management.md#bedrock-marketplace-model-endpoints) for how this billing works.
+
+!!! info "Served by the Generic Chat Implementation"
+    A model endpoint is served by the generic chat implementation, so model-family-specific behavior is not applied to it. Token counting ([`/v1/responses/input_tokens`](api_openai_responses.md#input-token-counting) and `/anthropic/v1/messages/count_tokens`) is not available for these models — Amazon Bedrock's token counter accepts a foundation model only. Neither route is listed for them in [`search_models`](api_search_models.md), and calling one anyway answers `400`.
+
+!!! info "Only What Amazon Bedrock Can Map Works"
+    Amazon Bedrock only serves a Marketplace listing through its own chat API when it can map that listing's container to it. A listing it cannot map is still published, but fails at request time with a clean error — this is a documented limitation, and the server does not translate payloads on the listing's behalf.
+
+#### `AWS_BEDROCK_MARKETPLACE_ENDPOINT_REGIONS` { #bedrock-marketplace-endpoint-regions }
+
+:octicons-package-24: **Purpose**
+:   Restrict which regions are searched for Amazon Bedrock Marketplace model endpoints
+
+:octicons-code-24: **Format**
+:   Comma-separated string of AWS region codes
+
+:octicons-gear-24: **Default**
+:   Every [`AWS_BEDROCK_REGIONS`](#aws-bedrock-regions) entry
+
+:octicons-workflow-24: **Behavior**
+:   Every region listed here must also appear in [`AWS_BEDROCK_REGIONS`](#aws-bedrock-regions), or the server refuses to start: a model endpoint is invoked in its own region and has no cross-region form, so a region the server does not otherwise serve could never answer
+
+```bash
+# Search only these regions for Marketplace model endpoints
+export AWS_BEDROCK_MARKETPLACE_ENDPOINT_REGIONS=eu-west-1,us-east-1
+```
+
+!!! warning "An Endpoint Outside the Served Set Is Simply Never Published"
+    An endpoint deployed in a region the server does not serve is never published — it does not appear in the model list, and a request naming it answers `404`. That is correct behavior, not a bug: invoking an endpoint always happens in its own region, so a region the server never searches can never be reached.
+
+#### `AWS_BEDROCK_ALLOW_MARKETPLACE_ENDPOINT_ARN` { #bedrock-allow-marketplace-endpoint-arn }
+
+:octicons-package-24: **Purpose**
+:   Allow users to pass the ARN of an Amazon Bedrock Marketplace model endpoint directly as a model ID in API requests
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false`
+
+:octicons-workflow-24: **Behavior**
+:   When enabled, users can use a Marketplace model endpoint ARN instead of a model ID in the `model` parameter, including an endpoint that is not published in the model list. When disabled, only the published model IDs are accepted
+
+```bash
+# Disabled (default) - users can only use published model IDs
+# No environment variable needed
+
+# Enable Marketplace model endpoint ARN support
+export AWS_BEDROCK_ALLOW_MARKETPLACE_ENDPOINT_ARN=true
+```
+
+!!! danger "Cost-Bearing Setting"
+    A caller who can name any endpoint ARN can direct traffic at instances the account is already paying for, including endpoints the operator never intended to expose. Enable this only when every client is trusted with the account's full set of deployed endpoints.
+
+!!! example "Example ARN"
+    ```text
+    arn:aws:sagemaker:us-east-1:123456789012:endpoint/my-endpoint
+    ```
 
 #### `AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN` { #bedrock-allow-cross-region-profile-arn }
 

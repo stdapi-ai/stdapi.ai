@@ -823,6 +823,51 @@ class _Settings(BaseSettings):
         ),
     )
 
+    aws_bedrock_marketplace_endpoints_enabled: bool = Field(
+        default=False,
+        description=(
+            "If true, publish the Amazon Bedrock Marketplace model endpoints deployed in this "
+            "account and serve them like any other chat model. The server only discovers and "
+            "serves endpoints; it never creates, updates or deletes one. An endpoint that is not "
+            "yet in service, or that Amazon Bedrock could not register, is not published.\n\n"
+            "Disabled by default: a Marketplace model endpoint runs on dedicated instances and is "
+            "billed by the instance-hour for as long as it exists, whether or not it is called. "
+            "See [Amazon Bedrock Marketplace](https://docs.aws.amazon.com/bedrock/latest/userguide/what-is-bedrock-marketplace.html).\n\n"
+            "Required IAM permissions when set to true:\n"
+            "- bedrock:ListMarketplaceModelEndpoints\n"
+            "- bedrock:GetMarketplaceModelEndpoint\n"
+            "- sagemaker:InvokeEndpoint\n"
+            "- sagemaker:InvokeEndpointWithResponseStream"
+        ),
+    )
+
+    aws_bedrock_marketplace_endpoint_regions: Annotated[list[RegionName], NoDecode] = (
+        Field(
+            default=[],
+            description=(
+                "Regions searched for Amazon Bedrock Marketplace model endpoints. Every region "
+                "listed must also appear in aws_bedrock_regions: an endpoint is invoked in its "
+                "own region and has no cross-region form, so a region the server does not "
+                "otherwise serve could never answer.\n\n"
+                "Environment variable format: Comma-separated string\n\n"
+                "Example: 'eu-west-1,us-east-1'\n\n"
+                "If not specified, every aws_bedrock_regions entry is searched."
+            ),
+        )
+    )
+
+    aws_bedrock_allow_marketplace_endpoint_arn: bool = Field(
+        default=False,
+        description=(
+            "If True, allow users to pass the ARN of an Amazon Bedrock Marketplace model endpoint "
+            "directly as a model ID, including an endpoint that is not published in the model "
+            "list. When disabled, only the published model IDs are accepted.\n\n"
+            "This is a cost-bearing setting: a caller who can name any endpoint ARN can direct "
+            "traffic at instances the account is already paying for.\n\n"
+            "Example ARN: arn:aws:sagemaker:us-east-1:123456789012:endpoint/my-endpoint"
+        ),
+    )
+
     aws_bedrock_allow_cross_region_inference_profile_arn: bool = Field(
         default=False,
         description=(
@@ -2206,6 +2251,7 @@ class _Settings(BaseSettings):
         "aws_bedrock_knowledge_base_ids",
         "aws_bedrock_mantle_regions",
         "aws_bedrock_mantle_preferred_models",
+        "aws_bedrock_marketplace_endpoint_regions",
         "aws_cognito_client_ids",
         "aws_cognito_required_scopes",
         "oauth_authorization_servers",
@@ -2884,6 +2930,28 @@ class _Settings(BaseSettings):
                 raise ValueError(msg)
             seen_prefixes[prefix] = field_name
 
+    def _validate_marketplace_endpoint_regions(self) -> None:
+        """Ensure every searched Marketplace endpoint region is one the server serves.
+
+        A Marketplace model endpoint is invoked in its own region and has no
+        cross-region form, so an endpoint outside the served set could never
+        answer a request.
+
+        Raises:
+            ValueError: If a searched region is absent from aws_bedrock_regions.
+        """
+        if unserved := [
+            region
+            for region in self.aws_bedrock_marketplace_endpoint_regions
+            if region not in self.aws_bedrock_regions
+        ]:
+            msg = (
+                f"aws_bedrock_marketplace_endpoint_regions names {unserved}, which "
+                "aws_bedrock_regions does not: a model endpoint is only reachable in "
+                "its own region. Add them to aws_bedrock_regions, or remove them."
+            )
+            raise ValueError(msg)
+
     def _validate_mantle_user_role_identity(self) -> None:
         """Refuse routing a model to Mantle where the per-end-user role must apply.
 
@@ -3012,6 +3080,8 @@ class _Settings(BaseSettings):
                 "are required to configure Amazon Bedrock Guardrails."
             )
             raise ValueError(msg)
+
+        self._validate_marketplace_endpoint_regions()
 
         # An alias guardrail is operator configuration: no override gate, no Mantle.
         alias_guardrail = any(
