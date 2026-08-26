@@ -24,7 +24,7 @@ from stdapi.aws_bedrock import (
     set_inference_configuration,
 )
 from stdapi.models.chat._adapters import _common
-from stdapi.monitoring import log_response_params
+from stdapi.monitoring import REQUEST_LOG, log_error_details, log_response_params
 from stdapi.types.anthropic_messages import (
     Base64ImageSource,
     Base64PDFSource,
@@ -43,6 +43,7 @@ from stdapi.types.anthropic_messages import (
     FileSource,
     ImageBlockParam,
     InputJSONDelta,
+    MCPToolsetParam,
     MemoryToolParam,
     Message,
     MessageCountTokensParams,
@@ -62,6 +63,7 @@ from stdapi.types.anthropic_messages import (
     RedactedThinkingBlockParam,
     ResponseServiceTiers,
     SearchResultBlockParam,
+    ServerToolUnionParam,
     ServerToolUseBlockParam,
     ServiceTiers,
     SignatureDelta,
@@ -784,7 +786,7 @@ def _map_tool_choice(tool_choice: ToolChoiceParam | None) -> ToolChoiceTypeDef |
 
 
 def _handle_system_tool(
-    tool: ToolUnionParam,
+    tool: ToolParam | ServerToolUnionParam,
     tool_list: list[ToolTypeDef],
     *,
     tool_name_map: ServerToolNames | None,
@@ -879,6 +881,10 @@ def _build_tool_config(
 
     tool_list: list[ToolTypeDef] = []
     for tool in tools:
+        if isinstance(tool, MCPToolsetParam):
+            # A toolset carries no name and no schema; the code below would
+            # read one as a tool definition.
+            continue
         tool_bedrock = _map_tool_spec(tool)
         if tool_bedrock is None:
             _handle_system_tool(tool, tool_list, tool_name_map=tool_name_map)
@@ -918,6 +924,44 @@ def _build_output_config(
             }
         case _:  # pragma: no cover
             return None
+
+
+#: Operator-facing warning naming the MCP connector configuration that was ignored.
+_MCP_CONNECTOR_IGNORED = (
+    "Ignored the MCP connector configuration of this request "
+    "(`mcp_servers`, `mcp_toolset`): models are not connected to remote MCP "
+    "servers, so those tools never run. Declare the tools in `tools` and run "
+    "them from the client instead."
+)
+
+
+def warn_mcp_connector_ignored(
+    request: MessageCreateParams | MessageCountTokensParams,
+) -> None:
+    """Tell the operator that a request's MCP connector configuration was ignored.
+
+    The connector makes the model an MCP client calling a remote server during
+    the turn, which no backend here does. Rejecting the request would break an
+    otherwise valid one, so it is served without the connector and the caller
+    sees an ordinary answer -- which leaves the server log as the only place the
+    operator can learn why the MCP tools never fired.
+
+    ``mcp_servers`` is what identifies such a request, and it is already out of
+    the way by the time this runs -- the field is never serialized and the
+    toolsets are dropped at validation. Both routes and every request
+    translation call this, including the batch API through
+    ``translate_request``, so the warning is written at most once per request
+    log however many requests that log covers.
+
+    Args:
+        request: Messages or count-tokens request, as received.
+    """
+    if not request.mcp_servers:
+        return
+    log = REQUEST_LOG.get(None)
+    if log is not None and _MCP_CONNECTOR_IGNORED in (log.get("error_detail") or ()):
+        return
+    log_error_details(_MCP_CONNECTOR_IGNORED, level="warning")
 
 
 #: ``set_inference_configuration`` argument names a request extra cannot reuse
@@ -978,6 +1022,8 @@ async def translate_request(
         additional request fields, tool config, service tier, automatic cache control,
         automatic cache control ttl, output config).
     """
+    # Batched requests reach no route, so this is their only warning.
+    warn_mcp_connector_ignored(request)
     if request.cache_control is None:
         allow_explicit_caching = prompt_caching_supported
         automatic_prompt_caching: frozenset[PromptCaching] | None = None

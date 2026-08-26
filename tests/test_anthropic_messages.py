@@ -33,16 +33,24 @@ from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, PERFORMANCE_CONFIG_VAR
 from stdapi.aws_bedrock_mantle import mantle_request_headers, validate_pruning_extras
 from stdapi.config import SETTINGS
 from stdapi.models import ModelDetails
-from stdapi.models.chat._adapters._anthropic_message import translate_request
+from stdapi.models.chat._adapters._anthropic_message import (
+    _build_tool_config,
+    translate_request,
+    warn_mcp_connector_ignored,
+)
 from stdapi.models.chat._default import ChatModel
+from stdapi.models.chat._mantle._convert import messages_payload
+from stdapi.monitoring import log_request_params
 from stdapi.routes import anthropic_messages
 from stdapi.types.anthropic_messages import (
+    MCPToolsetParam,
     Message,
     MessageCountTokensParams,
     MessageCreateParams,
     MessageDelta,
     MessageDeltaUsage,
     MessageParam,
+    ToolParam,
 )
 
 if TYPE_CHECKING:
@@ -67,6 +75,55 @@ _WEATHER_TOOL: dict[str, object] = {
         "required": ["location"],
     },
 }
+
+#: Remote MCP server definition an MCP-connector client attaches to a request.
+_MCP_SERVER: dict[str, object] = {
+    "type": "url",
+    "url": "https://mcp.example.com/mcp",
+    "name": "example",
+}
+
+#: Toolset entry enabling the tools of ``_MCP_SERVER``, as current clients send it.
+_MCP_TOOLSET: dict[str, object] = {
+    "type": "mcp_toolset",
+    "mcp_server_name": "example",
+    "default_config": {"enabled": True},
+}
+
+#: Identifier prefix Anthropic mints for an MCP tool call.
+_MCP_TOOL_USE_ID = "mcptoolu_01ABCdefGHIjklMNOpqrST"
+
+
+def _mcp_replay_messages() -> list[Any]:
+    """Return a conversation holding a recorded ``mcp_tool_use``/``mcp_tool_result``.
+
+    The connector runs the tool for the model, so the call, its result and the
+    answer the model wrote from it all belong to the same assistant turn -- the
+    Anthropic API rejects the call as orphaned when the result is sent as the
+    next user message instead.
+    """
+    return [
+        {"role": "user", "content": "What does the example server say?"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "mcp_tool_use",
+                    "id": _MCP_TOOL_USE_ID,
+                    "name": "lookup",
+                    "server_name": "example",
+                    "input": {"query": "hello"},
+                },
+                {
+                    "type": "mcp_tool_result",
+                    "tool_use_id": _MCP_TOOL_USE_ID,
+                    "is_error": False,
+                    "content": [{"type": "text", "text": "the example server says hi"}],
+                },
+                {"type": "text", "text": "The example server says hi."},
+            ],
+        },
+    ]
 
 
 def _register_test_model(
@@ -4405,3 +4462,916 @@ class TestMessagesConverseUsageAttribution:
 
         assert message.usage.cache_creation is None
         assert message.usage.output_tokens_details is None
+
+
+class TestMCPConnector:
+    """The MCP connector (``mcp_servers`` + ``mcp_toolset``) is accepted and ignored.
+
+    Anthropic's MCP connector lets the *model* act as an MCP client and call a
+    remote MCP server during the turn.  This gateway never opens that
+    connection, so an application built against the connector must still get a
+    normal answer rather than a rejected request, and a conversation already
+    holding ``mcp_tool_use`` / ``mcp_tool_result`` blocks must replay intact.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+         stdapi/types/anthropic_messages.py:MessageCreateParams
+         stdapi/models/chat/_adapters/_anthropic_message.py:warn_mcp_connector_ignored
+    """
+
+    def test_mcp_servers_request_is_answered(
+        self,
+        anthropic_client: Anthropic,
+        anthropic_chat_basic_model: str,
+        use_official_api: bool,
+    ) -> None:
+        """A request attaching a remote MCP server still returns a message.
+
+        The connector is not run here, so the answer is the one the model
+        produces on its own.  The vendor implements the connector, which is a
+        different behaviour and needs the ``mcp-client-2025-11-20`` beta on the
+        account, so the assertion is only made against the gateway.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+             stdapi/types/anthropic_messages.py:MessageCreateParams
+        """
+        if use_official_api:
+            pytest.skip(
+                "The Anthropic API runs the MCP connector (beta "
+                "'mcp-client-2025-11-20'); ignoring it is gateway behaviour"
+            )
+
+        response = anthropic_client.messages.create(
+            model=anthropic_chat_basic_model,
+            max_tokens=16,
+            messages=[{"role": "user", "content": "Say hello in one word."}],
+            extra_body={"mcp_servers": [_MCP_SERVER]},
+        )
+
+        assert response.type == "message"
+        assert [block.type for block in response.content] == ["text"]
+
+    def test_mcp_toolset_request_keeps_a_custom_tool(
+        self,
+        anthropic_client: Anthropic,
+        anthropic_chat_vision_model: str,
+        use_official_api: bool,
+    ) -> None:
+        """An ``mcp_toolset`` beside a custom tool leaves the custom tool usable.
+
+        Dropping the toolset must not drop the rest of ``tools``: the model is
+        still offered ``get_weather`` and still answers.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+             stdapi/models/chat/_adapters/_anthropic_message.py:warn_mcp_connector_ignored
+        """
+        if use_official_api:
+            pytest.skip(
+                "The Anthropic API runs the MCP connector (beta "
+                "'mcp-client-2025-11-20'); ignoring it is gateway behaviour"
+            )
+
+        response = anthropic_client.messages.create(  # type: ignore[call-overload]
+            model=anthropic_chat_vision_model,
+            max_tokens=300,
+            messages=[{"role": "user", "content": "What's the weather in Paris?"}],
+            tools=[_WEATHER_TOOL, _MCP_TOOLSET],
+            tool_choice={"type": "tool", "name": "get_weather"},
+            extra_body={"mcp_servers": [_MCP_SERVER]},
+        )
+
+        tool_uses = [block for block in response.content if block.type == "tool_use"]
+        assert tool_uses, "the surviving custom tool must still be callable"
+        assert tool_uses[0].name == "get_weather"
+
+    def test_replayed_mcp_blocks_are_answered(
+        self,
+        anthropic_client: Anthropic,
+        anthropic_chat_basic_model: str,
+        use_official_api: bool,
+    ) -> None:
+        """A conversation holding ``mcp_tool_use`` / ``mcp_tool_result`` replays.
+
+        These blocks are what a client records from a connector-enabled turn and
+        sends back on the next one, both inside the assistant turn that ran the
+        tool.  The pair must survive together, or the backend rejects the
+        orphaned result -- and the result must reach it as the user turn
+        answering the call, which no backend takes any other way.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+             stdapi/types/anthropic_messages.py:_split_recorded_mcp_turns
+        """
+        response = anthropic_client.messages.create(
+            model=anthropic_chat_basic_model,
+            max_tokens=32,
+            messages=_mcp_replay_messages(),
+            extra_headers=(
+                {"anthropic-beta": "mcp-client-2025-11-20"}
+                if use_official_api
+                else None
+            ),
+        )
+
+        assert response.type == "message"
+        assert response.usage.input_tokens > 0
+
+    def test_a_streamed_connector_request_completes(
+        self,
+        anthropic_client: Anthropic,
+        anthropic_chat_basic_model: str,
+        use_official_api: bool,
+    ) -> None:
+        """A streamed turn carrying both MCP history and ``mcp_servers`` finishes.
+
+        Streaming translates the request through the same path but emits the
+        answer as events, so a connector request must reach ``message_stop``
+        rather than fail once the response has already started.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+             stdapi/models/chat/_adapters/_anthropic_message.py:format_stream
+        """
+        if use_official_api:
+            pytest.skip(
+                "The Anthropic API runs the MCP connector (beta "
+                "'mcp-client-2025-11-20'); ignoring it is gateway behaviour"
+            )
+
+        events = list(
+            anthropic_client.messages.create(
+                model=anthropic_chat_basic_model,
+                max_tokens=32,
+                messages=_mcp_replay_messages(),
+                stream=True,
+                extra_body={"mcp_servers": [_MCP_SERVER]},
+            )
+        )
+
+        assert [event.type for event in events][-1] == "message_stop"
+
+    def test_count_tokens_accepts_an_mcp_connector_request(
+        self,
+        anthropic_client: Anthropic,
+        anthropic_count_tokens_model: str,
+        use_official_api: bool,
+    ) -> None:
+        """``count_tokens`` shares the body, so it must accept the same request.
+
+        Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
+             stdapi/models/chat/_adapters/_anthropic_message.py:count_tokens_via_bedrock
+        """
+        if use_official_api:
+            pytest.skip(
+                "The Anthropic API runs the MCP connector (beta "
+                "'mcp-client-2025-11-20'); ignoring it is gateway behaviour"
+            )
+
+        count = anthropic_client.messages.count_tokens(
+            model=anthropic_count_tokens_model,
+            messages=_mcp_replay_messages(),
+            tools=[_MCP_TOOLSET],  # type: ignore[list-item]
+            extra_body={"mcp_servers": [_MCP_SERVER]},
+        )
+
+        assert count.input_tokens > 0
+
+
+class TestMCPConnectorRequestMapping:
+    """What the MCP connector fields become before a backend ever sees them.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+         stdapi/models/chat/_adapters/_anthropic_message.py:warn_mcp_connector_ignored
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    def _request(**fields: object) -> MessageCreateParams:
+        """Build a minimal create-message request carrying *fields*."""
+        return MessageCreateParams.model_validate(
+            {
+                "model": "test.translate-model",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+                **fields,
+            }
+        )
+
+    def test_mcp_servers_is_never_serialized(self) -> None:
+        """``mcp_servers`` is parsed but excluded from every outgoing payload.
+
+        Backends that forward the body verbatim reject an unknown ``mcp_servers``
+        key outright, so the field must not survive serialization even though the
+        request declares it.
+
+        Ref: stdapi/types/anthropic_messages.py:MessageCreateParams
+             stdapi/models/chat/_mantle/_convert.py:messages_payload
+        """
+        request = self._request(mcp_servers=[_MCP_SERVER])
+
+        assert request.mcp_servers is not None
+        assert request.mcp_servers[0].url == _MCP_SERVER["url"]
+        assert "mcp_servers" not in request.model_dump(exclude_unset=True)
+        assert not request.model_extra, "a declared field must not land in extras"
+
+    async def test_mcp_servers_does_not_reach_the_backend_parameters(self) -> None:
+        """``mcp_servers`` reaches neither the inference config nor the model extras.
+
+        Ref: stdapi/models/chat/_adapters/_anthropic_message.py:translate_request
+        """
+        request = self._request(mcp_servers=[_MCP_SERVER])
+        (
+            _messages,
+            _system,
+            inference_config,
+            additional_request_fields,
+            *_rest,
+        ) = await translate_request(
+            request,
+            "test.translate-model",
+            prompt_caching_supported=False,
+            prompt_caching_tool_supported=False,
+        )
+
+        assert "mcp_servers" not in additional_request_fields
+        assert "mcp_servers" not in inference_config
+
+    def test_mcp_toolset_is_dropped_and_other_tools_survive(self) -> None:
+        """The toolset entry is removed from ``tools``; every other tool stays.
+
+        Ref: stdapi/types/anthropic_messages.py:_without_mcp_toolsets
+        """
+        request = self._request(
+            tools=[_WEATHER_TOOL, _MCP_TOOLSET], mcp_servers=[_MCP_SERVER]
+        )
+
+        assert request.tools is not None
+        assert [tool.type for tool in request.tools] == ["custom"]
+
+    def test_dropping_every_tool_leaves_an_empty_list(self) -> None:
+        """A ``tools`` array holding only toolsets becomes empty, never ``null``.
+
+        Backends forwarding the body verbatim accept an empty ``tools`` array and
+        reject a null one.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:messages_payload
+        """
+        request = self._request(tools=[_MCP_TOOLSET], mcp_servers=[_MCP_SERVER])
+
+        assert request.tools == []
+        assert request.model_dump(exclude_unset=True)["tools"] == []
+        assert self._request(tools=[]).tools == [], "an empty array stays an array"
+
+    @pytest.mark.parametrize(
+        "params",
+        [MessageCreateParams, MessageCountTokensParams],
+        ids=["create", "count"],
+    )
+    @pytest.mark.parametrize(
+        "tool_choice",
+        [{"type": "any"}, {"type": "tool", "name": "lookup"}, {"type": "auto"}],
+        ids=["any", "tool", "auto"],
+    )
+    def test_a_tool_choice_goes_with_the_toolsets_it_selected_from(
+        self,
+        params: type[MessageCreateParams | MessageCountTokensParams],
+        tool_choice: dict[str, str],
+    ) -> None:
+        """A choice whose only tools were toolsets is dropped, not left dangling.
+
+        Upstream serves that request -- the toolsets *are* the tools the choice
+        selects from -- so refusing it would be stricter than the API mirrored
+        here.  Keeping the choice is not an option either: the Messages API
+        answers ``tool_choice.any may only be specified while providing tools``
+        (and ``Tool '<name>' not found in provided tools``) for a forced choice
+        beside an empty ``tools`` array, measured against a Claude passthrough
+        model.  Both bodies declare the field, so both have to drop it.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/types/anthropic_messages.py:_without_orphaned_tool_choice
+        """
+        request = params.model_validate(
+            {
+                "model": "test.translate-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [_MCP_TOOLSET],
+                "tool_choice": tool_choice,
+                "mcp_servers": [_MCP_SERVER],
+            }
+        )
+
+        assert request.tools == []
+        assert request.tool_choice is None
+        assert "tool_choice" not in request.model_dump(exclude_unset=True)
+
+    def test_a_tool_choice_survives_a_tool_the_drop_spares(self) -> None:
+        """A choice keeps its meaning while any ordinary tool is left to select.
+
+        Dropping it whenever a toolset is present would silence a choice the
+        request can still honor.
+
+        Ref: stdapi/types/anthropic_messages.py:_without_orphaned_tool_choice
+        """
+        request = self._request(
+            tools=[_WEATHER_TOOL, _MCP_TOOLSET],
+            tool_choice={"type": "tool", "name": "get_weather"},
+            mcp_servers=[_MCP_SERVER],
+        )
+
+        assert request.model_dump(exclude_unset=True)["tool_choice"] == {
+            "type": "tool",
+            "name": "get_weather",
+        }
+
+    async def test_a_dropped_choice_reaches_neither_backend_path(self) -> None:
+        """Neither the tool config nor a verbatim body carries the orphaned choice.
+
+        The two paths would otherwise disagree: the tool config is dropped whole
+        when no tool is left, while a body forwarded as it stands would reach a
+        Messages API that rejects a forced choice without tools.
+
+        Ref: stdapi/models/chat/_adapters/_anthropic_message.py:_build_tool_config
+             stdapi/models/chat/_mantle/_convert.py:messages_payload
+        """
+        request = self._request(
+            tools=[_MCP_TOOLSET], tool_choice={"type": "any"}, mcp_servers=[_MCP_SERVER]
+        )
+        (*_head, tool_config, _tier, _caching, _ttl, _output) = await translate_request(
+            request,
+            "test.translate-model",
+            prompt_caching_supported=False,
+            prompt_caching_tool_supported=False,
+        )
+        payload = await messages_payload(request, "test.translate-model")
+
+        assert tool_config is None
+        assert payload["tools"] == []
+        assert "tool_choice" not in payload
+
+    async def test_mcp_toolset_does_not_reach_the_tool_config(self) -> None:
+        """Only the custom tool becomes a Bedrock ``toolSpec``.
+
+        A toolset has no ``name`` and no input schema, so anything reading it as
+        a tool definition would fail; it must be gone before the tool config is
+        built.
+
+        Ref: stdapi/models/chat/_adapters/_anthropic_message.py:_build_tool_config
+        """
+        request = self._request(
+            tools=[_WEATHER_TOOL, _MCP_TOOLSET], mcp_servers=[_MCP_SERVER]
+        )
+        (*_head, tool_config, _tier, _caching, _ttl, _output) = await translate_request(
+            request,
+            "test.translate-model",
+            prompt_caching_supported=False,
+            prompt_caching_tool_supported=False,
+        )
+
+        assert tool_config is not None
+        assert [tool["toolSpec"]["name"] for tool in tool_config["tools"]] == [
+            "get_weather"
+        ]
+
+    def test_the_operator_is_warned_once(self, request_log: dict[str, Any]) -> None:
+        """One warning names what was ignored, without naming any backend.
+
+        The caller gets a normal answer, so the server log is the only place the
+        operator learns that the MCP tools never fired.
+
+        Ref: stdapi/models/chat/_adapters/_anthropic_message.py:warn_mcp_connector_ignored
+        """
+        warn_mcp_connector_ignored(
+            self._request(tools=[_MCP_TOOLSET], mcp_servers=[_MCP_SERVER])
+        )
+
+        assert request_log["level"] == "warning"
+        (detail,) = request_log["error_detail"]
+        assert "mcp_servers" in detail
+        assert "mcp_toolset" in detail
+        assert "Bedrock" not in detail, "an operator warning must not name a backend"
+
+    def test_a_request_without_mcp_fields_is_not_warned_about(
+        self, request_log: dict[str, Any]
+    ) -> None:
+        """No MCP connector configuration means no warning at all.
+
+        Ref: stdapi/models/chat/_adapters/_anthropic_message.py:warn_mcp_connector_ignored
+        """
+        warn_mcp_connector_ignored(self._request(tools=[_WEATHER_TOOL]))
+
+        assert "error_detail" not in request_log
+
+    async def test_the_translation_path_warns_for_every_entry_point(
+        self, request_log: dict[str, Any]
+    ) -> None:
+        """Translating a request warns, so the batch API reports the drop too.
+
+        Batched entries never reach a route handler: they are validated as
+        ordinary message bodies and translated straight through
+        ``build_message_request``, which is why the warning has to be raised
+        here as well as on the routes.
+
+        Ref: stdapi/batches.py:_prepare_anthropic_request
+             stdapi/models/chat/_adapters/_anthropic_message.py:translate_request
+        """
+        await translate_request(
+            self._request(tools=[_MCP_TOOLSET], mcp_servers=[_MCP_SERVER]),
+            "test.translate-model",
+            prompt_caching_supported=False,
+            prompt_caching_tool_supported=False,
+        )
+
+        assert request_log["level"] == "warning"
+        (detail,) = request_log["error_detail"]
+        assert "mcp_servers" in detail
+
+    async def test_a_batch_of_connector_requests_is_warned_about_once(
+        self, request_log: dict[str, Any]
+    ) -> None:
+        """Many ignored connectors under one request log produce one warning.
+
+        A batch validates and translates up to a thousand entries inside a
+        single request, and one repeated line per entry would bury the log it
+        is written to.
+
+        Ref: stdapi/batches.py:_prepare_anthropic_request
+             stdapi/models/chat/_adapters/_anthropic_message.py:warn_mcp_connector_ignored
+        """
+        for _ in range(3):
+            await translate_request(
+                self._request(mcp_servers=[_MCP_SERVER]),
+                "test.translate-model",
+                prompt_caching_supported=False,
+                prompt_caching_tool_supported=False,
+            )
+
+        assert len(request_log["error_detail"]) == 1
+
+    @staticmethod
+    def _turns(messages: list[Any]) -> list[tuple[str, list[str]]]:
+        """Return the role and content block types of each Bedrock message."""
+        return [
+            (message["role"], [next(iter(block)) for block in message["content"]])
+            for message in messages
+        ]
+
+    async def test_a_recorded_connector_turn_is_split_into_alternating_turns(
+        self,
+    ) -> None:
+        """The result the assistant turn recorded becomes the user turn answering it.
+
+        A connector turn records the call, its result and the answer written
+        from it together, because the model ran the tool itself.  A tool result
+        belongs to the user turn following the call, so the turn is split -- in
+        the recorded order, or the model reads its own answer before the result
+        it drew from.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+             stdapi/types/anthropic_messages.py:_split_recorded_mcp_turns
+        """
+        messages, *_rest = await translate_request(
+            self._request(messages=_mcp_replay_messages()),
+            "test.translate-model",
+            prompt_caching_supported=False,
+            prompt_caching_tool_supported=False,
+        )
+
+        assert self._turns(messages) == [
+            ("user", ["text"]),
+            ("assistant", ["toolUse"]),
+            ("user", ["toolResult"]),
+            ("assistant", ["text"]),
+        ]
+
+    @pytest.mark.parametrize(
+        "follow_up", ["and now?", [{"type": "text", "text": "and now?"}]]
+    )
+    async def test_a_moved_result_joins_the_user_turn_that_follows_it(
+        self, follow_up: str | list[dict[str, str]]
+    ) -> None:
+        """A result moved out of its turn merges with the next user message.
+
+        Roles alternate, so opening a second user turn for the result would
+        leave two of them in a row where the conversation had one.  A `content`
+        given as a plain string is the same turn as one given as a single text
+        block, so both have to merge.
+
+        Ref: stdapi/types/anthropic_messages.py:_merged_into
+        """
+        replay = _mcp_replay_messages()
+        del replay[1]["content"][-1]  # the connector turn ends on the tool result
+
+        messages, *_rest = await translate_request(
+            self._request(messages=[*replay, {"role": "user", "content": follow_up}]),
+            "test.translate-model",
+            prompt_caching_supported=False,
+            prompt_caching_tool_supported=False,
+        )
+
+        assert self._turns(messages) == [
+            ("user", ["text"]),
+            ("assistant", ["toolUse"]),
+            ("user", ["toolResult", "text"]),
+        ]
+
+    async def test_a_marked_result_keeps_its_cache_point_after_the_move(self) -> None:
+        """A ``cache_control`` on the recorded result still marks it once moved.
+
+        The cache point marks the block before it, so a result carrying one has
+        to arrive with it on the turn it moved to; left behind, the deployment
+        caches a different prefix than the caller asked for.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
+             stdapi/types/anthropic_messages.py:_split_recorded_mcp_turns
+        """
+        replay = _mcp_replay_messages()
+        replay[1]["content"][1]["cache_control"] = {"type": "ephemeral"}
+
+        messages, *_rest = await translate_request(
+            self._request(messages=replay),
+            "test.translate-model",
+            prompt_caching_supported=True,
+            prompt_caching_tool_supported=True,
+        )
+
+        assert self._turns(messages) == [
+            ("user", ["text"]),
+            ("assistant", ["toolUse"]),
+            ("user", ["toolResult", "cachePoint"]),
+            ("assistant", ["text"]),
+        ]
+
+    def test_an_ordinary_conversation_keeps_its_turns(self) -> None:
+        """Without a recorded MCP block, no turn is merged or moved.
+
+        The split rewrites a conversation, so nothing but the shape it exists
+        for may reach it -- a backend given the body as it stands would
+        otherwise receive turns the caller never sent.
+
+        Ref: stdapi/types/anthropic_messages.py:_split_recorded_mcp_turns
+        """
+        request = self._request(
+            messages=[
+                {"role": "user", "content": "hi"},
+                {"role": "user", "content": "still there?"},
+            ]
+        )
+
+        assert [(message.role, message.content) for message in request.messages] == [
+            ("user", "hi"),
+            ("user", "still there?"),
+        ]
+
+    def test_a_toolset_without_a_server_is_dropped_without_a_warning(
+        self, request_log: dict[str, Any]
+    ) -> None:
+        """A toolset naming no declared server is dropped, and nothing is logged.
+
+        Such a request is malformed upstream -- every toolset must reference an
+        ``mcp_servers`` entry -- so ``mcp_servers`` is what identifies a
+        connector request, and its absence is what keeps an ordinary tool-less
+        request from being warned about.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+             stdapi/types/anthropic_messages.py:_without_mcp_toolsets
+        """
+        request = self._request(tools=[_MCP_TOOLSET])
+        warn_mcp_connector_ignored(request)
+
+        assert request.tools == []
+        assert "error_detail" not in request_log
+
+    def test_count_tokens_shares_the_same_handling(
+        self, request_log: dict[str, Any]
+    ) -> None:
+        """``count_tokens`` carries the same body and gets the same treatment.
+
+        A fix applied only to the create-message body leaves this route rejecting
+        the very conversation the other one accepts.
+
+        Ref: stdapi/types/anthropic_messages.py:MessageCountTokensParams
+        """
+        request = MessageCountTokensParams.model_validate(
+            {
+                "model": "test.translate-model",
+                "messages": _mcp_replay_messages(),
+                "tools": [_WEATHER_TOOL, _MCP_TOOLSET],
+                "mcp_servers": [_MCP_SERVER],
+            }
+        )
+        warn_mcp_connector_ignored(request)
+
+        assert request.tools is not None
+        assert [tool.type for tool in request.tools] == ["custom"]
+        assert "mcp_servers" not in request.model_dump(exclude_unset=True)
+        assert request_log["error_detail"]
+        assert [
+            (
+                message.role,
+                [block.type for block in message.content]
+                if isinstance(message.content, list)
+                else message.content,
+            )
+            for message in request.messages
+        ] == [
+            ("user", "What does the example server say?"),
+            ("assistant", ["tool_use"]),
+            ("user", ["tool_result"]),
+            ("assistant", ["text"]),
+        ], "the split validator is duplicated on this body and has to behave the same"
+
+    async def test_a_forwarded_body_carries_a_replay_the_messages_api_accepts(
+        self,
+    ) -> None:
+        """A backend given the body verbatim gets no MCP field and a valid replay.
+
+        That surface rejects ``mcp_servers`` as an unknown key and ``mcp_toolset``
+        as an unknown tool type, so the same request must be cleaned for it too —
+        an empty ``tools`` array is accepted where a null one is not.  It also
+        pairs every ``tool_use`` with a ``tool_result`` in the *next* message, so
+        the recorded turn has to arrive already split, this path having no
+        translation step to split it later.
+
+        The empty ``tools`` array stands even though the replay names a tool the
+        request no longer declares: probed on 2026-09-02 against the Mantle-served
+        ``anthropic.claude-haiku-4-5``, ``POST /anthropic/v1/messages`` answered
+        this very payload — split ``tool_use``/``tool_result`` turns beside
+        ``tools: []`` — with an ordinary ``end_turn`` message that read the tool
+        result back, so nothing here has to synthesize a tool stub the way a
+        Converse tool configuration does.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+             https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls
+             stdapi/models/chat/_mantle/_convert.py:messages_payload
+        """
+        request = self._request(
+            messages=_mcp_replay_messages(),
+            tools=[_MCP_TOOLSET],
+            mcp_servers=[_MCP_SERVER],
+        )
+
+        payload = await messages_payload(request, "test.translate-model")
+
+        assert "mcp_servers" not in payload
+        assert payload["tools"] == []
+        assert [
+            (
+                message["role"],
+                [block["type"] for block in message["content"]]
+                if isinstance(message["content"], list)
+                else "text",
+            )
+            for message in payload["messages"]
+        ] == [
+            ("user", "text"),
+            ("assistant", ["tool_use"]),
+            ("user", ["tool_result"]),
+            ("assistant", ["text"]),
+        ]
+
+    def test_the_tool_config_builder_skips_a_toolset_it_is_handed(self) -> None:
+        """A toolset reaching the tool builder is skipped rather than mis-read.
+
+        Validation removes toolsets from every request, so this guard should
+        never fire; it exists because a toolset carries no name and no input
+        schema, and the code that turns a tool into a Bedrock ``toolSpec`` would
+        fail on one rather than ignore it.
+
+        Ref: stdapi/models/chat/_adapters/_anthropic_message.py:_build_tool_config
+        """
+        toolset = MCPToolsetParam(type="mcp_toolset", mcp_server_name="example")
+        weather = ToolParam.model_validate(_WEATHER_TOOL)
+
+        tool_config = _build_tool_config([toolset, weather], None)
+
+        assert tool_config is not None
+        assert [tool["toolSpec"]["name"] for tool in tool_config["tools"]] == [
+            "get_weather"
+        ]
+        assert _build_tool_config([toolset], None) is None
+
+    def test_the_mcp_authorization_token_is_never_recorded(
+        self, request_log: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A caller's MCP bearer token reaches neither the log nor a payload.
+
+        ``mcp_servers`` may carry a credential for the remote server. Nothing
+        here uses it, so it must not be written anywhere: excluding the field
+        from serialization keeps it out of the request log as well, even on a
+        deployment that logs request bodies.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+             stdapi/monitoring.py:log_request_params
+        """
+        monkeypatch.setattr(SETTINGS, "log_request_params", True)
+        token = "sk-mcp-do-not-log"  # noqa: S105
+        request = self._request(
+            mcp_servers=[{**_MCP_SERVER, "authorization_token": token}]
+        )
+
+        log_request_params(request)
+        warn_mcp_connector_ignored(request)
+
+        assert request_log["request_params"], "the body must have been logged"
+        assert token not in _json.dumps(request_log, default=str)
+        assert token not in _json.dumps(request.model_dump(mode="json"))
+
+
+class TestMCPConnectorRouteWiring:
+    """What a connector request produces in the server log, end to end.
+
+    A Mantle-served model never reaches the shared translation step, so each
+    route raises the operator warning itself: deleting either call would leave
+    those requests ignored in complete silence, since the caller still gets a
+    normal answer.  A request that does reach the translation is warned about by
+    both, and must still be reported once.
+
+    Ref: stdapi/routes/anthropic_messages.py:create_message
+         stdapi/routes/anthropic_messages.py:count_tokens
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    def _warnings(captured: str) -> list[str]:
+        """Return every MCP-connector warning found in captured JSON log lines."""
+        details: list[str] = []
+        for line in captured.splitlines():
+            try:
+                event = _json.loads(line)
+            except _json.JSONDecodeError:
+                continue
+            details.extend(
+                str(detail)
+                for detail in event.get("error_detail", ())
+                if "mcp_servers" in str(detail)
+            )
+        return details
+
+    def test_the_message_route_warns_about_an_ignored_connector(
+        self,
+        anthropic_app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A connector request answered without translation still logs the warning.
+
+        The model here answers directly, as a Mantle-served one does, so the
+        only thing that can report the ignored connector is the route itself.
+        """
+        details = _register_test_model(
+            monkeypatch, "test.mcp-route-model", "MCP Route Test"
+        )
+
+        async def _create_message(_request: object, _message_id: str) -> dict[str, Any]:
+            return {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "hi"}],
+                "model": details.id,
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }
+
+        monkeypatch.setattr(
+            anthropic_messages,
+            "get_chat_model",
+            lambda _: SimpleNamespace(create_message=_create_message),
+        )
+        capsys.readouterr()
+
+        response = anthropic_app_client.post(
+            "/anthropic/v1/messages",
+            json={
+                "model": details.id,
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [_MCP_TOOLSET],
+                "mcp_servers": [_MCP_SERVER],
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert len(self._warnings(capsys.readouterr().out)) == 1
+
+    def test_the_count_tokens_route_warns_about_an_ignored_connector(
+        self,
+        anthropic_app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Counting tokens for a connector request logs the same single warning."""
+        details = _register_test_model(
+            monkeypatch, "test.mcp-count-model", "MCP Count Test"
+        )
+        monkeypatch.setattr(
+            anthropic_messages, "count_tokens_via_bedrock", AsyncMock(return_value=7)
+        )
+        monkeypatch.setattr(anthropic_messages, "get_chat_model", lambda _: None)
+        capsys.readouterr()
+
+        response = anthropic_app_client.post(
+            "/anthropic/v1/messages/count_tokens",
+            json={
+                "model": details.id,
+                "messages": [{"role": "user", "content": "hi"}],
+                "mcp_servers": [_MCP_SERVER],
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["input_tokens"] == 7
+        assert len(self._warnings(capsys.readouterr().out)) == 1
+
+    def test_a_translated_request_is_warned_about_once(
+        self,
+        anthropic_app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A request going through both the route and the translation warns once.
+
+        Neither call covers the other's callers, so a request served by
+        translation raises the warning twice; without the guard the operator
+        reads one ignored connector as two.
+
+        Ref: stdapi/models/chat/_adapters/_anthropic_message.py:warn_mcp_connector_ignored
+        """
+        details = _register_test_model(
+            monkeypatch, "test.mcp-translated-model", "MCP Translated Test"
+        )
+        monkeypatch.setattr(
+            ChatModel, "converse", AsyncMock(return_value=_converse_response())
+        )
+        capsys.readouterr()
+
+        response = anthropic_app_client.post(
+            "/anthropic/v1/messages",
+            json={
+                "model": details.id,
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+                "mcp_servers": [_MCP_SERVER],
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert len(self._warnings(capsys.readouterr().out)) == 1
+
+    def test_a_rejected_body_keeps_its_token_out_of_the_answer_only(
+        self, anthropic_app_client: TestClient, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A malformed connector entry is reported to the operator, token included.
+
+        A body failing on several counts has its whole error list written to the
+        server log, values and all, because that is where a malformed request is
+        diagnosed.  The caller is told which field is wrong and nothing else, so
+        the token stays inside the deployment -- which is why the documentation
+        tells operators to rotate a token a `400` was answered for.
+
+        Ref: docs/api_anthropic_messages.md
+             stdapi/main.py:handle_validation_exception
+        """
+        token = "sk-mcp-rejected-body"  # noqa: S105
+        capsys.readouterr()
+
+        response = anthropic_app_client.post(
+            "/anthropic/v1/messages",
+            json={
+                "model": "test.translate-model",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+                # Neither `type` nor `name`, so the entry fails on both counts.
+                "mcp_servers": [
+                    {"url": "https://mcp.example.com/mcp", "authorization_token": token}
+                ],
+            },
+        )
+
+        assert response.status_code == 400, response.text
+        assert token not in response.text
+        assert token in capsys.readouterr().out
+
+    def test_a_request_without_the_connector_logs_no_warning(
+        self,
+        anthropic_app_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """An ordinary request keeps the log clean, so the warning stays meaningful."""
+        details = _register_test_model(
+            monkeypatch, "test.mcp-count-quiet-model", "MCP Count Quiet Test"
+        )
+        monkeypatch.setattr(
+            anthropic_messages, "count_tokens_via_bedrock", AsyncMock(return_value=7)
+        )
+        monkeypatch.setattr(anthropic_messages, "get_chat_model", lambda _: None)
+        capsys.readouterr()
+
+        response = anthropic_app_client.post(
+            "/anthropic/v1/messages/count_tokens",
+            json={"model": details.id, "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+        assert response.status_code == 200, response.text
+        assert self._warnings(capsys.readouterr().out) == []

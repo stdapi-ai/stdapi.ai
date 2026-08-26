@@ -371,3 +371,56 @@ async def test_count_tokens_without_extras_sends_no_additional_fields(
         "messages": [{"role": "user", "content": [{"text": "hi"}]}]
     }
     assert "additionalModelRequestFields" not in call["input"]["converse"]
+
+
+async def test_count_tokens_counts_a_replayed_mcp_conversation(
+    fake_client: _FakeCountTokensClient,
+) -> None:
+    """Replayed MCP blocks are counted as the tool use and result they are.
+
+    ``count_tokens`` shares the Messages body, so the same conversation must be
+    countable; the synthesized ``toolConfig`` is what makes Bedrock accept a
+    history carrying tool blocks with no ``tools`` array.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+         stdapi/models/chat/_adapters/_anthropic_message.py:_synthesize_tool_config_from_history
+    """
+    request = MessageCountTokensParams.model_validate(
+        {
+            "model": _CLAUDE_MODEL,
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "mcp_tool_use",
+                            "id": "mcptoolu_01ABCdefGHIjklMNOpqrST",
+                            "name": "lookup",
+                            "server_name": "example",
+                            "input": {"query": "hello"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "mcp_tool_result",
+                            "tool_use_id": "mcptoolu_01ABCdefGHIjklMNOpqrST",
+                            "content": [{"type": "text", "text": "hi"}],
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+    await count_tokens_via_bedrock(
+        request, _CLAUDE_MODEL, "us-east-1", _chat_model(_CLAUDE_MODEL)
+    )
+    (call,) = fake_client.calls
+    converse = call["input"]["converse"]
+    assert [spec["toolSpec"]["name"] for spec in converse["toolConfig"]["tools"]] == [
+        "lookup"
+    ]
+    use_id = converse["messages"][0]["content"][0]["toolUse"]["toolUseId"]
+    assert use_id == converse["messages"][1]["content"][0]["toolResult"]["toolUseId"]

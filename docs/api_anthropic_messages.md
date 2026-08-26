@@ -64,6 +64,8 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 | Parallel tool calls                   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Multiple tools in one turn                                                                   |
 | Web search tool (`web_search`)        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Available on models with system tool support (e.g., Amazon Nova 2)                           |
 | Claude server tools                   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bash, text editor, computer use (Claude 3.5+), memory (Claude 3.7+)                          |
+| MCP connector (`mcp_servers`, `mcp_toolset`) | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored: the model does not connect to remote MCP servers, so their tools never run. Declare the tools in `tools` and run them yourself — see [MCP Connector](#mcp-connector) |
+| MCP block replay (`mcp_tool_use`, `mcp_tool_result`) |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Accepted in conversation history and treated as an ordinary tool use and result; a repeated call comes back as `tool_use`, for you to run |
 | **Generation Control**                |                                          |                                                                                              |
 | `max_tokens`                          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Output length limits. Optional on this gateway (divergence from the Anthropic API, which requires it): the model's default output limit applies when omitted |
 | `temperature`                         |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Mapped to Bedrock inference params                                                           |
@@ -116,6 +118,7 @@ Mantle-only Claude models are passed through to the upstream Anthropic Messages 
 | Parameter | Claude passthrough | Converted to an OpenAI shape |
 |-----------|--------------------|------------------------------|
 | Server tools (`web_search`, `code_execution`, `bash`, `text_editor`, `computer`, …) | Forwarded verbatim (`anthropic-beta` flags are **not** auto-injected on the Mantle path — pass them yourself) | Rejected with `400` |
+| MCP connector (`mcp_servers`, `mcp_toolset`) | Dropped before the request leaves — see [MCP Connector](#mcp-connector) | Dropped |
 | `thinking` | Forwarded | Dropped on conversion (use `output_config.effort` for portable reasoning control) |
 | `thinking` response blocks | Returned as sent upstream | Not returned — a converted model's chain of thought is only available on the OpenAI-compatible APIs |
 | `output_config.effort` | Forwarded | Mapped to reasoning effort |
@@ -513,6 +516,22 @@ The following Anthropic server tools are **not supported** via the classic Bedro
 - `container_upload` — Container file upload
 
 Requests using these tools on Converse-served Claude models will return a `400 Bad Request` error. On [Mantle](#bedrock-mantle)-served Claude models (passthrough), server tools are instead forwarded verbatim to the upstream Messages API, which decides support; when a Mantle request must be converted to an OpenAI shape, server tools are rejected with `400`.
+
+#### MCP Connector
+
+Anthropic's MCP connector — `mcp_servers` plus `mcp_toolset` entries in `tools` — asks the **model** to act as an MCP client and call a remote MCP server while it answers. That is **not supported here**: the models this API serves do not open those connections.
+
+Rather than reject an otherwise valid request, the gateway **accepts it and ignores the connector**:
+
+- `mcp_servers` and every `mcp_toolset` entry are dropped; no connection is made and none of the server's tools can be called. An `authorization_token` you supply is never forwarded to any backend, and never appears in the `request_params` log field ([`LOG_REQUEST_PARAMS`](operations_configuration.md#log-request-params)) — but a request rejected as malformed reports the offending value to the server log, so treat a `400` on a body carrying a token as a reason to rotate it.
+- Every other tool in `tools` is kept and behaves normally. A `cache_control` breakpoint carried by an `mcp_toolset` is dropped with it, so a request that marked its cache prefix there caches a shorter prefix than intended — put the breakpoint on a tool that survives.
+- A `tool_choice` is dropped when the toolsets were the only entries in `tools`: the choice had nothing left to select from, and forcing a tool against an empty `tools` array is refused by the Messages API.
+- `mcp_tool_use` and `mcp_tool_result` blocks already in the conversation — what a client records from a connector-enabled turn elsewhere, both inside the assistant turn that ran the tool — are accepted and read as an ordinary tool call and its result, so a replayed transcript keeps its meaning. Should the model call that tool again, it comes back as a normal `tool_use` block for you to run.
+
+To use MCP tools with this API, run the MCP client yourself: connect to the server, declare its tools in `tools`, and return each result as a `tool_result` block.
+
+!!! info "Two different MCP roles"
+    This gateway is itself an **MCP server**: an AI agent can call its endpoints as MCP tools, which is the opposite direction from the connector described above. See [MCP (Model Context Protocol)](features.md#mcp-model-context-protocol).
 
 ### Provider-Specific Parameters
 

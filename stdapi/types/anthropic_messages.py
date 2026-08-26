@@ -1,8 +1,9 @@
 """Local Anthropic-compatible Messages API types."""
 
-from typing import Annotated, Literal
+from itertools import groupby
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator, model_validator
 
 from stdapi.input_file import FileIdInputFile, InputFile
 from stdapi.types import (
@@ -11,6 +12,9 @@ from stdapi.types import (
     BaseModelResponse,
     JsonMapping,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 #: Ref: anthropic.types.stop_reason.StopReason
 StopReason = Literal[
@@ -1366,12 +1370,186 @@ ContentBlockParam = (
 )
 
 
+#: Content block type an MCP-connector turn answers its own tool call with.
+_MCP_RESULT_BLOCK_TYPE = "mcp_tool_result"
+
+#: Content block types an MCP-connector turn records, and their ordinary equivalent.
+# Ref: anthropic.types.beta.beta_mcp_tool_use_block_param.BetaMCPToolUseBlockParam
+# Ref: anthropic.types.beta.beta_request_mcp_tool_result_block_param.BetaRequestMCPToolResultBlockParam
+_MCP_BLOCK_TYPES: dict[str, str] = {
+    "mcp_tool_use": "tool_use",
+    _MCP_RESULT_BLOCK_TYPE: "tool_result",
+}
+
+
+def _as_ordinary_tool_block(block: Any) -> Any:  # noqa: ANN401
+    """Rewrite a recorded MCP content block into its ordinary equivalent.
+
+    Args:
+        block: One raw ``content`` entry, before validation.
+
+    Returns:
+        The block unchanged, or a copy retyped as ``tool_use``/``tool_result``
+        with the server name — which has no equivalent here — removed.
+    """
+    if not isinstance(block, dict):
+        return block
+    block_type = block.get("type")
+    if (
+        not isinstance(block_type, str)
+        or (ordinary := _MCP_BLOCK_TYPES.get(block_type)) is None
+    ):
+        return block
+    return {k: v for k, v in block.items() if k != "server_name"} | {"type": ordinary}
+
+
+def _is_recorded_mcp_result(block: Any) -> bool:  # noqa: ANN401
+    """Whether a raw content block is a tool result the MCP connector recorded.
+
+    Args:
+        block: One raw ``content`` entry, before validation.
+
+    Returns:
+        True for an ``mcp_tool_result`` block.
+    """
+    return isinstance(block, dict) and block.get("type") == _MCP_RESULT_BLOCK_TYPE
+
+
+def _holds_recorded_mcp_result(message: Any) -> bool:  # noqa: ANN401
+    """Whether a raw message answers its own tool call with a recorded result.
+
+    Args:
+        message: One raw ``messages`` entry, before validation.
+
+    Returns:
+        True when the message holds an ``mcp_tool_result`` block.
+    """
+    return (
+        isinstance(message, dict)
+        and isinstance(content := message.get("content"), list)
+        and any(map(_is_recorded_mcp_result, content))
+    )
+
+
+def _content_blocks(content: Any) -> list[Any] | None:  # noqa: ANN401
+    """Return a raw message content as the content blocks it stands for.
+
+    Args:
+        content: Raw ``content`` value, before validation.
+
+    Returns:
+        The blocks, a plain string being one text block, or ``None`` when the
+        value is neither and only validation can say what is wrong with it.
+    """
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    return content if isinstance(content, list) else None
+
+
+def _merged_into(turn: dict[str, Any], following: Any) -> bool:  # noqa: ANN401
+    """Append the content of a following turn to *turn*, if it has the same role.
+
+    Roles alternate, so a result moved out of the turn that recorded it joins
+    the user turn already answering the call rather than opening a second one.
+
+    Args:
+        turn: Turn built by the split, extended in place.
+        following: Raw message, or built turn, coming right after it.
+
+    Returns:
+        Whether *following* was merged, and so must not be added on its own.
+    """
+    if (
+        not isinstance(following, dict)
+        or following.get("role") != turn["role"]
+        or (blocks := _content_blocks(following.get("content"))) is None
+    ):
+        return False
+    turn["content"] += blocks
+    return True
+
+
+def _recorded_mcp_turns(message: Any) -> Iterator[Any]:  # noqa: ANN401
+    """Yield the alternating turns one raw message stands for.
+
+    Args:
+        message: One raw ``messages`` entry, before validation.
+
+    Yields:
+        The message itself, or the turns its recorded tool results split it
+        into, each in the order the blocks were recorded.
+    """
+    if not _holds_recorded_mcp_result(message):
+        yield message
+        return
+    for is_result, blocks in groupby(message["content"], _is_recorded_mcp_result):
+        yield {
+            **message,
+            "role": "user" if is_result else message.get("role"),
+            "content": list(blocks),
+        }
+
+
+def _split_recorded_mcp_turns(messages: Any) -> Any:  # noqa: ANN401
+    """Move a recorded MCP tool result into the turn that answers the call.
+
+    Anthropic's MCP connector runs the tool itself, so it records the call and
+    its result in one assistant turn. Read as the ordinary blocks they are, that
+    is a shape no backend takes: a tool result belongs to the user turn
+    following the call. Splitting the conversation here rather than per backend
+    is what lets a replayed transcript keep its meaning whichever way the
+    request is served, and it keeps every block in the order it was recorded.
+
+    Args:
+        messages: Raw ``messages`` value, before validation.
+
+    Returns:
+        The value with each recorded MCP turn split into alternating turns.
+    """
+    if not isinstance(messages, list) or not any(
+        map(_holds_recorded_mcp_result, messages)
+    ):
+        return messages
+    split: list[Any] = []
+    # Only a turn built here may be extended: merging turns the request already
+    # had would rewrite a conversation this has no reason to touch.
+    built = False
+    for message in messages:
+        for turn in _recorded_mcp_turns(message):
+            if built and _merged_into(split[-1], turn):
+                continue
+            split.append(turn)
+            built = turn is not message
+    return split
+
+
 # Ref: anthropic.types.message_param.MessageParam
 class MessageParam(BaseModelRequest):
     """Base message parameter."""
 
     role: Literal["user", "assistant", "system"] = Field(description="Message role.")
     content: str | list[ContentBlockParam] = Field(description="Message content.")
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def _accept_mcp_blocks(cls, content: Any) -> Any:  # noqa: ANN401
+        """Read a recorded MCP tool call as the ordinary tool call it is.
+
+        A conversation that ran through Anthropic's MCP connector comes back
+        holding ``mcp_tool_use``/``mcp_tool_result`` blocks. They carry exactly a
+        tool call and its result, plus the name of the server that ran it, which
+        has no equivalent here; keeping the call structured is what preserves the
+        ``tool_use_id`` pairing the model needs.
+
+        Args:
+            content: Raw ``content`` value, before validation.
+
+        Returns:
+            The value with any recorded MCP block rewritten.
+        """
+        if not isinstance(content, list):
+            return content
+        return [_as_ordinary_tool_block(block) for block in content]
 
 
 # Ref: anthropic.types.tool_param.ToolParam.InputSchema
@@ -1714,11 +1892,49 @@ class ToolSearchToolRegexParam(BaseModelRequest):
     )
 
 
-# Ref: anthropic.types.tool_union_param.ToolUnionParam
-# Ref: anthropic.types.message_count_tokens_tool_param.MessageCountTokensToolParam
-ToolUnionParam = (
-    ToolParam
-    | ToolBashParam
+# Ref: anthropic.types.beta.beta_mcp_tool_config_param.BetaMCPToolConfigParam
+# Ref: anthropic.types.beta.beta_mcp_tool_default_config_param.BetaMCPToolDefaultConfigParam
+# The MCP connector is a beta-only API, so this mirrors the beta namespace where
+# every other type on this page mirrors the stable one.
+class MCPToolConfigParam(BaseModelRequest):
+    """Configuration of the tools an MCP toolset exposes."""
+
+    defer_loading: bool | None = Field(
+        default=None, description="Load the tool only when it is referenced."
+    )
+    enabled: bool | None = Field(
+        default=None, description="Whether the tool is usable."
+    )
+
+
+# Ref: anthropic.types.beta.beta_mcp_toolset_param.BetaMCPToolsetParam
+class MCPToolsetParam(BaseModelRequest):
+    """Tools of one remote MCP server declared in `mcp_servers`.
+
+    UNSUPPORTED on this implementation: accepted and ignored, and no other tool
+    in the request is affected. The model never connects to a remote MCP server,
+    so none of these tools can be called; declare the tools you need in `tools`
+    and run them yourself.
+    """
+
+    type: Literal["mcp_toolset"] = Field(description="Tool type. Always `mcp_toolset`.")
+    mcp_server_name: str = Field(
+        description="Name of the `mcp_servers` entry whose tools this configures."
+    )
+    cache_control: CacheControlEphemeralParam | None = Field(
+        default=None, description="Cache control for this tool."
+    )
+    configs: dict[str, MCPToolConfigParam] | None = Field(
+        default=None, description="Per-tool configuration, keyed by tool name."
+    )
+    default_config: MCPToolConfigParam | None = Field(
+        default=None, description="Configuration applied to every tool of the server."
+    )
+
+
+#: Tools run for the model instead of by the client, each identified by its name.
+ServerToolUnionParam = (
+    ToolBashParam
     | ToolTextEditorParam
     | ToolComputerParam
     | WebSearchToolParam
@@ -1728,6 +1944,115 @@ ToolUnionParam = (
     | ToolSearchToolBm25Param
     | ToolSearchToolRegexParam
 )
+
+# Ref: anthropic.types.tool_union_param.ToolUnionParam
+# Ref: anthropic.types.message_count_tokens_tool_param.MessageCountTokensToolParam
+ToolUnionParam = ToolParam | ServerToolUnionParam | MCPToolsetParam
+
+#: ``tools`` entry type declaring the tools of a remote MCP server.
+_MCP_TOOLSET_TOOL_TYPE = "mcp_toolset"
+
+
+def _without_mcp_toolsets(
+    tools: list[ToolUnionParam] | None,
+) -> list[ToolUnionParam] | None:
+    """Drop the MCP toolsets of a validated ``tools`` list.
+
+    No model connects to a remote MCP server here, so a toolset names tools that
+    can never be called. Removing it at validation makes every entry point --
+    both routes and the batch API -- see the same tool list, and leaves every
+    other tool untouched.
+
+    Args:
+        tools: Validated ``tools`` value.
+
+    Returns:
+        The list without its MCP toolsets -- empty rather than ``None`` when
+        they were all it held, since a backend given the body verbatim accepts
+        an empty ``tools`` array and rejects a null one.
+    """
+    if not tools:
+        return tools
+    return [tool for tool in tools if not isinstance(tool, MCPToolsetParam)]
+
+
+def _is_mcp_toolset(tool: Any) -> bool:  # noqa: ANN401
+    """Whether a raw ``tools`` entry declares an MCP toolset.
+
+    Args:
+        tool: One raw ``tools`` entry, before validation.
+
+    Returns:
+        True for an ``mcp_toolset`` entry.
+    """
+    if isinstance(tool, MCPToolsetParam):
+        return True
+    return isinstance(tool, dict) and tool.get("type") == _MCP_TOOLSET_TOOL_TYPE
+
+
+def _without_orphaned_tool_choice(values: Any) -> Any:  # noqa: ANN401
+    """Drop a ``tool_choice`` whose tools were all MCP toolsets.
+
+    Upstream serves such a request -- the toolsets are the tools the choice
+    selects from -- so refusing it, as a backend handed an empty ``tools`` array
+    beside a forced choice does, would be stricter than the API mirrored here.
+    The choice goes the way of the toolsets it applied to, which is what the
+    tool configuration built for a request already does.
+
+    Args:
+        values: Raw request mapping, before validation.
+
+    Returns:
+        The mapping without its ``tool_choice``, or unchanged when at least one
+        tool survives the toolset drop.
+    """
+    if (
+        not isinstance(values, dict)
+        or values.get("tool_choice") is None
+        or not isinstance(tools := values.get("tools"), list)
+        or not tools
+        or not all(map(_is_mcp_toolset, tools))
+    ):
+        return values
+    return {key: value for key, value in values.items() if key != "tool_choice"}
+
+
+# Ref: anthropic.types.beta.beta_request_mcp_server_tool_configuration_param.BetaRequestMCPServerToolConfigurationParam
+class MCPServerToolConfigurationParam(BaseModelRequest):
+    """Which tools of a remote MCP server the model may use."""
+
+    allowed_tools: list[str] | None = Field(
+        default=None,
+        description="Tool names the model may call, instead of all of them.",
+    )
+    enabled: bool | None = Field(
+        default=None, description="Whether the server's tools are usable."
+    )
+
+
+# Ref: anthropic.types.beta.beta_request_mcp_server_url_definition_param.BetaRequestMCPServerURLDefinitionParam
+class MCPServerURLDefinitionParam(BaseModelRequest):
+    """Connection details of a remote MCP server.
+
+    UNSUPPORTED on this implementation: accepted and ignored, and the rest of the
+    request is served normally. The model never connects to the server, so its
+    tools never run.
+    """
+
+    type: Literal["url"] = Field(description="Server type. Always `url`.")
+    name: str = Field(
+        description="Name an `mcp_toolset` entry references to configure this server."
+    )
+    url: str = Field(description="HTTPS endpoint of the MCP server.")
+    authorization_token: str | None = Field(
+        default=None,
+        description="Bearer token for the MCP server.\n"
+        "UNSUPPORTED on this implementation: no connection to the server is made, "
+        "so the token is never forwarded to any backend.",
+    )
+    tool_configuration: MCPServerToolConfigurationParam | None = Field(
+        default=None, description="Which of the server's tools the model may use."
+    )
 
 
 # Ref: anthropic.types.tool_choice_auto_param.ToolChoiceAutoParam
@@ -2109,7 +2434,9 @@ class MessageCreateParams(BaseModelRequestWithExtra):
         "has role `assistant`, the response continues from its content. A "
         "`content` value may be a plain string (shorthand for one `text` block) "
         "or an array of content blocks. A first message with role `system` sets "
-        "an inline system prompt, appended after the top-level `system` parameter."
+        "an inline system prompt, appended after the top-level `system` parameter. "
+        "`mcp_tool_use` and `mcp_tool_result` blocks are accepted and read as "
+        "`tool_use` and `tool_result`."
     )
     cache_control: CacheControlEphemeralParam | None = Field(
         default=None, description="Cache control applied to the last cacheable block."
@@ -2125,6 +2452,16 @@ class MessageCreateParams(BaseModelRequestWithExtra):
         default=None,
         description="Specifies the geographic region for inference processing.\n"
         "UNSUPPORTED on this implementation. Data residency configuration is managed at server configuration level.",
+    )
+    mcp_servers: list[MCPServerURLDefinitionParam] | None = Field(
+        default=None,
+        # Never serialized: no backend accepts this field.
+        exclude=True,
+        description="Remote MCP servers to connect the model to.\n"
+        "UNSUPPORTED on this implementation: accepted and ignored, and the rest "
+        "of the request is served normally. The model never connects to these "
+        "servers, so their tools never run; declare the tools you need in "
+        "`tools` and run them yourself.",
     )
     metadata: MetadataParam | None = Field(
         default=None, description="Request metadata."
@@ -2205,6 +2542,47 @@ class MessageCreateParams(BaseModelRequestWithExtra):
     container: str | None = Field(
         default=None, description="Container identifier for reuse across requests."
     )
+
+    @field_validator("messages", mode="before")
+    @classmethod
+    def _split_mcp_turns(cls, messages: Any) -> Any:  # noqa: ANN401
+        """Answer a recorded MCP tool call with the user turn its result belongs to.
+
+        Args:
+            messages: Raw ``messages`` value, before validation.
+
+        Returns:
+            The value with each recorded MCP turn split into alternating turns.
+        """
+        return _split_recorded_mcp_turns(messages)
+
+    @field_validator("tools", mode="after")
+    @classmethod
+    def _drop_mcp_toolsets(
+        cls, tools: list[ToolUnionParam] | None
+    ) -> list[ToolUnionParam] | None:
+        """Remove the MCP toolsets, which name tools that can never be called.
+
+        Args:
+            tools: Validated ``tools`` value.
+
+        Returns:
+            The list without its MCP toolsets.
+        """
+        return _without_mcp_toolsets(tools)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_orphaned_tool_choice(cls, values: Any) -> Any:  # noqa: ANN401
+        """Drop a ``tool_choice`` left with no tool to select once toolsets go.
+
+        Args:
+            values: Raw request mapping, before validation.
+
+        Returns:
+            The mapping without a ``tool_choice`` the toolset drop orphaned.
+        """
+        return _without_orphaned_tool_choice(values)
 
 
 # Ref: anthropic.types.json_output_format_param.JSONOutputFormatParam
@@ -2293,12 +2671,24 @@ class MessageCountTokensParams(BaseModelRequestWithExtra):
         "has role `assistant`, the response continues from its content. A "
         "`content` value may be a plain string (shorthand for one `text` block) "
         "or an array of content blocks. A first message with role `system` sets "
-        "an inline system prompt, appended after the top-level `system` parameter."
+        "an inline system prompt, appended after the top-level `system` parameter. "
+        "`mcp_tool_use` and `mcp_tool_result` blocks are accepted and read as "
+        "`tool_use` and `tool_result`."
     )
     system: str | list[TextBlockParam] | None = Field(
         default=None,
         description="System prompt providing context and instructions, such as "
         "a goal or role.",
+    )
+    mcp_servers: list[MCPServerURLDefinitionParam] | None = Field(
+        default=None,
+        # Never serialized: no backend accepts this field.
+        exclude=True,
+        description="Remote MCP servers to connect the model to.\n"
+        "UNSUPPORTED on this implementation: accepted and ignored, and the rest "
+        "of the request is counted normally. The model never connects to these "
+        "servers, so their tools never run; declare the tools you need in "
+        "`tools` and run them yourself.",
     )
     tools: list[ToolUnionParam] | None = Field(
         default=None,
@@ -2327,6 +2717,47 @@ class MessageCountTokensParams(BaseModelRequestWithExtra):
     cache_control: CacheControlEphemeralParam | None = Field(
         default=None, description="Cache control applied to last cacheable block."
     )
+
+    @field_validator("messages", mode="before")
+    @classmethod
+    def _split_mcp_turns(cls, messages: Any) -> Any:  # noqa: ANN401
+        """Answer a recorded MCP tool call with the user turn its result belongs to.
+
+        Args:
+            messages: Raw ``messages`` value, before validation.
+
+        Returns:
+            The value with each recorded MCP turn split into alternating turns.
+        """
+        return _split_recorded_mcp_turns(messages)
+
+    @field_validator("tools", mode="after")
+    @classmethod
+    def _drop_mcp_toolsets(
+        cls, tools: list[ToolUnionParam] | None
+    ) -> list[ToolUnionParam] | None:
+        """Remove the MCP toolsets, which name tools that can never be called.
+
+        Args:
+            tools: Validated ``tools`` value.
+
+        Returns:
+            The list without its MCP toolsets.
+        """
+        return _without_mcp_toolsets(tools)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_orphaned_tool_choice(cls, values: Any) -> Any:  # noqa: ANN401
+        """Drop a ``tool_choice`` left with no tool to select once toolsets go.
+
+        Args:
+            values: Raw request mapping, before validation.
+
+        Returns:
+            The mapping without a ``tool_choice`` the toolset drop orphaned.
+        """
+        return _without_orphaned_tool_choice(values)
 
 
 # Ref: anthropic.types.message_tokens_count.MessageTokensCount
