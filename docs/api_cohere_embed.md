@@ -83,7 +83,7 @@ curl -X POST "$BASE/v2/embed" \
 | **Input**                     |                                          |                                                                    |
 | `texts`                       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Full support                                                       |
 | `images`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Multimodal models only; data URIs, plus URLs and S3 URIs           |
-| `inputs` (fused text + image) | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Rejected with 400 — use `texts` or `images` instead                |
+| `inputs` (fused text + image) |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Several content parts in one input require Cohere Embed v4; a single-part input works on every model. v2 endpoint only |
 | **Model Parameters**          |                                          |                                                                    |
 | `input_type`                  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Applied to Cohere models; no equivalent on other providers         |
 | `output_dimension`            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Some models support dimension reduction                            |
@@ -92,9 +92,10 @@ curl -X POST "$BASE/v2/embed" \
 | `priority`                    | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted but ignored — request scheduling priority is not applicable on Bedrock |
 | Extra model-specific params   | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra fields are forwarded as additional model request parameters  |
 | **Output**                    |                                          |                                                                    |
-| `images` metadata array       |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Echoed by models that report image dimensions (e.g. Cohere Embed)  |
+| `images` metadata array       |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Echoed by models that report image dimensions (e.g. Cohere Embed), and only when every input of the request is an image |
 | **Usage tracking**            |                                          |                                                                    |
 | `billed_units.input_tokens`   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Estimated on some models                                           |
+| `billed_units.images`         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Counts every submitted image, from `images` and from `inputs`      |
 
 </div>
 
@@ -118,9 +119,12 @@ These are the model families served by this route, with the constraint each one 
 
 | Model                        | Model ID                       | Cohere Name                | Notes                                                              |
 |------------------------------|--------------------------------|----------------------------|--------------------------------------------------------------------|
-| Cohere Embed v4              | `cohere.embed-v4:0`            | `embed-v4.0`               | The only model accepting `texts` and `images` in the same request  |
-| Cohere Embed Multilingual v3 | `cohere.embed-multilingual-v3` | `embed-multilingual-v3.0`  | `texts` or `images` in a request, not both                         |
-| Cohere Embed English v3      | `cohere.embed-english-v3`      | `embed-english-v3.0`       | `texts` or `images` in a request, not both                         |
+| Cohere Embed v4              | `cohere.embed-v4:0`            | `embed-v4.0`               | Several `images` per request; the only Cohere model accepting `texts` and `images` in the same request, and the only model of any family embedding several content parts into a single vector |
+| Cohere Embed Multilingual v3 | `cohere.embed-multilingual-v3` | `embed-multilingual-v3.0`  | `texts` or `images` in a request, not both; one image per request  |
+| Cohere Embed English v3      | `cohere.embed-english-v3`      | `embed-english-v3.0`       | `texts` or `images` in a request, not both; one image per request  |
+
+!!! note "Embed v3 Takes Images Even Though It Is Listed As Text-Only"
+    The [Models](models.md) page and [`/search_models`](api_search_models.md) report the input modalities each model publishes on Amazon Bedrock, and the two Embed v3 models publish `TEXT` alone — so neither is returned by an `input_modalities=IMAGE` filter. That list is a best-effort hint, never a gate: both models accept one image per request on this route, embed it, and are [billed](#billing) for it. Cohere Embed v4 publishes `IMAGE` and appears in the filter as expected.
 
 !!! tip "Cohere's Own Model Names Resolve As They Stand"
     Each Cohere model is published under the name [Cohere's API](https://docs.cohere.com/docs/models) uses as well as its Bedrock ID, derived from the ID rather than curated by hand, so an application already calling Cohere changes only its base URL. Both forms reach the same model; a Cohere model Bedrock does not serve (e.g. `embed-english-light-v3.0`) returns `404` until you map it with [`MODEL_ALIASES`](operations_configuration.md#model-aliases).
@@ -140,6 +144,49 @@ These are the model families served by this route, with the constraint each one 
 |------------------------------|-----------------------------------|--------------------------------------------|
 | TwelveLabs Marengo Embed 3.0 | `twelvelabs.marengo-embed-3-0-v1:0` | `output_dimension` is rejected with a 400 |
 | TwelveLabs Marengo Embed 2.7 | `twelvelabs.marengo-embed-2-7-v1:0` | `output_dimension` is rejected with a 400 |
+
+## Multimodal Inputs
+
+Send `inputs` to the `/v2/embed` endpoint to embed a caption and a picture **into a single vector** — the representation a product catalogue or a document page needs, where the text and the image describe the same thing. Each entry of `inputs` carries a `content` array of `text` and `image_url` parts and produces exactly one vector.
+
+```bash
+curl -X POST "$BASE/v2/embed" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "cohere.embed-v4:0",
+    "input_type": "search_document",
+    "inputs": [
+      {
+        "content": [
+          {"type": "text", "text": "A red bicycle leaning on a wall"},
+          {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0..."}}
+        ]
+      }
+    ],
+    "embedding_types": ["float"]
+  }'
+```
+
+```json
+{
+  "response_type": "embeddings_by_type",
+  "id": "0f1b3c6e8d9a4b5c8e7f6a5b4c3d2e1f",
+  "embeddings": {"float": [[0.012, -0.034, ...]]},
+  "meta": {
+    "api_version": {"version": "2"},
+    "billed_units": {"input_tokens": 330, "images": 1}
+  }
+}
+```
+
+Good to know:
+
+* **Two or more content parts require Cohere Embed v4.** Any other model returns 400 rather than splitting the entry, which would answer with more vectors than inputs were sent. An entry with a **single** content part is accepted by every embedding model and is embedded exactly as the same `texts` or `images` entry would be. The response `texts` array echoes the `texts` field only, so a vector produced from an `inputs` entry has no echoed text.
+* **`texts`, `images` and `inputs` can be combined**, and the vectors come back in that order: texts first, then images, then `inputs` entries. Carrying texts and images in the *same* request needs a model that takes both — Cohere Embed v4, Amazon Nova 2 Multimodal Embeddings, Amazon Titan Embed Image or TwelveLabs Marengo Embed. Cohere Embed v3 takes one or the other and returns 400 for both at once, naming those alternatives.
+* **`images` metadata is only returned when the request embeds images alone** — every input an image, sent through `images`, through single-part `inputs` entries, or both. As soon as a text travels in the same request, or an image sits in a multi-part entry, no `images` metadata comes back; `meta.billed_units.images` counts every submitted image either way.
+* **Cohere models accept at most 96 `texts` and at most 96 `inputs` entries per request.** The endpoint does not enforce that limit — the model rejects what exceeds it — and other embedding models have limits of their own. How many `images` a request may carry is a separate, per-model limit, given in the [model table](#cohere-models) above.
+* Image parts take the same sources as `images`: a data URI, an `https://` URL or an `s3://` URI.
 
 ## Quantized and Base64 Embedding Types
 
@@ -222,9 +269,9 @@ curl -X POST "$BASE/v1/embed" \
 
 Requests are served by the same Bedrock embedding backends as the [OpenAI-compatible Embeddings API](api_openai_embeddings.md), with automatic multi-region routing and failover across the regions where the selected model is available.
 
-- When both `texts` and `images` are provided, embeddings are returned in request order: all texts first, then all images.
+- When several input fields are provided, embeddings are returned in request order: all texts first, then all images, then the `inputs` entries.
 - Guardrail and performance headers available on the [OpenAI-compatible Embeddings API](api_openai_embeddings.md#available-request-headers) work on this route too.
 
 ## Billing
 
-Requests are billed through Bedrock (per token), not in Cohere search units; `billed_units.input_tokens` reports the Bedrock-metered input tokens. Usage appears in [usage logs and cost tracking](operations_logging_monitoring.md) as `input_tokens`.
+Requests are billed through Bedrock, not in Cohere search units. `billed_units.input_tokens` reports the Bedrock-metered input tokens, which on Cohere Embed v4 already include the tokens of every embedded image. Cohere Embed v3 models meter an embedded image as a separate billed unit instead. Usage appears in [usage logs and cost tracking](operations_logging_monitoring.md) as `input_tokens`, plus the per-media-unit dimensions of the models that publish one — see [Media Input Pricing](operations_cost_management.md#media-input-pricing).

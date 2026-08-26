@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_s3.client import S3Client
 
-    from stdapi.input_file import InputFileUrl
+    from stdapi.models.embedding import EmbedInputValue
     from stdapi.pricing import Routing
     from stdapi.types import JsonMapping
 
@@ -266,20 +266,24 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
     async def embed_text(
         self,
-        inputs: list[InputFileUrl | str],
+        inputs: Sequence[EmbedInputValue],
         dimensions: int | None,
         extra_params: JsonMapping,
     ) -> EmbeddingResponse:
         """Get embeddings for text.
 
         Args:
-            inputs: Texts to embed.
+            inputs: Texts and media to embed, one vector each.
             dimensions: Number of dimensions.
             extra_params: Extra model parameters.
 
         Returns:
             Embedding response.
+
+        Raises:
+            ApiError: When an input groups several content parts.
         """
+        values = self._single_part_inputs(inputs)
         force_s3_data = bool(extra_params.pop("force_s3_data", False))
         base_params = _EmbeddingParams(
             embeddingPurpose=extra_params.pop("embeddingPurpose", "GENERIC_INDEX")  # type:ignore[typeddict-item]
@@ -297,7 +301,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
                 extra_params=extra_params,
                 force_s3_data=force_s3_data,
             )
-            for value in inputs
+            for value in values
         ):
             embeddings.extend(
                 item["embedding"] for item in result.response["embeddings"]
@@ -488,7 +492,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
     async def build_batch_request(
         self,
-        inputs: list[InputFileUrl | str],
+        inputs: Sequence[EmbedInputValue],
         dimensions: int | None,
         extra_params: JsonMapping,
     ) -> dict[str, Any]:
@@ -498,7 +502,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         without this server, so it cannot point at anything this server holds.
 
         Args:
-            inputs: Texts to embed.
+            inputs: The single text or media input to embed.
             dimensions: Number of dimensions.
             extra_params: Extra model parameters.
 
@@ -506,7 +510,9 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             The request body.
 
         Raises:
-            ApiError: When the input is too large to travel inside the body.
+            ApiError: When the input is too large to travel inside the body,
+                the request carries more than one input, or an input groups
+                several content parts.
         """
         params = dict(extra_params)
         params.pop("force_s3_data", None)
