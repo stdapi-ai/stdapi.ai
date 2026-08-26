@@ -532,7 +532,7 @@ class TestSignedRequest:
     ``request_credentials`` is an internal botocore contract with no public
     guarantee, and it is what the whole feature rests on.
 
-    Ref: stdapi/aws.py:_sign_as_user
+    Ref: stdapi/aws.py:_sign_model_invocation
     """
 
     class _AbortError(Exception):

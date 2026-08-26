@@ -65,6 +65,7 @@ from stdapi.config import AWS_REGION, SETTINGS
 from stdapi.monitoring import (
     EventLog,
     Tenant,
+    TenantAwsCredential,
     add_server_warning,
     log_background_event,
     log_error_details,
@@ -129,6 +130,11 @@ _DUMMY_SALT: Final = token_bytes(_SALT_SIZE)
 
 #: Region the minted keys are delivered through.
 _SSM_REGION: RegionName = AWS_REGION  # type: ignore[assignment]
+
+#: Matcher a tenant record's cross-account IAM role ARN must satisfy.
+_ROLE_ARN_RE: Final = re_compile(
+    r"^arn:aws[a-z-]*:iam::\d{12}:role/[\w+=,.@/-]+$"
+).match
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,6 +283,49 @@ def _patterns(item: Item, attribute: str, key_id: str) -> tuple[str, ...] | None
     return tuple(value)  # type: ignore[arg-type]
 
 
+def _aws_credential(
+    key_id: str, tenant_item: Item, secret_item: Item
+) -> TenantAwsCredential | None:
+    """Read the cross-account AWS credential off a key's records, if declared.
+
+    Fails closed on every half-configured state: a declared role must never be
+    silently ignored, or the tenant's usage lands on the deployment's bill
+    while the operator believes it does not.
+
+    Args:
+        key_id: The key both records belong to.
+        tenant_item: The operator-declared tenant record.
+        secret_item: The server-minted credential record.
+
+    Returns:
+        The credential, or None when the record declares no role.
+
+    Raises:
+        FeatureUnavailableError: The role ARN is malformed, the feature is
+            disabled while a role is declared, or the external ID is not
+            minted yet.
+    """
+    role_arn = tenant_item.get("aws_role_arn")
+    if role_arn is None:
+        return None
+    if not isinstance(role_arn, str) or not _ROLE_ARN_RE(role_arn):
+        raise _malformed_record(key_id, "'aws_role_arn' is not an IAM role ARN")
+    if not SETTINGS.tenant_aws_credentials:
+        raise _malformed_record(
+            key_id,
+            "it declares 'aws_role_arn' while tenant_aws_credentials is "
+            "disabled; enable the setting or remove the attribute",
+        )
+    external_id = secret_item.get("external_id")
+    if not isinstance(external_id, str) or not external_id:
+        raise _malformed_record(
+            key_id,
+            "its ExternalId is not minted yet; the server mints one within "
+            "a minute of the role being declared",
+        )
+    return TenantAwsCredential(role_arn=role_arn, external_id=external_id)
+
+
 def _build_entry(key_id: str, tenant_item: Item, secret_item: Item) -> _Entry:
     """Assemble a cache entry from the two records of one key.
 
@@ -307,6 +356,7 @@ def _build_entry(key_id: str, tenant_item: Item, secret_item: Item) -> _Entry:
             models_deny=_patterns(tenant_item, "models_deny", key_id) or (),
             endpoints_allow=_patterns(tenant_item, "endpoints_allow", key_id),
             endpoints_deny=_patterns(tenant_item, "endpoints_deny", key_id) or (),
+            aws_credential=_aws_credential(key_id, tenant_item, secret_item),
         ),
         disabled=bool(tenant_item.get("disabled")),
         secret_hash=secret_hash,
@@ -489,18 +539,22 @@ async def _mint(key_id: str, name: str) -> None:
             return
         secret = recovered[1]
     salt = token_bytes(_SALT_SIZE)
+    # Minted with every key so registering a role later needs no write.
+    external_id = webuuid()
     written = await put_item(
         {
             PARTITION_KEY: _PARTITION,
             SORT_KEY: item_key(_SECRET_KIND, key_id),
             "secret_hash": _hash_secret(secret, salt),
             "salt": salt,
+            "external_id": external_id,
             "minted_at": int(time()),
         },
         condition=f"attribute_not_exists({PARTITION_KEY})",
     )
     log_error_details(
-        f"Minted tenant API key '{key_id}' into SSM parameter '{parameter}'"
+        f"Minted tenant API key '{key_id}' into SSM parameter '{parameter}', "
+        f"with ExternalId '{external_id}' for a cross-account role"
         if written
         else f"Tenant API key '{key_id}' was minted by another instance",
         level="info",
@@ -519,7 +573,10 @@ async def reconcile_tenant_keys() -> None:
         TableUnavailableError: The partition could not be listed.
     """
     tenants: dict[str, Item] = {}
-    secrets: set[str] = set()
+    secrets: dict[str, Item] = {}
+    # Sort key each credential record was read under, so a record whose key ID
+    # is out of spec is still addressable without rebuilding its key.
+    secret_sort_keys: dict[str, str] = {}
     # Consistent, once a minute: a stale read here could mistake a freshly
     # declared tenant's credential for an orphan and revoke a delivered key.
     for item in await query_partition(_PARTITION, consistent=True):
@@ -530,22 +587,105 @@ async def reconcile_tenant_keys() -> None:
         if kind == _TENANT_KIND and key_id:
             tenants[key_id] = item
         elif kind == _SECRET_KIND and key_id:
-            secrets.add(key_id)
+            secrets[key_id] = item
+            secret_sort_keys[key_id] = sort_key
     pending = {
         key_id: item for key_id, item in tenants.items() if key_id not in secrets
     }
-    orphans = secrets - tenants.keys()
-    if not pending and not orphans:
+    orphans = {
+        key_id: secret_sort_keys[key_id] for key_id in secrets.keys() - tenants.keys()
+    }
+    # Credential records minted before ExternalId existed, now needing one.
+    unminted_external = {
+        key_id: item
+        for key_id, item in secrets.items()
+        if key_id in tenants
+        and tenants[key_id].get("aws_role_arn") is not None
+        and not item.get("external_id")
+    }
+    if not pending and not orphans and not unminted_external:
         return
     with log_background_event("tenant_keys_reconcile", webuuid()):
         for key_id, item in pending.items():
             await _mint_pending(key_id, item)
-        for key_id in orphans:
-            await delete_item(_PARTITION, item_key(_SECRET_KIND, key_id))
+        for key_id, item in unminted_external.items():
+            await _backfill_external_id(key_id, item)
+        for key_id, sort_key in orphans.items():
+            await _drop_orphan(key_id, sort_key)
+
+
+async def _drop_orphan(key_id: str, sort_key: str) -> None:
+    """Remove the credential record of a tenant that no longer exists.
+
+    Deleting one revokes a credential, so the tenant record is re-read
+    immediately before: a tooling-driven destroy-and-recreate would otherwise
+    let a pass started inside that gap revoke a key already delivered.
+
+    Args:
+        key_id: The key the record belongs to.
+        sort_key: The sort key the record was read under, which is what it is
+            deleted by -- a key ID no server ever minted has no rebuildable key.
+
+    Raises:
+        TableUnavailableError: The record could not be re-read or deleted.
+    """
+    if not _KEY_ID_RE(key_id):
+        if key_id not in _REPORTED:
+            _REPORTED.add(key_id)
             log_error_details(
-                f"Removed the credential record of destroyed tenant key '{key_id}'",
-                level="info",
+                f"Credential record '{sort_key}' carries a key ID this server "
+                "never mints and is left untouched: remove it with the tooling "
+                "that wrote it",
+                level="warning",
             )
+        return
+    recreated = await get_item(
+        _PARTITION, item_key(_TENANT_KIND, key_id), consistent=True
+    )
+    if recreated is not None:
+        return
+    await delete_item(_PARTITION, sort_key)
+    log_error_details(
+        f"Revoked the credential record of destroyed tenant key '{key_id}'",
+        level="warning",
+    )
+
+
+async def _backfill_external_id(key_id: str, secret_item: Item) -> None:
+    """Mint the ExternalId of a credential record that predates the feature.
+
+    Create-once: the conditional write makes concurrent instances agree on a
+    single value, exactly like the secret mint itself. Failures are reported
+    rather than raised; the next reconciliation retries.
+
+    Args:
+        key_id: The key whose credential record lacks an ExternalId.
+        secret_item: The credential record, as read by the reconciliation.
+    """
+    external_id = webuuid()
+    try:
+        written = await put_item(
+            {**secret_item, "external_id": external_id},
+            condition="attribute_not_exists(external_id)",
+        )
+    except (ClientError, BotoCoreError, TableUnavailableError) as error:
+        detail = (
+            error.detail
+            if isinstance(error, TableUnavailableError)
+            else type(error).__name__
+        )
+        log_error_details(
+            f"The ExternalId of tenant key '{key_id}' could not be minted: {detail}",
+            level="warning",
+        )
+        return
+    log_error_details(
+        f"Minted ExternalId '{external_id}' for tenant key '{key_id}': the "
+        "tenant must require it in its role's trust policy"
+        if written
+        else f"The ExternalId of tenant key '{key_id}' was minted by another instance",
+        level="info",
+    )
 
 
 async def _mint_pending(key_id: str, item: Item) -> None:

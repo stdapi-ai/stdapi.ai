@@ -45,6 +45,7 @@ from stdapi.aws_dynamodb import (
     delete_item,
     get_item,
     put_item,
+    query_partition,
 )
 from stdapi.config import SETTINGS
 from stdapi.monitoring import (
@@ -343,6 +344,54 @@ class TestMinting:
         tenant_keys._CACHE.clear()  # noqa: SLF001
         with pytest.raises(ApiError):
             await verify_tenant_key(key)
+
+    async def test_an_out_of_spec_credential_record_never_aborts_the_pass(
+        self, tenant_backend: SSMClient
+    ) -> None:
+        """A record written by the operator's own tooling is skipped, not fatal.
+
+        The docs invite any tool that can write a DynamoDB item to declare a
+        tenant, so an item whose sort key is not one this server writes is a
+        realistic input. Reconciliation must report it and carry on: raising
+        would abort startup on every instance and kill the reconciliation loop
+        on the running ones.
+
+        Ref: stdapi/tenant_keys.py:_drop_orphan
+             stdapi/aws_dynamodb.py:item_key
+        """
+        await put_item({PARTITION_KEY: "TENANT", SORT_KEY: "secret#abc#def"})
+        await put_item(_tenant_item("v" + "0" * 15))
+
+        await reconcile_tenant_keys()
+
+        assert await get_item("TENANT", "secret#abc#def") is not None
+        assert await get_item("TENANT", "secret#v" + "0" * 15) is not None
+
+    async def test_a_tenant_recreated_during_the_pass_keeps_its_credential(
+        self, tenant_backend: SSMClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An orphan is confirmed against the table before its key is revoked.
+
+        Tooling that replaces a tenant record destroys and recreates it seconds
+        apart; a pass whose listing fell in that gap would otherwise revoke a
+        key already delivered, and mint a fresh secret the tenant never gets.
+
+        Ref: stdapi/tenant_keys.py:_drop_orphan
+        """
+        key_id = "y" + "0" * 15
+        await _declare_and_mint(tenant_backend, key_id=key_id)
+        listed = await query_partition("TENANT", consistent=True)
+
+        async def _listing_taken_in_the_gap(
+            *_args: object, **_kwargs: object
+        ) -> list[Item]:
+            return [item for item in listed if item[SORT_KEY] != f"tenant#{key_id}"]
+
+        monkeypatch.setattr(tenant_keys, "query_partition", _listing_taken_in_the_gap)
+
+        await reconcile_tenant_keys()
+
+        assert await get_item("TENANT", f"secret#{key_id}") is not None
 
     async def test_a_parameter_holding_something_else_is_never_recorded(
         self, tenant_backend: SSMClient
@@ -1091,6 +1140,283 @@ class TestEveryRouteIsAuthenticated:
 
         assert len(checked) > 50, "the app under test must carry its routes"
         assert unprotected == []
+
+    def test_every_websocket_route_verifies_its_credential(self) -> None:
+        """A WebSocket route cannot be added without a credential check either.
+
+        ``Depends(authenticate)`` never runs on a WebSocket handshake, so these
+        routes call :func:`verify_websocket_credentials` themselves -- exactly
+        the kind of call a new route forgets. Both halves are asserted: the set
+        of WebSocket paths is declared here, so a new one fails by default, and
+        each declared handler must still reach the verification.
+
+        Ref: stdapi/auth.py:verify_websocket_credentials
+        """
+        from fastapi.routing import APIWebSocketRoute  # noqa: PLC0415
+
+        from stdapi.main import app  # noqa: PLC0415
+
+        websockets: dict[str, Callable[..., Any]] = {}
+        for route in app.routes:
+            if isinstance(route, APIWebSocketRoute):
+                websockets[route.path_format] = route.endpoint
+            elif hasattr(route, "effective_route_contexts"):
+                for context in route.effective_route_contexts():
+                    original = context.original_route
+                    if not context.methods and isinstance(original, APIWebSocketRoute):
+                        websockets[original.path_format] = original.endpoint
+
+        assert set(websockets) == self._WEBSOCKET_ROUTES
+        assert (
+            sorted(
+                path
+                for path, endpoint in websockets.items()
+                if not _reaches_websocket_verification(endpoint)
+            )
+            == []
+        )
+
+
+class TestAwsCredentialRecords:
+    """The cross-account credential a tenant record may declare (#154).
+
+    The operator declares ``aws_role_arn`` on the tenant record; the server
+    mints the ``ExternalId`` into its own credential record. Every
+    half-configured state must fail closed: a declared role silently ignored
+    would land the tenant's usage on the deployment's bill.
+    """
+
+    async def test_a_declared_role_carries_the_minted_external_id(
+        self, tenant_backend: SSMClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A role-bearing tenant verifies to a credential with the stored ExternalId.
+
+        Ref: stdapi/tenant_keys.py:_aws_credential
+             https://docs.aws.amazon.com/IAM/latest/UserGuide/confused-deputy.html
+        """
+        monkeypatch.setattr(SETTINGS, "tenant_aws_credentials", True)
+        key_id = "r" + "0" * 15
+        role = "arn:aws:iam::210987654321:role/stdapi-tenant"
+        key = await _declare_and_mint(tenant_backend, key_id, aws_role_arn=role)
+        secret_item = await get_item("TENANT", f"secret#{key_id}")
+        assert secret_item is not None
+        external_id = secret_item["external_id"]
+        assert isinstance(external_id, str)
+        assert external_id
+
+        tenant = await verify_tenant_key(key)
+        assert tenant.aws_credential is not None
+        assert tenant.aws_credential.role_arn == role
+        assert tenant.aws_credential.external_id == external_id
+
+    async def test_a_tenant_without_a_role_carries_no_credential(
+        self, tenant_backend: SSMClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A plain tenant record yields no AWS credential.
+
+        Ref: stdapi/tenant_keys.py:_aws_credential
+        """
+        monkeypatch.setattr(SETTINGS, "tenant_aws_credentials", True)
+        key = await _declare_and_mint(tenant_backend, "p" + "0" * 15)
+        assert (await verify_tenant_key(key)).aws_credential is None
+
+    async def test_a_declared_role_with_the_feature_off_fails_closed(
+        self, tenant_backend: SSMClient
+    ) -> None:
+        """A role declared while tenant_aws_credentials is off refuses the key.
+
+        503 and loud, never a silent fallback to the deployment's account:
+        the operator must align the record and the setting.
+
+        Ref: stdapi/tenant_keys.py:_aws_credential
+        """
+        key = await _declare_and_mint(
+            tenant_backend,
+            "o" + "0" * 15,
+            aws_role_arn="arn:aws:iam::210987654321:role/stdapi-tenant",
+        )
+        with pytest.raises(FeatureUnavailableError):
+            await verify_tenant_key(key)
+
+    async def test_a_malformed_role_arn_fails_closed(
+        self, tenant_backend: SSMClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A role attribute that is not an IAM role ARN refuses the key.
+
+        Ref: stdapi/tenant_keys.py:_aws_credential
+        """
+        monkeypatch.setattr(SETTINGS, "tenant_aws_credentials", True)
+        key = await _declare_and_mint(
+            tenant_backend, "m" + "0" * 15, aws_role_arn="not-an-arn"
+        )
+        with pytest.raises(FeatureUnavailableError):
+            await verify_tenant_key(key)
+
+    async def test_a_missing_external_id_fails_closed_then_backfills(
+        self, tenant_backend: SSMClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A credential record predating the feature is refused, then backfilled.
+
+        The refusal covers the up-to-a-minute window before the reconciliation
+        mints the ExternalId; afterwards the key verifies with it.
+
+        Ref: stdapi/tenant_keys.py:_backfill_external_id
+        """
+        monkeypatch.setattr(SETTINGS, "tenant_aws_credentials", True)
+        key_id = "b" + "0" * 15
+        role = "arn:aws:iam::210987654321:role/stdapi-tenant"
+        key = await _declare_and_mint(tenant_backend, key_id, aws_role_arn=role)
+        # Rebuild the pre-#154 record shape: same secret, no ExternalId.
+        secret_item = await get_item("TENANT", f"secret#{key_id}")
+        assert secret_item is not None
+        await put_item(
+            {
+                name: value
+                for name, value in secret_item.items()
+                if name != "external_id"
+            }
+        )
+        tenant_keys._CACHE.clear()  # noqa: SLF001
+
+        with pytest.raises(FeatureUnavailableError):
+            await verify_tenant_key(key)
+
+        await reconcile_tenant_keys()
+        tenant_keys._CACHE.clear()  # noqa: SLF001
+        tenant = await verify_tenant_key(key)
+        assert tenant.aws_credential is not None
+        assert tenant.aws_credential.role_arn == role
+        backfilled = await get_item("TENANT", f"secret#{key_id}")
+        assert backfilled is not None
+        assert tenant.aws_credential.external_id == backfilled["external_id"]
+
+    async def test_the_backfill_never_rewrites_an_existing_external_id(
+        self, tenant_backend: SSMClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reconciling again keeps the ExternalId a tenant already trusts.
+
+        A rewritten value would break the trust policy the tenant wrote it
+        into, revoking the credential from the outside.
+
+        Ref: stdapi/tenant_keys.py:_backfill_external_id
+        """
+        monkeypatch.setattr(SETTINGS, "tenant_aws_credentials", True)
+        key_id = "s" + "0" * 15
+        await _declare_and_mint(
+            tenant_backend,
+            key_id,
+            aws_role_arn="arn:aws:iam::210987654321:role/stdapi-tenant",
+        )
+        before = await get_item("TENANT", f"secret#{key_id}")
+        assert before is not None
+        await reconcile_tenant_keys()
+        after = await get_item("TENANT", f"secret#{key_id}")
+        assert after is not None
+        assert after["external_id"] == before["external_id"]
+
+
+class TestReconciliationLifecycle:
+    """The background loop, and the failures that must never reach a caller.
+
+    Minting runs off the request path, so every failure in it is reported and
+    absorbed: a loop that dies, or a startup that fails, would leave newly
+    declared tenants without a key for the life of the process.
+
+    Ref: stdapi/tenant_keys.py:_reconcile_loop
+         stdapi/tenant_keys.py:initialize_tenant_keys
+    """
+
+    async def test_the_loop_starts_once_and_stops_on_close(
+        self, tenant_backend: SSMClient
+    ) -> None:
+        """A second start joins the running loop instead of doubling the writes."""
+        del tenant_backend
+        open_tenant_key_reconciliation()
+        task = tenant_keys._RECONCILE_TASK  # noqa: SLF001
+        try:
+            open_tenant_key_reconciliation()
+            assert task is not None
+            assert tenant_keys._RECONCILE_TASK is task  # noqa: SLF001
+        finally:
+            await close_tenant_key_reconciliation()
+
+        assert task is not None
+        assert task.cancelled()
+        assert tenant_keys._RECONCILE_TASK is None  # noqa: SLF001
+
+    async def test_the_loop_survives_a_failing_pass(
+        self, tenant_backend: SSMClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unreachable table pauses minting, it does not end it."""
+        del tenant_backend
+        passes = 0
+        second = Event()
+
+        async def _failing() -> None:
+            nonlocal passes
+            passes += 1
+            if passes >= 2:
+                second.set()
+            detail = "the table is unreachable"
+            raise TableUnavailableError(detail)
+
+        monkeypatch.setattr(tenant_keys, "_RECONCILE_INTERVAL", 0.0)
+        monkeypatch.setattr(tenant_keys, "reconcile_tenant_keys", _failing)
+        open_tenant_key_reconciliation()
+        try:
+            await wait_for(second.wait(), 5.0)
+            task = tenant_keys._RECONCILE_TASK  # noqa: SLF001
+            assert task is not None
+            assert not task.done()
+        finally:
+            await close_tenant_key_reconciliation()
+
+    async def test_a_refused_delivery_is_reported_and_never_raised(
+        self, tenant_backend: SSMClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing Parameter Store permission leaves a tenant keyless, loudly."""
+        from stdapi.monitoring import log_error_details  # noqa: PLC0415
+
+        warnings: list[object] = []
+
+        def _spy(
+            *detail: object, level: str | None = None, status: int | None = None
+        ) -> None:
+            if level == "warning":
+                warnings.extend(detail)
+            log_error_details(*detail, level=level, status=status)  # type: ignore[arg-type]
+
+        async def _denied(**_kwargs: object) -> None:
+            raise ClientError(
+                {"Error": {"Code": "AccessDeniedException", "Message": "denied"}},
+                "PutParameter",
+            )
+
+        monkeypatch.setattr(tenant_keys, "log_error_details", _spy)
+        monkeypatch.setattr(tenant_backend, "put_parameter", _denied)
+        await put_item(_tenant_item("k" + "1" * 15))
+
+        await reconcile_tenant_keys()
+
+        assert await get_item("TENANT", "secret#k" + "1" * 15) is None
+        assert any("could not be minted" in str(warning) for warning in warnings)
+
+    async def test_an_unreachable_table_at_startup_only_warns(
+        self, tenant_backend: SSMClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A table a moment away from existing must not turn into an outage."""
+        del tenant_backend
+
+        async def _unreachable() -> None:
+            detail = "the table is unreachable"
+            raise TableUnavailableError(detail)
+
+        monkeypatch.setattr(tenant_keys, "reconcile_tenant_keys", _unreachable)
+        start_event: EventLog = {"type": "start", "level": "info"}  # type: ignore[typeddict-item]
+
+        await initialize_tenant_keys(start_event)
+
+        assert "server_warnings" in start_event
 
 
 @pytest.mark.gateway("Amazon DynamoDB has no upstream-vendor equivalent")
