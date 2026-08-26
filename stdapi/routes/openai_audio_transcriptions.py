@@ -1,6 +1,6 @@
 """OpenAI-compatible Audio Transcription API implementation."""
 
-from typing import TYPE_CHECKING, Annotated, cast
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
@@ -27,6 +27,7 @@ from stdapi.types.openai_audio import (
     TranscriptionCreateResponse,
     TranscriptionDiarized,
     TranscriptionInclude,
+    TranscriptionStreamEvent,
     TranscriptionTextDeltaEvent,
     TranscriptionTextDoneEvent,
 )
@@ -67,25 +68,26 @@ async def _merge_form_list[T: str](
     Returns:
         The combined list in bare-then-alias order, or None if both are empty.
     """
-    alias = cast("list[T]", (await http_request.form()).getlist(f"{name}[]"))
+    alias: list[T] = (await http_request.form()).getlist(f"{name}[]")  # type: ignore[assignment]
     merged = [*(bare or []), *alias]
     return merged or None
 
 
 async def _guarded_transcript_events(
-    event_stream: AsyncGenerator[
-        TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent
-    ],
-) -> AsyncGenerator[TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent]:
+    event_stream: AsyncGenerator[TranscriptionStreamEvent],
+) -> AsyncGenerator[TranscriptionStreamEvent]:
     """Buffer a transcription stream and guardrail the final transcript.
 
     Events are withheld until the terminal done event so a blocking guardrail
     intervention surfaces as a regular HTTP error before the SSE response
-    starts. When the guardrail only masks content, the buffered deltas are
-    replaced by a single delta carrying the masked transcript.
+    starts. When the guardrail only masks content, the buffered events are
+    replaced by a single delta carrying the masked transcript: a speaker segment
+    repeats the text it labels, so keeping the segments would hand back exactly
+    what the guardrail took out.
 
     Args:
-        event_stream: Generator yielding transcription delta and done events.
+        event_stream: Generator yielding transcription delta, segment and done
+            events.
 
     Yields:
         The buffered events, with text replaced when the guardrail masked it.
@@ -107,17 +109,15 @@ async def _guarded_transcript_events(
 
 
 async def _transcript_audio_sse(
-    event_stream: AsyncGenerator[
-        TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent
-    ],
+    event_stream: AsyncGenerator[TranscriptionStreamEvent],
 ) -> AsyncGenerator[JSONServerSentEvent]:
     """Generate Server-Sent Events for real-time audio transcription streaming.
 
     Args:
-        event_stream: Generator yielding TranscriptionTextDeltaEvent or TranscriptionTextDoneEvent objects
+        event_stream: Generator yielding transcription delta, segment and done events
 
     Yields:
-        JSONServerSentEvent: SSE events with transcript.text.delta and transcript.text.done events
+        JSONServerSentEvent: SSE events with transcript.text.delta, transcript.text.segment and transcript.text.done events
     """
     async for event in event_stream:
         yield json_sse(None, event)
@@ -142,7 +142,8 @@ async def _transcript_audio_sse(
         "or a stream of SSE events.\n\n"
         "**Extended output format (beyond original OpenAI API):**\n"
         "- **`diarized_json`**: Speaker diarization — returns labelled segments identifying "
-        "which speaker said what, with timestamps.\n\n"
+        "which speaker said what, with timestamps. With `stream=true` each segment arrives "
+        "as its own `transcript.text.segment` event.\n\n"
         "**Find compatible models:** Call `search_models` with `route=openai_audio_transcription` "
         "to discover model IDs that support speech-to-text."
     ),
@@ -281,7 +282,8 @@ async def create_transcription(
             description=(
                 "Transcript output format.\n"
                 "`srt`, `vtt`, `verbose_json` and `diarized_json` need a model that "
-                "produces timestamps, such as `amazon.transcribe`."
+                "produces timestamps, such as `amazon.transcribe`.\n"
+                "`srt` and `vtt` cannot be combined with `stream=true`."
             )
         ),
     ] = "json",
@@ -319,7 +321,11 @@ async def create_transcription(
         Form(
             description=(
                 "If set to true, the model response data will be streamed to the client as it is generated using "
-                "server-sent events."
+                "server-sent events.\n"
+                "Emits `transcript.text.delta` events then `transcript.text.done`, "
+                "plus a `transcript.text.segment` event per speaker segment with "
+                "`response_format=diarized_json` on a model that labels speakers, "
+                "such as `amazon.transcribe`."
             )
         ),
     ] = False,
@@ -372,12 +378,14 @@ async def create_transcription(
         prompt: Optional style guidance for the model. Supported by Bedrock
             models (e.g. Mistral Voxtral); rejected by ``amazon.transcribe``.
         chunking_strategy: Controls how the audio is cut into chunks. `auto` only is supported on this implementation.
-        response_format: Output format: `json`, `text`, `srt`, `verbose_json`, `vtt`, or `diarized_json`. The timestamped formats need a model that produces timestamps.
+        response_format: Output format: `json`, `text`, `srt`, `verbose_json`, `vtt`, or `diarized_json`. The timestamped formats need a model that produces timestamps; `srt` and `vtt` cannot be streamed.
         timestamp_granularities: For `verbose_json` only; `word` and/or `segment`. A bare form value may also carry a comma-separated list.
         include: Additional information to include in the transcription response. `logprobs` only works with response_format set to `json`.
         temperature: Sampling temperature. Supported by Bedrock models
             (e.g. Mistral Voxtral); rejected by ``amazon.transcribe``.
-        stream: Whether to stream partial results via Server-Sent Events.
+        stream: Whether to stream partial results via Server-Sent Events, with a
+            ``transcript.text.segment`` event per speaker segment when
+            ``diarized_json`` is requested from a model that labels speakers.
         known_speaker_names: Optional list of known speaker names. Accepted but ignored: diarization degrades to generic speaker labels.
         known_speaker_references: Optional list of audio references for known speakers. Accepted but ignored: diarization degrades to generic speaker labels.
 

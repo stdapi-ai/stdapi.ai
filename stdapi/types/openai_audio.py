@@ -21,9 +21,6 @@ AudioSubtitleFormat = Literal["srt", "vtt"]
 #: Subtitle formats for transcription/translation responses
 SUBTITLE_FORMATS: set[AudioSubtitleFormat] = {"srt", "vtt"}
 
-#: Formats a streamed transcription cannot express (deltas only, no cues/timings)
-UNSTREAMABLE_FORMATS: set[str] = {*SUBTITLE_FORMATS, "diarized_json"}
-
 #: OpenAI voices and matching gender (True for Female, False elsewhere)
 OPENAI_VOICES_FEMALE: dict[str, bool] = {
     "alloy": True,
@@ -76,6 +73,29 @@ class TranscriptionTextDeltaEvent(BaseModelResponse):
     logprobs: list[Logprob] | None = Field(
         default=None,
         description="Log probabilities of the delta; included only if requested.",
+    )
+    segment_id: str | None = Field(
+        default=None,
+        description="Identifier of the `transcript.text.segment` event this delta "
+        "belongs to; present only on a diarized stream.",
+    )
+
+
+# Ref: openai.types.audio.transcription_text_segment_event.TranscriptionTextSegmentEvent
+class TranscriptionTextSegmentEvent(BaseModelResponse):
+    """Streaming speaker-labelled segment event for diarized transcriptions."""
+
+    id: str = Field(description="Unique segment identifier.")
+    end: float = Field(ge=0, description="End timestamp of the segment in seconds.")
+    speaker: str = Field(
+        description="Speaker label: sequential capital letters (`A`, `B`, ...) "
+        "in the order the speakers are first heard, rolling over to `AA`, `AB`, "
+        "... past 26 speakers."
+    )
+    start: float = Field(ge=0, description="Start timestamp of the segment in seconds.")
+    text: str = Field(description="Transcript text for this segment.")
+    type: Literal["transcript.text.segment"] = Field(
+        description="Event type. Always `transcript.text.segment`."
     )
 
 
@@ -130,6 +150,14 @@ class TranscriptionTextDoneEvent(BaseModelResponse):
     usage: UsageTokens | None = Field(
         default=None, description="Usage statistics for token-billed models."
     )
+
+
+# Ref: openai.types.audio.transcription_stream_event.TranscriptionStreamEvent
+TranscriptionStreamEvent = (
+    TranscriptionTextDeltaEvent
+    | TranscriptionTextSegmentEvent
+    | TranscriptionTextDoneEvent
+)
 
 
 # Ref: openai.types.audio.transcription.UsageDuration
@@ -239,8 +267,9 @@ class TranscriptionDiarizedSegment(BaseModelResponse):
     id: str = Field(description="Unique segment identifier.")
     end: float = Field(ge=0, description="End timestamp of the segment in seconds.")
     speaker: str = Field(
-        description="Speaker label: matches `known_speaker_names[]` if provided, "
-        "otherwise sequential capital letters (`A`, `B`, ...)."
+        description="Speaker label: sequential capital letters (`A`, `B`, ...) "
+        "in the order the speakers are first heard, rolling over to `AA`, `AB`, "
+        "... past 26 speakers."
     )
     start: float = Field(ge=0, description="Start timestamp of the segment in seconds.")
     text: str = Field(description="Transcript text for this segment.")
@@ -463,7 +492,9 @@ class TranscriptionCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=
         "Should match the audio language.",
     )
     response_format: AudioResponseFormat = Field(
-        default="json", description="Transcript output format."
+        default="json",
+        description="Transcript output format. "
+        "`srt` and `vtt` cannot be combined with `stream=true`.",
     )
     temperature: float | None = Field(
         default=None,
@@ -478,7 +509,11 @@ class TranscriptionCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=
     )
     stream: bool | None = Field(
         default=False,
-        description="Stream the response as server-sent events as it is generated.",
+        description="Stream the response as server-sent events as it is generated: "
+        "`transcript.text.delta` events then `transcript.text.done`, plus a "
+        "`transcript.text.segment` event per speaker segment with "
+        "`response_format=diarized_json` on a model that labels speakers, such "
+        "as `amazon.transcribe`.",
     )
 
     @model_validator(mode="after")
@@ -487,7 +522,7 @@ class TranscriptionCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=
 
         Rules implemented:
         - timestamp_granularities may only be used with response_format == 'verbose_json'.
-        - subtitle formats ('srt'/'vtt') and 'diarized_json' cannot be streamed.
+        - subtitle formats ('srt'/'vtt') cannot be streamed.
         - chunking_strategy other than 'auto' is unsupported.
         - known_speaker_names/known_speaker_references are accepted and ignored:
           diarization degrades to generic speaker labels instead of failing the request.
@@ -510,20 +545,13 @@ class TranscriptionCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=
         if self.timestamp_granularities and self.response_format != "verbose_json":
             msg = "timestamp_granularities requires response_format='verbose_json'."
             raise ValueError(msg)
-        if self.stream and self.response_format in UNSTREAMABLE_FORMATS:
-            # A streamed transcription carries text deltas and nothing else, so
-            # each of these asks for a deliverable the stream cannot hold: cues
-            # for the subtitle formats, speaker attribution for diarized_json.
-            wanted = (
-                "speaker-labelled segments"
-                if self.response_format == "diarized_json"
-                else "subtitles"
-            )
+        if self.stream and self.response_format in SUBTITLE_FORMATS:
             msg = (
                 f"response_format='{self.response_format}' is not available with "
-                f"stream=true: a streamed transcription carries text only, so the "
-                f"{wanted} would be missing. Request it without streaming, or "
-                "stream with response_format='text' or 'json'."
+                "stream=true: a streamed transcription carries no subtitle cues. "
+                "Request the subtitles without streaming, or stream with "
+                "response_format='text', 'json', or 'diarized_json' on a model "
+                "that labels speakers."
             )
             raise ValueError(msg)
         if isinstance(self.chunking_strategy, dict) or self.chunking_strategy != "auto":

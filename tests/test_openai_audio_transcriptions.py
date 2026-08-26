@@ -11,25 +11,39 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from aws_sdk_transcribe_streaming.models import (
+    Alternative,
+    Item,
+    ItemType,
+    Result,
+    Transcript,
+    TranscriptEvent,
+)
 from openai import BadRequestError, NotFoundError, OpenAI
 from pydantic import ValidationError
 from starlette.responses import Response
 
-from stdapi import usage
+from stdapi import aws_bedrock, usage
 from stdapi.api_errors import ApiError, UnsupportedModelError, UnsupportedParameterError
 from stdapi.config import SETTINGS, _Settings
 from stdapi.input_file import InputFile
+from stdapi.models.audio._default import AudioModel as DefaultAudioModel
+from stdapi.models.audio.amazon_nova_sonic import AudioModel as NovaSonicAudioModel
 from stdapi.models.audio.amazon_transcribe import (
     AudioModel,
     _build_transcription_job_params,
+    _stream_input,
+    _StreamedTranscript,
     _TranscribeExtraParams,
     _TranscribeLanguageIdSetting,
 )
 from stdapi.routes import openai_audio_transcriptions
 from stdapi.types.openai_audio import (
+    AudioResponseFormat,
     TranscriptionCreateParams,
     TranscriptionTextDeltaEvent,
     TranscriptionTextDoneEvent,
+    TranscriptionTextSegmentEvent,
 )
 from tests.conftest import logged_usage_entries
 
@@ -37,6 +51,9 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Iterator
 
     from starlette.testclient import TestClient as TestClientType
+
+    from stdapi.types.openai_audio import TranscriptionStreamEvent
+    from stdapi.usage import UsageLogEntry
 
 from stdapi.models.audio.amazon_transcribe import TranscribeJobData
 
@@ -732,6 +749,74 @@ class TestAudioTranscriptions:
         assert "A" in {segment.speaker for segment in segments}, (
             "Speaker labels must start at 'A': "
             f"{sorted({segment.speaker for segment in segments})}"
+        )
+
+    @pytest.mark.slow
+    def test_streaming_diarized_json_emits_segment_events(
+        self,
+        openai_client: OpenAI,
+        sample_audio_file: bytes,
+        transcription_diarize_model: str,
+    ) -> None:
+        """``diarized_json`` + ``stream=true`` emits ``transcript.text.segment`` events.
+
+        A speaker is attached only once a segment is finalized, so the segments
+        are asserted as a sequence -- each one before the terminal
+        ``transcript.text.done`` -- rather than against a fixed count, which is
+        the recognizer's decision. Speaker labels are the sequential capital
+        letters the API publishes, in first-appearance order, so the first
+        speaker heard is always ``A``.
+
+        Ref: https://developers.openai.com/api/docs/guides/speech-to-text
+             openai.types.audio.transcription_text_segment_event.TranscriptionTextSegmentEvent
+             stdapi/models/audio/amazon_transcribe.py:AudioModel.stt_stream
+        """
+        events = list(
+            openai_client.audio.transcriptions.create(
+                file=("test.wav", io.BytesIO(sample_audio_file)),
+                model=transcription_diarize_model,
+                response_format="diarized_json",
+                language="en",
+                stream=True,
+            )
+        )
+
+        assert events, "No streaming events received"
+        assert events[-1].type == "transcript.text.done", (
+            f"Stream does not end with the done event: {[e.type for e in events]}"
+        )
+        segments = [
+            event for event in events if event.type == "transcript.text.segment"
+        ]
+        assert segments, (
+            "diarized_json streamed no speaker segments: "
+            f"{[event.type for event in events]}"
+        )
+
+        speakers: list[str] = []
+        starts: list[float] = []
+        for segment in segments:
+            assert segment.id, "Segment carries no identifier"
+            assert segment.text.strip(), f"Empty segment text: {segment!r}"
+            assert segment.start >= 0
+            assert segment.end >= segment.start
+            assert segment.speaker.isalpha(), (
+                f"Speaker label is not a letter label: {segment.speaker!r}"
+            )
+            assert segment.speaker.isupper(), (
+                f"Speaker label is not capitalised: {segment.speaker!r}"
+            )
+            speakers.append(segment.speaker)
+            starts.append(segment.start)
+
+        segment_ids = [segment.id for segment in segments]
+        assert len(set(segment_ids)) == len(segment_ids), (
+            f"Duplicate segment ids: {segment_ids}"
+        )
+        assert starts == sorted(starts), f"Segment starts are not ordered: {starts}"
+        assert "A" in speakers, f"Speaker labels must start at 'A': {sorted(speakers)}"
+        assert speakers[0] == "A", (
+            f"The first speaker heard must be labelled 'A': {speakers}"
         )
 
     @pytest.mark.slow
@@ -1508,7 +1593,8 @@ class TestTranscribeStreamTermination:
     Exercised on the path a request naming no language takes, where no live
     session can be opened: one delta per transcript of the finished job,
     followed by the terminating done event whose ``text`` is those deltas
-    joined by a space.
+    concatenated -- each delta after the first carries the space that separates
+    it from the previous one, so a client appending them gets the done text.
 
     Ref: https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create
          stdapi/models/audio/amazon_transcribe.py:AudioModel.stt_stream
@@ -1517,7 +1603,11 @@ class TestTranscribeStreamTermination:
     async def test_done_event_concatenates_every_delta(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Two transcripts produce two deltas and one done event holding both."""
+        """Two transcripts produce two deltas and one done event holding both.
+
+        Nothing here is diarized, so no delta may name a segment: a
+        ``segment_id`` would point at an event the stream never sends.
+        """
 
         async def _fake_transcribe(
             _self: AudioModel, *_args: object, **_kwargs: object
@@ -1543,10 +1633,506 @@ class TestTranscribeStreamTermination:
         assert all(
             isinstance(event, TranscriptionTextDeltaEvent) for event in deltas
         ), events
-        assert [event.delta for event in deltas] == ["hello", "world"]  # type: ignore[union-attr]
+        assert [event.delta for event in deltas] == ["hello", " world"]  # type: ignore[union-attr]
         assert isinstance(done, TranscriptionTextDoneEvent)
         assert done.type == "transcript.text.done"
         assert done.text == "hello world"
+        assert "".join(event.delta for event in deltas) == done.text  # type: ignore[union-attr]
+        assert [event.segment_id for event in deltas] == [None, None]  # type: ignore[union-attr]
+
+
+def _stream_result(
+    *,
+    result_id: str,
+    partial: bool,
+    transcript: str,
+    items: list[tuple[str, str | None, float, float]] = [],  # noqa: B006
+) -> TranscriptEvent:
+    """Build one ``TranscriptEvent`` the way a live session delivers it.
+
+    Args:
+        result_id: Identifier Transcribe restates a result under.
+        partial: Whether the result may still change.
+        transcript: The alternative's whole transcript.
+        items: ``(content, speaker, start, end)`` tuples; a content of ``"."``,
+            ``","`` or ``"?"`` is sent as a punctuation item.
+
+    Returns:
+        The event, shaped as the streaming SDK models it.
+    """
+    return TranscriptEvent(
+        transcript=Transcript(
+            results=[
+                Result(
+                    result_id=result_id,
+                    is_partial=partial,
+                    start_time=items[0][2] if items else 0.0,
+                    end_time=items[-1][3] if items else 0.0,
+                    alternatives=[
+                        Alternative(
+                            transcript=transcript,
+                            items=[
+                                Item(
+                                    content=content,
+                                    speaker=speaker,
+                                    start_time=start,
+                                    end_time=end,
+                                    type=(
+                                        ItemType.PUNCTUATION
+                                        if content in {".", ",", "?"}
+                                        else ItemType.PRONUNCIATION
+                                    ),
+                                )
+                                for content, speaker, start, end in items
+                            ],
+                        )
+                    ],
+                )
+            ]
+        )
+    )
+
+
+@pytest.mark.local
+class TestStreamedDiarization:
+    """A live session's finalized results become speaker-labelled segments.
+
+    Amazon Transcribe labels the speaker of each word rather than of a result,
+    and a single finalized result routinely spans two speakers, so a result is
+    cut into runs of consecutive words sharing a speaker. Punctuation carries no
+    speaker of its own and stays with the run it terminates.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/dg/diarization.html
+         stdapi/models/audio/amazon_transcribe.py:_StreamedTranscript
+    """
+
+    def test_one_result_is_cut_into_one_run_per_speaker(self) -> None:
+        """Consecutive words of one speaker become one part, ending at the last word."""
+        transcript = _StreamedTranscript(diarize=True)
+
+        parts = list(
+            transcript.read(
+                _stream_result(
+                    result_id="r1",
+                    partial=False,
+                    transcript="Hello there. Hi",
+                    items=[
+                        ("Hello", "0", 0.0, 0.5),
+                        ("there", "0", 0.5, 1.0),
+                        (".", None, 1.0, 1.0),
+                        ("Hi", "2", 1.2, 1.6),
+                    ],
+                )
+            )
+        )
+
+        assert [(part.speaker, part.text) for part in parts] == [
+            ("0", "Hello there."),
+            ("2", "Hi"),
+        ]
+        assert parts[0].start == 0.0
+        assert parts[0].end == 1.0
+        assert parts[1].start == 1.2
+
+    def test_a_language_written_without_spaces_keeps_its_spacing(self) -> None:
+        """Words are cut out of the transcript, so none of them gains a space.
+
+        Japanese is written without word separators while Transcribe still
+        attributes one word at a time, so a segment rebuilt by joining those
+        words would read differently from the same recording transcribed
+        without ``stream=true``.
+
+        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/supported-languages.html
+        """
+        transcript = _StreamedTranscript(diarize=True)
+
+        parts = list(
+            transcript.read(
+                _stream_result(
+                    result_id="r1",
+                    partial=False,
+                    transcript="こんにちは元気ですか",
+                    items=[
+                        ("こんにちは", "0", 0.0, 0.6),
+                        ("元気", "0", 0.6, 1.0),
+                        ("ですか", "1", 1.0, 1.4),
+                    ],
+                )
+            )
+        )
+
+        assert [(part.speaker, part.text) for part in parts] == [
+            ("0", "こんにちは元気"),
+            ("1", "ですか"),
+        ]
+
+    def test_words_the_transcript_does_not_restate_are_still_joined(self) -> None:
+        """When the two disagree, the words are spaced rather than dropped.
+
+        The transcript is the spacing reference, so a result whose words cannot
+        be found in it falls back to separating them, which is what every
+        language the segments are asked for in practice does.
+        """
+        transcript = _StreamedTranscript(diarize=True)
+
+        parts = list(
+            transcript.read(
+                _stream_result(
+                    result_id="r1",
+                    partial=False,
+                    transcript="[redacted]",
+                    items=[
+                        ("Hello", "0", 0.0, 0.5),
+                        ("there", "0", 0.5, 1.0),
+                        (".", None, 1.0, 1.0),
+                    ],
+                )
+            )
+        )
+
+        assert [(part.speaker, part.text) for part in parts] == [("0", "Hello there.")]
+
+    def test_a_partial_result_yields_nothing(self) -> None:
+        """Nothing is emitted until Transcribe marks the result final.
+
+        The speaker of a segment cannot be revised once sent, which holds only
+        because a result is read out exactly once, when it stops changing.
+        """
+        transcript = _StreamedTranscript(diarize=True)
+
+        assert not list(
+            transcript.read(
+                _stream_result(
+                    result_id="r1",
+                    partial=True,
+                    transcript="Hello",
+                    items=[("Hello", "0", 0.0, 0.5)],
+                )
+            )
+        )
+
+    def test_a_result_without_speakers_still_yields_its_text(self) -> None:
+        """A finalized result Transcribe labelled nobody in stays a plain part."""
+        transcript = _StreamedTranscript(diarize=True)
+
+        parts = list(
+            transcript.read(
+                _stream_result(result_id="r1", partial=False, transcript="Hello there")
+            )
+        )
+
+        assert [(part.speaker, part.text) for part in parts] == [(None, "Hello there")]
+
+    def test_speaker_labels_are_off_unless_diarization_was_asked_for(self) -> None:
+        """Without diarization a finalized result stays one unlabelled part."""
+        transcript = _StreamedTranscript()
+
+        parts = list(
+            transcript.read(
+                _stream_result(
+                    result_id="r1",
+                    partial=False,
+                    transcript="Hello there",
+                    items=[("Hello", "0", 0.0, 0.5), ("there", "2", 0.5, 1.0)],
+                )
+            )
+        )
+
+        assert [(part.speaker, part.text) for part in parts] == [(None, "Hello there")]
+
+    def test_diarized_json_opens_the_session_with_speaker_labels(self) -> None:
+        """``diarized_json`` is what turns speaker partitioning on, nothing else.
+
+        Ref: stdapi/models/audio/amazon_transcribe.py:_stream_input
+        """
+        assert (
+            _stream_input({"language_code": "en-US"}, None, diarize=True)
+        ).show_speaker_label is True
+        assert (
+            _stream_input({"language_code": "en-US"}, None, diarize=False)
+        ).show_speaker_label is False
+
+
+@pytest.mark.local
+class TestJobFallbackDiarization:
+    """A streamed request no live session can serve still emits its segments.
+
+    Whether a live session is available depends on the deployment and on the
+    language the caller named, which the caller cannot see, so both paths answer
+    ``diarized_json`` the same way: the job path emits every segment it already
+    holds before the terminal done event.
+
+    Ref: https://developers.openai.com/api/docs/guides/speech-to-text
+         stdapi/models/audio/amazon_transcribe.py:AudioModel._job_transcript
+    """
+
+    @staticmethod
+    async def _events(
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> tuple[list[TranscriptionStreamEvent], list[UsageLogEntry]]:
+        """Stream ``diarized_json`` from a job whose speakers are already known.
+
+        The conversation goes back to its first speaker, which is the only way
+        to tell a label that is reused from one handed out again, and it runs
+        past the 15-second billing minimum so the recorded seconds are the
+        job's own rather than the floor.
+
+        Returns:
+            The events the stream produced, and the usage it recorded.
+        """
+
+        async def _fake_transcribe(
+            _self: AudioModel, *_args: object, **_kwargs: object
+        ) -> dict[str, Any]:
+            return {
+                "transcripts": [{"transcript": "hello world again"}],
+                "audio_segments": [
+                    {
+                        "id": 0,
+                        "start_time": "0.0",
+                        "end_time": "1.0",
+                        "transcript": "hello",
+                        "speaker_label": "spk_1",
+                    },
+                    {
+                        "id": 1,
+                        "start_time": "1.0",
+                        "end_time": "2.0",
+                        "transcript": "world",
+                        "speaker_label": "spk_0",
+                    },
+                    {
+                        "id": 2,
+                        "start_time": "2.0",
+                        "end_time": "20.0",
+                        "transcript": "again",
+                        "speaker_label": "spk_1",
+                    },
+                ],
+            }
+
+        monkeypatch.setattr(AudioModel, "_transcribe", _fake_transcribe)
+        usage_token = usage.init_usage()
+        try:
+            events = [
+                event
+                async for event in AudioModel("amazon.transcribe").stt_stream(
+                    InputFile("data:audio/wav;base64,AAAA"),
+                    "diarized_json",
+                    logprobs=False,
+                )
+            ]
+            return events, usage.usage_log_entries()
+        finally:
+            usage.USAGE.reset(usage_token)
+
+    async def test_every_segment_is_emitted_before_the_done_event(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Each audio segment becomes one delta and one segment event."""
+        events, _ = await self._events(monkeypatch)
+
+        assert [event.type for event in events] == [
+            "transcript.text.delta",
+            "transcript.text.segment",
+            "transcript.text.delta",
+            "transcript.text.segment",
+            "transcript.text.delta",
+            "transcript.text.segment",
+            "transcript.text.done",
+        ]
+        assert events[-1].text == "hello world again"  # type: ignore[union-attr]
+
+    async def test_the_deltas_rebuild_the_final_transcript(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Concatenating the deltas gives the done text, separators included.
+
+        Ref: openai.types.audio.transcription_text_delta_event.TranscriptionTextDeltaEvent
+        """
+        events, _ = await self._events(monkeypatch)
+
+        deltas = [
+            event for event in events if isinstance(event, TranscriptionTextDeltaEvent)
+        ]
+        done = events[-1]
+        assert isinstance(done, TranscriptionTextDoneEvent)
+        assert [event.delta for event in deltas] == ["hello", " world", " again"]
+        assert "".join(event.delta for event in deltas) == done.text
+        assert [event.segment_id for event in deltas] == ["seg_0", "seg_1", "seg_2"]
+
+    async def test_speaker_labels_follow_first_appearance(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The first speaker heard is ``A``, and hearing it again reuses ``A``."""
+        events, _ = await self._events(monkeypatch)
+        segments = [
+            event
+            for event in events
+            if isinstance(event, TranscriptionTextSegmentEvent)
+        ]
+
+        assert [segment.speaker for segment in segments] == ["A", "B", "A"]
+        assert [segment.id for segment in segments] == ["seg_0", "seg_1", "seg_2"]
+        assert [(segment.start, segment.end) for segment in segments] == [
+            (0.0, 1.0),
+            (1.0, 2.0),
+            (2.0, 20.0),
+        ]
+
+    async def test_the_transcribed_audio_is_billed_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A streamed diarized request records the job's seconds exactly once.
+
+        The segments are read out of the same job payload the duration comes
+        from, so emitting them must not skip -- nor repeat -- the recording.
+        The 20 seconds are above the 15-second billing minimum, so a lost
+        duration reads as a different number rather than as the floor, and a
+        second recording doubles it (repeated recordings sum into one entry).
+
+        Ref: stdapi/usage.py:record_transcribe_usage
+        """
+        _, entries = await self._events(monkeypatch)
+
+        transcribe = [entry for entry in entries if entry["service"] == "transcribe"]
+        assert len(transcribe) == 1, f"expected one transcribe entry: {entries}"
+        assert transcribe[0]["model"] == "amazon.transcribe"
+        assert transcribe[0]["input_seconds"] == 20
+
+
+@pytest.mark.local
+@pytest.mark.usefixtures("request_log")
+class TestNonStreamedDiarizationRefusesMaskedText:
+    """Without ``stream=true``, a masking guardrail fails ``diarized_json``.
+
+    The segments are built from the raw job payload rather than from the
+    guarded text, so answering with a masked transcript would hand back exactly
+    what the guardrail took out. Only the streamed request can carry the masked
+    text, because it drops the segments to do it.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html
+         stdapi/models/audio/amazon_transcribe.py:AudioModel._format_transcription_response
+    """
+
+    @staticmethod
+    def _stub_masking_guardrail(monkeypatch: pytest.MonkeyPatch) -> None:
+        """Configure a guardrail whose only intervention anonymizes a word."""
+
+        class _GuardrailClient:
+            @staticmethod
+            async def apply_guardrail(**_params: object) -> dict[str, Any]:
+                return {
+                    "action": "GUARDRAIL_INTERVENED",
+                    "assessments": [
+                        {
+                            "sensitiveInformationPolicy": {
+                                "piiEntities": [
+                                    {"type": "EMAIL", "action": "ANONYMIZED"}
+                                ]
+                            }
+                        }
+                    ],
+                    "outputs": [{"text": "hello {EMAIL}"}],
+                }
+
+        monkeypatch.setattr(
+            aws_bedrock, "get_client", lambda _service, _region: _GuardrailClient()
+        )
+        monkeypatch.setattr(
+            aws_bedrock,
+            "GUARDRAIL_CONFIG_VAR",
+            SimpleNamespace(
+                get=lambda _default=None: {
+                    "guardrailIdentifier": "gr123",
+                    "guardrailVersion": "1",
+                }
+            ),
+        )
+
+    @staticmethod
+    async def _transcribe(
+        monkeypatch: pytest.MonkeyPatch, response_format: AudioResponseFormat
+    ) -> Any:  # noqa: ANN401
+        """Transcribe the stubbed job through the masking guardrail."""
+        _stub_transcribe(monkeypatch)
+        TestNonStreamedDiarizationRefusesMaskedText._stub_masking_guardrail(monkeypatch)
+        usage_token = usage.init_usage()
+        try:
+            return await AudioModel("amazon.transcribe").stt(
+                InputFile("data:audio/wav;base64,AAAA"), response_format, logprobs=False
+            )
+        finally:
+            usage.USAGE.reset(usage_token)
+
+    async def test_diarized_json_fails_with_content_filter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The masked transcript is refused rather than returned with segments."""
+        with pytest.raises(ApiError) as exc_info:
+            await self._transcribe(monkeypatch, "diarized_json")
+
+        assert exc_info.value.status == 400
+        assert exc_info.value.code == "content_filter"
+
+    async def test_json_still_answers_with_the_masked_transcript(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The same guardrail masks the plain format, which carries no segments.
+
+        Asserted beside the refusal so the difference is pinned as the format's,
+        not as the guardrail declining to mask at all.
+        """
+        response = await self._transcribe(monkeypatch, "json")
+
+        assert not isinstance(response, str | Response)
+        assert response.text == "hello {EMAIL}"
+
+
+@pytest.mark.local
+class TestStreamedDiarizationIsRefusedWithoutSpeakers:
+    """A model that cannot label speakers refuses ``diarized_json`` when streaming.
+
+    Speaker labels are the whole point of the format, so a model with none to
+    give answers a clean 400 instead of a 200 carrying an unlabelled transcript.
+
+    Ref: https://developers.openai.com/api/docs/guides/speech-to-text
+         stdapi/models/audio/__init__.py:AudioModelBase._validate_streamed_diarization
+    """
+
+    @staticmethod
+    def _audio() -> InputFile:
+        """Return a minimal upload; no model reaches it before refusing."""
+        return InputFile("data:audio/wav;base64,AAAA")
+
+    async def test_a_bedrock_speech_model_refuses(self) -> None:
+        """The Converse-backed default model refuses before any backend call.
+
+        The refusal names the model that does label speakers, so the caller can
+        act on it without going back to the catalog.
+        """
+        stream = DefaultAudioModel("mistral.voxtral-mini-3b-2507").stt_stream(
+            self._audio(), "diarized_json", logprobs=False
+        )
+
+        with pytest.raises(ApiError) as exc_info:
+            await anext(stream)
+
+        assert exc_info.value.status == 400
+        assert "diarized_json" in str(exc_info.value)
+        assert "amazon.transcribe" in str(exc_info.value)
+
+    async def test_amazon_nova_sonic_refuses(self) -> None:
+        """Nova Sonic serves ``json``/``text`` only and says so."""
+        stream = NovaSonicAudioModel("amazon.nova-2-sonic-v1:0").stt_stream(
+            self._audio(), "diarized_json", logprobs=False
+        )
+
+        with pytest.raises(ApiError) as exc_info:
+            await anext(stream)
+
+        assert exc_info.value.status == 400
+        assert "diarized_json" in str(exc_info.value)
 
 
 @pytest.mark.local
@@ -1595,14 +2181,56 @@ class TestStreamingTranscriptionRoute:
         )
 
     @staticmethod
-    def _post_stream(app_client: TestClientType) -> Any:  # noqa: ANN401
+    def _stub_diarized_model(monkeypatch: pytest.MonkeyPatch) -> None:
+        """Serve the route from a model streaming a delta, a segment and a done."""
+
+        class _StubModel:
+            @staticmethod
+            async def stt_stream(
+                **_kwargs: object,
+            ) -> AsyncGenerator[
+                TranscriptionTextDeltaEvent
+                | TranscriptionTextSegmentEvent
+                | TranscriptionTextDoneEvent
+            ]:
+                yield TranscriptionTextDeltaEvent(
+                    delta="hello world",
+                    type="transcript.text.delta",
+                    segment_id="seg_0",
+                )
+                yield TranscriptionTextSegmentEvent(
+                    id="seg_0",
+                    start=0.0,
+                    end=1.5,
+                    speaker="A",
+                    text="hello world",
+                    type="transcript.text.segment",
+                )
+                yield TranscriptionTextDoneEvent(
+                    text="hello world", type="transcript.text.done"
+                )
+
+        async def _validate_model(*_args: object, **_kwargs: object) -> Any:  # noqa: ANN401
+            return SimpleNamespace(id="stub-speech-model")
+
+        monkeypatch.setattr(
+            openai_audio_transcriptions, "validate_model", _validate_model
+        )
+        monkeypatch.setattr(
+            openai_audio_transcriptions,
+            "get_audio_model",
+            lambda _model_id: _StubModel(),
+        )
+
+    @staticmethod
+    def _post_stream(app_client: TestClientType, response_format: str = "json") -> Any:  # noqa: ANN401
         """Post a streaming transcription request through the multipart path."""
         return app_client.post(
             "/v1/audio/transcriptions",
             files={"file": ("test.wav", io.BytesIO(b"fake"), "audio/wav")},
             data={
                 "model": "stub-speech-model",
-                "response_format": "json",
+                "response_format": response_format,
                 "stream": "true",
             },
         )
@@ -1634,6 +2262,9 @@ class TestStreamingTranscriptionRoute:
         ]
         assert [payload["delta"] for payload in payloads[:-1]] == ["hello ", "world"]
         assert payloads[-1]["text"] == "hello world"
+        assert not any("segment_id" in payload for payload in payloads), (
+            "segment_id belongs to a diarized stream only"
+        )
 
     def test_a_configured_guardrail_masks_the_streamed_transcript(
         self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
@@ -1668,6 +2299,106 @@ class TestStreamingTranscriptionRoute:
         ]
         assert payloads[0]["delta"] == "hello *****"
         assert payloads[-1]["text"] == "hello *****"
+        assert "world" not in response.text
+
+    def test_segment_events_reach_the_client(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A segment event is serialised with its speaker and timestamps intact.
+
+        The delta that belongs to it names the same ``segment_id``, which is how
+        a client correlates the two without matching their text.
+
+        Ref: openai.types.audio.transcription_text_segment_event.TranscriptionTextSegmentEvent
+             openai.types.audio.transcription_text_delta_event.TranscriptionTextDeltaEvent
+        """
+        self._stub_diarized_model(monkeypatch)
+
+        response = self._post_stream(app_client, "diarized_json")
+
+        assert response.status_code == 200
+        payloads = self._sse_payloads(response.text)
+        assert [payload["type"] for payload in payloads] == [
+            "transcript.text.delta",
+            "transcript.text.segment",
+            "transcript.text.done",
+        ]
+        assert payloads[0] == {
+            "delta": "hello world",
+            "type": "transcript.text.delta",
+            "segment_id": "seg_0",
+        }
+        assert payloads[1] == {
+            "id": "seg_0",
+            "start": 0.0,
+            "end": 1.5,
+            "speaker": "A",
+            "text": "hello world",
+            "type": "transcript.text.segment",
+        }
+
+    def test_a_speakerless_model_answers_an_error_rather_than_a_stream(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Refusing ``diarized_json`` reaches the client as HTTP 400, not as SSE.
+
+        The refusal is raised on the stream's first event, so it only stays an
+        HTTP status while that event is pulled before the response starts.
+
+        Ref: stdapi/models/audio/__init__.py:AudioModelBase._validate_streamed_diarization
+        """
+
+        async def _validate_model(*_args: object, **_kwargs: object) -> Any:  # noqa: ANN401
+            return SimpleNamespace(id="stub-speech-model")
+
+        monkeypatch.setattr(
+            openai_audio_transcriptions, "validate_model", _validate_model
+        )
+        monkeypatch.setattr(
+            openai_audio_transcriptions,
+            "get_audio_model",
+            lambda _model_id: DefaultAudioModel("mistral.voxtral-mini-3b-2507"),
+        )
+
+        response = self._post_stream(app_client, "diarized_json")
+
+        assert response.status_code == 400
+        assert response.headers["content-type"].startswith("application/json")
+        error = response.json()["error"]
+        assert "diarized_json" in error["message"]
+        assert "amazon.transcribe" in error["message"]
+
+    def test_a_masking_guardrail_withholds_the_segments(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A masked transcript is never followed by segments carrying the raw text.
+
+        Segments repeat the transcript, so a stream that masked the deltas and
+        kept the segments would hand the client exactly what the guardrail took
+        out.
+        """
+        self._stub_diarized_model(monkeypatch)
+
+        async def _mask(text: str, **_kwargs: object) -> str:
+            return text.replace("world", "*****")
+
+        monkeypatch.setattr(
+            openai_audio_transcriptions, "apply_guardrail_to_text", _mask
+        )
+        monkeypatch.setattr(
+            openai_audio_transcriptions,
+            "GUARDRAIL_CONFIG_VAR",
+            SimpleNamespace(get=lambda _default=None: {"guardrailIdentifier": "gr"}),
+        )
+
+        response = self._post_stream(app_client, "diarized_json")
+
+        assert response.status_code == 200
+        payloads = self._sse_payloads(response.text)
+        assert [payload["type"] for payload in payloads] == [
+            "transcript.text.delta",
+            "transcript.text.done",
+        ]
         assert "world" not in response.text
 
 

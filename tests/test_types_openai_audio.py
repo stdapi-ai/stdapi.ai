@@ -81,23 +81,20 @@ class TestTranscriptionCreateParamsKnownSpeaker:
 
 
 class TestTranscriptionCreateParamsStreamingSubtitles:
-    """Formats a stream cannot express are refused with ``stream=true``.
+    """Subtitle formats are refused with ``stream=true``; ``diarized_json`` is not.
 
-    The streaming path emits plain ``transcript.text.delta`` events and nothing
-    else, so each of these asks for something the stream cannot carry: ``srt`` and
-    ``vtt`` want cues, ``diarized_json`` wants speaker attribution. Accepting the
-    pair would answer 200 with plain text -- and still bill Amazon Transcribe for
-    the subtitle or diarization work whose output is then discarded -- so it is
-    refused up front. Speaker labels are the whole point of asking for
-    ``diarized_json``: silently returning an unlabelled transcript is a different
-    deliverable, not a degraded one.
+    A streamed transcription carries text events, so ``srt`` and ``vtt`` ask for
+    cues it has no event to hold: accepting the pair would answer 200 with plain
+    text, a payload the caller cannot parse as subtitles. ``diarized_json`` has
+    an event of its own -- ``transcript.text.segment`` -- so it is accepted here
+    and refused by the models that cannot label speakers.
 
     Ref: https://docs.aws.amazon.com/transcribe/latest/dg/subtitles.html
-         https://docs.aws.amazon.com/transcribe/latest/dg/diarization.html
+         https://developers.openai.com/api/docs/guides/speech-to-text
          stdapi/types/openai_audio.py:TranscriptionCreateParams
     """
 
-    @pytest.mark.parametrize("response_format", ["srt", "vtt", "diarized_json"])
+    @pytest.mark.parametrize("response_format", ["srt", "vtt"])
     def test_unstreamable_format_with_streaming_is_rejected(
         self, response_format: str
     ) -> None:
@@ -108,6 +105,17 @@ class TestTranscriptionCreateParamsStreamingSubtitles:
                 response_format=response_format,  # type: ignore[arg-type]
                 stream=True,
             )
+
+    def test_diarized_json_with_streaming_is_accepted(self) -> None:
+        """``diarized_json`` streams as ``transcript.text.segment`` events.
+
+        Ref: openai.types.audio.transcription_text_segment_event.TranscriptionTextSegmentEvent
+        """
+        params = TranscriptionCreateParams(
+            model="amazon.transcribe", response_format="diarized_json", stream=True
+        )
+        assert params.response_format == "diarized_json"
+        assert params.stream is True
 
     @pytest.mark.parametrize("response_format", ["srt", "vtt", "diarized_json"])
     def test_unstreamable_format_without_streaming_is_accepted(
