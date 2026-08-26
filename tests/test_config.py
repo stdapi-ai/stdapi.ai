@@ -463,7 +463,9 @@ class TestGuardrailSettingsCrossValidation:
     def test_both_set_is_accepted(self) -> None:
         """A complete identifier/version pair is accepted."""
         settings = _Settings(
-            aws_bedrock_guardrail_identifier="gr-123", aws_bedrock_guardrail_version="1"
+            aws_bedrock_guardrail_identifier="gr-123",
+            aws_bedrock_guardrail_version="1",
+            aws_bedrock_mantle_preferred_models=[],
         )
         assert settings.aws_bedrock_guardrail_identifier == "gr-123"
         assert settings.aws_bedrock_guardrail_version == "1"
@@ -483,6 +485,7 @@ class TestGuardrailSettingsCrossValidation:
             aws_bedrock_allow_guardrail_override=False,
             aws_bedrock_guardrail_identifier="gr-123",
             aws_bedrock_guardrail_version="1",
+            aws_bedrock_mantle_preferred_models=[],
         )
         assert settings.aws_bedrock_allow_guardrail_override is False
 

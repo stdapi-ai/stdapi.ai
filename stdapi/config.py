@@ -11,6 +11,7 @@ Key Components:
 
 import re
 from datetime import datetime
+from os import environ
 from typing import TYPE_CHECKING, Annotated, Literal, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
@@ -148,6 +149,12 @@ AWS_BEDROCK_MANTLE_REGIONS: frozenset[str] = frozenset(
         "us-west-2",
     }
 )
+
+#: Model IDs, or ID prefixes, served by Bedrock Mantle by default where both endpoints offer them.
+DEFAULT_MANTLE_PREFERRED_MODELS: tuple[str, ...] = ("openai.gpt-5.6",)
+
+#: Settings with a non-empty default whose documented way to clear it is an empty value.
+EMPTY_CLEARS: frozenset[str] = frozenset({"aws_bedrock_mantle_preferred_models"})
 
 #: Guardrail trace levels accepted wherever a guardrail is configured.
 GuardrailTrace = Literal["disabled", "enabled", "enabled_full"]
@@ -539,7 +546,8 @@ class _Settings(BaseSettings):
             "Grok, Google Gemma 4) become available on the chat completions, "
             "responses, messages and completions routes. Models available on both "
             "the classic bedrock-runtime endpoint and Mantle are served by "
-            "bedrock-runtime unless listed in aws_bedrock_mantle_preferred_models.\n\n"
+            "bedrock-runtime unless listed in aws_bedrock_mantle_preferred_models, "
+            "which defaults to the OpenAI GPT-5.6 family.\n\n"
             "When Bedrock Mantle is unreachable or the IAM role lacks "
             "bedrock-mantle permissions, Mantle models are simply not listed and "
             "a warning is logged at startup.\n\n"
@@ -570,14 +578,26 @@ class _Settings(BaseSettings):
     )
 
     aws_bedrock_mantle_preferred_models: Annotated[list[str], NoDecode] = Field(
-        default=[],
+        default=list(DEFAULT_MANTLE_PREFERRED_MODELS),
         description=(
             "Model IDs (or ID prefixes) served by Amazon Bedrock Mantle even when "
             "also available on the classic bedrock-runtime endpoint. Useful to "
-            "leverage Mantle's independent throughput quotas or native response "
-            "storage for selected models.\n\n"
+            "leverage Mantle's independent throughput quotas, native response "
+            "storage or built-in server tools for selected models.\n\n"
+            "Defaults to the OpenAI GPT-5.6 family ('openai.gpt-5.6'), whose web "
+            "search and code interpreter tools Amazon Bedrock serves on Mantle "
+            "alone. Mantle has no cross-Region inference profiles, so those "
+            "models are billed at the In-Region rate: exactly 10% above the "
+            "Global cross-Region rate bedrock-runtime serves them at. Amazon "
+            "Bedrock Guardrails and token counting do not apply to them either. "
+            "Set this to an empty value to serve every dual-homed model on "
+            "bedrock-runtime.\n\n"
+            "An explicit value replaces the default entirely: repeat "
+            "'openai.gpt-5.6' to keep it.\n\n"
+            "Cannot be combined with Amazon Bedrock Guardrails: guardrails do not "
+            "apply to Mantle-served requests.\n\n"
             "Environment variable format: Comma-separated string\n"
-            "Example: 'anthropic.claude-haiku-4-5,openai.gpt-oss'"
+            "Example: 'openai.gpt-5.6,anthropic.claude-haiku-4-5'"
         ),
     )
 
@@ -2157,6 +2177,31 @@ class _Settings(BaseSettings):
         extra = cls._parse_comma_list(value) if isinstance(value, str) else value
         return default_dropped | frozenset(extra)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _keep_explicit_empty(cls, data: object) -> object:
+        """Restore an environment value that is empty on purpose.
+
+        ``env_ignore_empty`` reads ``FOO=`` as unset, which is right for a
+        setting whose default is already empty and wrong for one documented as
+        cleared that way: the default would silently reapply. Variable names are
+        matched without regard to case, as the environment source matches them.
+
+        Args:
+            data: The raw input pydantic is about to validate.
+
+        Returns:
+            The same input, with each explicitly emptied setting set to [].
+        """
+        if isinstance(data, dict):
+            for name in EMPTY_CLEARS - data.keys():
+                declared = [
+                    value for key, value in environ.items() if key.lower() == name
+                ]
+                if declared and not any(declared):
+                    data[name] = []
+        return data
+
     @field_validator(
         "aws_bedrock_knowledge_base_ids",
         "aws_bedrock_mantle_regions",
@@ -2839,6 +2884,37 @@ class _Settings(BaseSettings):
                 raise ValueError(msg)
             seen_prefixes[prefix] = field_name
 
+    def _validate_mantle_user_role_identity(self) -> None:
+        """Refuse routing a model to Mantle where the per-end-user role must apply.
+
+        A Mantle request is signed from the server's own credentials, so the
+        per-end-user role -- and the policy conditions written on it -- is never
+        assumed for a model routed there. Same shape as the guardrail rule: a
+        request-time policy the transport cannot honor is refused rather than
+        silently degraded. Disabled Mantle, or no region serving it, makes the
+        preference a no-op, hence legal.
+
+        Raises:
+            ValueError: If a preferred model would be routed away from the role.
+        """
+        if (
+            self.aws_bedrock_mantle_enabled
+            and self.aws_bedrock_mantle_regions
+            and self.aws_bedrock_mantle_preferred_models
+            and self.aws_bedrock_user_role_require_identity
+        ):
+            preferred = ", ".join(self.aws_bedrock_mantle_preferred_models)
+            msg = (
+                "aws_bedrock_mantle_preferred_models is incompatible with "
+                "aws_bedrock_user_role_require_identity: a Bedrock Mantle request "
+                "is signed with the server's own credentials, so the models it "
+                f"routes there ({preferred}) never run under the end user's role. "
+                "Set aws_bedrock_mantle_preferred_models to an empty value to "
+                "serve every dual-homed model on bedrock-runtime under that role, "
+                "or disable aws_bedrock_user_role_require_identity."
+            )
+            raise ValueError(msg)
+
     def _validate_vector_stores(self) -> None:
         """Ensure the Vector Stores API is configured completely or not at all.
 
@@ -2960,6 +3036,7 @@ class _Settings(BaseSettings):
                 "(guardrails do not apply to Mantle-served requests)."
             )
             raise ValueError(msg)
+
         if not self.aws_bedrock_mantle_regions:
             # Regions with no bedrock-mantle endpoint have no DNS record at all,
             # so probing them warns forever about a permanent fact. An explicit
@@ -2969,6 +3046,41 @@ class _Settings(BaseSettings):
                 for region in self.aws_bedrock_regions
                 if region in AWS_BEDROCK_MANTLE_REGIONS
             ]
+
+        # An alias guardrail only conflicts with the preference when the alias
+        # actually targets a model the preference routes to Mantle: the same
+        # prefix match request time uses (stdapi/models/__init__.py:is_mantle_preferred).
+        mantle_alias_guardrail = any(
+            isinstance(alias, ModelAliasConfig)
+            and alias.guardrail_identifier
+            and any(
+                alias.model == entry or alias.model.startswith(entry)
+                for entry in self.aws_bedrock_mantle_preferred_models
+            )
+            for alias in self.model_aliases.values()
+        )
+
+        # Routing a model to Mantle removes its guardrail with nothing at request
+        # time able to report it, so the combination is refused rather than
+        # degraded. Disabled Mantle, or no region actually serving Mantle, makes
+        # the preference a no-op, hence legal.
+        if (
+            self.aws_bedrock_mantle_enabled
+            and self.aws_bedrock_mantle_regions
+            and self.aws_bedrock_mantle_preferred_models
+            and (self.aws_bedrock_guardrail_identifier or mantle_alias_guardrail)
+        ):
+            preferred = ", ".join(self.aws_bedrock_mantle_preferred_models)
+            msg = (
+                "aws_bedrock_mantle_preferred_models is incompatible with Amazon "
+                "Bedrock Guardrails: guardrails do not apply to Mantle-served "
+                f"requests, so the models it routes there ({preferred}) would be "
+                "served unfiltered. Set aws_bedrock_mantle_preferred_models to an "
+                "empty value to serve every dual-homed model on bedrock-runtime "
+                "with the guardrail applied, or remove the guardrail "
+                "configuration."
+            )
+            raise ValueError(msg)
 
         if (
             self.aws_bedrock_user_role_require_identity
@@ -2980,6 +3092,8 @@ class _Settings(BaseSettings):
                 "requests that identify no end user would attribute nothing."
             )
             raise ValueError(msg)
+
+        self._validate_mantle_user_role_identity()
 
         if not self.aws_transcribe_s3_bucket:
             self.aws_transcribe_s3_bucket = self.aws_s3_bucket
