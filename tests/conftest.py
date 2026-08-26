@@ -58,7 +58,7 @@ finally:
 faulthandler.register(signal.SIGUSR1, all_threads=True)
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator, Iterator
+    from collections.abc import AsyncIterator, Callable, Generator, Iterator
     from typing import Any
 
     from pluggy import Result as _PluggyResult
@@ -557,6 +557,7 @@ _LIVE_FIXTURES = frozenset(
         "live_guardrail",
         "live_server",
         "openai_client",
+        "sandbox_dynamodb_table",
         "test_client",
     }
 )
@@ -1906,6 +1907,103 @@ def cohere_client_v1(
     return _build_cohere_client(
         cohere.Client, use_official_api, server_url, test_client, api_key
     )
+
+
+@pytest.fixture(scope="session")
+def moto_dynamodb_endpoint() -> Iterator[str]:
+    """Serve a local Amazon DynamoDB stand-in, on the loopback interface only.
+
+    Server mode rather than moto's patching decorators: those rewrite
+    ``botocore``'s own HTTP layer, which ``aiobotocore`` replaces, so the
+    gateway's real client is the one thing they cannot intercept. Against a
+    socket, the client under test is exactly the client that runs in
+    production.
+
+    Yields:
+        The stand-in's endpoint URL.
+
+    Ref: https://docs.getmoto.org/en/latest/docs/server_mode.html
+         stdapi/aws_dynamodb.py
+    """
+    from moto.server import ThreadedMotoServer  # noqa: PLC0415
+
+    # 127.0.0.1, never the default 0.0.0.0: a test double must not be reachable
+    # from outside the machine running the suite.
+    server = ThreadedMotoServer(ip_address="127.0.0.1", port=0, verbose=False)
+    server.start()
+    host, port = server.get_host_and_port()
+    try:
+        yield f"http://{host}:{port}"
+    finally:
+        server.stop()
+
+
+@pytest.fixture
+async def dynamodb_table(
+    moto_dynamodb_endpoint: str, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[str]:
+    """Bind ``stdapi.aws_dynamodb`` to a fresh table in the local stand-in.
+
+    The client is installed in the real connection pool and the table name in
+    the real settings, so the module under test resolves both exactly as it
+    does at runtime. The table is per test, which is what lets these run
+    concurrently without an ``xdist_group``.
+
+    Yields:
+        The table name.
+
+    Ref: stdapi/aws.py:get_client
+         stdapi/aws_dynamodb.py:verify_table
+    """
+    from stdapi.aws import _CLIENTS  # noqa: PLC0415
+    from stdapi.config import SETTINGS  # noqa: PLC0415
+
+    table = f"stdapi-test-{token_hex(8)}"
+    region = SETTINGS.aws_bedrock_regions[0]
+    session = get_session()
+    async with session.create_client(
+        "dynamodb",
+        region_name=region,
+        endpoint_url=moto_dynamodb_endpoint,
+        # The stand-in verifies no signature, but botocore refuses to sign
+        # without credentials, and the environment may legitimately have none.
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",  # noqa: S106 - a local stand-in, not a secret
+    ) as client:
+        await client.create_table(
+            TableName=table,
+            AttributeDefinitions=[
+                {"AttributeName": "pk", "AttributeType": "S"},
+                {"AttributeName": "sk", "AttributeType": "S"},
+            ],
+            KeySchema=[
+                {"AttributeName": "pk", "KeyType": "HASH"},
+                {"AttributeName": "sk", "KeyType": "RANGE"},
+            ],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        await client.update_time_to_live(
+            TableName=table,
+            TimeToLiveSpecification={"Enabled": True, "AttributeName": "expires_at"},
+        )
+        monkeypatch.setitem(_CLIENTS, "dynamodb", {region: client})
+        monkeypatch.setattr(SETTINGS, "aws_dynamodb_table", table)
+        yield table
+
+
+@pytest.fixture(scope="session")
+def sandbox_dynamodb_table() -> str:
+    """Name the real DynamoDB table the sandbox deployment created.
+
+    Returns:
+        The table name.
+
+    Ref: stdapi/config.py:_Settings.aws_dynamodb_table
+    """
+    table = getenv("AWS_DYNAMODB_TABLE")
+    if not table:
+        pytest.skip("AWS_DYNAMODB_TABLE is not set: no sandbox DynamoDB table")
+    return table
 
 
 #: Failure-output substrings marking a model unavailable on the live backend.
