@@ -32,28 +32,25 @@ jobs:
           - key: pricing
             name: Compare DEFAULT_MODEL_PRICES against its vendor sources
             tests: tests/test_pricing_drift.py
+            # One test in this file reads the live AWS Price List API, which
+            # this lane has no credentials for, so it always skips -- and a skip
+            # is what marks the leg incomplete. Running it would make the leg
+            # red every week and bury a genuine detector break in that noise.
+            # Drop this once the OIDC role granting pricing:GetProducts exists.
+            deselect: tests/test_pricing_drift.py::test_the_price_list_publishes_no_rate_the_tables_hand_copy
           - key: docs-assets
             name: Compare the pinned documentation assets against npm
             tests: tests/test_docs_assets_drift.py
+            # Nothing to drop: every test of this leg runs without credentials.
+            deselect: ""
     env:
       FORCE_COLOR: "1"
-      # Configuration is validated on import and refuses an environment naming
-      # no region, so without one the detectors die before comparing anything.
-      # The value is a placeholder: almost everything this lane compares is read
-      # from a public vendor page rather than from that region. No credentials
-      # are configured, and blocking the metadata endpoint and the credential
-      # files turns a stray call into an immediate failure instead of an
-      # unattended job that hangs until it times out.
-      #
-      # One comparison is not a page read: the pricing detector also checks that
-      # the AWS Price List API still publishes no rate the hand-copied tables
-      # carry, over a signed call. Credential-free, that call cannot be made and
-      # the test skips, so this leg records `incomplete` and opens a tracking
-      # issue instead of reporting a detector that never ran as green. Running
-      # it here needs an OIDC role this repository may assume, limited to
-      # `pricing:GetProducts`, and `id-token: write` on this job; that role does
-      # not exist yet, and minting a token for one that does not is a privilege
-      # this lane is deliberately without.
+      # Configuration validation requires a region; the detectors read public
+      # vendor pages rather than call this region, and blocking the credential
+      # files and IMDS makes a stray signed call fail fast instead of hanging.
+      # The one signed call this lane would otherwise make -- the Price List
+      # API check -- is deselected above until an OIDC role scoped to
+      # `pricing:GetProducts` exists.
       AWS_EC2_METADATA_DISABLED: "true"
       AWS_CONFIG_FILE: /dev/null
       AWS_SHARED_CREDENTIALS_FILE: /dev/null
@@ -73,33 +70,57 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --group test
 
-      # -m drift scopes the run to the lane's one live test, leaving the same
-      # file's offline classifier tests (already covered by the Test workflow)
-      # out of this schedule. A source that cannot be read is reported in the
-      # captured output but never turns this step red. A detector that ran but
-      # skipped compared nothing, which is not a pass either -- it is the
-      # outcome that used to report green while doing none of the work, so -rs
-      # names in the report which test did not execute and why.
-      # Every matrix value reaches the shell through the environment, never
-      # through an expansion the runner splices into the script itself.
-      - name: Run the detector
+      # -m drift scopes both commands below to the lane's live tests; matrix
+      # values reach the shell only through the environment, never spliced into
+      # the script. Collection runs first and alone so a module that cannot be
+      # imported is recorded as `collect-error`, not dressed up as a comparison
+      # failure; this step also opens report/status.txt, so its own failure is
+      # captured too.
+      - name: Check that the detector collects
         env:
           TESTS: ${{ matrix.tests }}
+          DESELECT: ${{ matrix.deselect }}
         run: |
           set -o pipefail
           mkdir -p report
-          if pytest --drift -m drift "$TESTS" -q -rs \
-              --junit-xml=report/junit.xml \
-              | tee report/drift-report.txt; then
-            if grep -q "<skipped" report/junit.xml; then
-              echo incomplete > report/status.txt
+          echo collect-error > report/status.txt
+          pytest --drift -m drift "$TESTS" ${DESELECT:+--deselect "$DESELECT"} \
+            -q --collect-only 2>&1 \
+            | tee report/drift-report.txt
+
+      # A source that cannot be read is reported and does not fail the step by
+      # itself, as long as at least one other source was compared; a run where
+      # nothing could be read skips and is recorded as `incomplete`. Everything
+      # else is told apart by pytest's own exit code: 1 is the comparison itself
+      # failing, anything else is the detector failing to run at all. -rs names
+      # in the report which test did not execute and why.
+      - name: Run the detector
+        env:
+          TESTS: ${{ matrix.tests }}
+          DESELECT: ${{ matrix.deselect }}
+        run: |
+          set -o pipefail
+          echo run-error > report/status.txt
+          pytest --drift -m drift "$TESTS" ${DESELECT:+--deselect "$DESELECT"} \
+            -q -rs --junit-xml=report/junit.xml 2>&1 \
+            | tee report/drift-report.txt && rc=0 || rc=$?
+          case "$rc" in
+            0)
+              if grep -q "<skipped" report/junit.xml; then
+                echo incomplete > report/status.txt
+                exit 1
+              fi
+              echo pass > report/status.txt
+              ;;
+            1)
+              echo fail > report/status.txt
               exit 1
-            fi
-            echo pass > report/status.txt
-          else
-            echo fail > report/status.txt
-            exit 1
-          fi
+              ;;
+            *)
+              echo run-error > report/status.txt
+              exit 1
+              ;;
+          esac
 
       - name: Upload the report
         if: always()
@@ -127,44 +148,82 @@ jobs:
       matrix:
         include:
           - key: pricing
-            label: price-drift
-            description: >-
+            subject: the DEFAULT_MODEL_PRICES detector
+            drift_label: price-drift
+            drift_description: >-
               DEFAULT_MODEL_PRICES no longer matches its vendor source
-            title: >-
+            drift_title: >-
               Price drift: DEFAULT_MODEL_PRICES no longer matches its vendor
               source
+            broken_label: price-drift-detector
+            broken_description: >-
+              The DEFAULT_MODEL_PRICES detector did not compare its vendor
+              sources
           - key: docs-assets
-            label: docs-asset-drift
-            description: >-
+            subject: the pinned documentation asset detector
+            drift_label: docs-asset-drift
+            drift_description: >-
               The pinned Swagger UI or ReDoc release is no longer what upstream
               publishes
-            title: >-
+            drift_title: >-
               Asset drift: the documentation pages pin a superseded Swagger UI
               or ReDoc release
+            broken_label: docs-asset-drift-detector
+            broken_description: >-
+              The documentation asset detector did not compare its upstream
+              releases
     steps:
       - name: Download the report
         uses: actions/download-artifact@v4
         with:
           name: drift-report-${{ matrix.key }}
 
-      - name: Read whether this detector is the one that failed
-        id: status
+      # A detector that crashed, could not be imported or never ran has found
+      # nothing about a vendor, so it is filed as its own kind of work under its
+      # own label: reading a lane failure as a drift finding is what sends
+      # somebody to check a price that was never compared.
+      - name: Choose what this detector's outcome is filed as
+        id: issue
+        env:
+          SUBJECT: ${{ matrix.subject }}
+          DRIFT_LABEL: ${{ matrix.drift_label }}
+          DRIFT_DESCRIPTION: ${{ matrix.drift_description }}
+          DRIFT_TITLE: ${{ matrix.drift_title }}
+          BROKEN_LABEL: ${{ matrix.broken_label }}
+          BROKEN_DESCRIPTION: ${{ matrix.broken_description }}
         run: |
-          if [ "$(cat status.txt)" = fail ]; then
-            echo "failed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "failed=false" >> "$GITHUB_OUTPUT"
-          fi
+          status=$(cat status.txt 2>/dev/null || echo run-error)
+          file=true
+          label=$BROKEN_LABEL
+          description=$BROKEN_DESCRIPTION
+          title="Drift lane broken: $SUBJECT failed to run"
+          case "$status" in
+            pass)
+              file=false
+              ;;
+            fail)
+              label=$DRIFT_LABEL
+              description=$DRIFT_DESCRIPTION
+              title=$DRIFT_TITLE
+              ;;
+          esac
+          {
+            echo "status=$status"
+            echo "file=$file"
+            echo "label=$label"
+            echo "description=$description"
+            echo "title=$title"
+          } >> "$GITHUB_OUTPUT"
 
       # Idempotent by construction: the label is created once (--force makes a
       # second run a no-op) and then used to find an already-open issue, so a
       # second consecutive failing run comments instead of opening a duplicate.
       - name: Ensure the tracking label exists
-        if: steps.status.outputs.failed == 'true'
+        if: steps.issue.outputs.file == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          LABEL: ${{ matrix.label }}
-          DESCRIPTION: ${{ matrix.description }}
+          LABEL: ${{ steps.issue.outputs.label }}
+          DESCRIPTION: ${{ steps.issue.outputs.description }}
         run: |
           gh label create "$LABEL" \
             --repo "$GITHUB_REPOSITORY" \
@@ -173,21 +232,80 @@ jobs:
             --force
 
       - name: Open or update the tracking issue
-        if: steps.status.outputs.failed == 'true'
+        if: steps.issue.outputs.file == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          LABEL: ${{ matrix.label }}
-          TITLE: ${{ matrix.title }}
+          LABEL: ${{ steps.issue.outputs.label }}
+          TITLE: ${{ steps.issue.outputs.title }}
+          STATUS: ${{ steps.issue.outputs.status }}
+          ARTIFACT: drift-report-${{ matrix.key }}
         run: |
+          # An issue body over 65,536 characters is refused outright, and a
+          # captured failure can be orders of magnitude larger than the finding
+          # it reports. The whole report is already this run's artifact, so the
+          # body keeps its head and its tail, the two places the finding and the
+          # summary line are, and says where the rest is. The budgets are counted
+          # in bytes, which is never fewer than characters, and spent whole lines
+          # at a time wherever the lines fit inside them.
+          max_bytes=60000
+          head_bytes=40000
+          tail_bytes=20000
+          # The capture carries the colouring the workflow log asks for, which
+          # an issue body renders as noise. `-rs` also prints skip reasons, and
+          # a skip raised from a botocore exception quotes it verbatim, so an
+          # account ID or a role ARN can reach what is a public issue: both are
+          # redacted here rather than trusted not to appear.
+          sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' \
+              -e 's#arn:aws[a-z-]*:[^[:space:]"'"'"']*#<arn redacted>#g' \
+              -e 's/\([^[:alnum:].]\|^\)[0-9]\{12\}\([^[:alnum:].]\|$\)/\1<account redacted>\2/g' \
+              drift-report.txt > report.txt
+          # A detector that died before writing anything still has to arrive as
+          # a readable issue rather than as a body holding only the header.
+          if [ ! -s report.txt ]; then
+            printf 'The detector produced no output at all.\n' > report.txt
+          fi
+          size=$(wc -c < report.txt)
+          body=report.txt
+          if [ "$size" -gt "$max_bytes" ]; then
+            LC_ALL=C awk -v budget="$head_bytes" \
+              '{ total += length + 1 } total <= budget' report.txt > head.txt
+            tac report.txt \
+              | LC_ALL=C awk -v budget="$tail_bytes" \
+                '{ total += length + 1 } total <= budget' \
+              | tac > tail.txt
+            # A single line longer than its budget leaves that end empty; fall
+            # back to a raw byte cut and drop the partial UTF-8 character it can
+            # leave at the seam.
+            [ -s head.txt ] || head -c "$head_bytes" report.txt \
+              | LC_ALL=C sed '$ s/[\xc0-\xff][\x80-\xbf]*$//' > head.txt
+            [ -s tail.txt ] || tail -c "$tail_bytes" report.txt \
+              | LC_ALL=C sed '1 s/^[\x80-\xbf]*//' > tail.txt
+            {
+              cat head.txt
+              printf '\n[... %s of %s bytes omitted here; the whole report is the "%s" artifact of %s, kept for 14 days ...]\n\n' \
+                "$(( size - $(wc -c < head.txt) - $(wc -c < tail.txt) ))" \
+                "$size" "$ARTIFACT" "$RUN_URL"
+              cat tail.txt
+            } > truncated.txt
+            body=truncated.txt
+          fi
+          # Fenced so pytest output and third-party-derived text (vendor page
+          # fragments in a Finding's detail) render as literal text rather than
+          # being interpreted as Markdown -- an angle-bracketed token, an
+          # @mention or a spoofed header would otherwise reach a public issue live.
+          {
+            echo "Recorded by the scheduled drift workflow as \`$STATUS\`:"
+            echo "$RUN_URL"
+            echo
+            echo '~~~~~~~~~~'
+            cat "$body"
+            echo
+            echo '~~~~~~~~~~'
+          } > issue-body.txt
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" \
             --label "$LABEL" --state open --json number \
             --jq '.[0].number')
-          {
-            echo "Detected by the scheduled drift workflow: $RUN_URL"
-            echo
-            cat drift-report.txt
-          } > issue-body.txt
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" \
               --body-file issue-body.txt
