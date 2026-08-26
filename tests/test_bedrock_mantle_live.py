@@ -29,6 +29,7 @@ import pytest
 from anthropic import BadRequestError as AnthropicBadRequestError
 from openai import BadRequestError, NotFoundError, OpenAI
 
+from tests._helpers import red_png_b64
 from tests.conftest import logged_usage_entries
 
 #: The learned-routing caches are process-global, so these tests must not be split
@@ -48,6 +49,12 @@ _GEMMA3 = "google.gemma-3-4b-it"
 
 #: Mantle model serving Chat Completions and Responses on /openai/v1 (native store).
 _GEMMA4 = "google.gemma-4-e2b"
+
+#: Mantle-only vision-language model on the legacy /v1 surface.
+_QWEN3_VL = "qwen.qwen3-vl-235b-a22b-instruct"
+
+#: Mantle-only text-only Qwen model, offered without the IMAGE input modality.
+_QWEN3_TEXT = "qwen.qwen3-32b"
 
 #: Responses-only reasoning model (expensive; keep usage minimal).
 _LUNA = "openai.gpt-5.6-luna"
@@ -122,6 +129,27 @@ class TestMantleModelDiscovery:
         if sibling in MANTLE_MODELS:
             assert not is_mantle_served(sibling)
 
+    @pytest.mark.usefixtures("local_test_client")
+    def test_vision_model_is_published_with_image_input(
+        self, listed_model_ids: set[str]
+    ) -> None:
+        """The vision model is offered with image input, not as a text-only model.
+
+        This model is offered here only, so nothing else corrects what its
+        family declares: offered as text-only, a client filtering the catalog
+        for image support never selects it, while the same weights offered
+        elsewhere on Bedrock are listed as reading images.
+
+        Ref: https://developers.openai.com/api/reference/resources/models
+             stdapi/models/chat/_mantle/qwen_vl.py:ChatModel
+        """
+        from stdapi.models import MANTLE_MODELS  # noqa: PLC0415
+
+        model = MANTLE_MODELS.get(_QWEN3_VL)
+        assert model is not None, f"{_QWEN3_VL} is not offered by this deployment"
+        assert _QWEN3_VL in listed_model_ids
+        assert model.input_modalities == ["TEXT", "IMAGE"]
+
 
 class TestMantleChatCompletions:
     """Chat Completions served by Mantle (passthrough and conversions).
@@ -150,6 +178,99 @@ class TestMantleChatCompletions:
         assert response.usage.total_tokens >= (
             response.usage.prompt_tokens + response.usage.completion_tokens
         )
+
+    def test_qwen_vision_accepts_an_image_part(self, openai_client: OpenAI) -> None:
+        """An image content part reaches a vision model served here and is read.
+
+        The catalog offers this model for image input, so the request behind
+        that offer has to work: the image travels inline in the request body,
+        which is where a model that cannot read one refuses it. The same prompt
+        is sent again without the picture because a dropped image part is
+        otherwise invisible: asked for a colour it cannot see, the model guesses
+        one, so the billed prompt tokens are what a guess cannot fake. The
+        picture is a locally built 1x1 red PNG, which this model reads rather
+        than rejecting as undersized (measured 2026-08-26: "Red" at 87 prompt
+        tokens with it, "White" at 21 without); "orange" is accepted because
+        models disagree on naming a single saturated pixel.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+             stdapi/models/chat/_mantle/qwen_vl.py:ChatModel
+        """
+        prompt = "What is the color of this image? Reply in one word."
+        response = openai_client.chat.completions.create(
+            model=_QWEN3_VL,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{red_png_b64()}"
+                            },
+                        },
+                    ],
+                }
+            ],
+            max_completion_tokens=32,
+        )
+        without_image = openai_client.chat.completions.create(
+            model=_QWEN3_VL,
+            messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+            max_completion_tokens=32,
+        )
+
+        content = response.choices[0].message.content
+        assert content
+        assert any(color in content.lower() for color in ("red", "orange")), (
+            f"Expected the attached image to be read, got: {content!r}"
+        )
+        assert response.usage is not None
+        assert without_image.usage is not None
+        assert response.usage.prompt_tokens > without_image.usage.prompt_tokens, (
+            "the inlined image must be billed as prompt tokens"
+        )
+        assert response.usage.completion_tokens > 0
+
+    def test_qwen_text_only_refuses_an_image_part(self, openai_client: OpenAI) -> None:
+        """A Qwen model offered without image input refuses an image part cleanly.
+
+        The catalog offers the vision line only, and the sibling text models are
+        the reason: they answer an image part with a refusal rather than reading
+        it. The gateway does not pre-validate image input on this route, so the
+        refusal arrives from upstream and has to reach the client as a request
+        error rather than a bare 500. The envelope ``code`` is deliberately not
+        asserted: it is relayed from the upstream body, so pinning it makes a
+        rename upstream read as a gateway regression.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+             stdapi/models/chat/_mantle/open_weight.py:ChatModel
+        """
+        with pytest.raises(BadRequestError) as bad_request:
+            openai_client.chat.completions.create(
+                model=_QWEN3_TEXT,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Say OK."},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{red_png_b64()}"
+                                },
+                            },
+                        ],
+                    }
+                ],
+                max_completion_tokens=16,
+            )
+        assert bad_request.value.status_code == 400
+        body = bad_request.value.body
+        assert isinstance(body, dict)
+        assert body["type"] == "invalid_request_error"
+        assert "image" in body["message"].lower()
 
     def test_gemma4_openai_v1_surface(self, openai_client: OpenAI) -> None:
         """Chat completion passthrough works for a Mantle-only Gemma 4 model.

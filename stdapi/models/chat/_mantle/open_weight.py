@@ -16,13 +16,20 @@ if TYPE_CHECKING:
 
 
 class ChatModel(MantleChatModel):
-    """Open-weight Mantle chat model (e.g. ``qwen.qwen3-32b``)."""
+    """Open-weight Mantle chat model (e.g. ``qwen.qwen3-32b``).
+
+    The matcher excludes the Qwen vision-language line rather than leaving the
+    two patterns to matcher ordering: the catalog keeps whichever of two
+    matching patterns it reaches first while iterating an unordered set, so an
+    overlap publishes a capability that can change between restarts.
+    """
 
     __slots__ = ()
 
     #: Model ID matcher, regex pattern or string prefix
     MATCHER: ClassVar[Pattern[str]] = re_compile(
-        r"^(?:qwen|zai|mistral|deepseek|minimax|moonshotai|nvidia|writer)\."
+        r"^(?:zai|mistral|deepseek|minimax|moonshotai|nvidia|writer)\."
+        r"|^qwen\.(?!qwen[\d.]*-vl)"
         r"|^google\.gemma-3"
     )
 
