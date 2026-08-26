@@ -911,3 +911,35 @@ class TestRealTable:
             assert sum(outcomes) == 1
         finally:
             await delete_item(partition, "lease")
+
+    async def test_a_shared_model_cache_shard_fits_in_one_item(
+        self, sandbox_dynamodb: str
+    ) -> None:
+        """A full-size shard is accepted by the real service, not just the stand-in.
+
+        The stand-in enforces no item size, so the one number the shared model
+        cache cannot verify offline is that its shard size really does leave
+        room for the key, the attribute names and the item overhead inside
+        DynamoDB's 400 KB limit.
+
+        Ref: stdapi/models/_shared_cache.py:_SHARD_BYTES
+             https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html
+        """
+        from secrets import token_bytes, token_hex  # noqa: PLC0415
+
+        from stdapi.models._shared_cache import _SHARD_BYTES  # noqa: PLC0415
+
+        del sandbox_dynamodb
+        partition = item_key("MODELCACHE", f"test-{token_hex(8)}")
+        sort_key = item_key("shard", token_hex(8), "0000")
+        try:
+            assert await put_item(
+                {
+                    PARTITION_KEY: partition,
+                    SORT_KEY: sort_key,
+                    "data": token_bytes(_SHARD_BYTES),
+                    EXPIRES_AT_ATTRIBUTE: 2_000_000_000,
+                }
+            )
+        finally:
+            await delete_item(partition, sort_key)

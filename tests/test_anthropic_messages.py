@@ -3520,7 +3520,7 @@ class TestAnthropicMessagesUnknownModel:
             monkeypatch, "test.some-registered-model", "Registered Test Model"
         )
         monkeypatch.setattr(
-            _models_mod, "initialize_bedrock_models", AsyncMock(return_value=None)
+            _models_mod, "_refresh_bedrock_models", AsyncMock(return_value=False)
         )
 
     @pytest.mark.usefixtures("_offline_registry")

@@ -353,11 +353,11 @@ class TestListModelsCacheUnit:
 
     @pytest.fixture
     def catalog(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
-        """Drive the route from an injected catalogue and refresh flag.
+        """Drive the route from an injected catalogue and catalog generation.
 
         Returns:
             The mutable control dict: ``models`` (the catalogue the route reads)
-            and ``updated`` (what ``initialize_bedrock_models`` reports).
+            and ``generation`` (what ``catalog_generation`` reports).
         """
         control: dict[str, object] = {
             "models": {
@@ -370,22 +370,29 @@ class TestListModelsCacheUnit:
                     start_of_life_time=datetime(2025, 3, 4, tzinfo=UTC),
                 ),
             },
-            "updated": True,
+            "generation": 1,
         }
 
         async def _initialize() -> bool:
-            return bool(control["updated"])
+            return False
+
+        def _generation() -> int:
+            generation = control["generation"]
+            assert isinstance(generation, int)
+            return generation
 
         async def _details() -> dict[str, ModelDetails]:
             return control["models"]  # type: ignore[return-value]
 
         monkeypatch.setattr(openai_models_routes, "_ALL_MODELS", [])
+        monkeypatch.setattr(openai_models_routes, "_CATALOG_GENERATION", -1)
         monkeypatch.setattr(
             openai_models_routes, "_MODELS_RESPONSE", ModelsResponse(data=[])
         )
         monkeypatch.setattr(
             openai_models_routes, "initialize_bedrock_models", _initialize
         )
+        monkeypatch.setattr(openai_models_routes, "catalog_generation", _generation)
         monkeypatch.setattr(openai_models_routes, "get_all_models_details", _details)
         return control
 
@@ -418,11 +425,14 @@ class TestListModelsCacheUnit:
     def test_cache_is_served_until_a_refresh_reports_a_change(
         self, app_client: TestClient, catalog: dict[str, object]
     ) -> None:
-        """A catalogue change is invisible until the refresh reports it, then it is served.
+        """A catalogue change is invisible until its generation moves, then it is served.
 
         The middle call proves the response is genuinely cached (the changed
         catalogue is not read), and the last one proves the cache is dropped as
-        soon as the refresh signals an update.
+        soon as the catalog reports a new generation -- which is what a refresh
+        that completed in the background leaves behind.
+
+        Ref: stdapi/models/__init__.py:catalog_generation
         """
         assert [m["id"] for m in app_client.get("/v1/models").json()["data"]] == [
             "vendor.alpha-v1",
@@ -432,13 +442,12 @@ class TestListModelsCacheUnit:
         catalog["models"] = {
             "vendor.beta-v1": make_model_details("vendor.beta-v1", provider="Beta")
         }
-        catalog["updated"] = False
         assert [m["id"] for m in app_client.get("/v1/models").json()["data"]] == [
             "vendor.alpha-v1",
             "vendor.zeta-v1",
         ], "an unchanged catalogue must not be re-formatted"
 
-        catalog["updated"] = True
+        catalog["generation"] = 2
         assert [m["id"] for m in app_client.get("/v1/models").json()["data"]] == [
             "vendor.beta-v1"
         ]

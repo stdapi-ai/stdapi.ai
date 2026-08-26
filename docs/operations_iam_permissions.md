@@ -464,9 +464,9 @@ Required to keep indexing a vector store file when the server that accepted it s
 
 ## :material-table: Shared Table (Optional) { #shared-table }
 
-**Environment Variables**: [`AWS_DYNAMODB_TABLE`](operations_configuration.md#aws-dynamodb-table), [`AWS_DYNAMODB_REGION`](operations_configuration.md#aws-dynamodb-region)
+**Environment Variables**: [`AWS_DYNAMODB_TABLE`](operations_configuration.md#aws-dynamodb-table), [`AWS_DYNAMODB_REGION`](operations_configuration.md#aws-dynamodb-region), [`MODEL_CACHE_SHARED`](operations_configuration.md#model-cache-shared)
 
-Required by the features whose records every instance of a deployment reads and writes, on the one [Amazon DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html) table you create. Grant it on that table's ARN.
+Required by the features whose records every instance of a deployment reads and writes, on the one [Amazon DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html) table you create. Grant it on that table's ARN. [Model list sharing](operations_resilience.md#model-list-refresh) is the feature that uses it today; a server missing these permissions reports it at `WARNING` and keeps discovering the model list itself.
 
 ??? example "Shared Table IAM Policy Statements"
     ```json
@@ -496,6 +496,9 @@ Required by the features whose records every instance of a deployment reads and 
 
     !!! note "If the table uses a customer managed key"
         A table encrypted with a customer managed AWS KMS key needs no `kms:*` permission here: Amazon DynamoDB creates the grants it uses on your behalf when the table is created. Encryption at rest is always on, and the default AWS owned key is free.
+
+    !!! warning "Write access to the table is control of what the gateway serves"
+        The published model list carries the routing state the gateway invokes with — inference profiles and Amazon Bedrock Marketplace and Amazon SageMaker AI endpoint ARNs — so anything that can write to this table can decide where the gateway sends inference traffic. Treat `dynamodb:PutItem` on it as equivalent to the gateway's own inference permissions: grant it to the gateway's task role only, keep the table dedicated to the gateway, and scope the inference permissions above to the endpoint ARNs you actually deploy.
 
 ---
 

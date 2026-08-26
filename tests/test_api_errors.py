@@ -285,12 +285,13 @@ class TestUnsupportedModelError:
         Ref: stdapi/models/__init__.py:validate_model
         """
 
-        async def _already_loaded() -> None:
+        async def _already_loaded(_start_event: object = None) -> bool:
             """Stand in for the refresh a cache miss triggers."""
+            return False
 
         catalogue = dict.fromkeys(_CATALOGUE)
         monkeypatch.setattr(models_module, "_MODELS", catalogue)
-        monkeypatch.setattr(models_module, "initialize_bedrock_models", _already_loaded)
+        monkeypatch.setattr(models_module, "_refresh_bedrock_models", _already_loaded)
 
         with pytest.raises(UnsupportedModelError) as raised:
             await models_module.validate_model("gpt-4o")

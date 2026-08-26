@@ -885,7 +885,10 @@ def _isolated_model_cache(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
             "MODEL_ALIASES",
         )
     }
+    # Both, not just the deadline: "never refreshed" is what makes the cache
+    # cold, and a cold cache is the one state that still refreshes inline.
     monkeypatch.setitem(stdapi.models._CACHE, "update_next", None)  # noqa: SLF001
+    monkeypatch.setitem(stdapi.models._CACHE, "updated_at", None)  # noqa: SLF001
     yield
     for name, content in saved.items():
         target = getattr(stdapi.models, name)

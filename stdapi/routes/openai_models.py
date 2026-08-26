@@ -11,6 +11,7 @@ from stdapi.auth import authenticate
 from stdapi.config import SETTINGS
 from stdapi.models import (
     ModelDetails,
+    catalog_generation,
     get_all_models_details,
     initialize_bedrock_models,
     validate_model,
@@ -36,6 +37,8 @@ _ALL_MODELS: list[Model] = []
 _MODELS_RESPONSE = ModelsResponse(data=[])
 #: Guards concurrent rebuilds of the model caches above.
 _ALL_MODELS_LOCK = Lock()
+#: Catalog generation the caches above were built from; -1 until they are.
+_CATALOG_GENERATION = -1
 
 
 def format_bedrock_model_to_openai(model: ModelDetails) -> Model:
@@ -110,10 +113,14 @@ async def list_models(_: Annotated[None, Depends(authenticate)]) -> ModelsRespon
     Raises:
         ApiError: When unable to retrieve models from backend services (500)
     """
-    global _MODELS_RESPONSE  # noqa: PLW0603
-    updated = await initialize_bedrock_models()
+    global _MODELS_RESPONSE, _CATALOG_GENERATION  # noqa: PLW0603
+    await initialize_bedrock_models()
+    # Compared rather than taken from the call above: a refresh that ran in the
+    # background, or that another listing route triggered, changes the catalog
+    # without this call ever seeing it.
+    generation = catalog_generation()
     async with _ALL_MODELS_LOCK:
-        if updated or not _ALL_MODELS:
+        if generation != _CATALOG_GENERATION or not _ALL_MODELS:
             models = await get_all_models_details()
             _ALL_MODELS.clear()
             _ALL_MODELS.extend(
@@ -121,6 +128,7 @@ async def list_models(_: Annotated[None, Depends(authenticate)]) -> ModelsRespon
                 for model_id in sorted(models)
             )
             _MODELS_RESPONSE = ModelsResponse(data=list(_ALL_MODELS))
+            _CATALOG_GENERATION = generation
     return log_response_params(_MODELS_RESPONSE)
 
 
