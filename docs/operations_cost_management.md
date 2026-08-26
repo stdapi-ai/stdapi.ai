@@ -206,6 +206,52 @@ A [knowledge base store](api_openai_vector_stores.md#knowledge-base-stores) is b
 
 Read all of these from AWS Cost Explorer, filtered on Amazon Bedrock.
 
+### Bedrock Marketplace Model Endpoints { #bedrock-marketplace-model-endpoints }
+
+A model served from a [Bedrock Marketplace model endpoint](https://docs.aws.amazon.com/bedrock/latest/userguide/what-is-bedrock-marketplace.html) you deployed to your own AWS account is billed on an entirely different model from everything else on this page: **by the instance-hour, not the token.**
+
+!!! danger "There is no scale-to-zero on this path"
+    The endpoint runs on dedicated instances and is billed for every hour it exists, whether or not a single request is ever sent to it — the instance count has a minimum of one. Deleting the endpoint is the only thing that stops the charge.
+
+Real on-demand SageMaker hosting rates for one `ml.g6.xlarge` instance, read from the AWS Price List API on 2026-08-26:
+
+| Region      | Hourly     | ≈ Daily | ≈ Monthly |
+|:------------|:-----------|:--------|:----------|
+| `eu-west-3` | $1.4302    | $34     | $1,044    |
+| `eu-west-1` | $1.25776   | $30     | $918      |
+
+Check current rates for your own instance type and region on the [SageMaker pricing page](https://aws.amazon.com/sagemaker/pricing/) before deploying — these move, and they are not what stdapi.ai's own [cost tracking](#cost-tracking-real-time-aws-pricing) reports for this path (see below).
+
+!!! warning "A proprietary listing adds a software charge on top"
+    Some Marketplace listings bill a **provider software charge** per instance-hour, in addition to the instance rate above. stdapi.ai can neither discover nor report that rate — it is published on the listing's own AWS Marketplace page, not in any API. Open-weights listings (Apache-2.0 and similar) carry no such charge.
+
+**What the gateway reports.** Token counts for a Marketplace model endpoint are recorded in the request log and in [`/model_pricing`](api_model_pricing.md) under a service of their own — the same treatment as [a customer-provisioned knowledge base's search](#vector-stores), and for the same reason: **no unit price is resolved and none is invented**. AWS publishes no per-token rate for this path, because it does not bill per token. A request against a model endpoint therefore reports quantities with no cost, and raises no missing-price warning — that warning is reserved for a real gap in the price catalogue, not for a billing model this app has no rate to report. Read the actual charge from AWS Cost Explorer or the SageMaker hosting line of your bill.
+
+#### Deploy, Test, Destroy
+
+Because the meter runs from creation to deletion regardless of traffic, the only honest way to exercise this feature is **deploy → test → delete**, every time — create the endpoint, run whatever you need against it, then delete it immediately. Never leave one running.
+
+!!! danger "Guarantee the teardown, don't remember it"
+    Wrap the delete in a `trap`/`finally`, not a manual last step. A leaked endpoint bills silently, and because the per-instance-type endpoint quota can be as low as 1 or 2, it also blocks your next deployment of that instance type with a resource-limit error until the leaked one is found and removed.
+
+A full cycle is roughly 10–15 minutes to deploy, a few minutes to use, a few minutes to delete — under $2 at the rates above:
+
+```bash
+aws bedrock create-marketplace-model-endpoint \
+  --region <region> \
+  --endpoint-name <name> \
+  --model-source-identifier arn:aws:sagemaker:<region>:aws:hub-content/SageMakerPublicHub/Model/<listing>/<version> \
+  --accept-eula \
+  --endpoint-config "sageMaker={initialInstanceCount=1,instanceType=ml.g6.xlarge,executionRole=<role-arn>}"
+
+# ... run your test, then always:
+aws bedrock delete-marketplace-model-endpoint --region <region> --endpoint-arn <arn>
+```
+
+- `--accept-eula` accepts the listing's licence on your behalf — exactly why the gateway never calls either command itself: it only discovers an endpoint you already created, and never creates, updates or deletes one.
+- The endpoint's execution role must be named to match `*Sagemaker*ForBedrock*` if you use AWS's documented `iam:PassRole` policy for this role.
+- Deployment is gated by the **SageMaker endpoint-usage quota per instance type**, often 1 or 2 by default and adjustable through Service Quotas — request an increase before you need it, not after a deploy fails on it.
+
 ### Long-Context Pricing
 
 Some 1M-context-capable models are billed by AWS at a higher rate — roughly double for input-side tokens — once a call's prompt (input + cache read/write tokens) passes the boundary that model publishes. **That boundary differs per model**: Claude Sonnet 4 (via the `context-1m` `anthropic-beta` flag) switches at 200K tokens, while the OpenAI GPT-5.6 models bill their short-context rate all the way to 272K. stdapi.ai applies each model's own boundary, prices the whole call at the published long-context rate, and reports it with `"context": "long"` in the usage entry. When AWS publishes no long-context rate for a model, the standard rate is used as the best available estimate.

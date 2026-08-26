@@ -1666,6 +1666,122 @@ def bedrock_user_role_arn() -> str:
     return arn
 
 
+#: Bedrock registration status of an endpoint ``bedrock-runtime`` can invoke.
+_MARKETPLACE_REGISTERED = "REGISTERED"
+
+#: SageMaker status of an endpoint that can answer, compared case-insensitively.
+_MARKETPLACE_IN_SERVICE = "inservice"
+
+#: Error codes meaning the credentials may not list Marketplace endpoints at all.
+_MARKETPLACE_DENIED_CODES = frozenset({"AccessDeniedException", "AccessDenied"})
+
+#: How an operator gets an endpoint; every skip reason below ends with it.
+_MARKETPLACE_DEPLOY_HINT = (
+    "Deploy one with `tofu apply -var marketplace_endpoint=true` in the "
+    "terraform-sandbox stack, and destroy it with `-var marketplace_endpoint=false` "
+    "as soon as the run ends -- it bills by the instance-hour for as long as it "
+    "exists, called or idle"
+)
+
+
+@pytest.fixture(scope="session")
+async def marketplace_endpoint_arn() -> str:
+    """ARN of a deployed Amazon Bedrock Marketplace model endpoint, or skip.
+
+    The endpoint is deployed and destroyed around the run rather than kept, so
+    the lane cannot depend on anyone remembering to write its ARN down: it is
+    **detected** with ``bedrock:ListMarketplaceModelEndpoints`` across the
+    Regions this deployment serves, which is a free control-plane call, and the
+    first endpoint that is both ``REGISTERED`` and ``InService`` is the one under
+    test. ``TEST_MARKETPLACE_ENDPOINT_ARN`` in ``tests/.env`` still wins when it
+    is set, which is how one endpoint is pinned while several exist -- never a
+    committed file, because this repository is public and the ARN carries the
+    account ID.
+
+    Detection asks for the same two statuses the server's own discovery requires,
+    so an endpoint this fixture accepts is one the catalogue can publish.
+
+    Returns:
+        The endpoint ARN, from which the served model ID is discovered.
+    """
+    from botocore.exceptions import ClientError, NoCredentialsError  # noqa: PLC0415
+
+    from stdapi.config import SETTINGS  # noqa: PLC0415
+
+    if arn := getenv("TEST_MARKETPLACE_ENDPOINT_ARN", ""):
+        return arn
+
+    regions = (
+        SETTINGS.aws_bedrock_marketplace_endpoint_regions
+        or SETTINGS.aws_bedrock_regions
+    )
+    searched = ", ".join(regions)
+    session = get_session()
+    denied: list[str] = []
+    # An endpoint that exists without being servable is the operator's problem to
+    # act on, so the skip reason has to distinguish it from finding nothing.
+    not_servable: list[str] = []
+    for region in regions:
+        async with session.create_client("bedrock", region_name=region) as bedrock:
+            next_token = ""
+            while True:
+                try:
+                    page = (
+                        await bedrock.list_marketplace_model_endpoints(
+                            nextToken=next_token
+                        )
+                        if next_token
+                        else await bedrock.list_marketplace_model_endpoints()
+                    )
+                except NoCredentialsError:
+                    pytest.skip(
+                        "Detecting a Marketplace model endpoint needs AWS "
+                        "credentials, and this environment has none"
+                    )
+                except ClientError as error:
+                    if (
+                        error.response.get("Error", {}).get("Code")
+                        not in _MARKETPLACE_DENIED_CODES
+                    ):
+                        # An expired token is not a test result: let it fail the
+                        # lane rather than reading as "nothing is deployed".
+                        raise
+                    denied.append(region)
+                    break
+                for summary in page.get("marketplaceModelEndpoints") or ():
+                    endpoint_arn = summary["endpointArn"]
+                    if summary.get("status") != _MARKETPLACE_REGISTERED:
+                        not_servable.append(f"{endpoint_arn} is not REGISTERED")
+                        continue
+                    detail = (
+                        await bedrock.get_marketplace_model_endpoint(
+                            endpointArn=endpoint_arn
+                        )
+                    )["marketplaceModelEndpoint"]
+                    status = detail["endpointStatus"]
+                    if status.lower() == _MARKETPLACE_IN_SERVICE:
+                        return endpoint_arn
+                    not_servable.append(f"{endpoint_arn} is '{status}'")
+                if not (next_token := page.get("nextToken", "")):
+                    break
+
+    if len(denied) == len(regions):
+        pytest.skip(
+            "Detecting a Marketplace model endpoint needs "
+            f"bedrock:ListMarketplaceModelEndpoints, which these credentials are "
+            f"denied in every searched Region ({searched})"
+        )
+    if not_servable:
+        pytest.skip(
+            f"No Marketplace model endpoint can serve a request: "
+            f"{'; '.join(not_servable)}. {_MARKETPLACE_DEPLOY_HINT}."
+        )
+    pytest.skip(
+        f"No Amazon Bedrock Marketplace model endpoint is deployed in {searched}. "
+        f"{_MARKETPLACE_DEPLOY_HINT}."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Anthropic API fixtures (shared across Anthropic test modules)
 # ---------------------------------------------------------------------------

@@ -10,6 +10,7 @@ from stdapi.aws_bedrock_mantle import API_PATHS, invoke, mantle_request_headers
 from stdapi.config import SETTINGS
 from stdapi.models import (
     MANTLE_MODELS,
+    reject_unsupported_token_counting,
     route_and_execute,
     set_effective_region,
     validate_model,
@@ -291,13 +292,15 @@ async def count_tokens(
         MessageTokensCount with the input token count.
 
     Raises:
-        ApiError: If model is invalid or does not support text output.
+        ApiError: If model is invalid, does not support text output, or is
+            served by a Marketplace model endpoint (400).
     """
     log_request_params(request)
     warn_mcp_connector_ignored(request)
     model = await validate_model(
         request.model, input_modality="TEXT", output_modality="TEXT"
     )
+    reject_unsupported_token_counting(model)
     model_id = model.get_id()
     if serves_via_mantle(model_id):
         return log_response_params(
