@@ -2961,10 +2961,10 @@ class TestDefaultModelPrices:
             (
                 "openai.gpt-5.6-sol",
                 {
-                    Dimension.INPUT_TOKENS: "0.0000055",
-                    Dimension.CACHE_WRITE_TOKENS: "0.000006875",
-                    Dimension.CACHE_READ_TOKENS: "0.00000055",
-                    Dimension.OUTPUT_TOKENS: "0.000033",
+                    Dimension.INPUT_TOKENS: "0.0000044",
+                    Dimension.CACHE_WRITE_TOKENS: "0.0000055",
+                    Dimension.CACHE_READ_TOKENS: "0.00000044",
+                    Dimension.OUTPUT_TOKENS: "0.000022",
                 },
             ),
             (
@@ -3039,10 +3039,10 @@ class TestDefaultModelPrices:
             (
                 "openai.gpt-5.6-sol",
                 {
-                    Dimension.INPUT_TOKENS: "0.000005",
-                    Dimension.CACHE_WRITE_TOKENS: "0.00000625",
-                    Dimension.CACHE_READ_TOKENS: "0.0000005",
-                    Dimension.OUTPUT_TOKENS: "0.00003",
+                    Dimension.INPUT_TOKENS: "0.000004",
+                    Dimension.CACHE_WRITE_TOKENS: "0.000005",
+                    Dimension.CACHE_READ_TOKENS: "0.0000004",
+                    Dimension.OUTPUT_TOKENS: "0.00002",
                 },
             ),
             (
@@ -3170,7 +3170,7 @@ class TestDefaultModelPrices:
 
     @pytest.mark.parametrize(
         ("routing", "short", "long"),
-        [("", "0.0000055", "0.000011"), ("global", "0.000005", "0.00001")],
+        [("", "0.0000044", "0.0000088"), ("global", "0.000004", "0.000008")],
     )
     def test_the_long_context_defaults_resolve_beside_their_short_context_twin(
         self, monkeypatch: pytest.MonkeyPatch, routing: Routing, short: str, long: str

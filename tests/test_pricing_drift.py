@@ -1218,10 +1218,10 @@ class TestModelCardParsing:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
         """
         assert parse_model_card_global(gpt_56_sol_card) == {
-            Dimension.INPUT_TOKENS: Decimal("0.000005"),
-            Dimension.CACHE_WRITE_TOKENS: Decimal("0.00000625"),
-            Dimension.CACHE_READ_TOKENS: Decimal("0.0000005"),
-            Dimension.OUTPUT_TOKENS: Decimal("0.00003"),
+            Dimension.INPUT_TOKENS: Decimal("0.000004"),
+            Dimension.CACHE_WRITE_TOKENS: Decimal("0.000005"),
+            Dimension.CACHE_READ_TOKENS: Decimal("0.0000004"),
+            Dimension.OUTPUT_TOKENS: Decimal("0.00002"),
         }
 
     def test_a_card_without_a_global_row_publishes_no_global_rate(
@@ -1256,9 +1256,9 @@ class TestModelCardParsing:
         merely renamed its headers, so the parser refuses instead.
         """
         card = gpt_56_sol_card.replace(
-            '<tr><td tabindex="-1">Global CRIS</td><td tabindex="-1">$5.00</td>'
-            '<td tabindex="-1">$6.25</td><td tabindex="-1">$0.50</td>'
-            '<td tabindex="-1">$30.00</td></tr>',
+            '<tr><td tabindex="-1">Global CRIS</td><td tabindex="-1">$4.00</td>'
+            '<td tabindex="-1">$5.00</td><td tabindex="-1">$0.40</td>'
+            '<td tabindex="-1">$20.00</td></tr>',
             '<tr><td tabindex="-1">Global CRIS</td><td tabindex="-1">n/a</td>'
             '<td tabindex="-1">n/a</td><td tabindex="-1">n/a</td>'
             '<td tabindex="-1">n/a</td></tr>',
@@ -1329,10 +1329,10 @@ class TestLongContextParsing:
     ) -> None:
         """The long reading is the 1M table's In-Region row, not the 272K one."""
         assert parse_model_card(gpt_56_sol_card, "long") == {
-            Dimension.INPUT_TOKENS: Decimal("0.000011"),
-            Dimension.CACHE_WRITE_TOKENS: Decimal("0.00001375"),
-            Dimension.CACHE_READ_TOKENS: Decimal("0.0000011"),
-            Dimension.OUTPUT_TOKENS: Decimal("0.0000495"),
+            Dimension.INPUT_TOKENS: Decimal("0.0000088"),
+            Dimension.CACHE_WRITE_TOKENS: Decimal("0.000011"),
+            Dimension.CACHE_READ_TOKENS: Decimal("0.00000088"),
+            Dimension.OUTPUT_TOKENS: Decimal("0.000033"),
         }
 
     def test_the_long_context_global_row_comes_from_the_same_table(
@@ -1340,10 +1340,10 @@ class TestLongContextParsing:
     ) -> None:
         """The 1M Global rate is the one beside the 1M In-Region rate."""
         assert parse_model_card_global(gpt_56_sol_card, "long") == {
-            Dimension.INPUT_TOKENS: Decimal("0.00001"),
-            Dimension.CACHE_WRITE_TOKENS: Decimal("0.0000125"),
-            Dimension.CACHE_READ_TOKENS: Decimal("0.000001"),
-            Dimension.OUTPUT_TOKENS: Decimal("0.000045"),
+            Dimension.INPUT_TOKENS: Decimal("0.000008"),
+            Dimension.CACHE_WRITE_TOKENS: Decimal("0.00001"),
+            Dimension.CACHE_READ_TOKENS: Decimal("0.0000008"),
+            Dimension.OUTPUT_TOKENS: Decimal("0.00003"),
         }
 
     def test_a_single_tier_card_publishes_no_long_context_rate(
@@ -1626,7 +1626,7 @@ class TestGlobalDetection:
         """
         drifted = {
             **DEFAULT_MODEL_GLOBAL_PRICES[self.MODEL_ID],
-            Dimension.OUTPUT_TOKENS: "0.000033",  # the In-Region rate, not Global
+            Dimension.OUTPUT_TOKENS: "0.000022",  # the In-Region rate, not Global
         }
         findings = classify(
             _global_key(self.MODEL_ID), drifted, self._reading(gpt_56_sol_card)
@@ -1637,7 +1637,7 @@ class TestGlobalDetection:
         assert drift[0].model_id == "openai.gpt-5.6-sol (Global)"
         url = _card_url("model-card-openai-gpt-56-sol")
         assert drift[0].detail == (
-            f"output_tokens: table has 0.000033, {url} publishes 0.00003"
+            f"output_tokens: table has 0.000022, {url} publishes 0.00002"
         )
 
     def test_a_model_priced_in_region_only_reports_nothing(self) -> None:
@@ -1666,7 +1666,7 @@ class TestGlobalDetection:
     ) -> None:
         """An em dash in the Global row withdraws that rate, and keeps the entry."""
         card = gpt_56_sol_card.replace(
-            '<td tabindex="-1">$6.25</td>', '<td tabindex="-1">—</td>', 1
+            '<td tabindex="-1">$5.00</td>', '<td tabindex="-1">—</td>', 1
         )
         findings = classify_global(self.MODEL_ID, self._reading(card))
         vanished = [f for f in findings if f.outcome is Outcome.VANISHED]
