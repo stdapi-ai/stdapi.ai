@@ -2,19 +2,19 @@
 
 from base64 import b64encode
 from struct import pack
-from typing import TYPE_CHECKING, Literal, Self
+from typing import TYPE_CHECKING, Annotated, ClassVar, Literal, Self
 
 from pydantic import Field, model_validator
 
 from stdapi.api_errors import ApiError
 from stdapi.input_file import InputFileUrl
-from stdapi.types import BaseModelRequestWithExtra, BaseModelResponse
+from stdapi.types import BaseModelRequest, BaseModelRequestWithExtra, BaseModelResponse
 from stdapi.types.cohere import ApiMeta
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from stdapi.models.embedding import EmbeddingResponse
+    from stdapi.models.embedding import EmbeddingResponse, EmbedInputValue
 
 #: Cohere embed `input_type` values.
 _InputType = Literal[
@@ -33,8 +33,57 @@ _TITAN_NATIVE_EMBEDDING_TYPES = frozenset({"float", "binary"})
 _DEFAULT_NATIVE_EMBEDDING_TYPES = frozenset({"float"})
 
 
+class EmbedInputImageUrl(BaseModelRequest):
+    """Image of an input content part."""
+
+    url: InputFileUrl = Field(
+        description=(
+            "Image data URI. URLs and S3 URIs are also accepted (beyond the "
+            "original Cohere API)."
+        )
+    )
+
+
+class EmbedInputContentText(BaseModelRequest):
+    """Text part of an input."""
+
+    type: Literal["text"] = Field(description="Content part type.")
+    text: str = Field(description="Text embedded as part of this input.")
+
+
+class EmbedInputContentImageUrl(BaseModelRequest):
+    """Image part of an input."""
+
+    type: Literal["image_url"] = Field(description="Content part type.")
+    image_url: EmbedInputImageUrl = Field(
+        description="Image embedded as part of this input."
+    )
+
+
+#: One content part of an input, discriminated on its `type` field.
+EmbedInputContent = Annotated[
+    EmbedInputContentText | EmbedInputContentImageUrl, Field(discriminator="type")
+]
+
+
+class EmbedInput(BaseModelRequest):
+    """One input to embed, made of one or more content parts."""
+
+    content: list[EmbedInputContent] = Field(
+        min_length=1,
+        description=(
+            "Content parts embedded together into a single vector. Two or more "
+            "parts require a Cohere Embed v4 model; a single part is accepted "
+            "by every embedding model."
+        ),
+    )
+
+
 class _EmbedRequestBase(BaseModelRequestWithExtra):
     """Shared request fields and validation for the v1 and v2 Embed APIs."""
+
+    #: Input fields this Embed API accepts, named in the "no input" error.
+    _INPUT_FIELDS: ClassVar[str] = "`texts` or `images`"
 
     model: str = Field(
         description="ID of the model to use.", min_length=1, max_length=255
@@ -72,6 +121,14 @@ class _EmbedRequestBase(BaseModelRequestWithExtra):
         ),
     )
 
+    def embed_inputs(self) -> list[EmbedInputValue]:
+        """Return every input to embed, in the order they are returned.
+
+        Returns:
+            The texts of the request, then its images.
+        """
+        return [*(self.texts or ()), *(self.images or ())]
+
     @model_validator(mode="after")
     def _unsupported(self) -> Self:
         """Validate unsupported or incompatible embed options.
@@ -81,12 +138,15 @@ class _EmbedRequestBase(BaseModelRequestWithExtra):
         """
         if "inputs" in (self.model_extra or {}):
             if self.model_extra["inputs"] is not None:  # type: ignore[index]
-                msg = "Fused multimodal `inputs` are not supported. Use `texts` or `images` instead."
+                msg = (
+                    "The `inputs` field is not part of this Embed API version. "
+                    "Use `texts` and `images`, or the v2 Embed endpoint."
+                )
                 raise ValueError(msg)
             # An explicit null is treated as absent, not forwarded to the model.
             self.model_extra.pop("inputs")  # type: ignore[union-attr]
-        if not self.texts and not self.images:
-            msg = "Provide at least one of `texts` or `images`."
+        if not self.embed_inputs():
+            msg = f"Provide at least one of {self._INPUT_FIELDS}."
             raise ValueError(msg)
         return self
 
@@ -94,6 +154,17 @@ class _EmbedRequestBase(BaseModelRequestWithExtra):
 class EmbedRequest(_EmbedRequestBase):
     """Request body for creating embeddings."""
 
+    _INPUT_FIELDS: ClassVar[str] = "`texts`, `images` or `inputs`"
+
+    inputs: list[EmbedInput] | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Inputs to embed, one vector each, as objects carrying a `content` "
+            "array of `text` and `image_url` parts. Embedded after `texts` and "
+            "`images` when those are sent too."
+        ),
+    )
     input_type: _InputType = Field(
         ...,
         description=(
@@ -127,6 +198,35 @@ class EmbedRequest(_EmbedRequestBase):
             "scheduling priority is not applicable on this implementation."
         ),
     )
+
+    def embed_inputs(self) -> list[EmbedInputValue]:
+        """Return every input to embed, in the order they are returned.
+
+        Returns:
+            The texts of the request, then its images, then its `inputs`
+            entries; an entry of several content parts is returned as the list
+            of its values, a single-part entry as the value itself.
+        """
+        values = super().embed_inputs()
+        for entry in self.inputs or ():
+            parts: list[InputFileUrl | str] = [
+                part.text if part.type == "text" else part.image_url.url
+                for part in entry.content
+            ]
+            values.append(parts[0] if len(parts) == 1 else parts)
+        return values
+
+    def count_images(self) -> int:
+        """Return how many images the request submits.
+
+        Returns:
+            The `images` entries plus the image parts of every `inputs` entry.
+        """
+        return len(self.images or ()) + sum(
+            part.type == "image_url"
+            for entry in self.inputs or ()
+            for part in entry.content
+        )
 
 
 class EmbedV1Request(_EmbedRequestBase):
