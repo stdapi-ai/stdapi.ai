@@ -3363,7 +3363,7 @@ def _classify_stream_error(
     if isinstance(exc, ApiError):
         return (
             exc.status,
-            hide_security_details(exc.status, exc.args[0]),
+            hide_security_details(exc.status, exc.args[0], disclosed=exc.disclosed),
             exc.param,
             exc.code,
             exc.args[0],

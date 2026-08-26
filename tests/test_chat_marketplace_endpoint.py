@@ -66,6 +66,7 @@ from stdapi.models import (
     usage_service,
     validate_model,
 )
+from stdapi.monitoring import TENANT, Tenant, TenantAwsCredential
 from stdapi.utils import match_marketplace_endpoint_arn, match_sagemaker_hub_content_arn
 from tests.conftest import logged_usage_entries
 
@@ -1290,3 +1291,44 @@ class TestRefusals:
         assert "Token counting is not supported" in response.text
         assert "arn:aws" not in response.text
 
+    async def test_a_tenant_credential_cannot_reach_the_endpoint(
+        self,
+        marketplace_model: str,
+        monkeypatch: pytest.MonkeyPatch,
+        request_log: dict[str, object],
+    ) -> None:
+        """A key carrying its own AWS credential is refused this model.
+
+        The endpoint is provisioned capacity in the deployment's own account, so
+        a tenant-signed request could not pay for it: serving one would land the
+        spend on the operator's bill. The refusal names the model and what to do,
+        and names no backend -- which of this deployment's services the model
+        sits on is not the caller's business.
+
+        Ref: stdapi/models/__init__.py:_pin_tenant_billable_service
+        """
+        monkeypatch.setattr(SETTINGS, "tenant_aws_credentials", True)
+        token = TENANT.set(
+            Tenant(
+                key_id="T" + "0" * 15,
+                name="tenant",
+                aws_credential=TenantAwsCredential(
+                    role_arn="arn:aws:iam::210987654321:role/stdapi-tenant",
+                    external_id="external-id-under-test",
+                ),
+            )
+        )
+        try:
+            with pytest.raises(ApiError) as raised:
+                await validate_model(marketplace_model)
+        finally:
+            TENANT.reset(token)
+
+        assert raised.value.status == 400
+        message = str(raised.value)
+        assert "carry an AWS credential of their own" in message
+        assert marketplace_model in message
+        for backend in ("Marketplace", "SageMaker", "Bedrock", "endpoint"):
+            assert backend not in message, (
+                f"The refusal names the backend ({backend}) to the caller"
+            )

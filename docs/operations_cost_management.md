@@ -188,6 +188,16 @@ Requests sent through the [Batch API](api_openai_batches.md) or the [Message Bat
 
 Usage is recorded **once per batch**, when the batch reaches a terminal state and its totals are read — not per request. The entry therefore appears on whichever read observed the end of the batch, which is a poll rather than the call that created it. A batch that is cancelled before its requests run records nothing.
 
+### Tenant AWS Credentials { #tenant-aws-credentials }
+
+A tenant that [registered an AWS credential](operations_authentication_security.md#tenant-aws-credentials) has its model invocations billed by AWS to **its own account**, not to the deployment's. The usage log stays complete but honest about who paid:
+
+- Each such usage entry carries `"billed_to": "tenant"`, with the token quantities recorded as usual.
+- **No cost is computed for those entries** — pricing them would claim spend the deployment never incurred — and they are excluded from the request's `cost` totals and from the `Cost` CloudWatch metric.
+- Everything else in the same request (Amazon Polly, Transcribe, S3, Knowledge Bases, moderation guardrail calls) remains the deployment's spend and is recorded and priced exactly as before.
+
+To see what a credentialed tenant spends, read the *tenant's* AWS bill: Amazon Bedrock usage appears in the tenant account's Cost Explorer, attributable to the role sessions named `stdapi-ai-tenant-<key id>`.
+
 ### Vector Stores { #vector-stores }
 
 Indexing a file into a [vector store](api_openai_vector_stores.md) costs one embedding call per passage, and a search costs one per query. Those calls are recorded and priced like any other embedding usage, against the model in [`VECTOR_STORE_EMBEDDING_MODEL`](operations_configuration.md#vector-store-embedding-model) — a large file is many passages, so the cost of an attach scales with the file, not with the request.

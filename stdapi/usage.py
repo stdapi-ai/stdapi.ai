@@ -133,6 +133,9 @@ class UsageRecord:
     currency: str = ""  # Computed in compute_costs()
     # Populated instead of cost/currency only when dimensions span multiple currencies
     costs: dict[str, Decimal] = field(default_factory=dict)
+    # Billed to the tenant's own AWS account: never priced, never in this
+    # deployment's cost totals, and marked "billed_to" in the log entry.
+    billed_externally: bool = False
 
 
 class UsageLogEntry(TypedDict, total=False):
@@ -145,6 +148,7 @@ class UsageLogEntry(TypedDict, total=False):
     tier: str  # Service tier: standard, flex, priority, batch
     routing: Literal["global", "latency"]  # Only present for a non-plain profile
     context: Literal["long"]  # Only present past the model's long-context boundary
+    billed_to: Literal["tenant"]  # Only present when another AWS account was billed
     cost: str  # Exact plain-decimal text -- see format_cost
     currency: str
     costs: dict[str, str]  # Populated when dimensions spanned more than one currency
@@ -262,6 +266,7 @@ def _record_usage(
     input_seconds_by_spec: Mapping[str, int] | None = None,
     input_tokens_by_spec: Mapping[str, int] | None = None,
     output_tokens_by_spec: Mapping[str, int] | None = None,
+    billed_externally: bool = False,
 ) -> None:
     """Record real AWS-billed usage for ``service``/``model``/``tier``.
 
@@ -293,6 +298,8 @@ def _record_usage(
             bucket ("speech"), for models pricing modalities apart.
         output_tokens_by_spec: Output token counts broken down by modality spec
             bucket.
+        billed_externally: Whether the call was billed to another AWS account
+            (a tenant's), so no cost of this deployment may be claimed for it.
     """
     if (records := USAGE.get(None)) is None:
         return
@@ -330,6 +337,8 @@ def _record_usage(
         record = records[key] = UsageRecord(
             service, model, operation, effective_region, tier, routing, context
         )
+    if billed_externally:
+        record.billed_externally = True
     for dimension, value in quantities_to_add.items():
         record.quantities[dimension] = record.quantities.get(dimension, 0) + value
     if total_tokens > 0:
@@ -422,7 +431,10 @@ def compute_costs() -> list[str]:
     return [
         warning
         for record in records.values()
+        # A record billed to a tenant's account costs this deployment nothing:
+        # pricing it would claim spend the operator never incurred.
         if record.region
+        and not record.billed_externally
         and (warning := _apply_record_cost(record, *_compute_record_totals(record)))
     ]
 
@@ -816,6 +828,7 @@ def record_bedrock_usage(
     cache_write_tokens_by_ttl: Mapping[CacheTtlBucket, int] | None = None,
     input_tokens_by_spec: Mapping[str, int] | None = None,
     output_tokens_by_spec: Mapping[str, int] | None = None,
+    billed_externally: bool | None = None,
 ) -> None:
     """Record AWS Bedrock usage.
 
@@ -853,9 +866,29 @@ def record_bedrock_usage(
             ("speech"), for models whose speech and text tokens are priced
             apart. The remainder of ``input_tokens`` prices at the plain rate.
         output_tokens_by_spec: Output token counts grouped by modality spec.
+        billed_externally: Force the record's billed-account attribution;
+            ``None`` (default) marks the record tenant-billed only when the
+            request's invocations were signed with its tenant's AWS credential.
+            Pass ``False`` for a call this deployment always pays for, such as
+            a batch job's results, whatever key reads them back.
     """
     state = get_model_state(model)
     image_spec = IMAGE_SPEC.get("") if output_images else ""
+    if billed_externally is None:
+        # Imported here: stdapi.monitoring imports this module (import cycle).
+        from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
+
+        # Marked tenant-billed only when this request's invocations were
+        # actually signed with the tenant's session -- the request-log marker
+        # is written at signing time. A bedrock-runtime record of a call that
+        # session never signed, and Mantle, Marketplace and every other
+        # recorder, stay on this deployment's bill.
+        log = REQUEST_LOG.get(None)
+        billed_externally = (
+            service == Service.BEDROCK
+            and log is not None
+            and bool(log.get("aws_tenant_key_id"))
+        )
     # "default" means no differentiated tier; normalized to "standard" below.
     # Race-free only because concurrent same-model callers pass tier/routing
     # explicitly (see ModelInvocationState).
@@ -900,6 +933,7 @@ def record_bedrock_usage(
         else None,
         input_tokens_by_spec=input_tokens_by_spec,
         output_tokens_by_spec=output_tokens_by_spec,
+        billed_externally=billed_externally,
     )
 
 
@@ -977,6 +1011,8 @@ def _base_log_entry(record: UsageRecord) -> UsageLogEntry:
         entry["routing"] = record.routing
     if record.context:
         entry["context"] = record.context
+    if record.billed_externally:
+        entry["billed_to"] = "tenant"
     return entry
 
 

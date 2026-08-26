@@ -796,7 +796,7 @@ _ARN_RE = compile_regex(r"arn:aws[\w:/.-]*")
 _ACCOUNT_ID_RE = compile_regex(r"\b\d{12}\b")
 
 
-def hide_security_details(status: int, message: str) -> str:
+def hide_security_details(status: int, message: str, *, disclosed: bool = False) -> str:
     """Hide sensitive information from client response in case of HTTP errors.
 
     AWS error messages routinely embed ARNs and account IDs; these are redacted
@@ -806,14 +806,18 @@ def hide_security_details(status: int, message: str) -> str:
     Args:
         status: HTTP status code.
         message: Message body.
+        disclosed: Whether *message* is a fixed text written for the client,
+            which a refusal status then keeps instead of flattening it. The
+            redaction below still runs over it.
 
     Returns:
         Message body.
     """
-    if status == 401:
-        return "Unauthorized"
-    if status == 403:
-        return "Forbidden"
+    if not disclosed:
+        if status == 401:
+            return "Unauthorized"
+        if status == 403:
+            return "Forbidden"
     return _ACCOUNT_ID_RE.sub("<account-id>", _ARN_RE.sub("<arn>", message))
 
 

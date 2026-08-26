@@ -1,7 +1,7 @@
 ---
 title: Authentication & Security
-description: Configuration guide for authenticating and securing requests to stdapi.ai — API keys via SSM/Secrets Manager, per-tenant API keys with model and endpoint scopes, Amazon Cognito user pool tokens, OAuth 2.0 discovery for AI agents, external authentication via AWS ALB/API Gateway, and encryption in transit.
-keywords: API authentication, API key, AWS SSM, Secrets Manager, tenant API keys, multi-tenant API gateway, scoped API keys, model allow list, API key revocation, Amazon Cognito user pool, JWT, bearer token, AWS ALB authentication, API Gateway authorizer, OIDC, OAuth 2.0 discovery, protected resource metadata, WWW-Authenticate, MCP client authentication, stdapi.ai security
+description: Configuration guide for authenticating and securing requests to stdapi.ai — API keys via SSM/Secrets Manager, per-tenant API keys with model and endpoint scopes, tenant-owned AWS credentials via cross-account IAM roles, Amazon Cognito user pool tokens, OAuth 2.0 discovery for AI agents, external authentication via AWS ALB/API Gateway, and encryption in transit.
+keywords: API authentication, API key, AWS SSM, Secrets Manager, tenant API keys, multi-tenant API gateway, scoped API keys, model allow list, API key revocation, tenant AWS credentials, bring your own AWS account, cross-account IAM role, sts:AssumeRole ExternalId, confused deputy, per-tenant Bedrock quota, Amazon Cognito user pool, JWT, bearer token, AWS ALB authentication, API Gateway authorizer, OIDC, OAuth 2.0 discovery, protected resource metadata, WWW-Authenticate, MCP client authentication, stdapi.ai security
 ---
 
 # :material-lock: Authentication & Security
@@ -206,6 +206,47 @@ Validation is a direct read of the tenant's two records, cached in each server i
 
 !!! tip "A tenant key and a user token together"
     A request may carry both `X-API-Key: sk-std-...` (the tenant key) and `Authorization: Bearer <token>` (a Cognito user token): **both are then verified** — the tenant key authorizes and scopes the request, the token identifies the user for [per-user cost attribution](operations_cost_management.md#per-user-attribution). This is the one place tenant keys extend the header rules: for every other combination, `X-API-Key` keeps winning exactly as before. Without a user, the tenant's key ID is the identity the request is attributed to.
+
+#### Tenant AWS credentials — the tenant's own quota and bill { #tenant-aws-credentials }
+
+A tenant may go one step further and bring its **own AWS account**: register an IAM role of that account against its key, and every model invocation made with the key runs under that role — the tenant's own Amazon Bedrock model access, quotas, throttling and bill, instead of the deployment's. Enable it with [`TENANT_AWS_CREDENTIALS`](operations_configuration.md#tenant-aws-credentials) and declare the role on the tenant record:
+
+```hcl
+tenants = {
+  "acme" = {
+    aws_role_arn = "arn:aws:iam::210987654321:role/stdapi-acme"
+  }
+}
+```
+
+The design is AWS's own [cross-account confused-deputy pattern](https://docs.aws.amazon.com/IAM/latest/UserGuide/confused-deputy.html): the server assumes the tenant's role with `sts:AssumeRole`, presenting an **`ExternalId` the server mints** for that tenant — read it from the `external_id` attribute of the tenant's `secret#<key id>` record, the only place it is published. The tenant writes it into the role's trust policy:
+
+```json
+{
+  "Effect": "Allow",
+  "Principal": { "AWS": "arn:aws:iam::<deployment account>:root" },
+  "Action": "sts:AssumeRole",
+  "Condition": { "StringEquals": { "sts:ExternalId": "<minted external id>" } }
+}
+```
+
+The role's permission policy is the tenant's to scope — `bedrock:InvokeModel*` and the Converse actions on the models it wants to allow. **No secret exists anywhere at rest**: the stored role ARN is public-by-design and the ExternalId is only meaningful when presented by the deployment's own IAM principal. The tenant revokes the grant at any moment by editing its own trust policy; sessions are capped at one hour by AWS role chaining, so a revocation is fully effective within that hour, and the server never signs a new request with a session it could not reopen.
+
+**What runs on whose account.** The tenant's credential covers **model invocations only** — the `Converse` and `InvokeModel` families, streaming included. Everything else a request may touch stays on the deployment's account: Amazon Polly, Transcribe, Translate and Comprehend, S3 storage, Knowledge Bases and vector stores. Four operations are **refused** for a credential-carrying key rather than silently billed to the deployment, each with a clear error naming the reason: the Batch API (a job outlives the one-hour session), real-time speech-to-speech model sessions (a bidirectional stream signs once, as the server), asynchronous (video) generation (the job writes to the deployment's bucket), and models only served by Amazon Bedrock Mantle or by a Bedrock Marketplace endpoint. A model served by Mantle **by default** but also available on the classic runtime — the GPT-5.6 family — is transparently served from the runtime instead, where the tenant's credential signs and pays.
+
+!!! warning "Not compatible with Amazon Bedrock Guardrails"
+    A guardrail configured in the deployment's account cannot be evaluated by a tenant's principal — AWS Guardrails have no cross-account path. Rather than silently serving tenant requests unguarded, the server **refuses to start** when `TENANT_AWS_CREDENTIALS` is enabled while [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](operations_configuration.md#aws-bedrock-guardrail-identifier) or a model-alias guardrail is configured. A tenant may still name a guardrail of its *own* account per request where header overrides are allowed: it is evaluated by the tenant's principal, in the tenant's account.
+
+!!! info "Why a role, and nothing else"
+    Cross-account roles are the only credential form served, by policy and not by omission. **Amazon Bedrock API keys** are refused: short-term keys last at most 12 hours — unstorable by construction — and long-term keys are IAM-user bearer tokens AWS itself marks *"for exploration only"*; storing them would turn the tenant table into a vault of live credentials. **Raw access keys** are long-lived secrets at rest with no tenant-side revocation story. **OIDC federation** adds an identity provider to operate without removing any of the above. A role plus ExternalId stores nothing worth stealing.
+
+A few behaviors worth knowing:
+
+- **The model catalogue is not per-tenant.** `GET /v1/models` advertises what the deployment serves, from the deployment's account. A model the tenant's account has no access to fails at invocation with an honest `403`: *"Your AWS account does not have access to this model."*
+- **Errors never name the deployment's account.** A revoked trust policy, a wrong ExternalId or a deleted role answers a fixed `403` — *"The AWS credential registered for this API key could not be used…"* — with the full AWS detail written to the server log only. AWS STS being throttled or unreachable is not the tenant's registration and answers a retryable `503` instead, so a client retries it rather than auditing a trust policy that is fine.
+- **A tenant's throttle is its own.** Tenant requests still fail over across the configured Bedrock Regions, but a throttle of the tenant's account is answered as the tenant's own `429` and never marks a Region as blocked for other callers — Bedrock quota is per account, per Region. One exception, and it is opt-in: with [`AWS_ADAPTIVE_RETRY`](operations_configuration.md#aws-adaptive-retry) enabled, the retry token bucket belongs to the shared client rather than to a credential, so a tenant being throttled heavily can slow other callers' retries. Leave adaptive retry off — the default — where tenants must not affect one another.
+- **Cross-Region inference profiles** route within the tenant's account: destination Regions that are opt-in must be enabled in the *tenant's* account for the profile to serve them.
+- **Cost reporting stays honest.** Usage billed to the tenant's account is marked `billed_to: tenant` in the [usage log](operations_cost_management.md) and is never priced into the deployment's cost totals.
 
 ### :material-compass-outline: Authentication Discovery for Agents
 

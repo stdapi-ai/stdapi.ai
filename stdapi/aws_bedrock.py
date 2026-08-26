@@ -210,7 +210,7 @@ AWS_ERROR_MAP: dict[str, tuple[int, str]] = {
         },
         (429, "rate_limit_error"),
     ),
-    # Only ever reached for a call the end user's own role session signed: every other denial is `denied_feature_unavailable`'s, at 503.
+    # Only ever reached for a call the end user's own role session signed: a tenant-signed denial gets its own fixed 403 and every other denial is `denied_feature_unavailable`'s, at 503.
     **dict.fromkeys({"AccessDeniedException"}, (403, "permission_error")),
     **dict.fromkeys(
         {

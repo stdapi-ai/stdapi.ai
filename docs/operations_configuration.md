@@ -262,6 +262,7 @@ Configure **one** API key source. If several are set, precedence is `API_KEY` �
 | [`TENANT_KEY_CACHE_SECONDS`](#tenant-key-cache-seconds)           | `60`      | Per-instance validation cache, which is also the revocation window |
 | [`TENANT_KEY_SSM_PARAMETER_PREFIX`](#tenant-key-ssm-parameter-prefix) | None  | SSM prefix minted tenant keys are delivered under, once            |
 | [`TENANT_KEY_SSM_KMS_KEY_ID`](#tenant-key-ssm-kms-key-id)         | None      | KMS key encrypting the delivery parameters, instead of `alias/aws/ssm` |
+| [`TENANT_AWS_CREDENTIALS`](#tenant-aws-credentials)               | `false`   | Let a tenant register a cross-account IAM role its model invocations run under |
 | [`AUTHENTICATION_MODE`](#authentication-mode)                     | `any`     | Accepted methods: `any`, `api_key` or `cognito`                    |
 
 Amazon Cognito user pool tokens are an alternative to the API key — see [Amazon Cognito Authentication](#cognito-authentication):
@@ -2508,6 +2509,24 @@ export TENANT_KEY_SSM_PARAMETER_PREFIX=/stdapi-ai/prod/tenant-keys
 
 ```bash
 export TENANT_KEY_SSM_KMS_KEY_ID=alias/stdapi-ai
+```
+
+#### `TENANT_AWS_CREDENTIALS` { #tenant-aws-credentials }
+
+:octicons-package-24: **Purpose**
+:   Let a tenant register an IAM role of its own AWS account (`aws_role_arn` on its tenant record), so that tenant's model invocations run under the tenant's account — its Amazon Bedrock model access, quotas and bill. The server assumes the role with a server-minted `ExternalId` (the AWS confused-deputy pattern); no secret is stored anywhere. See [Tenant AWS credentials](operations_authentication_security.md#tenant-aws-credentials)
+
+:octicons-gear-24: **Default**
+:   `false` — every request runs under the server's own identity, and a tenant record declaring `aws_role_arn` is refused rather than silently billed to the deployment
+
+:octicons-alert-24: **Requirement**
+:   Requires [`TENANT_API_KEYS`](#tenant-api-keys). Incompatible with Amazon Bedrock Guardrails ([`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](#aws-bedrock-guardrail-identifier) or a model-alias guardrail): a guardrail of this deployment's account cannot be evaluated by a tenant principal, so startup fails rather than serving tenant requests unguarded
+
+:octicons-shield-check-24: **Required IAM Permissions**
+:   `sts:AssumeRole` on the tenant roles — see [IAM permissions](operations_iam_permissions.md#tenant-aws-credentials)
+
+```bash
+export TENANT_AWS_CREDENTIALS=true
 ```
 
 ### Authentication Discovery for Agents { #oauth-discovery }

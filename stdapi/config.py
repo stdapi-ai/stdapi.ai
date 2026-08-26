@@ -1482,6 +1482,36 @@ class _Settings(BaseSettings):
         ),
     )
 
+    tenant_aws_credentials: bool = Field(
+        default=False,
+        description=(
+            "Let a tenant register an AWS IAM role of its own account against "
+            "its API key ('aws_role_arn' on the tenant record), so that "
+            "tenant's model invocations run under the tenant's AWS account: "
+            "its Amazon Bedrock quotas and its bill. The server assumes the "
+            "role with sts:AssumeRole, presenting a server-minted ExternalId "
+            "the role's trust policy must require (the AWS confused-deputy "
+            "pattern); no secret is stored anywhere, and the tenant revokes "
+            "the grant by editing its own trust policy.\n\n"
+            "Only the Converse and InvokeModel families are covered: "
+            "auxiliary services (Amazon Polly, Transcribe, Translate, "
+            "Comprehend, S3, Knowledge Bases) stay on this deployment's "
+            "account, and the Batch API, real-time sessions, asynchronous "
+            "(video) generation and Amazon Bedrock Mantle-only models are "
+            "refused for keys carrying a credential rather than billed to "
+            "the deployment.\n\n"
+            "Requires tenant_api_keys. Cannot be combined with Amazon Bedrock "
+            "Guardrails (aws_bedrock_guardrail_identifier or a model alias "
+            "guardrail): a guardrail of this deployment's account cannot be "
+            "evaluated by a tenant principal, and silently dropping it is not "
+            "an acceptable default.\n\n"
+            "Required IAM permissions: sts:AssumeRole on the tenant roles.\n\n"
+            "Disabled (default): every request runs under the server's own "
+            "identity, and a tenant record declaring 'aws_role_arn' is "
+            "refused rather than silently billed to the deployment."
+        ),
+    )
+
     authentication_mode: Literal["any", "api_key", "cognito"] = Field(
         default="any",
         description=(
@@ -3248,6 +3278,39 @@ class _Settings(BaseSettings):
             )
             raise ValueError(msg)
 
+    def _validate_tenant_credentials(self, *, alias_guardrail: bool) -> None:
+        """Refuse a tenant-credential configuration that cannot hold.
+
+        Args:
+            alias_guardrail: Whether any model alias configures a guardrail.
+
+        Raises:
+            ValueError: If tenant AWS credentials are enabled without tenant
+                API keys, or together with an Amazon Bedrock guardrail.
+        """
+        if not self.tenant_aws_credentials:
+            return
+        if not self.tenant_api_keys:
+            msg = (
+                "tenant_aws_credentials requires tenant_api_keys: the "
+                "credential is registered against a tenant record."
+            )
+            raise ValueError(msg)
+        # Fail closed at configuration time: a guardrail of this account
+        # cannot be evaluated by a tenant principal, and dropping it
+        # silently for tenant-signed requests is not an acceptable default.
+        if self.aws_bedrock_guardrail_identifier or alias_guardrail:
+            msg = (
+                "tenant_aws_credentials is incompatible with Amazon Bedrock "
+                "Guardrails (aws_bedrock_guardrail_identifier or a model "
+                "alias guardrail): a guardrail of this deployment's AWS "
+                "account cannot be evaluated by a tenant's own principal, "
+                "so tenant-signed requests would run unfiltered. Remove "
+                "the guardrail configuration, or disable "
+                "tenant_aws_credentials."
+            )
+            raise ValueError(msg)
+
     @model_validator(mode="after")
     def _validate(self) -> Self:
         """Perform cross-field validation and apply configuration defaults.
@@ -3291,6 +3354,8 @@ class _Settings(BaseSettings):
             and not alias_guardrail
         ):
             self.aws_bedrock_allow_guardrail_override = True
+
+        self._validate_tenant_credentials(alias_guardrail=alias_guardrail)
 
         if self.aws_bedrock_mantle_service_header and (
             self.aws_bedrock_guardrail_identifier

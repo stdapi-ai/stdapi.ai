@@ -9,6 +9,7 @@ then resolves a model by matching its identifier.
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
+from stdapi.api_errors import ApiError
 from stdapi.config import SETTINGS
 from stdapi.models import (
     MANTLE_MODELS,
@@ -18,7 +19,7 @@ from stdapi.models import (
     is_marketplace_endpoint,
     load_model_plugins,
 )
-from stdapi.monitoring import REQUEST
+from stdapi.monitoring import REQUEST, tenant_aws_credential
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -158,6 +159,11 @@ def serves_via_mantle(model_id: str) -> bool:
     Returns:
         True for Mantle-registered models, or when the (gated) per-request
         ``x-stdapi-service: bedrock-mantle`` header targets a dual-homed model.
+
+    Raises:
+        ApiError: The header asks for Mantle while the API key carries a
+            tenant AWS credential, which cannot sign (or pay for) a
+            Mantle-served request.
     """
     if (
         SETTINGS.aws_bedrock_mantle_service_header
@@ -165,6 +171,16 @@ def serves_via_mantle(model_id: str) -> bool:
         and (request := REQUEST.get(None)) is not None
         and request.headers.get("x-stdapi-service") == "bedrock-mantle"
     ):
+        if tenant_aws_credential() is not None:
+            # Refused rather than ignored: honoring it would bill the
+            # operator, ignoring it would silently drop what the caller asked.
+            msg = (
+                "Amazon Bedrock Mantle runs on this deployment's own AWS "
+                "account, which is not available for API keys that carry an "
+                "AWS credential of their own. Remove the 'x-stdapi-service' "
+                "header."
+            )
+            raise ApiError(msg)
         return True
     return is_mantle_served(model_id)
 
