@@ -191,3 +191,23 @@ async def test_map_tool_result_to_bedrock_rejects_tool_reference_block() -> None
     assert "ToolReferenceBlockParam" not in message, (
         "the internal class name must not leak into the client-facing error"
     )
+
+
+async def test_map_tool_result_keeps_an_mcp_tool_use_id_intact() -> None:
+    """An ``mcptoolu_`` identifier reaches Bedrock unchanged.
+
+    Only the ``toolu_`` prefix is stripped, and an MCP identifier does not carry
+    it, so the value must survive verbatim — the matching ``toolUse`` block goes
+    through the same rule, and Bedrock rejects a ``toolResult`` whose identifier
+    matches no call.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolResultBlock.html
+         stdapi/models/chat/_adapters/_anthropic_message.py:_map_tool_result_to_bedrock
+    """
+    mcp_id = "mcptoolu_01ABCdefGHIjklMNOpqrST"
+    block = ToolResultBlockParam(
+        type="tool_result", tool_use_id=mcp_id, content="the example server says hi"
+    )
+    result = await _map_tool_result_to_bedrock(block)
+    assert result["toolResult"]["toolUseId"] == mcp_id

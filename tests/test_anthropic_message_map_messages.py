@@ -672,3 +672,112 @@ class TestMapMessagesRoleMerging:
             allow_tool_caching=False,
         )
         assert result == []
+
+
+class TestReplayedMCPBlocks:
+    """``mcp_tool_use`` / ``mcp_tool_result`` replayed from an MCP-connector turn.
+
+    The gateway never runs the connector, so these blocks only ever arrive as
+    history.  They carry the same information as an ordinary tool call, and are
+    mapped as one: anything else loses the ``tool_use_id`` pairing and leaves the
+    model reading a tool it was told about but never saw called.
+
+    The connector records both blocks in the assistant turn; a whole request is
+    split into the alternating turns below before it reaches here, which is what
+    ``tests/test_anthropic_messages.py`` covers.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+         stdapi/types/anthropic_messages.py:MessageParam
+         stdapi/types/anthropic_messages.py:_split_recorded_mcp_turns
+    """
+
+    #: Identifier prefix Anthropic mints for an MCP tool call.
+    MCP_ID = "mcptoolu_01ABCdefGHIjklMNOpqrST"
+
+    @classmethod
+    def _replay(cls, *, is_error: bool = False) -> list[MessageParam]:
+        """Return a two-turn replay of one MCP tool call and its result."""
+        return [
+            MessageParam.model_validate(
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "mcp_tool_use",
+                            "id": cls.MCP_ID,
+                            "name": "lookup",
+                            "server_name": "example",
+                            "input": {"query": "hello"},
+                        }
+                    ],
+                }
+            ),
+            MessageParam.model_validate(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "mcp_tool_result",
+                            "tool_use_id": cls.MCP_ID,
+                            "is_error": is_error,
+                            "content": [{"type": "text", "text": "hi"}],
+                        }
+                    ],
+                }
+            ),
+        ]
+
+    async def test_mcp_blocks_become_a_paired_tool_use_and_tool_result(self) -> None:
+        """Both blocks map to the same ``toolUseId``, so the pair stays whole.
+
+        Bedrock rejects a ``toolResult`` whose ``toolUseId`` matches no
+        ``toolUse``, so an identifier rewritten on one side only would produce a
+        request that fails at run time and passes every unit test.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolResultBlock.html
+        """
+        use_msg, result_msg = await _map_messages(
+            self._replay(), allow_explicit_caching=False, allow_tool_caching=False
+        )
+
+        tool_use = use_msg["content"][0]["toolUse"]
+        tool_result = result_msg["content"][0]["toolResult"]
+        assert tool_use["toolUseId"] == tool_result["toolUseId"]
+        assert len(tool_use["toolUseId"]) <= 64, "Bedrock caps toolUseId at 64 chars"
+        assert re.fullmatch(r"[a-zA-Z0-9_.:-]+", tool_use["toolUseId"])
+
+    async def test_the_tool_call_keeps_its_name_and_arguments(self) -> None:
+        """Name and JSON arguments survive; the server name has no equivalent.
+
+        Flattening the call to prose would leave the model free to call the tool
+        again, which is the transcript corruption this mapping prevents.
+        """
+        use_msg, _result = await _map_messages(
+            self._replay(), allow_explicit_caching=False, allow_tool_caching=False
+        )
+
+        tool_use = use_msg["content"][0]["toolUse"]
+        assert tool_use["name"] == "lookup"
+        assert tool_use["input"] == {"query": "hello"}
+        assert "server_name" not in tool_use
+
+    async def test_a_failed_mcp_tool_result_keeps_its_error_status(self) -> None:
+        """``is_error`` becomes the Bedrock ``toolResult`` error status.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolResultBlock.html
+        """
+        _use, result_msg = await _map_messages(
+            self._replay(is_error=True),
+            allow_explicit_caching=False,
+            allow_tool_caching=False,
+        )
+
+        assert result_msg["content"][0]["toolResult"]["status"] == "error"
+
+    async def test_a_successful_mcp_tool_result_claims_no_error(self) -> None:
+        """``is_error: false`` must not be turned into an error status."""
+        _use, result_msg = await _map_messages(
+            self._replay(), allow_explicit_caching=False, allow_tool_caching=False
+        )
+
+        assert "status" not in result_msg["content"][0]["toolResult"]
