@@ -104,6 +104,9 @@ SQS_QUEUE_URL_RE = re.compile(
     r"/[0-9]{12}/(?P<name>[A-Za-z0-9_-]{1,80}(?:\.fifo)?)$"
 ).match
 
+#: Amazon DynamoDB table name, as the service accepts it.
+_DYNAMODB_TABLE_RE = re.compile(r"^[A-Za-z0-9_.-]{3,255}$").match
+
 #: Built-in set of ``anthropic_beta`` flags known to be supported by AWS Bedrock.
 _ANTHROPIC_BETA_BEDROCK_FLAGS: frozenset[str] = frozenset(
     {
@@ -1197,6 +1200,37 @@ class _Settings(BaseSettings):
             "Unset (default): no knowledge base is addressable, and a "
             "'vs_kb_...' identifier is answered exactly as an unknown vector "
             "store is."
+        ),
+    )
+
+    aws_dynamodb_table: str | None = Field(
+        default=None,
+        description=(
+            "Name of the Amazon DynamoDB table holding the records the "
+            "deployment's instances share. Features that need it name it in "
+            "their own documentation and are disabled while it is unset; no "
+            "table means no call and no charge.\n\n"
+            "Create the table yourself, with 'pk' (String) as its partition "
+            "key and 'sk' (String) as its sort key, on-demand capacity, and "
+            "time-to-live enabled on the 'expires_at' attribute. A sort key "
+            "cannot be added to an existing table, so a table created without "
+            "one has to be recreated. See "
+            "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html\n\n"
+            "Required IAM permissions, on the table ARN: dynamodb:GetItem, "
+            "dynamodb:PutItem, dynamodb:DeleteItem, dynamodb:Query, "
+            "dynamodb:DescribeTable and dynamodb:DescribeTimeToLive.\n\n"
+            "Example: 'stdapi-ai'\n\n"
+            "Unset (default): every feature that needs the table is disabled."
+        ),
+    )
+
+    aws_dynamodb_region: RegionName | None = Field(
+        default=None,
+        description=(
+            "AWS region holding aws_dynamodb_table. The table is a single "
+            "regional resource, so this setting has no failover.\n\n"
+            "Example: 'us-east-1'\n\n"
+            "Unset (default): the first aws_bedrock_regions entry."
         ),
     )
 
@@ -2853,6 +2887,27 @@ class _Settings(BaseSettings):
                 )
                 raise ValueError(msg)
 
+    def _validate_dynamodb(self) -> None:
+        """Ensure the shared DynamoDB table is named completely or not at all.
+
+        Raises:
+            ValueError: If the table name is not one DynamoDB accepts, or if a
+                region is set without a table for it to hold.
+        """
+        if table := self.aws_dynamodb_table:
+            if not _DYNAMODB_TABLE_RE(table):
+                msg = (
+                    "aws_dynamodb_table must be an Amazon DynamoDB table name: "
+                    "3 to 255 characters, letters, digits, '_', '-' and '.' only."
+                )
+                raise ValueError(msg)
+        elif self.aws_dynamodb_region:
+            msg = (
+                "aws_dynamodb_region requires aws_dynamodb_table: without a "
+                "table there is nothing in that region to reach."
+            )
+            raise ValueError(msg)
+
     @model_validator(mode="after")
     def _validate(self) -> Self:
         """Perform cross-field validation and apply configuration defaults.
@@ -2868,6 +2923,7 @@ class _Settings(BaseSettings):
         )
         self._validate_unique_routes_prefixes()
         self._validate_vector_stores()
+        self._validate_dynamodb()
         if (
             self.aws_bedrock_guardrail_identifier
             and not self.aws_bedrock_guardrail_version

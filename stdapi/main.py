@@ -44,6 +44,7 @@ from stdapi.aws_bedrock import (
 )
 from stdapi.aws_bedrock_mantle import set_mantle_project
 from stdapi.aws_bidi import drain_stream_closes, initialize_bidi_clients
+from stdapi.aws_dynamodb import table_client_specs, verify_table
 from stdapi.cleanup import (
     CLEANUPS,
     drain_cleanups,
@@ -248,6 +249,9 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 ),
                 # The indexing queue lives in the one region its URL names.
                 *((("sqs", region),) if (region := queue_region()) else ()),
+                # Nothing at all until a table is configured: the features
+                # sharing it are opt-in, and none is enabled by default.
+                *table_client_specs(),
             )
         ):
             # Not botocore clients, but they target the endpoints just resolved above.
@@ -282,6 +286,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                             initialize_moderation_models(),
                             verify_user_role_access(start_event),
                             verify_knowledge_bases(start_event),
+                            verify_table(start_event),
                             initialize_job_queue(start_event),
                             register(start_event),
                             return_exceptions=True,

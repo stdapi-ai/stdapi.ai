@@ -423,6 +423,43 @@ Required to keep indexing a vector store file when the server that accepted it s
 
 ---
 
+## :material-table: Shared Table (Optional) { #shared-table }
+
+**Environment Variables**: [`AWS_DYNAMODB_TABLE`](operations_configuration.md#aws-dynamodb-table), [`AWS_DYNAMODB_REGION`](operations_configuration.md#aws-dynamodb-region)
+
+Required by the features whose records every instance of a deployment reads and writes, on the one [Amazon DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html) table you create. Grant it on that table's ARN.
+
+??? example "Shared Table IAM Policy Statements"
+    ```json
+    {
+      "Sid": "SharedTable",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:Query",
+        "dynamodb:DescribeTable",
+        "dynamodb:DescribeTimeToLive"
+      ],
+      "Resource": "arn:aws:dynamodb:REGION:ACCOUNT_ID:table/TABLE_NAME"
+    }
+    ```
+
+    !!! info "Replace the Placeholders"
+        `REGION` is [`AWS_DYNAMODB_REGION`](operations_configuration.md#aws-dynamodb-region), `ACCOUNT_ID` your AWS account ID, and `TABLE_NAME` your [`AWS_DYNAMODB_TABLE`](operations_configuration.md#aws-dynamodb-table). Grant this on the table ARN itself — never on `*`.
+
+    !!! note "The table is yours to create"
+        The gateway never creates, deletes or reconfigures a table, so no `dynamodb:CreateTable`, `dynamodb:DeleteTable` or `dynamodb:UpdateTable` is granted. `dynamodb:DescribeTable` and `dynamodb:DescribeTimeToLive` are read-only and are what let the gateway report a table whose key schema or expiration is not what the features need.
+
+    !!! note "No index and no scan"
+        The table has no secondary index, so no index ARN is needed, and every read is addressed by key — `dynamodb:Scan` is deliberately not granted.
+
+    !!! note "If the table uses a customer managed key"
+        A table encrypted with a customer managed AWS KMS key needs no `kms:*` permission here: Amazon DynamoDB creates the grants it uses on your behalf when the table is created. Encryption at rest is always on, and the default AWS owned key is free.
+
+---
+
 ## :material-book-search: Knowledge Base Vector Stores (Optional) { #knowledge-base-vector-stores }
 
 **Environment Variables**: [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration.md#aws-bedrock-knowledge-base-ids)

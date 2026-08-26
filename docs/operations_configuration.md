@@ -177,6 +177,8 @@ This section provides a quick reference of all available configuration options. 
 | [`VECTOR_STORE_CHUNK_OVERLAP_TOKENS`](#vector-store-chunk-overlap-tokens) | `400` | Default chunk overlap; must not exceed half the chunk size                                 |
 | [`AWS_SQS_VECTOR_STORE_QUEUE_URL`](#aws-sqs-vector-store-queue-url) | None    | Amazon SQS queue making vector store indexing survive the server running it; unset keeps it in-process |
 | [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](#aws-bedrock-knowledge-base-ids) | `[]`    | Allowlist of Amazon Bedrock knowledge bases addressed as `vs_kb_...` vector stores; empty disables it |
+| [`AWS_DYNAMODB_TABLE`](#aws-dynamodb-table)             | None            | Amazon DynamoDB table holding the records a deployment's instances share; unset disables every feature needing it |
+| [`AWS_DYNAMODB_REGION`](#aws-dynamodb-region)           | First Bedrock region | Region holding `AWS_DYNAMODB_TABLE`; the table has no failover                                  |
 | [`AWS_TRANSCRIBE_S3_BUCKET`](#aws-transcribe-s3-bucket) | `AWS_S3_BUCKET` | S3 bucket for temporary audio transcription files; must be in same region as `AWS_TRANSCRIBE_REGION` |
 | [`AWS_TRANSCRIBE_OUTPUT_ENCRYPTION_KEY_ARN`](#aws-transcribe-output-encryption-key-arn) | None | AWS KMS key encrypting the transcription output objects; unset keeps the bucket's own encryption |
 | [`AWS_TRANSCRIBE_STREAM_LANGUAGES`](#aws-transcribe-stream-languages) | `[]`  | Languages a streamed transcription picks between when the request names none |
@@ -824,6 +826,44 @@ This setting is independent of [`AWS_S3_VECTORS_BUCKET`](#aws-s3-vectors-bucket)
 
 !!! info "What a knowledge base costs"
     A knowledge base search costs more than a search on a store the server owns, and a knowledge base backed by an always-on vector database bills whether it is queried or not. Both backends are offered so the choice is yours — see [Cost Management](operations_cost_management.md).
+
+#### `AWS_DYNAMODB_TABLE` { #aws-dynamodb-table }
+
+:octicons-package-24: **Purpose**
+:   Name of the [Amazon DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html) table holding the records the instances of a deployment share
+
+:octicons-gear-24: **Default**
+:   None — every feature that needs the table is disabled, no table is opened, and nothing is billed
+
+:octicons-alert-24: **Requirement**
+:   The table must already exist, with `pk` (String) as its **partition key** and `sk` (String) as its **sort key**, on-demand capacity, and [time to live](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html) enabled on the `expires_at` attribute. The gateway's role needs the [Shared Table permissions](operations_iam_permissions.md#shared-table) on it
+
+```bash
+export AWS_DYNAMODB_TABLE=stdapi-ai
+```
+
+The table is yours to create: the gateway reads and writes items, and never creates, deletes or reconfigures a table. The [official Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) creates one for you.
+
+!!! warning "The sort key cannot be added later"
+    Amazon DynamoDB fixes a table's key schema when the table is created, so a table made with `pk` alone has to be recreated rather than altered. The gateway checks the key schema at startup and reports a mismatch as a startup warning.
+
+!!! info "What the table costs"
+    On-demand capacity has no idle charge, the records are kilobytes, and expiring items are deleted without consuming write throughput — so a table nothing writes to bills essentially nothing. See [Amazon DynamoDB pricing](https://aws.amazon.com/dynamodb/pricing/on-demand/).
+
+#### `AWS_DYNAMODB_REGION` { #aws-dynamodb-region }
+
+:octicons-package-24: **Purpose**
+:   AWS region holding [`AWS_DYNAMODB_TABLE`](#aws-dynamodb-table)
+
+:octicons-gear-24: **Default**
+:   The first [`AWS_BEDROCK_REGIONS`](#aws-bedrock-regions) entry
+
+:octicons-alert-24: **Requirement**
+:   Must be the table's own region, and requires [`AWS_DYNAMODB_TABLE`](#aws-dynamodb-table); startup fails when it is set alone. A table is a regional resource, so this setting has no failover: if the region is unreachable, so is every feature built on the table
+
+```bash
+export AWS_DYNAMODB_REGION=us-east-1
+```
 
 #### `AWS_TRANSCRIBE_S3_BUCKET` { #aws-transcribe-s3-bucket }
 
