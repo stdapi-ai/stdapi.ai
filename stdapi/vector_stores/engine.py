@@ -380,6 +380,11 @@ async def resolve_embedding_model() -> tuple[str, int]:
     immutable, so a wrong value would only surface when the first file is
     indexed.
 
+    The model is the deployment's own, never one the caller named, so it is
+    resolved outside the calling tenant's model scope: searching or indexing an
+    existing store embeds with it unchecked, and refusing it only on creation
+    would answer a tenant with a model identifier it never sent.
+
     Returns:
         ``(model_id, dimensions)``.
 
@@ -388,7 +393,10 @@ async def resolve_embedding_model() -> tuple[str, int]:
     """
     model_id = (
         await validate_model(
-            SETTINGS.vector_store_embedding_model, "EMBEDDING", route="openai_embedding"
+            SETTINGS.vector_store_embedding_model,
+            "EMBEDDING",
+            route="openai_embedding",
+            tenant_scope=False,
         )
     ).id
     vectors = await _embed(model_id, ["."])

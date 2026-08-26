@@ -502,6 +502,57 @@ Required by the features whose records every instance of a deployment reads and 
 
 ---
 
+## :material-key-multiple: Tenant API Key Delivery (Optional) { #tenant-key-delivery }
+
+**Environment Variables**: [`TENANT_API_KEYS`](operations_configuration.md#tenant-api-keys), [`TENANT_KEY_SSM_PARAMETER_PREFIX`](operations_configuration.md#tenant-key-ssm-parameter-prefix), [`TENANT_KEY_SSM_KMS_KEY_ID`](operations_configuration.md#tenant-key-ssm-kms-key-id)
+
+Required, together with the [shared table permissions](#shared-table), when [tenant API keys](operations_authentication_security.md#tenant-api-keys) are enabled. The gateway writes each minted key exactly once (`PutParameter` refuses to overwrite), and reads a parameter back only to recover a mint that crashed between delivery and recording. Grant it on the delivery prefix and nothing wider.
+
+??? example "Tenant Key Delivery IAM Policy Statement"
+    ```json
+    {
+      "Sid": "TenantKeyDelivery",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:PutParameter",
+        "ssm:GetParameter"
+      ],
+      "Resource": "arn:aws:ssm:REGION:ACCOUNT_ID:parameter/PREFIX/*"
+    }
+    ```
+
+    !!! info "Replace the Placeholders"
+        `REGION` is the deployment's own Region, `ACCOUNT_ID` your AWS account ID, and `/PREFIX` your [`TENANT_KEY_SSM_PARAMETER_PREFIX`](operations_configuration.md#tenant-key-ssm-parameter-prefix) — the parameter ARN concatenates `parameter` and the prefix's leading slash.
+
+    !!! note "One prefix per deployment"
+        Any principal allowed to read under the prefix can read every tenant's key, and the gateway role itself can read them back — unless [`TENANT_KEY_SSM_KMS_KEY_ID`](operations_configuration.md#tenant-key-ssm-kms-key-id) names a key of your own, which also takes `kms:Decrypt` on it. Keep the prefix private to one deployment, and delete each parameter once its key is delivered — the gateway never needs it again.
+
+??? example "Customer Managed Key Statement (with `TENANT_KEY_SSM_KMS_KEY_ID`)"
+    Add this statement when the delivery parameters are encrypted with a key of your own instead of the AWS-managed `alias/aws/ssm` key. `kms:Encrypt` covers writing a standard `SecureString`, `kms:Decrypt` covers reading one back, and `kms:GenerateDataKey` is only needed if the account's default parameter tier creates advanced parameters. The `kms:ViaService` condition keeps the grant usable through Parameter Store alone.
+
+    ```json
+    {
+      "Sid": "TenantKeyDeliveryKms",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Encrypt",
+        "kms:Decrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Resource": "arn:aws:kms:REGION:ACCOUNT_ID:key/KEY_ID",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "ssm.REGION.amazonaws.com"
+        }
+      }
+    }
+    ```
+
+    !!! info "Replace the Placeholders"
+        `REGION` is the deployment's own Region, `ACCOUNT_ID` your AWS account ID, and `KEY_ID` the key's own identifier. `Resource` is always the key ARN, even where `TENANT_KEY_SSM_KMS_KEY_ID` names the key by alias: KMS does not accept an alias ARN as the resource of a cryptographic action.
+
+---
+
 ## :material-book-search: Knowledge Base Vector Stores (Optional) { #knowledge-base-vector-stores }
 
 **Environment Variables**: [`AWS_BEDROCK_KNOWLEDGE_BASE_IDS`](operations_configuration.md#aws-bedrock-knowledge-base-ids)

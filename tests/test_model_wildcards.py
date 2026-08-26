@@ -29,6 +29,7 @@ from stdapi.config import SETTINGS
 from stdapi.models import ModelDetails, validate_model
 from stdapi.models.capabilities import ROUTE_CAPABILITIES
 from stdapi.models.deprecation import DEPRECATED_MODELS
+from stdapi.monitoring import TENANT, Tenant
 from stdapi.types.anthropic_messages import (
     MessageCountTokensParams,
     MessageCreateParams,
@@ -307,6 +308,64 @@ class TestSelection:
             await validate_model("vendor.dual-*", "EMBEDDING", route=_EMBEDDING_ROUTE)
         ).id == "vendor.dual-embed-v1:0"
         assert request_log["model_id"] == "vendor.dual-embed-v1:0"
+
+
+class TestTenantScope:
+    """A pattern resolves within the calling tenant's model scope, not around it.
+
+    Narrowing the candidate set by tenant scope during selection, instead of
+    only after a model is chosen, is what lets a pattern select the newest
+    model the tenant may actually use rather than the newest model in the
+    whole catalogue -- which the tenant's key may not be scoped to at all.
+
+    Ref: stdapi/models/__init__.py:_resolve_model_wildcard
+         stdapi/monitoring.py:Tenant.allows_model
+    """
+
+    async def test_pattern_selects_the_newest_model_within_scope(
+        self,
+        catalog: Callable[[dict[str, ModelDetails]], None],
+        request_log: dict[str, Any],
+    ) -> None:
+        """The newest overall match is out of scope, so the pattern takes the in-scope one."""
+        catalog(
+            _seed(
+                in_scope=_model("vendor.family-9-v1:0", _OLDER),
+                out_of_scope=_model("vendor.family-10-v1:0", _NEWER),
+            )
+        )
+        token = TENANT.set(
+            Tenant(
+                key_id="tk_scoped", name="scoped", models_allow=("vendor.family-9-*",)
+            )
+        )
+        try:
+            resolved = await validate_model("vendor.family-*", route=_CHAT_ROUTE)
+        finally:
+            TENANT.reset(token)
+        assert resolved.id == "vendor.family-9-v1:0"
+
+    async def test_pattern_matching_only_out_of_scope_models_names_the_pattern(
+        self, catalog: Callable[[dict[str, ModelDetails]], None]
+    ) -> None:
+        """No in-scope match reads as no such model, naming the pattern the caller sent.
+
+        Not the model the pattern would have selected outside the tenant's
+        scope: that model was never a candidate, so it is never named back.
+        """
+        catalog(_seed(out_of_scope=_model("vendor.family-10-v1:0", _NEWER)))
+        token = TENANT.set(
+            Tenant(key_id="tk_scoped", name="scoped", models_allow=("vendor.other-*",))
+        )
+        try:
+            with pytest.raises(UnsupportedModelError) as raised:
+                await validate_model("vendor.family-*", route=_CHAT_ROUTE)
+        finally:
+            TENANT.reset(token)
+        assert raised.value.status == 404
+        assert raised.value.code == "model_not_found"
+        assert "vendor.family-*" in str(raised.value)
+        assert "vendor.family-10-v1:0" not in str(raised.value)
 
 
 class TestExcludedFromSelection:

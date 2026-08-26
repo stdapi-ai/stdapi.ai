@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends
 
-from stdapi.api_errors import ApiError
+from stdapi.api_errors import ApiError, UnsupportedModelError
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.aws_bedrock import (
@@ -43,7 +43,12 @@ from stdapi.models.moderation.amazon_bedrock_guardrail_checks import (
 from stdapi.models.moderation.amazon_comprehend import (
     ModerationModel as ComprehendModerationModel,
 )
-from stdapi.monitoring import REQUEST_ID, log_request_params, log_response_params
+from stdapi.monitoring import (
+    REQUEST_ID,
+    TENANT,
+    log_request_params,
+    log_response_params,
+)
 from stdapi.types.openai_moderations import (
     ModerationCreateParams,
     ModerationCreateResponse,
@@ -108,7 +113,8 @@ _INPUT_BATCH_SIZE: int = 10
         400: {
             "description": "Invalid input, disallowed model selection, or "
             "image input not supported by the selected model."
-        }
+        },
+        404: {"description": "Model not found."},
     },
     openapi_extra={
         "requestBody": {
@@ -167,13 +173,14 @@ async def create_moderation(
     # each backend is built with its own model ID, which is what usage is billed
     # against.
     if body.model == GUARDRAIL_CHECKS_MODERATION_MODEL:
-        model = body.model
+        model, model_id = body.model, GUARDRAIL_CHECKS_MODERATION_MODEL
         moderation_model: ModerationModelBase = GuardrailChecksModerationModel(
             GUARDRAIL_CHECKS_MODERATION_MODEL
         )
     elif (resolved := resolve_moderation_model(body.model)) is not None:
         identifier, version = resolved
         model = body.model or f"{identifier}:{version}"
+        model_id = GUARDRAIL_MODERATION_MODEL
         moderation_model = GuardrailModerationModel(
             GUARDRAIL_MODERATION_MODEL, identifier, version
         )
@@ -183,12 +190,21 @@ async def create_moderation(
         # No guardrail configured: an omitted model or an omni-moderation-*
         # alias uses guardrail checks before Comprehend as a last resort.
         model = body.model or GUARDRAIL_CHECKS_MODERATION_MODEL
+        model_id = GUARDRAIL_CHECKS_MODERATION_MODEL
         moderation_model = GuardrailChecksModerationModel(
             GUARDRAIL_CHECKS_MODERATION_MODEL, comprehend_fallback=True
         )
     else:
         model = body.model or COMPREHEND_MODERATION_MODEL
+        model_id = COMPREHEND_MODERATION_MODEL
         moderation_model = ComprehendModerationModel(COMPREHEND_MODERATION_MODEL)
+    # The tenant model scope, applied here rather than in ``validate_model``:
+    # this route picks its backend itself, so the model resolution every other
+    # route funnels the check through never runs. On the ID served and billed,
+    # never the spelling the request wrote, and refused as not found -- to a
+    # tenant, a model outside its scope does not exist.
+    if (tenant := TENANT.get()) is not None and not tenant.allows_model(model_id):
+        raise UnsupportedModelError(model)
     results: list[Moderation] = []
     for batch in batched(items, _INPUT_BATCH_SIZE, strict=False):
         results.extend(await gather(*map(moderation_model.moderate, batch)))

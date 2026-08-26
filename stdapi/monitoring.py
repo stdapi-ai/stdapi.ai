@@ -3,6 +3,7 @@
 from contextlib import contextmanager, nullcontext, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from re import compile as re_compile
 from time import perf_counter_ns
 from traceback import format_exception
@@ -171,6 +172,78 @@ class Principal:
 
 #: Verified caller of the current request; None when no identity was authenticated.
 PRINCIPAL: ContextVar[Principal | None] = ContextVar("principal", default=None)
+
+
+@dataclass(frozen=True, slots=True)
+class Tenant:
+    """Tenant whose API key the gateway verified for the current request.
+
+    The scope patterns follow :func:`fnmatch.fnmatchcase`: ``*`` and ``?``
+    match any characters, including ``/`` and ``.``. A list that was never set
+    is ``None`` and restricts nothing; a list set empty allows nothing.
+
+    Attributes:
+        key_id: Public identifier of the tenant's key, safe in logs.
+        name: Name the operator declared the tenant under.
+        models_allow: Patterns the resolved model ID must match, when set.
+        models_deny: Patterns refusing a resolved model ID, checked first.
+        endpoints_allow: Patterns the route path template must match, when set.
+        endpoints_deny: Patterns refusing a route path template, checked first.
+    """
+
+    key_id: str
+    name: str
+    models_allow: tuple[str, ...] | None = None
+    models_deny: tuple[str, ...] = ()
+    endpoints_allow: tuple[str, ...] | None = None
+    endpoints_deny: tuple[str, ...] = ()
+
+    @staticmethod
+    def _allows(
+        value: str, allow: tuple[str, ...] | None, deny: tuple[str, ...]
+    ) -> bool:
+        """Evaluate one allow/deny pattern pair against *value*.
+
+        Args:
+            value: The candidate the patterns are matched against.
+            allow: Patterns at least one of which must match, when set.
+            deny: Patterns none of which may match, checked first.
+
+        Returns:
+            True when *value* is within scope.
+        """
+        if any(fnmatchcase(value, pattern) for pattern in deny):
+            return False
+        if allow is None:
+            return True
+        return any(fnmatchcase(value, pattern) for pattern in allow)
+
+    def allows_model(self, model_id: str) -> bool:
+        """Whether this tenant's key may invoke *model_id*.
+
+        Args:
+            model_id: The resolved model ID, after alias resolution, so an
+                alias can never launder a denied model.
+
+        Returns:
+            True when the model is within the key's scope.
+        """
+        return self._allows(model_id, self.models_allow, self.models_deny)
+
+    def allows_endpoint(self, path: str) -> bool:
+        """Whether this tenant's key may call the route at *path*.
+
+        Args:
+            path: The route's path template, e.g. ``/v1/chat/completions``.
+
+        Returns:
+            True when the route is within the key's scope.
+        """
+        return self._allows(path, self.endpoints_allow, self.endpoints_deny)
+
+
+#: Verified tenant of the current request; None when no tenant key was presented.
+TENANT: ContextVar[Tenant | None] = ContextVar("tenant", default=None)
 
 #: Request ID (x-request-id header)
 REQUEST_ID: ContextVar[str] = ContextVar("request_id")
@@ -941,6 +1014,37 @@ def _api_error_sse_event(exc: ApiError) -> ServerSentEvent:
     )
 
 
+def _stream_backend_error(
+    exc: ClientError | HTTPClientError | BotocoreConnectionError,
+) -> ApiError | tuple[int, str]:
+    """Classify a backend failure that ended a stream after the headers went out.
+
+    Shared by every transport, so a mapping fix reaches all of them: only the
+    rendering of the terminal event differs between SSE and NDJSON.
+
+    Args:
+        exc: The backend exception that ended the stream.
+
+    Returns:
+        The API error to render, which the caller still has to log, or the
+        already-logged ``(status, client-safe message)`` pair to render one from.
+    """
+    if isinstance(exc, ClientError):
+        if (denied := denied_feature_unavailable(exc)) is not None:
+            return denied
+        error = exc.response["Error"]
+        status = AWS_ERROR_MAP.get(error["Code"], (502, "server_error"))[0]
+        log_error_details(error["Message"], status=status)
+        return status, (
+            "The request could not be completed. Retry the request."
+            if status >= 500
+            else hide_security_details(status, error["Message"])
+        )
+    status = AWS_ERROR_MAP.get(exc.__class__.__name__, (503, "server_error"))[0]
+    log_error_details(str(exc), status=status)
+    return status, "The service is temporarily unavailable. Retry the request."
+
+
 async def log_request_sse_stream_event(
     stream: AsyncGenerator[ServerSentEvent],
 ) -> AsyncGenerator[ServerSentEvent]:
@@ -967,34 +1071,14 @@ async def log_request_sse_stream_event(
         log_error_details(exc.args[0], status=exc.status, level=exc.level)
     except ApiError as exc:
         yield _api_error_sse_event(exc)
-    except ClientError as exc:
-        if (denied := denied_feature_unavailable(exc)) is not None:
-            yield _api_error_sse_event(denied)
+    except (ClientError, HTTPClientError, BotocoreConnectionError) as exc:
+        detail = _stream_backend_error(exc)
+        if isinstance(detail, ApiError):
+            yield _api_error_sse_event(detail)
             return
-        error = exc.response["Error"]
-        status = AWS_ERROR_MAP.get(error["Code"], (502, "server_error"))[0]
-        log_error_details(error["Message"], status=status)
-        message = (
-            "The request could not be completed. Retry the request."
-            if status >= 500
-            else hide_security_details(status, error["Message"])
-        )
+        status, message = detail
         yield ServerSentEvent(
             data=to_json_str(format_http_error(REQUEST.get(), status, message)[0]),
-            event="error",
-        )
-    except (HTTPClientError, BotocoreConnectionError) as exc:
-        message = str(exc)
-        status = AWS_ERROR_MAP.get(exc.__class__.__name__, (503, "server_error"))[0]
-        log_error_details(message, status=status)
-        yield ServerSentEvent(
-            data=to_json_str(
-                format_http_error(
-                    REQUEST.get(),
-                    status,
-                    "The service is temporarily unavailable. Retry the request.",
-                )[0]
-            ),
             event="error",
         )
     except Exception as exc:  # noqa: BLE001
@@ -1016,14 +1100,20 @@ def resolve_request_identity() -> str | None:
 
     Returns:
         The verified caller's subject, else the identifier the request declared,
-        else None.
+        else the verified tenant's key ID, else None.
 
     Raises:
         LookupError: If called outside a request context with no verified caller.
     """
     if (principal := PRINCIPAL.get()) is not None:
         return principal.subject
-    return REQUEST_LOG.get().get("request_user_id")
+    # The declared identifier outranks the tenant: it is finer-grained, and the
+    # tenant key that authorized the request bounds who can declare one.
+    if user_id := REQUEST_LOG.get().get("request_user_id"):
+        return user_id
+    if (tenant := TENANT.get()) is not None:
+        return tenant.key_id
+    return None
 
 
 def build_metadata(
