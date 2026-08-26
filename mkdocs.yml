@@ -75,6 +75,7 @@ nav:
             - Embeddings: api_openai_embeddings.md
             - Moderations: api_openai_moderations.md
             - Models: api_openai_models.md
+            - Organization Usage: api_openai_organization_usage.md
           - Anthropic Compatible:
             - Messages: api_anthropic_messages.md
             - Message Batches: api_anthropic_batches.md
