@@ -301,10 +301,12 @@ Publishing where tokens come from lets an AI agent authenticate itself — see [
 
 ### :material-chart-box-outline: CloudWatch Metrics { #summary-cloudwatch-metrics }
 
-| Variable                                                            | Default  | Description                                                            |
-|-----------------------------------------------------------------------|----------|--------------------------------------------------------------------|
-| [`CLOUDWATCH_METRICS`](#cloudwatch-metrics)                     | `false`  | Emit per-request AWS-billed usage as CloudWatch EMF log lines      |
-| [`CLOUDWATCH_METRICS_NAMESPACE`](#cloudwatch-metrics-namespace) | `stdapi` | CloudWatch namespace for the emitted usage metrics                 |
+| Variable                                                                    | Default               | Description                                                            |
+|-----------------------------------------------------------------------------|-----------------------|------------------------------------------------------------------|
+| [`CLOUDWATCH_METRICS`](#cloudwatch-metrics)                                 | `false`               | Emit per-request AWS-billed usage as CloudWatch EMF log lines      |
+| [`CLOUDWATCH_METRICS_NAMESPACE`](#cloudwatch-metrics-namespace)             | `stdapi`              | CloudWatch namespace for the emitted usage metrics                 |
+| [`CLOUDWATCH_METRICS_USER_DIMENSION`](#cloudwatch-metrics-user-dimension)   | `false`               | Also publish the authenticated caller as a `User` metric dimension  |
+| [`CLOUDWATCH_METRICS_REGION`](#cloudwatch-metrics-region)                   | Server's region       | Region the [Usage API](#usage-api-section) reads the published metrics from |
 
 ### :material-currency-usd: Cost Tracking { #summary-cost-tracking }
 
@@ -312,6 +314,16 @@ Publishing where tokens come from lets an AI agent authenticate itself — see [
 |-----------------------------------------------------------------|----------------|-----------------------------------------------------------------------|
 | [`COST_TRACKING`](#cost-tracking)                           | `false`        | Enable real-time cost computation from live AWS pricing                |
 | [`COST_PRICE_OVERRIDES`](#cost-price-overrides)             | `{}`           | JSON map of operator-supplied unit prices for models missing from the AWS catalog |
+
+### :material-chart-timeline-variant: Usage API { #summary-usage-api }
+
+| Variable                                                    | Default | Description                                                                       |
+|-------------------------------------------------------------|---------|-----------------------------------------------------------------------------------|
+| [`USAGE_API`](#usage-api)                                   | `false` | Serve the organization usage and costs endpoints (requires `CLOUDWATCH_METRICS`)  |
+| [`USAGE_API_ADMIN_SCOPES`](#usage-api-admin-scopes)         | None    | OAuth 2.0 scopes an Amazon Cognito token must all carry to read these endpoints   |
+| [`USAGE_API_MAX_METRICS`](#usage-api-max-metrics)           | `500`   | Refuse a query that would read more metric series than this                       |
+| [`USAGE_API_MAX_RANGE_DAYS`](#usage-api-max-range-days)     | `92`    | Longest span between `start_time` and `end_time` on a query                       |
+| [`USAGE_API_CACHE_TTL`](#usage-api-cache-ttl)               | `60`    | Seconds an answered query is reused for (`0` disables the cache)                  |
 
 ### :material-radar: Observability (OpenTelemetry) { #summary-observability }
 
@@ -3905,6 +3917,42 @@ export CLOUDWATCH_METRICS=true
 export CLOUDWATCH_METRICS_NAMESPACE=my-app-metrics
 ```
 
+#### `CLOUDWATCH_METRICS_USER_DIMENSION` { #cloudwatch-metrics-user-dimension }
+
+:octicons-package-24: **Purpose**
+:   Also publish the authenticated caller as a `User` metric dimension. This is what makes `group_by=user_id` answerable on the [Usage API](api_openai_organization_usage.md); without it, those queries have no per-user series to read.
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false`
+
+:octicons-alert-24: **Requirement**
+:   [`CLOUDWATCH_METRICS`](#cloudwatch-metrics) and [`USAGE_API`](#usage-api) must both be enabled
+
+!!! warning "The cardinality of this dimension is your caller population"
+    Off by default because it adds one stored metric series per user × model × metric name, and Amazon CloudWatch bills every stored custom metric monthly. Enable it only where the number of distinct callers is bounded and known — see [Usage API Query Cost](operations_cost_management.md#usage-api-cost).
+
+```bash
+export CLOUDWATCH_METRICS_USER_DIMENSION=true
+```
+
+#### `CLOUDWATCH_METRICS_REGION` { #cloudwatch-metrics-region }
+
+:octicons-package-24: **Purpose**
+:   Region the [Usage API](api_openai_organization_usage.md) reads the published metrics from. Metrics are published in the region the server's logs are ingested in, which is the server's own region by default — set this only when the logs are shipped elsewhere, because a mismatch makes every usage query answer with empty buckets.
+
+:octicons-database-24: **Type**
+:   String (AWS region name)
+
+:octicons-gear-24: **Default**
+:   The region the server runs in — its configured AWS region, or the first [`AWS_BEDROCK_REGIONS`](#aws-bedrock-regions) entry when none is set
+
+```bash
+export CLOUDWATCH_METRICS_REGION=eu-west-1
+```
+
 #### `COST_TRACKING` { #cost-tracking }
 
 :octicons-package-24: **Purpose**
@@ -3930,6 +3978,126 @@ export COST_TRACKING=true
 
 :octicons-gear-24: **Default**
 :   `{}`
+
+---
+
+## :material-chart-timeline-variant: Usage API { #usage-api-section }
+
+The [Organization Usage and Costs API](api_openai_organization_usage.md) serves the OpenAI Administration usage and costs endpoints from the metrics this deployment already publishes. It is **opt-in and off by default**; while it is off, the routes do not exist at all.
+
+The routes it adds, under the configured [`OPENAI_ROUTES_PREFIX`](#openai-routes-prefix):
+
+```text
+/v1/organization/usage/completions
+/v1/organization/usage/embeddings
+/v1/organization/usage/moderations
+/v1/organization/usage/images
+/v1/organization/usage/audio_speeches
+/v1/organization/usage/audio_transcriptions
+/v1/organization/usage/web_search_calls
+/v1/organization/usage/file_search_calls
+/v1/organization/usage/vector_stores
+/v1/organization/usage/code_interpreter_sessions
+/v1/organization/costs
+```
+
+!!! warning "Prerequisites"
+    - [`CLOUDWATCH_METRICS`](#cloudwatch-metrics) must be enabled: the usage endpoints read the metrics it publishes, and answer nothing without them.
+    - `/v1/organization/costs` additionally requires [`COST_TRACKING`](#cost-tracking), which is what puts a cost on the published metrics.
+    - The role needs `cloudwatch:GetMetricData` and `cloudwatch:ListMetrics` — see [Usage API IAM Permissions](operations_iam_permissions.md#usage-api-iam).
+
+!!! danger "These queries are billed, and are not in the CloudWatch free tier"
+    Amazon CloudWatch bills each query by the number of metric series it reads, and enabling the Usage API also publishes the usage metrics under an extra dimension set that is billed monthly. A single client polling the endpoints once a minute is a recurring three-figure monthly charge on a large catalogue. Read [Usage API Query Cost](operations_cost_management.md#usage-api-cost) before enabling it, and keep the limits below at their defaults unless you have priced the change.
+
+#### `USAGE_API` { #usage-api }
+
+:octicons-package-24: **Purpose**
+:   Serve the [organization usage and costs endpoints](api_openai_organization_usage.md). When disabled, the routes do not exist at all. Enabling it also publishes the usage metrics under an additional dimension set, which carries its own [monthly cost](operations_cost_management.md#usage-api-cost).
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false`
+
+:octicons-alert-24: **Requirement**
+:   [`CLOUDWATCH_METRICS`](#cloudwatch-metrics) enabled; `/v1/organization/costs` additionally requires [`COST_TRACKING`](#cost-tracking)
+
+```bash
+export USAGE_API=true
+```
+
+#### `USAGE_API_ADMIN_SCOPES` { #usage-api-admin-scopes }
+
+:octicons-package-24: **Purpose**
+:   OAuth 2.0 scopes an [Amazon Cognito](#cognito-authentication) token must **all** carry to read these endpoints. Left empty, no user pool token is accepted and only the deployment's own [`API_KEY`](#api-key) may read them. A [tenant API key](#tenant-api-keys) is never accepted, whatever this is set to — organization-wide usage is not a tenant's to read.
+
+:octicons-database-24: **Type**
+:   Comma-separated list of scope names
+
+:octicons-gear-24: **Default**
+:   Empty — admin API key only
+
+```bash
+export USAGE_API_ADMIN_SCOPES=stdapi/admin,stdapi/usage.read
+```
+
+#### `USAGE_API_MAX_METRICS` { #usage-api-max-metrics }
+
+:octicons-package-24: **Purpose**
+:   Refuse a query that would read more metric series than this, **before** it is billed. A query over the limit is rejected rather than served, so a client narrows its `group_by` or its time range instead of running up the bill.
+
+:octicons-database-24: **Type**
+:   Integer
+
+:octicons-gear-24: **Default**
+:   `500`
+
+:octicons-alert-24: **Requirement**
+:   1–500 — 500 is also the Amazon CloudWatch per-request maximum
+
+```bash
+# Tighter cap on a deployment with a large model catalogue
+export USAGE_API_MAX_METRICS=100
+```
+
+#### `USAGE_API_MAX_RANGE_DAYS` { #usage-api-max-range-days }
+
+:octicons-package-24: **Purpose**
+:   Longest span allowed between `start_time` and `end_time` on a query. A longer range is rejected rather than served, so a client cannot ask for a year of daily buckets in one call.
+
+:octicons-database-24: **Type**
+:   Integer (days)
+
+:octicons-gear-24: **Default**
+:   `92`
+
+:octicons-alert-24: **Requirement**
+:   1–455
+
+```bash
+# One month per query
+export USAGE_API_MAX_RANGE_DAYS=31
+```
+
+#### `USAGE_API_CACHE_TTL` { #usage-api-cache-ttl }
+
+:octicons-package-24: **Purpose**
+:   Seconds an answered query is reused for. This is what makes a polling client affordable: within the TTL, repeated identical queries are served from the cached answer and cost nothing. Set `0` to disable the cache — every query then reaches Amazon CloudWatch and is billed.
+
+:octicons-database-24: **Type**
+:   Integer (seconds)
+
+:octicons-gear-24: **Default**
+:   `60`
+
+:octicons-alert-24: **Requirement**
+:   0–3600
+
+```bash
+# Longer reuse window for dashboards that poll aggressively
+export USAGE_API_CACHE_TTL=300
+```
 
 ---
 

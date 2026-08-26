@@ -77,6 +77,11 @@ stdapi.ai provides multiple resources for exploring and testing the API—choose
 |                   | `POST/GET/DELETE /v1/vector_stores/{id}/files`, `…/file_batches` | Attach, list, read and detach the indexed files          | [Vector Stores →](api_openai_vector_stores.md)         |
 | **📦 Batches**    | `POST/GET /v1/batches`            | Run a file of requests asynchronously at the batch price                    | [Batches →](api_openai_batches.md)                     |
 |                   | `POST /v1/batches/{id}/cancel`    | Cancel a running batch                                                      | [Batches →](api_openai_batches.md)                     |
+| **📊 Usage**      | `GET /v1/organization/usage/completions`, `…/embeddings`, `…/moderations`, `…/images`, `…/audio_speeches`, `…/audio_transcriptions`, `…/web_search_calls`, `…/file_search_calls`, `…/vector_stores`, `…/code_interpreter_sessions` | Consumption in time buckets, grouped by model, endpoint, key or user | [Organization Usage →](api_openai_organization_usage.md) |
+|                   | `GET /v1/organization/costs`      | Spend in time buckets, in your AWS partition's currency                     | [Organization Usage →](api_openai_organization_usage.md) |
+
+!!! info "The usage endpoints are an administrator surface"
+    `/v1/organization/...` reports the whole deployment's consumption and spend, so it is **disabled by default** — enable it with [`USAGE_API`](operations_configuration.md#usage-api) and read it with the deployment's own API key, or a token carrying every scope in [`USAGE_API_ADMIN_SCOPES`](operations_configuration.md#usage-api-admin-scopes). The retired `GET /v1/usage` endpoint is not served: it is absent from OpenAI's current API surface and from the `openai` SDK.
 
 ### :material-magnify: stdapi.ai Native Extensions
 

@@ -17,6 +17,7 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from decimal import Decimal
 from math import ceil
+from re import compile as regex_compile
 from time import time_ns
 from typing import TYPE_CHECKING, Final, Literal, TypedDict
 
@@ -38,7 +39,7 @@ from stdapi.pricing import (
 from stdapi.utils import stdout_write
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Callable, Iterable, Mapping
 
     from pydantic import JsonValue
     from types_aiobotocore_bedrock_runtime.literals import ServiceTierTypeType
@@ -115,6 +116,8 @@ class UsageRecord:
     routing: Routing = ""  # See resolve_price's `routing`.
     context: ContextLength = ""  # See resolve_price's `context`.
     quantities: dict[Dimension, int] = field(default_factory=dict)
+    # Billed backend invocations aggregated into this record (one per recorder call).
+    requests: int = 0
     # Informational only (Converse API); not billed, no Dimension
     total_tokens: int = 0
     # By cache TTL bucket ("5m"/"1h"): AWS charges each TTL differently.
@@ -152,6 +155,7 @@ class UsageLogEntry(TypedDict, total=False):
     cost: str  # Exact plain-decimal text -- see format_cost
     currency: str
     costs: dict[str, str]  # Populated when dimensions spanned more than one currency
+    requests: int  # Billed backend invocations aggregated into this entry
     input_tokens: int
     output_tokens: int
     total_tokens: int
@@ -337,6 +341,7 @@ def _record_usage(
         record = records[key] = UsageRecord(
             service, model, operation, effective_region, tier, routing, context
         )
+    record.requests += 1
     if billed_externally:
         record.billed_externally = True
     for dimension, value in quantities_to_add.items():
@@ -1037,6 +1042,8 @@ def usage_log_entries() -> list[UsageLogEntry]:
         for dimension, info in _DIMENSION_INFO.items():
             if (value := record.quantities.get(dimension, 0)) > 0:
                 entry[info.log_key] = value  # type: ignore[literal-required]
+        if record.requests > 0:
+            entry["requests"] = record.requests
         if record.total_tokens > 0:
             entry["total_tokens"] = record.total_tokens
         for name in _BREAKDOWN_FIELDS:
@@ -1046,12 +1053,152 @@ def usage_log_entries() -> list[UsageLogEntry]:
     return entries
 
 
+#: EMF metric counting the billed backend invocations behind a usage record.
+REQUESTS_METRIC: Final = "Requests"
+
+#: Route paths, after their provider prefix, mapped to the ``Operation`` metric
+#: dimension values. Deliberately an allow list: a path this table does not name
+#: publishes no Operation dimension at all, so the dimension can never take a
+#: caller-controlled value nor an unbounded number of them.
+_OPERATION_DIMENSIONS: Final[tuple[tuple[Callable[[str], object], str], ...]] = tuple(
+    (regex_compile(pattern).fullmatch, name)
+    for pattern, name in (
+        (r"/v1/chat/completions", "chat.completions"),
+        (r"/v1/completions", "completions"),
+        (r"/v1/responses", "responses"),
+        (r"/v1/messages", "messages"),
+        (r"/v[12]/embed(dings)?", "embeddings"),
+        (r"/v[12]/rerank", "rerank"),
+        (r"/v1/moderations", "moderations"),
+        (r"/v1/audio/speech", "audio.speech"),
+        (r"/v1/audio/transcriptions", "audio.transcriptions"),
+        (r"/v1/audio/translations", "audio.translations"),
+        (r"/v1/images/generations", "images.generations"),
+        (r"/v1/images/edits", "images.edits"),
+        (r"/v1/images/variations", "images.variations"),
+        (r"/v1/videos", "videos"),
+        (r"/v1/realtime", "realtime"),
+        (r"/v1/vector_stores/[^/]+/search", "vector_stores.search"),
+    )
+)
+
+#: Configured provider route prefixes, longest first, stripped before matching.
+_ROUTE_PREFIXES: Final[tuple[str, ...]] = tuple(
+    sorted(
+        {
+            prefix
+            for prefix in (
+                SETTINGS.openai_routes_prefix,
+                SETTINGS.anthropic_routes_prefix,
+                SETTINGS.cohere_routes_prefix,
+            )
+            if prefix
+        },
+        key=len,
+        reverse=True,
+    )
+)
+
+
+def metric_operation(operation: str) -> str:
+    """Map a recorded operation to its ``Operation`` metric dimension value.
+
+    Args:
+        operation: The recorded operation, which is the request's route path.
+
+    Returns:
+        The stable dimension value, or "" when the route has none.
+    """
+    for prefix in _ROUTE_PREFIXES:
+        if operation.startswith(prefix):
+            operation = operation[len(prefix) :]
+            break
+    for matches, name in _OPERATION_DIMENSIONS:
+        if matches(operation):
+            return name
+    return ""
+
+
+def _caller_dimensions() -> dict[str, str]:
+    """Return the caller-identifying EMF dimension fields for this request.
+
+    Both are opt-in, because each one multiplies the number of stored metric
+    series: the tenant key only exists where tenant keys are issued, and the
+    user is behind ``cloudwatch_metrics_user_dimension`` since its cardinality
+    is the caller population rather than the operator's own key list.
+
+    Returns:
+        The dimension name/value pairs to publish, empty when the usage API is
+        off or the request carries neither identity.
+    """
+    if not SETTINGS.usage_api:
+        return {}
+    # Imported here: stdapi.monitoring imports this module (import cycle).
+    from stdapi.monitoring import PRINCIPAL, TENANT  # noqa: PLC0415
+
+    fields: dict[str, str] = {}
+    if (tenant := TENANT.get()) is not None:
+        fields["ApiKey"] = tenant.key_id
+    if (
+        SETTINGS.cloudwatch_metrics_user_dimension
+        and (principal := PRINCIPAL.get()) is not None
+    ):
+        fields["User"] = principal.subject
+    return fields
+
+
+def _quantity_dimension_sets(
+    operation: str, caller: Mapping[str, str]
+) -> list[JsonValue]:
+    """Build the dimension sets a record's quantity metrics are published under.
+
+    Args:
+        operation: The record's ``Operation`` dimension value, "" when it has none.
+        caller: The caller-identifying dimension fields of this request.
+
+    Returns:
+        One list of dimension names per set, always starting with the
+        ``["Model"]`` roll-up every deployment publishes.
+    """
+    sets: list[JsonValue] = [["Model"]]
+    if not operation:
+        return sets
+    sets.append(["Model", "Operation"])
+    sets.extend(["Model", "Operation", name] for name in caller)
+    return sets
+
+
+def _quantity_metrics(record: UsageRecord) -> tuple[list[JsonValue], dict[str, int]]:
+    """Build a record's non-zero quantity metrics and their EMF values.
+
+    Args:
+        record: The usage record to read the quantities from.
+
+    Returns:
+        The EMF metric declarations and the field values they name.
+    """
+    metrics: list[JsonValue] = []
+    payload: dict[str, int] = {}
+    for dimension, info in _DIMENSION_INFO.items():
+        if (value := record.quantities.get(dimension, 0)) > 0:
+            metrics.append({"Name": info.emf_name, "Unit": info.emf_unit})
+            payload[info.emf_name] = value
+    if record.requests > 0:
+        metrics.append({"Name": REQUESTS_METRIC, "Unit": "Count"})
+        payload[REQUESTS_METRIC] = record.requests
+    return metrics, payload
+
+
 def emit_usage_metrics() -> None:
     """Write one EMF line per usage record when ``cloudwatch_metrics`` is on.
 
     Each line carries only non-zero metric fields. ``Model`` is the dimension;
     ``Currency`` is added when a cost is resolved (EMF requires declared
     dimensions to have matching fields). Emitted directly to stdout.
+
+    With ``usage_api`` on, the same metrics are also published under
+    ``Operation`` (and, where the request carries one, the tenant key or the
+    caller), which is what makes the per-endpoint usage surface queryable.
 
     Multi-currency records emit one line per currency, quantity metrics only
     on the first line to avoid double-counting.
@@ -1061,13 +1208,13 @@ def emit_usage_metrics() -> None:
     if not (records := USAGE.get(None)):
         return
     timestamp = time_ns() // 1_000_000
+    caller = _caller_dimensions()
+    # Off by default: the extra dimension sets are extra stored metric series,
+    # and only the usage API reads them.
+    split_endpoints = SETTINGS.usage_api
+    namespace = SETTINGS.cloudwatch_metrics_namespace
     for record in records.values():
-        quantity_metrics: list[JsonValue] = []
-        quantities_payload: dict[str, int] = {}
-        for dimension, info in _DIMENSION_INFO.items():
-            if (value := record.quantities.get(dimension, 0)) > 0:
-                quantity_metrics.append({"Name": info.emf_name, "Unit": info.emf_unit})
-                quantities_payload[info.emf_name] = value
+        quantity_metrics, quantities_payload = _quantity_metrics(record)
 
         cost_by_currency = record.costs or (
             {record.currency: record.cost}
@@ -1077,10 +1224,21 @@ def emit_usage_metrics() -> None:
         if not quantity_metrics and not cost_by_currency:
             continue
 
+        operation = metric_operation(record.operation) if split_endpoints else ""
         base: dict[str, JsonValue] = {
             "Model": record.model,
             "operation": record.operation,
         }
+        if operation:
+            base["Operation"] = operation
+            base.update(caller)
+        quantity_sets = _quantity_dimension_sets(operation, caller)
+        # Cost carries the tenant key and nothing else: it is the only caller
+        # axis the costs endpoint reports, so a per-user cost series would be
+        # stored, and billed, with no reader.
+        cost_sets: list[JsonValue] = [["Model", "Currency"]]
+        if operation and "ApiKey" in caller:
+            cost_sets.append(["Model", "Currency", "ApiKey"])
 
         if not cost_by_currency:
             stdout_write(
@@ -1091,8 +1249,8 @@ def emit_usage_metrics() -> None:
                         "Timestamp": timestamp,
                         "CloudWatchMetrics": [
                             {
-                                "Namespace": SETTINGS.cloudwatch_metrics_namespace,
-                                "Dimensions": [["Model"]],
+                                "Namespace": namespace,
+                                "Dimensions": quantity_sets,
                                 "Metrics": quantity_metrics,
                             }
                         ],
@@ -1114,8 +1272,8 @@ def emit_usage_metrics() -> None:
             # Cost bare-by-Model -- silently summing currencies.
             directives: list[JsonValue] = [
                 {
-                    "Namespace": SETTINGS.cloudwatch_metrics_namespace,
-                    "Dimensions": [["Model", "Currency"]],
+                    "Namespace": namespace,
+                    "Dimensions": cost_sets,
                     "Metrics": [{"Name": "Cost", "Unit": "None"}],
                 }
             ]
@@ -1123,8 +1281,8 @@ def emit_usage_metrics() -> None:
                 directives.insert(
                     0,
                     {
-                        "Namespace": SETTINGS.cloudwatch_metrics_namespace,
-                        "Dimensions": [["Model"]],
+                        "Namespace": namespace,
+                        "Dimensions": quantity_sets,
                         "Metrics": quantity_metrics,
                     },
                 )

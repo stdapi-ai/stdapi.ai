@@ -1,7 +1,7 @@
 ---
 title: Cost Management - Amazon Bedrock Gateway Spend, Pricing & Attribution
 description: Understand and control what stdapi.ai costs — AWS Marketplace vs AWS-billed models and credit eligibility, infrastructure and license cost, per-request cost estimation from published AWS prices, and per-user cost attribution.
-keywords: AWS Bedrock cost, AI gateway pricing, AWS Marketplace billing, AWS credits, Bedrock cost tracking, cost attribution, FinOps AWS AI, LLM cost management
+keywords: AWS Bedrock cost, AI gateway pricing, AWS Marketplace billing, AWS credits, Bedrock cost tracking, cost attribution, FinOps AWS AI, LLM cost management, CloudWatch GetMetricData cost, usage API cost
 ---
 
 # :material-cash-multiple: Cost Management
@@ -386,6 +386,57 @@ To split the **AWS bill itself** per end user, give each one an identity of thei
 
 ---
 
+## :material-chart-timeline-variant: Usage API Query Cost { #usage-api-cost }
+
+The [Organization Usage and Costs API](api_openai_organization_usage.md) answers from the metrics this deployment publishes to Amazon CloudWatch, and **CloudWatch bills both halves of that**: the metric series it stores every month, and every metric a query reads. This is the one feature on this page whose own cost can rival a small model workload, so it is [off by default](operations_configuration.md#usage-api) and priced here rather than discovered on an invoice.
+
+Rates below are `us-east-1`, read from the AWS Price List API (`AmazonCloudWatch`) on 2026-08-26 and cross-checked against the [CloudWatch pricing page](https://aws.amazon.com/cloudwatch/pricing/). They differ by region and they move — price your own before enabling.
+
+| Charge                       | Rate                                                | Free tier                                             |
+|:-----------------------------|:-----------------------------------------------------|:-------------------------------------------------------|
+| `cloudwatch:GetMetricData`   | **$0.00001 per metric requested** ($0.01 per 1,000)  | **None — explicitly excluded**                          |
+| `cloudwatch:ListMetrics`     | $0.01 per 1,000 requests                             | 1,000,000 requests per month                            |
+| Stored custom metric series  | $0.30 per metric-month, first 10,000                 | —                                                       |
+
+!!! danger "The free tier does not cover the query that matters"
+    CloudWatch's 1,000,000 free API requests per month sound like they cover this. They do not: `GetMetricData` is excluded from that allowance, and it is billed **per metric series requested**, not per call — so a single call reading 108 series is charged for 108 metrics, from the first request onwards.
+
+### What a Query Costs
+
+On a deployment serving ~79 models, one `group_by=model` query against `/v1/organization/usage/completions` reads roughly 108 series:
+
+| Usage pattern                               | ~79 models                | A few hundred models        |
+|:--------------------------------------------|:--------------------------|:-----------------------------|
+| One query                                   | ≈ **$0.00108**            | ≈ $0.003–$0.010              |
+| One client polling once a minute, 30 days   | ≈ **$47/month**           | **$130–$430/month**          |
+
+That figure is **per polling client**: two dashboards on the same schedule cost twice as much, and a shorter poll interval scales it linearly until the [response cache](operations_configuration.md#usage-api-cache-ttl) absorbs it.
+
+### What Enabling It Costs at Rest
+
+Turning [`USAGE_API`](operations_configuration.md#usage-api) on also publishes the usage metrics under an additional `Model`+`Operation` dimension set, so the endpoints can answer per-model *and* per-endpoint. Those extra series are stored metrics, billed monthly whether or not a single query is ever made — roughly **$120–$180/month** on a 79-model deployment, scaling with the number of models actually used.
+
+!!! warning "`CLOUDWATCH_METRICS_USER_DIMENSION` has no upper bound"
+    [`CLOUDWATCH_METRICS_USER_DIMENSION`](operations_configuration.md#cloudwatch-metrics-user-dimension) is what makes `group_by=user_id` answerable, and it adds one further series **per user × model × metric name**. Its cardinality is your caller population, so its cost is unbounded by anything the deployment controls. Enable it only where that population is small and known.
+
+### The Four Protections
+
+Each is a setting, and each default is chosen to keep the bill predictable:
+
+| Protection                                                                          | Default | What it prevents                                                                                     |
+|:------------------------------------------------------------------------------------|:--------|:------------------------------------------------------------------------------------------------------|
+| [`USAGE_API`](operations_configuration.md#usage-api)                                | `false` | Everything above. While it is off the endpoints refuse and the extra series are not published.        |
+| [`USAGE_API_CACHE_TTL`](operations_configuration.md#usage-api-cache-ttl)            | `60` s  | A polling client billing every poll. Within the TTL an identical query is served from cache and costs nothing — and a client polling faster than the bucket width learns nothing new anyway. |
+| [`USAGE_API_MAX_METRICS`](operations_configuration.md#usage-api-max-metrics)        | `500`   | A wide `group_by` reading thousands of series. The query is refused **before** it is billed.          |
+| [`USAGE_API_MAX_RANGE_DAYS`](operations_configuration.md#usage-api-max-range-days)  | `92`    | A single call asking for a year of daily buckets.                                                     |
+
+Lower `USAGE_API_MAX_METRICS` and raise `USAGE_API_CACHE_TTL` on a large catalogue; the defaults are a ceiling, not a target.
+
+!!! note "`/v1/organization/costs` reports your AWS bill, not your customers' invoices"
+    It reports what **AWS bills this deployment** for serving the requests, on the same [estimated basis](#cost-tracking-real-time-aws-pricing) as the request logs. It is not a reseller's revenue figure: if you bill your own clients at a markup, or at a flat rate, that number is yours to compute and does not appear here.
+
+---
+
 ## :material-server: Gateway Cost
 
 Secondary for most deployments — read this section if you run under a hard cost constraint or at low traffic, where the gateway's fixed floor is a visible share of the bill.
@@ -404,7 +455,7 @@ The [Terraform module](operations_getting_started.md) provisions:
 | **S3 vector bucket** (optional)   | Created with `aws_s3_vectors_bucket_create`; billed on stored vectors and on the bytes each search reads — see [Vector Stores](#vector-stores) |
 | **SQS queue** + dead-letter queue (optional) | Created with `aws_sqs_vector_store_queue_create`; a handful of requests per attached file, plus one long poll per task every 20 seconds |
 | **DynamoDB table** (optional)     | Created with `aws_dynamodb_table_create`; on-demand, so nothing at rest — billed only by the features that use it, see [Model List Sharing](#model-list-sharing) |
-| **CloudWatch** logs, metrics, alarms | Grows with log verbosity and EMF metric volume                         |
+| **CloudWatch** logs, metrics, alarms | Grows with log verbosity and EMF metric volume; the [Usage API](#usage-api-cost) adds stored metric series and a per-query charge on top |
 | **KMS**, IAM, networking          | Keys and roles; NAT/VPC endpoints only when the module creates the network |
 | **WAF** (optional)                | Per-rule and per-request charges when `alb_waf_enabled = true`            |
 

@@ -44,6 +44,7 @@ from stdapi.aws_bedrock import (
 )
 from stdapi.aws_bedrock_mantle import set_mantle_project
 from stdapi.aws_bidi import drain_stream_closes, initialize_bidi_clients
+from stdapi.aws_cloudwatch import add_usage_api_warnings, metrics_region
 from stdapi.aws_dynamodb import table_client_specs, verify_table
 from stdapi.cleanup import (
     CLEANUPS,
@@ -266,6 +267,9 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:  # noqa: PLR0915 - one l
                 *table_client_specs(),
                 # Delivers minted tenant keys; nothing until the feature is on.
                 *tenant_key_client_specs(),
+                # Only warmed for the usage API, its sole consumer: the metrics
+                # are published through the log stream, never through a client.
+                *((("cloudwatch", metrics_region()),) if SETTINGS.usage_api else ()),
             )
         ):
             # Not botocore clients, but they target the endpoints just resolved above.
@@ -323,6 +327,8 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:  # noqa: PLR0915 - one l
                         "('aws_bedrock_batch_role_arn' not set): "
                         "the Batch APIs are disabled",
                     )
+                if SETTINGS.usage_api:
+                    add_usage_api_warnings(start_event)
                 if deprecated := SETTINGS.deprecated():
                     add_server_warning(
                         start_event,

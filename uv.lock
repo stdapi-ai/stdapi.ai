@@ -2911,7 +2911,7 @@ dev = [
     { name = "pytest-xdist", extra = ["psutil"] },
     { name = "ruff" },
     { name = "stdapi", extra = ["granian", "mcp", "opentelemetry", "uvicorn"] },
-    { name = "types-aiobotocore", extra = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "comprehend", "meteringmarketplace", "polly", "pricing", "s3", "ssm", "sts", "transcribe", "translate"] },
+    { name = "types-aiobotocore", extra = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "cloudwatch", "comprehend", "meteringmarketplace", "polly", "pricing", "s3", "ssm", "sts", "transcribe", "translate"] },
     { name = "types-pyyaml" },
 ]
 docs = [
@@ -2929,7 +2929,7 @@ lint = [
     { name = "pyarrow" },
     { name = "ruff" },
     { name = "stdapi", extra = ["opentelemetry", "uvicorn"] },
-    { name = "types-aiobotocore", extra = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "comprehend", "meteringmarketplace", "polly", "pricing", "s3", "ssm", "sts", "transcribe", "translate"] },
+    { name = "types-aiobotocore", extra = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "cloudwatch", "comprehend", "meteringmarketplace", "polly", "pricing", "s3", "ssm", "sts", "transcribe", "translate"] },
     { name = "types-pyyaml" },
 ]
 test = [
@@ -3005,7 +3005,7 @@ dev = [
     { name = "stdapi" },
     { name = "stdapi", extras = ["opentelemetry", "uvicorn"] },
     { name = "stdapi", extras = ["opentelemetry", "uvicorn", "granian", "mcp"] },
-    { name = "types-aiobotocore", extras = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "polly", "comprehend", "meteringmarketplace", "pricing", "s3", "ssm", "sts", "transcribe", "translate"], specifier = ">=3.8" },
+    { name = "types-aiobotocore", extras = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "cloudwatch", "polly", "comprehend", "meteringmarketplace", "pricing", "s3", "ssm", "sts", "transcribe", "translate"], specifier = ">=3.8" },
     { name = "types-pyyaml" },
 ]
 docs = [
@@ -3024,7 +3024,7 @@ lint = [
     { name = "ruff" },
     { name = "stdapi" },
     { name = "stdapi", extras = ["opentelemetry", "uvicorn"] },
-    { name = "types-aiobotocore", extras = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "polly", "comprehend", "meteringmarketplace", "pricing", "s3", "ssm", "sts", "transcribe", "translate"], specifier = ">=3.8" },
+    { name = "types-aiobotocore", extras = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "cloudwatch", "polly", "comprehend", "meteringmarketplace", "pricing", "s3", "ssm", "sts", "transcribe", "translate"], specifier = ">=3.8" },
     { name = "types-pyyaml" },
 ]
 test = [
@@ -3137,6 +3137,9 @@ bedrock-agent-runtime = [
 bedrock-runtime = [
     { name = "types-aiobotocore-bedrock-runtime" },
 ]
+cloudwatch = [
+    { name = "types-aiobotocore-cloudwatch" },
+]
 comprehend = [
     { name = "types-aiobotocore-comprehend" },
 ]
@@ -3190,6 +3193,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b1/d4/4b8b3a32f9c489650d37557c97b08b2fa0a1e4821516a87bdf3b07fc8c8a/types_aiobotocore_bedrock_runtime-3.9.0.tar.gz", hash = "sha256:fd4ce6134f4996343d23b07249c246e9c86e032580fb01f89ca0740cc5831c44", size = 31471, upload-time = "2026-08-02T02:57:37.204Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/35/b1/42d5ac89f7616a6555644896b52a174c29f9b7eca76498a5f46f2081ed1d/types_aiobotocore_bedrock_runtime-3.9.0-py3-none-any.whl", hash = "sha256:dc469ac0ce8d11d6e0097ba97116774cc653fb963fc3481dadeb4632658f6f56", size = 38159, upload-time = "2026-08-02T02:57:34.672Z" },
+]
+
+[[package]]
+name = "types-aiobotocore-cloudwatch"
+version = "3.9.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/48/a9/836a065734709e96228eba430038505c0e85c7234551ea458be90ff6e17b/types_aiobotocore_cloudwatch-3.9.0.tar.gz", hash = "sha256:1a7da73f8869af29ed8f8eae0b228e763dc572b4f4a8428b61297195817427b2", size = 40086, upload-time = "2026-08-02T02:58:08.965Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fe/58/fc7b47b6a87cabab596ed4081b0054b633a5229aa9d77dc9bb64a5aca747/types_aiobotocore_cloudwatch-3.9.0-py3-none-any.whl", hash = "sha256:ed975558c364cfba6dee5b66395d539e1fa1ff2fc34f295c52a60dc6e4067582", size = 50107, upload-time = "2026-08-02T02:58:07.096Z" },
 ]
 
 [[package]]

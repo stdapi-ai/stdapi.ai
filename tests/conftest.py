@@ -305,6 +305,7 @@ environ.update(
         # exporter endpoint, and its retries drown the captured server output.
         "otel_sample_rate": "0.0",
         "cloudwatch_metrics": "true",
+        "usage_api": "true",
         "trusted_hosts": '["*"]',
         # Model-specific extra configuration
         "aws_bedrock_legacy": "true",
