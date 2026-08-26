@@ -213,18 +213,72 @@ def feature_unavailable_guard(
 #: Feature name a denial no call site named a feature for is refused under.
 _DENIED_FEATURE: Final = "The requested feature"
 
+#: AWS error codes meaning a tenant role session died under the call signed with it.
+_TENANT_SESSION_ERROR_CODES: Final = frozenset(
+    {
+        "ExpiredTokenException",
+        "UnrecognizedClientException",
+        "InvalidSignatureException",
+    }
+)
 
-def denied_feature_unavailable(exc: ClientError) -> FeatureUnavailableError | None:
+
+def _tenant_signed_denial(exc: ClientError, operation: str) -> ApiError | None:
+    """Answer a refusal of a tenant-signed call as the tenant's own 403.
+
+    AWS evaluated the tenant's own principal, so the refusal is neither an
+    outage of this deployment (503) nor the caller's API key being wrong
+    (401). The fixed messages carry nothing of the AWS failure: its raw text
+    names principals and resources, and the generic handlers would otherwise
+    map a dead session to an authentication error against the API key.
+
+    Args:
+        exc: The AWS client error to classify.
+        operation: AWS API operation the failing call invoked.
+
+    Returns:
+        The 403 to answer the tenant with, or ``None`` when *exc* is not a
+        tenant-signed denial.
+    """
+    # Imported here: both modules import this one (import cycle).
+    from stdapi.aws import (  # noqa: PLC0415
+        TENANT_ACCESS_DENIED_MESSAGE,
+        TENANT_CREDENTIAL_FAILURE_MESSAGE,
+        drop_tenant_sessions,
+        signed_as_tenant,
+    )
+
+    code = exc.response["Error"]["Code"]
+    if not signed_as_tenant(operation):
+        return None
+    if code in ACCESS_DENIED_CODES:
+        return ApiError(TENANT_ACCESS_DENIED_MESSAGE, status=403)
+    if code in _TENANT_SESSION_ERROR_CODES:
+        # Imported here: stdapi.monitoring imports this module (import cycle).
+        from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
+
+        # Dropped so the next request opens a fresh session instead of
+        # re-signing with the dead one for up to an hour.
+        log = REQUEST_LOG.get(None)
+        if log is not None and (key_id := log.get("aws_tenant_key_id")):
+            drop_tenant_sessions(key_id)
+        return ApiError(TENANT_CREDENTIAL_FAILURE_MESSAGE, status=403)
+    return None
+
+
+def denied_feature_unavailable(exc: ClientError) -> ApiError | None:
     """Answer a denial of the server's own role as a feature the deployment lacks.
 
     Last resort for the denials no call site wrapped in
     :func:`feature_unavailable_guard`, so that one under-permissioned
     deployment answers the same way on every route.
 
-    A model invocation signed as its end user (``aws_bedrock_user_role_arn``)
-    is the exception: AWS evaluated a policy written about *that* caller, an
-    authorization decision the deployment makes on purpose, so it stays the
-    caller's own permission error instead of reading as an outage.
+    Two request-attributable identities are the exception, because AWS
+    evaluated a policy written about *that* caller rather than about this
+    deployment: a model invocation signed with the tenant's registered AWS
+    credential answers the tenant's own fixed 403, and one signed as its end
+    user (``aws_bedrock_user_role_arn``) stays the caller's own permission
+    error instead of reading as an outage.
 
     The other request-attributable denial never reaches here: an object the
     caller named in an ``s3://`` input is refused as
@@ -238,13 +292,15 @@ def denied_feature_unavailable(exc: ClientError) -> FeatureUnavailableError | No
         The error to answer the caller with, or ``None`` when *exc* is not a
         denial of the server's own role.
     """
+    operation = exc.operation_name
+    if (tenant_denial := _tenant_signed_denial(exc, operation)) is not None:
+        return tenant_denial
     if exc.response["Error"]["Code"] not in ACCESS_DENIED_CODES:
         return None
     # Imported here: both modules import this one (import cycle).
     from stdapi.aws import signed_as_end_user  # noqa: PLC0415
     from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
 
-    operation = exc.operation_name
     if signed_as_end_user(operation):
         return None
     log = REQUEST_LOG.get(None)
