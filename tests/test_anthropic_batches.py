@@ -17,6 +17,7 @@ Ref: https://platform.claude.com/docs/en/build-with-claude/batch-processing
 """
 
 import contextlib
+from datetime import datetime
 from time import monotonic, sleep
 from typing import TYPE_CHECKING, Any
 
@@ -659,6 +660,45 @@ class TestMessageBatchLifecycle:
             f"{_PATH}?limit=1&before_id={oldest}"
         ).json()
         assert [item["id"] for item in backwards["data"]] == [middle]
+
+    def test_paging_a_listing_orders_by_the_times_it_reports(
+        self, anthropic_app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Message Batches page back newest first, reporting times in that order.
+
+        Two batches submitted at once, one large and one small, finish
+        submitting in the opposite order to the one they were named in, so a
+        creation time read when submission ends can disagree with a listing
+        that orders on the identifier. The scripted clock below stands in for
+        that overlap: the first batch is the slow one. Both invariants are
+        asserted together, since either alone passes on a listing that
+        publishes an order it does not use.
+
+        Ref: https://platform.claude.com/docs/en/api/listing-message-batches
+             stdapi/batches.py:list_batches
+        """
+        _batches.install(monkeypatch)
+        submitted = iter((2_000_000_030, 2_000_000_010, 2_000_000_020))
+        with monkeypatch.context() as clock:
+            clock.setattr(batches, "now_utc_timestamp", lambda: next(submitted))
+            oldest, middle, newest = (
+                _create(anthropic_app_client, _requests(100))["id"] for _ in range(3)
+            )
+
+        paged: list[dict[str, Any]] = []
+        cursor: str | None = None
+        for _page in range(3):
+            body = anthropic_app_client.get(
+                f"{_PATH}?limit=1{f'&after_id={cursor}' if cursor else ''}"
+            ).json()
+            assert cursor not in [item["id"] for item in body["data"]]
+            paged.extend(body["data"])
+            cursor = paged[-1]["id"]
+            assert body["has_more"] is (len(paged) < 3)
+
+        assert [item["id"] for item in paged] == [newest, middle, oldest]
+        times = [datetime.fromisoformat(item["created_at"]) for item in paged]
+        assert times == sorted(times, reverse=True), times
 
     def test_unknown_batch_is_not_found(
         self, anthropic_app_client: TestClient, monkeypatch: pytest.MonkeyPatch

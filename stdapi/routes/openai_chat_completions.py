@@ -251,10 +251,11 @@ async def create_chat_completion(
         result.metadata = request.metadata
         if store:
             # A locally stored result must carry the server-assigned ID so the
-            # stored surface (GET/DELETE/messages) can serve it: some backends
-            # (e.g. Mantle passthrough) ignore completion_id and return their
-            # own upstream ID.
+            # stored surface (GET/DELETE/messages) can serve it, and the
+            # creation time the listing orders on: some backends (e.g. Mantle
+            # passthrough) ignore both and answer with their own upstream ones.
             result.id = completion_id
+            result.created = created
             try:
                 await save_stored_response(
                     completion_id,
@@ -506,7 +507,9 @@ async def list_chat_completions(
         }
     )
     sessions = await list_stored_sessions("chat_completion")
-    sessions.sort(key=lambda session: session[1], reverse=order == "desc")
+    # Tie-break on the ID: the reported time is whole seconds, so a cursor over
+    # a partial order could skip or repeat a completion between two pages.
+    sessions.sort(key=lambda session: (session[1], session[0]), reverse=order == "desc")
     ids = [f"chatcmpl-{session_id}" for session_id, _ in sessions]
     if after is not None:
         index = next((i for i, id_ in enumerate(ids) if id_ == after), None)
