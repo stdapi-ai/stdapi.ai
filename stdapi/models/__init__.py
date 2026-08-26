@@ -5,7 +5,7 @@ from asyncio import timeout as async_timeout
 from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from importlib import import_module
 from pkgutil import iter_modules
@@ -21,7 +21,7 @@ from botocore.exceptions import (
     ReadTimeoutError,
 )
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
-from pydantic import AwareDatetime, BaseModel, Field, JsonValue
+from pydantic import AwareDatetime, BaseModel, Field, JsonValue, ValidationError
 from pydantic_core import from_json, to_json
 
 import stdapi.region_routing as _region_routing
@@ -54,6 +54,7 @@ from stdapi.aws_s3 import (
     require_s3_bucket_for_region,
     track_temporary_s3_objects,
 )
+from stdapi.cleanup import drain_tasks
 from stdapi.config import SETTINGS, ModelAliasConfig
 from stdapi.exceptions import ServerError
 from stdapi.input_file import (
@@ -64,6 +65,7 @@ from stdapi.input_file import (
     plan_bedrock_media_transport,
     resolve_all_bedrock_content_blocks,
 )
+from stdapi.models import _shared_cache
 from stdapi.models.capabilities import ROUTE_CAPABILITIES, Capability
 from stdapi.models.deprecation import DEPRECATED_MODELS
 from stdapi.models.pricing_overrides import (
@@ -81,6 +83,7 @@ from stdapi.monitoring import (
     EventLog,
     add_server_warning,
     build_metadata,
+    log_background_event,
     log_error_details,
 )
 from stdapi.pricing import (
@@ -100,9 +103,11 @@ from stdapi.utils import (
     match_bedrock_prompt_arn,
     match_bedrock_prompt_router_arn,
     match_marketplace_endpoint_arn,
+    webuuid,
 )
 
 if TYPE_CHECKING:
+    from asyncio import Task
     from collections.abc import (
         AsyncGenerator,
         AsyncIterable,
@@ -138,8 +143,12 @@ if TYPE_CHECKING:
         """Model cache configuration."""
 
         update_next: AwareDatetime | None
+        updated_at: AwareDatetime | None
         update_interval: timedelta
+        max_stale: timedelta
         update_lock: Lock
+        refresh_task: Task[None] | None
+        generation: int
         access_lock: Lock
         user_profiles_access_lock: Lock
         prompts_access_lock: Lock
@@ -454,13 +463,26 @@ _TWIN_SEPARATORS = re_compile(r"[^a-z0-9]+")
 #: Model cache state
 _CACHE: _ModelCache = {
     "update_next": None,
+    "updated_at": None,
     "update_lock": Lock(),
     "update_interval": timedelta(seconds=SETTINGS.model_cache_seconds),
+    "max_stale": timedelta(seconds=SETTINGS.model_cache_max_stale_seconds),
+    "refresh_task": None,
+    "generation": 0,
     "access_lock": Lock(),
     "user_profiles_access_lock": Lock(),
     "prompts_access_lock": Lock(),
     "batch_price_source": None,
 }
+
+#: The background refresh in flight, held until it completes or the server stops.
+_REFRESH_TASKS: Final[set[Task[None]]] = set()
+
+#: Longest wait before retrying a refresh that failed or lost the shared lease.
+_REFRESH_RETRY_SECONDS: Final = 60
+
+#: Age, in refresh intervals, past which a failing refresh is reported as an error.
+_DEGRADED_INTERVALS: Final = 2
 
 #: Always-allowed inference types
 _INFERENCE_TYPES = {"INFERENCE_PROFILE", "ON_DEMAND"}
@@ -691,6 +713,12 @@ class ModelDetails(BaseModel):
         if self.inference_profiles_regional is None:
             self.inference_profiles_regional = {}
         self.inference_profiles_regional[region] = name
+
+
+#: ModelDetails fields kept out of its public form, and out of every dump with it.
+_PRIVATE_MODEL_FIELDS: Final[tuple[str, ...]] = tuple(
+    name for name, field in ModelDetails.model_fields.items() if field.exclude
+)
 
 
 class ModelBase[RequestT, ResponseT]:
@@ -2436,12 +2464,187 @@ async def _collect_all_models(
     return all_models, invalid_arn_mappings
 
 
+def catalog_generation() -> int:
+    """Count the times the model catalog has changed since the server started.
+
+    What a listing route rebuilds its own cached payload from: a background
+    refresh completes without any request awaiting it, so the caller that
+    triggered a refresh is not the caller that must be told about its result.
+
+    Returns:
+        The current catalog generation.
+    """
+    return _CACHE["generation"]
+
+
+def _refresh_due() -> bool:
+    """Whether the model catalog has reached the age it is refreshed at.
+
+    Returns:
+        True when the catalog has never been built, or has expired.
+    """
+    update_next = _CACHE["update_next"]
+    return update_next is None or update_next <= SETTINGS.now()
+
+
+def _catalog_age() -> timedelta | None:
+    """Return how long ago the model catalog was last built.
+
+    Returns:
+        The age of the catalog, or None when it has never been built.
+    """
+    updated_at = _CACHE["updated_at"]
+    return None if updated_at is None else SETTINGS.now() - updated_at
+
+
+def _may_serve_stale() -> bool:
+    """Whether an expired catalog may answer while its refresh runs.
+
+    Returns:
+        True when a catalog exists and is younger than
+        ``model_cache_max_stale_seconds``. False leaves the caller to wait for
+        a refresh: there is nothing to serve, or what there is has aged past
+        the point where advertising a withdrawn model is acceptable.
+    """
+    age = _catalog_age()
+    return age is not None and age <= _CACHE["max_stale"]
+
+
+def _schedule_refresh() -> None:
+    """Start the background refresh, unless one is already running.
+
+    Single flight by construction: the check and the task creation share one
+    step of the event loop, so concurrent callers cannot both start a sweep.
+    """
+    running = _CACHE["refresh_task"]
+    if running is not None and not running.done():
+        return
+    task = create_task(_refresh_in_background())
+    _CACHE["refresh_task"] = task
+    _REFRESH_TASKS.add(task)
+    task.add_done_callback(_forget_refresh)
+
+
+def _forget_refresh(task: Task[None]) -> None:
+    """Drop a finished refresh from the registry, reading whatever it raised.
+
+    Args:
+        task: The refresh that has just finished.
+    """
+    _REFRESH_TASKS.discard(task)
+    if not task.cancelled():
+        # Read so a failure nothing else handles is not additionally reported
+        # as an exception nobody retrieved.
+        task.exception()
+
+
+async def _refresh_in_background() -> None:
+    """Refresh the model catalog while expired copies of it answer requests.
+
+    A failure is reported to the operator and never to a caller -- the catalog
+    that is being served is still the one that answered a moment ago. The next
+    attempt is held off for a moment so a backend that is refusing every call
+    is not asked again by every request.
+    """
+    with log_background_event("model_cache_refresh", webuuid()):
+        try:
+            await _refresh_bedrock_models(None)
+        except (BotoCoreError, ClientError, ServerError) as exception:
+            _CACHE["update_next"] = SETTINGS.now() + min(
+                _CACHE["update_interval"], timedelta(seconds=_REFRESH_RETRY_SECONDS)
+            )
+            # Only ever reached with a catalog to serve, which is what makes
+            # this a warning rather than something a caller has to be told.
+            age = _catalog_age() or timedelta(0)
+            log_error_details(
+                f"Refreshing the model list from AWS Bedrock failed: {exception}. "
+                f"The model list is {int(age.total_seconds())} seconds old and "
+                "is still being served; requests will wait for a successful "
+                f"refresh once it reaches {SETTINGS.model_cache_max_stale_seconds} "
+                "seconds ('model_cache_max_stale_seconds').",
+                # Raised past a couple of intervals, so the operator sees the
+                # degradation well before it reaches the ceiling.
+                level=(
+                    "error"
+                    if age > _CACHE["update_interval"] * _DEGRADED_INTERVALS
+                    else "warning"
+                ),
+            )
+
+
+async def drain_model_refresh(timeout: float) -> int:  # noqa: ASYNC109 -- shared drain contract
+    """Await the background model-catalog refresh, if one is running.
+
+    Args:
+        timeout: Seconds allowed before the unfinished refresh is cancelled.
+
+    Returns:
+        Number of refreshes that had not finished at the deadline.
+    """
+    return await drain_tasks(_REFRESH_TASKS, timeout)
+
+
 async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool:
-    """Refresh the Bedrock model cache from all configured regions if stale.
+    """Make sure the Bedrock model catalog is current, without waiting for it.
+
+    Three states, and only one of them costs the caller anything:
+
+    - **Current** -- nothing happens, at the price of one comparison.
+    - **Expired, and younger than ``model_cache_max_stale_seconds``** -- the
+      catalog in hand answers immediately and a background refresh replaces it.
+      This is what keeps a discovery sweep off the request path.
+    - **Never built, past that age, or starting up** -- the caller waits for the
+      refresh, because there is nothing safe to answer with.
 
     Individual unreachable regions are tolerated (warned about, retried on
     the next refresh); the refresh only fails when every region fails or
     every availability check errors.
+
+    Args:
+        start_event: Optional startup event log to record warnings on for
+            unreachable regions, unavailable models, invalid ARN mappings,
+            and unmatched ``aws_bedrock_model_region_restrict`` keys. Startup
+            always waits for its refresh.
+
+    Returns:
+        ``True`` if this call refreshed the cache, ``False`` otherwise --
+        including when it started a background refresh. Use
+        :func:`catalog_generation` to notice a refresh that completed
+        elsewhere.
+    """
+    if not _refresh_due():
+        return False
+    if start_event is None and _may_serve_stale():
+        _schedule_refresh()
+        return False
+    return await _refresh_bedrock_models(start_event)
+
+
+async def refresh_stale_catalog() -> None:
+    """Keep a model resolution from serving a withdrawn model indefinitely.
+
+    Run on every resolution, not only on one that finds nothing: an expired
+    catalog still names every model it knew, including one AWS has since taken
+    away, and nothing else on that path would ever notice. A current catalog
+    costs one comparison, an expired one starts the background refresh that
+    removes the model, and only a catalog past
+    ``model_cache_max_stale_seconds`` makes the caller wait -- which is what
+    stops the window from being unbounded.
+
+    A catalog that has never been dated is left alone: it was installed rather
+    than discovered, so there is no age to judge it by, and the miss path below
+    still refreshes before answering "no such model".
+    """
+    if not _refresh_due() or _CACHE["updated_at"] is None:
+        return
+    if _may_serve_stale():
+        _schedule_refresh()
+    else:
+        await _refresh_bedrock_models(None)
+
+
+async def _refresh_bedrock_models(start_event: EventLog | None) -> bool:
+    """Rebuild the Bedrock model catalog, from the shared cache or from AWS.
 
     A lazy on-demand refresh (``start_event`` is None) that discovers
     previously unregistered model IDs triggers an immediate price-catalog
@@ -2450,12 +2653,14 @@ async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool
     released models get cost tracking without a background poll.
 
     Args:
-        start_event: Optional startup event log to record warnings on for
-            unreachable regions, unavailable models, invalid ARN mappings,
-            and unmatched ``aws_bedrock_model_region_restrict`` keys.
+        start_event: Optional startup event log to record warnings on.
 
     Returns:
         ``True`` if the cache was refreshed, ``False`` otherwise.
+
+    Raises:
+        BotoCoreError: When every configured region fails.
+        ClientError: When every configured region fails.
     """
     updated = False
     unavailable_models: dict[str, dict[str, list[str]]] = {}
@@ -2464,10 +2669,18 @@ async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool
     new_model_ids: set[str] = set()
 
     async with _CACHE["update_lock"]:
-        if _CACHE["update_next"] is None or _CACHE["update_next"] <= SETTINGS.now():
-            all_models, invalid_arn_mappings = await _collect_all_models(
-                failed_regions, mantle_regions_without_endpoint, unavailable_models
+        # Re-checked under the lock: whoever held it may have just refreshed.
+        if _refresh_due():
+            collected = await _collect_catalog(
+                start_event,
+                failed_regions,
+                mantle_regions_without_endpoint,
+                unavailable_models,
             )
+            if collected is None:
+                # Another server is sweeping; its result arrives shortly.
+                return False
+            all_models, invalid_arn_mappings, collected_at = collected
 
             mantle_guardrail_aliases = _mantle_guardrail_aliases(all_models)
             mantle_guardrail_models = (
@@ -2485,31 +2698,12 @@ async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool
                 )
             }
 
-            models_input: dict[str, set[str]] = {}
-            models_output: dict[str, set[str]] = {}
-            for model_id in sorted(all_models):
-                for modality in all_models[model_id].output_modalities:
-                    models_output.setdefault(modality.upper(), set()).add(model_id)
-                for modality in all_models[model_id].input_modalities:
-                    models_input.setdefault(modality.upper(), set()).add(model_id)
-
-            async with _CACHE["access_lock"]:
-                if all_models != _MODELS:
-                    new_model_ids = set(all_models) - set(_MODELS)
-                    _MODELS.clear()
-                    _MODELS.update(all_models)
-                    updated = True
-                if models_output != _MODELS_OUTPUT_MODALITY:
-                    _MODELS_OUTPUT_MODALITY.clear()
-                    _MODELS_OUTPUT_MODALITY.update(models_output)
-                    updated = True
-                if models_input != _MODELS_INPUT_MODALITY:
-                    _MODELS_INPUT_MODALITY.clear()
-                    _MODELS_INPUT_MODALITY.update(models_input)
-                    updated = True
-                if updated:
-                    update_unified_models_collections()
-            _CACHE["update_next"] = SETTINGS.now() + _CACHE["update_interval"]
+            updated, new_model_ids = await _install_catalog(all_models)
+            # Dated from the sweep, not from now: a catalog read from the shared
+            # cache carries its publisher's age, so every server of a fleet
+            # expires together instead of each restarting the interval.
+            _CACHE["updated_at"] = collected_at
+            _CACHE["update_next"] = collected_at + _CACHE["update_interval"]
         else:
             invalid_arn_mappings = {}
             unmatched_restrict_keys = set()
@@ -2528,6 +2722,268 @@ async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool
     )
     await _trigger_price_catalog_refresh(start_event, new_model_ids)
     return updated
+
+
+async def _install_catalog(
+    all_models: dict[str, ModelDetails],
+) -> tuple[bool, set[str]]:
+    """Make a freshly collected catalog the one this server serves.
+
+    Args:
+        all_models: The catalog to install.
+
+    Returns:
+        Whether anything changed, and the model IDs that are new. A refresh
+        that found the same models as the last one changes neither, so the
+        listing routes keep their built payloads and nothing is re-priced.
+    """
+    updated = False
+    new_model_ids: set[str] = set()
+    models_input: dict[str, set[str]] = {}
+    models_output: dict[str, set[str]] = {}
+    for model_id in sorted(all_models):
+        for modality in all_models[model_id].output_modalities:
+            models_output.setdefault(modality.upper(), set()).add(model_id)
+        for modality in all_models[model_id].input_modalities:
+            models_input.setdefault(modality.upper(), set()).add(model_id)
+
+    async with _CACHE["access_lock"]:
+        if all_models != _MODELS:
+            new_model_ids = set(all_models) - set(_MODELS)
+            _MODELS.clear()
+            _MODELS.update(all_models)
+            updated = True
+        if models_output != _MODELS_OUTPUT_MODALITY:
+            _MODELS_OUTPUT_MODALITY.clear()
+            _MODELS_OUTPUT_MODALITY.update(models_output)
+            updated = True
+        if models_input != _MODELS_INPUT_MODALITY:
+            _MODELS_INPUT_MODALITY.clear()
+            _MODELS_INPUT_MODALITY.update(models_input)
+            updated = True
+        if updated:
+            _CACHE["generation"] += 1
+            update_unified_models_collections()
+    return updated, new_model_ids
+
+
+async def _collect_catalog(
+    start_event: EventLog | None,
+    failed_regions: dict[str, str],
+    mantle_regions_without_endpoint: dict[str, str],
+    unavailable_models: dict[str, dict[str, list[str]]],
+) -> tuple[dict[str, ModelDetails], dict[str, str], AwareDatetime] | None:
+    """Obtain a model catalog, from the deployment's shared copy or from AWS.
+
+    Without ``model_cache_shared`` this is the discovery sweep and nothing
+    else. With it, the sweep is what happens when no server has published a
+    current catalog *and* this one wins the right to produce it; the server
+    that loses keeps serving what it has and picks up the winner's result on
+    its next check, which is what stops a fleet from sweeping N times. A server
+    with nothing it may serve -- no catalog at all, or one already past
+    ``model_cache_max_stale_seconds`` -- sweeps regardless of the lease:
+    waiting on a peer would mean answering from a list it has promised not to.
+
+    Args:
+        start_event: Optional startup event log to record warnings on.
+        failed_regions: Accumulator mapping unreachable regions to the error.
+        mantle_regions_without_endpoint: Accumulator mapping regions that do
+            not serve Bedrock Mantle to what the operator has to change.
+        unavailable_models: Accumulator for failed availability checks.
+
+    Returns:
+        The catalog, the invalid ARN mappings found building it, and when it
+        was collected -- or None when another server is producing it and this
+        one should keep serving what it has.
+
+    Raises:
+        BotoCoreError: When every configured region fails.
+        ClientError: When every configured region fails.
+    """
+    shared = _shared_cache.enabled()
+    if shared and (published := await _shared_cache.read_catalog(start_event)):
+        restored = _restore_catalog(published.payload, start_event)
+        if restored is not None:
+            # read_catalog already bounds created_at; guarded again here so a
+            # future change to that bound degrades to a sweep instead of a crash.
+            try:
+                collected_at = datetime.fromtimestamp(published.created_at, tz=UTC)
+            except OSError, OverflowError, ValueError:
+                pass
+            else:
+                return (*restored, collected_at)
+    lease_held = False
+    if shared:
+        lease = await _shared_cache.acquire_lease(start_event)
+        lease_held = lease is _shared_cache.Lease.HELD
+        # Waiting on the peer is allowed only while this server still has a
+        # catalog it may answer with: an unreachable table leaves no peer to
+        # wait for, and one past ``model_cache_max_stale_seconds`` may not be
+        # served either, so both sweep rather than defer.
+        if lease is _shared_cache.Lease.PEER and _may_serve_stale():
+            _CACHE["update_next"] = SETTINGS.now() + timedelta(
+                seconds=_REFRESH_RETRY_SECONDS
+            )
+            return None
+    collected_at = SETTINGS.now()
+    try:
+        all_models, invalid_arn_mappings = await _collect_all_models(
+            failed_regions, mantle_regions_without_endpoint, unavailable_models
+        )
+        if lease_held:
+            await _shared_cache.publish_catalog(
+                _catalog_payload(all_models, invalid_arn_mappings),
+                int(collected_at.timestamp()),
+                start_event,
+            )
+    finally:
+        if lease_held:
+            await _shared_cache.release_lease(start_event)
+    return all_models, invalid_arn_mappings, collected_at
+
+
+def _dump_models(models: Mapping[str, ModelDetails]) -> dict[str, JsonValue]:
+    """Serialize a model collection for the deployment's shared cache.
+
+    The fields a model keeps out of its public representation -- the routing
+    state and the account-bearing endpoint ARNs -- are added back by name:
+    another server needs them to serve a request, and this payload never
+    leaves the deployment's own table.
+
+    Args:
+        models: Models keyed by model ID.
+
+    Returns:
+        The same mapping, JSON-encodable.
+    """
+    return {
+        model_id: model.model_dump(mode="json", exclude_none=True)
+        | {
+            name: getattr(model, name)
+            for name in _PRIVATE_MODEL_FIELDS
+            if getattr(model, name) is not None
+        }
+        for model_id, model in models.items()
+    }
+
+
+def _catalog_payload(
+    all_models: dict[str, ModelDetails], invalid_arn_mappings: dict[str, str]
+) -> dict[str, JsonValue]:
+    """Serialize everything a discovery sweep produced.
+
+    Args:
+        all_models: The merged catalog the sweep returned.
+        invalid_arn_mappings: Model IDs mapped to ARN-mapping error messages.
+
+    Returns:
+        The published payload.
+    """
+    mappings: dict[str, JsonValue] = dict(invalid_arn_mappings)
+    return {
+        "models": _dump_models(all_models),
+        "mantle": _dump_models(MANTLE_MODELS),
+        "marketplace_endpoints": _dump_models(MARKETPLACE_ENDPOINT_MODELS),
+        "invalid_arn_mappings": mappings,
+    }
+
+
+def _restore_catalog(
+    payload: JsonValue, start_event: EventLog | None
+) -> tuple[dict[str, ModelDetails], dict[str, str]] | None:
+    """Rebuild what a sweep produced from a published payload.
+
+    The collections a sweep fills as a side effect are restored too, so a
+    server that read the catalog instead of discovering it is in exactly the
+    state a server that swept would be in.
+
+    Args:
+        payload: The payload read from the shared cache.
+        start_event: Optional startup event log to record warnings on.
+
+    Returns:
+        The catalog and the invalid ARN mappings, or None when the payload is
+        not one this build can rebuild -- which is a cache miss, not an error.
+    """
+    try:
+        if not isinstance(payload, dict):
+            msg = "The published model list is not an object."
+            raise TypeError(msg)  # noqa: TRY301 - one handler for every unusable payload
+        models = _load_models(payload, "models")
+        mantle = _load_models(payload, "mantle")
+        marketplace = _load_models(payload, "marketplace_endpoints")
+        invalid_arn_mappings = {
+            model_id: str(detail)
+            for model_id, detail in _section(payload, "invalid_arn_mappings").items()
+        }
+    except (KeyError, TypeError, ValidationError) as exception:
+        _warn_operator(
+            start_event,
+            "The shared model list could not be rebuilt "
+            f"({type(exception).__name__}); this server discovered the models "
+            "itself.",
+        )
+        return None
+    MANTLE_MODELS.clear()
+    MANTLE_MODELS.update(mantle)
+    MARKETPLACE_ENDPOINT_MODELS.clear()
+    MARKETPLACE_ENDPOINT_MODELS.update(marketplace)
+    return models, invalid_arn_mappings
+
+
+def _section(payload: dict[str, JsonValue], key: str) -> dict[str, JsonValue]:
+    """Read one named object out of a published payload.
+
+    Args:
+        payload: The payload read from the shared cache.
+        key: Name of the object inside it.
+
+    Returns:
+        The object.
+
+    Raises:
+        KeyError: The payload carries no such entry.
+        TypeError: The entry is not an object.
+    """
+    section = payload[key]
+    if not isinstance(section, dict):
+        msg = f"The published model list's '{key}' is not an object."
+        raise TypeError(msg)
+    return section
+
+
+def _load_models(payload: dict[str, JsonValue], key: str) -> dict[str, ModelDetails]:
+    """Rebuild one model collection out of a published payload.
+
+    Args:
+        payload: The payload read from the shared cache.
+        key: Name of the collection inside it.
+
+    Returns:
+        Models keyed by model ID.
+
+    Raises:
+        KeyError: The payload carries no such collection.
+        TypeError: The payload is not shaped like one.
+        ValidationError: A model in it is not one this build can rebuild.
+    """
+    return {
+        model_id: ModelDetails.model_validate(model)
+        for model_id, model in _section(payload, key).items()
+    }
+
+
+def _warn_operator(start_event: EventLog | None, detail: str) -> None:
+    """Report something only the operator can act on, wherever it can be read.
+
+    Args:
+        start_event: Startup event log to record the warning on, if any.
+        detail: What happened, named for the operator.
+    """
+    if start_event is not None:
+        add_server_warning(start_event, detail)
+    else:
+        log_error_details(detail, level="warning")
 
 
 async def _trigger_price_catalog_refresh(
@@ -3571,6 +4027,7 @@ async def validate_model(
     model_id = resolve_model_alias(model_id)
     original_id = model_id
     models = _MODELS if bedrock_only else _ALL_MODELS
+    await refresh_stale_catalog()
     if model_id.startswith("arn:"):
         model = _marketplace_endpoint_from_arn(
             model_id
@@ -3580,7 +4037,10 @@ async def validate_model(
             model = models.get(model_id)
 
     if model is None:
-        await initialize_bedrock_models()
+        # About to answer "no such model": the one case worth waiting for a
+        # refresh, since the model may be one this catalog is too old to know.
+        if _refresh_due():
+            await _refresh_bedrock_models(None)
         async with _CACHE["access_lock"]:
             model = models.get(model_id)
             if model is None:

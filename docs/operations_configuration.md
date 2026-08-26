@@ -352,7 +352,9 @@ Publishing where tokens come from lets an AI agent authenticate itself — see [
 | [`DEFAULT_MODEL_PARAMS`](#default-model-params)                     | `{}`                    | JSON object with per-model default inference parameters (temperature, max_tokens, etc.)    |
 | [`DEFAULT_MODEL_SERVICE_TIERS`](#default-model-service-tiers)       | `{}`                    | JSON object with per-model default service tiers (default, flex, priority, reserved)        |
 | [`AWS_BEDROCK_ALLOW_SERVICE_TIER_OVERRIDE`](#aws-bedrock-allow-service-tier-override) | `true` | Allow users to select the service tier per request, overriding the configured one (cost control) |
-| [`MODEL_CACHE_SECONDS`](#model-cache-seconds)                       | `900`                   | Model list cache lifetime in seconds before lazy refresh (default: 15 minutes)             |
+| [`MODEL_CACHE_SECONDS`](#model-cache-seconds)                       | `900`                   | Age in seconds at which the model list is refreshed in the background (default: 15 minutes) |
+| [`MODEL_CACHE_MAX_STALE_SECONDS`](#model-cache-max-stale-seconds)   | `86400`                 | Age in seconds past which a request waits for the model list refresh (default: 24 hours)   |
+| [`MODEL_CACHE_SHARED`](#model-cache-shared)                         | `false`                 | Share one model list between the deployment's servers through `AWS_DYNAMODB_TABLE`         |
 | [`AI_RESPONSE_TIMEOUT`](#ai-response-timeout)                       | `600`                   | Maximum seconds without data from a model before the request times out (default: 10 min)   |
 | [`SHUTDOWN_DRAIN_TIMEOUT`](#shutdown-drain-timeout)                 | `10`                    | Maximum seconds the server waits for background work to finish after being asked to stop   |
 | [`DROP_UNSUPPORTED_SYSTEM_PROMPT`](#drop-unsupported-system-prompt) | `true`                  | Drop system prompts for unsupported models; when `false`, return error instead             |
@@ -4343,21 +4345,21 @@ export REALTIME_ALLOW_SESSION_OVERRIDE=false
 
 ## :material-cached: Model Cache
 
-stdapi.ai automatically discovers and caches available Bedrock models from configured regions. The cache is refreshed on-demand when expired, not via background tasks.
+stdapi.ai automatically discovers and caches available Bedrock models from configured regions. Once the cache expires, the request that notices is answered from the cached list straight away and the refresh runs in the background — see [Model List Refresh](operations_resilience.md#model-list-refresh) for what that means for freshness.
 
 #### `MODEL_CACHE_SECONDS` { #model-cache-seconds }
 
 :octicons-package-24: **Purpose**
-:   Cache lifetime for the Bedrock models list before refresh
+:   Age at which the cached Bedrock model list is refreshed
 
 :octicons-database-24: **Type**
-:   Integer (seconds)
+:   Integer (seconds, must be greater than 0)
 
 :octicons-gear-24: **Default**
 :   `900` (15 minutes)
 
 :octicons-workflow-24: **Behavior**
-:   When a request needs the model list (e.g., model lookup, `/models` endpoint) and the cache has expired, the server queries Amazon Bedrock to discover newly available models, check for model access changes, and update inference profile configurations. This cache also applies to application inference profile and prompt router information when users pass ARNs directly (if enabled via [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](#bedrock-allow-application-profile-arn) or [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](#bedrock-allow-prompt-router-arn))
+:   Once the cached list reaches this age, the next request needing it (a model lookup, `/v1/models`, `/search_models`) is answered from the cached list and a refresh starts in the background: the server queries Amazon Bedrock to discover newly available models, pick up model access changes, and update inference profile configurations. This cache also applies to application inference profile and prompt router information when users pass ARNs directly (if enabled via [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](#bedrock-allow-application-profile-arn) or [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](#bedrock-allow-prompt-router-arn))
 
 ```bash
 # Default: 15 minutes
@@ -4370,22 +4372,73 @@ export MODEL_CACHE_SECONDS=300
 export MODEL_CACHE_SECONDS=3600
 ```
 
-!!! info "Lazy Refresh Behavior"
-    The model cache uses **lazy (on-demand) refresh**, not background tasks:
-
-    - Cache is refreshed only when a request needs it **and** the cache has expired
-    - Common triggers: model lookup failures, `/v1/models` API calls, inference requests with unknown models
-    - The **first request after expiration** experiences additional latency (typically 2-5 seconds) while the cache refreshes; the AWS calls (`ListFoundationModels`, `GetFoundationModelAvailability`, `ListInferenceProfiles`) run in parallel across regions, so the penalty scales with the slowest region rather than the number of regions
-    - Subsequent requests use the fresh cache until it expires again
+!!! info "Refresh Behavior"
+    - The refresh runs **only** when a request needs the list and the list has expired — there is no polling timer.
+    - However many requests notice the expiry at once, **one** refresh runs; the others are answered immediately from the list already in memory.
+    - The AWS calls (`ListFoundationModels`, `GetFoundationModelAvailability`, `ListInferenceProfiles`) run in parallel across regions, so a refresh takes about as long as the slowest region rather than scaling with their number.
+    - A request only waits for a refresh in two cases: the server has no model list at all (its first request after a start that could not build one), and the list has passed [`MODEL_CACHE_MAX_STALE_SECONDS`](#model-cache-max-stale-seconds).
 
 !!! tip "Tuning Recommendations"
     | Interval | Use Case | Trade-offs |
     |----------|----------|------------|
-    | `300` (5 min) | :material-rocket: Development, testing new models | More frequent refresh latency, faster model discovery |
-    | `900` (15 min) | :material-check: Production (default, balanced) | Balanced refresh frequency and latency impact |
-    | `3600` (1 hour) | :material-cash: Stable production, cost optimization | Rare refresh latency, slower model discovery |
+    | `300` (5 min) | :material-rocket: Development, testing new models | Faster model discovery, more AWS discovery calls |
+    | `900` (15 min) | :material-check: Production (default, balanced) | Balanced freshness and API call volume |
+    | `3600` (1 hour) | :material-cash: Stable production, cost optimization | Fewest AWS calls, slower model discovery |
 
-    Lower cache lifetimes increase the frequency of the per-region discovery calls; very frequent refreshes in high-traffic deployments may approach API rate limits.
+    Lower cache lifetimes increase the frequency of the per-region discovery calls; very frequent refreshes in high-traffic deployments may approach API rate limits. Higher ones widen the window in which the list still advertises a model AWS has withdrawn.
+
+#### `MODEL_CACHE_MAX_STALE_SECONDS` { #model-cache-max-stale-seconds }
+
+:octicons-package-24: **Purpose**
+:   Maximum age the cached model list may reach while its refresh keeps failing
+
+:octicons-database-24: **Type**
+:   Integer (seconds, `0` or more)
+
+:octicons-gear-24: **Default**
+:   `86400` (24 hours)
+
+:octicons-workflow-24: **Behavior**
+:   Below this age, an expired list is served while its refresh runs behind it. At or beyond it, the next request waits for a successful refresh instead — so a deployment whose refreshes fail silently (revoked `bedrock:ListFoundationModels`, a prolonged regional outage) cannot serve an arbitrarily old list, and a model that has been withdrawn stops being advertised. Each failed refresh is recorded in the server log, at `error` level once the list is more than two `MODEL_CACHE_SECONDS` old
+
+```bash
+# Default: 24 hours
+export MODEL_CACHE_MAX_STALE_SECONDS=86400
+
+# Tighter bound for a deployment where model availability changes matter
+export MODEL_CACHE_MAX_STALE_SECONDS=3600
+
+# Never serve an expired list: every expiry is refreshed synchronously
+export MODEL_CACHE_MAX_STALE_SECONDS=0
+```
+
+!!! warning "`0` restores the wait on every expiry"
+    With `0`, the first request after every expiry waits for the full discovery pass, which is the freshest and the slowest setting. Prefer a small non-zero value unless a request must never be answered from an expired list.
+
+#### `MODEL_CACHE_SHARED` { #model-cache-shared }
+
+:octicons-package-24: **Purpose**
+:   Share one model list between the servers of a deployment
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false`
+
+:octicons-workflow-24: **Behavior**
+:   When enabled, the model list is published to the Amazon DynamoDB table named by [`AWS_DYNAMODB_TABLE`](#aws-dynamodb-table), which is required. One server refreshes the list and publishes it; the others read it instead of querying Amazon Bedrock themselves, so a fleet performs one discovery pass per `MODEL_CACHE_SECONDS` instead of one per server, and a server that starts serves requests without a discovery pass of its own. Any table error is recorded in the server log and the server falls back to querying Amazon Bedrock itself
+
+```bash
+export AWS_DYNAMODB_TABLE=stdapi-ai
+export MODEL_CACHE_SHARED=true
+```
+
+!!! info "When it helps, and when it does not"
+    - It pays off from a handful of servers upward, or wherever tasks start and stop often (autoscaling, rolling deployments): the discovery pass is what a starting server otherwise has to complete before it is useful.
+    - Servers only share a list when they run the same version, in the same AWS account, with the same `AWS_BEDROCK_*` **and** `AWS_SAGEMAKER_*` configuration — every setting under those prefixes, not only the ones discovery reads, because being too broad costs a refresh while being too narrow serves one deployment's catalogue to another. Anything else reads as an empty cache, which is why a rolling deployment briefly has every server discovering on its own again.
+    - The table is only read and written when the list has expired, so the request rate does not change with traffic. See [the cost of an enabled shared list](operations_cost_management.md#model-list-sharing).
+    - Setting it without `AWS_DYNAMODB_TABLE` fails startup with a message naming both.
 
 ---
 

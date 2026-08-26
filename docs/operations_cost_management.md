@@ -392,6 +392,7 @@ The [Terraform module](operations_getting_started.md) provisions:
 | **S3 buckets** (regional)         | Input files, generated media; see `AWS_S3_VIDEOS_EXPIRES_AFTER`           |
 | **S3 vector bucket** (optional)   | Created with `aws_s3_vectors_bucket_create`; billed on stored vectors and on the bytes each search reads — see [Vector Stores](#vector-stores) |
 | **SQS queue** + dead-letter queue (optional) | Created with `aws_sqs_vector_store_queue_create`; a handful of requests per attached file, plus one long poll per task every 20 seconds |
+| **DynamoDB table** (optional)     | Created with `aws_dynamodb_table_create`; on-demand, so nothing at rest — billed only by the features that use it, see [Model List Sharing](#model-list-sharing) |
 | **CloudWatch** logs, metrics, alarms | Grows with log verbosity and EMF metric volume                         |
 | **KMS**, IAM, networking          | Keys and roles; NAT/VPC endpoints only when the module creates the network |
 | **WAF** (optional)                | Per-rule and per-request charges when `alb_waf_enabled = true`            |
@@ -424,6 +425,25 @@ None of these include AI service usage (Bedrock, Polly, Transcribe, …), which 
 
 !!! note "Estimating before you deploy"
     stdapi.ai publishes no infrastructure dollar estimate — the tiers above describe direction and drivers, not quotes: the total depends on your region, replica count, schedule and whether the module creates networking. Price the component list above with the [AWS Pricing Calculator](https://calculator.aws/) for your own configuration.
+
+---
+
+### Model List Sharing { #model-list-sharing }
+
+[`MODEL_CACHE_SHARED`](operations_configuration.md#model-cache-shared) is the one optional feature whose own AWS cost is worth stating rather than rounding away. **Left off, or with no [`AWS_DYNAMODB_TABLE`](operations_configuration.md#aws-dynamodb-table) configured, it costs nothing**: no table is created, no request is made. The table alone, created but unused, is also $0 — DynamoDB on-demand has no idle charge, this table holds kilobytes, and its storage sits inside the 25 GB always-free allowance.
+
+Enabled, it is not free. What it costs is the published list itself:
+
+- **Writes dominate.** Each refresh writes the compressed model list, and DynamoDB bills a write in 1 KB units. At the default `MODEL_CACHE_SECONDS=900` that is 96 refreshes a day for the whole fleet, whoever performs them.
+- **Reads round to nothing.** Each server reads the list once per interval — a few thousand read units a day — plus one small conditional write to claim the refresh.
+- **Traffic does not change any of it.** The table is touched when the list expires, never per request, so this is a fixed monthly figure rather than one that scales with usage.
+
+On [DynamoDB on-demand pricing](https://aws.amazon.com/dynamodb/pricing/on-demand/) in `us-east-1` ($0.625 per million write request units, $0.125 per million read request units, both higher in some regions), 96 refreshes a day of a list in the low hundreds of kilobytes comes to roughly **$0.60–$2 a month for the whole fleet**, plus a few cents per server for the reads.
+
+!!! note "The size of your list is the variable"
+    That range assumes the compressed list lands in the low hundreds of kilobytes, which is what a catalogue of a few hundred models across a handful of regions produces. A deployment with many regions and Marketplace endpoints will sit at the top of it or a little above; the figure scales linearly with the compressed size and inversely with `MODEL_CACHE_SECONDS`. Doubling the interval halves this cost.
+
+    It buys back the discovery passes it replaces: *N* servers make one pass per interval between them instead of one each. Those Bedrock control-plane calls are not billed, so the saving is in start-up latency and API rate-limit headroom rather than in dollars — which is why this is worth enabling for a fleet and not worth enabling for a single container.
 
 ---
 

@@ -55,7 +55,11 @@ from stdapi.config import SETTINGS
 from stdapi.exceptions import ServerError
 from stdapi.input_file import reset_current_input_files
 from stdapi.metering import EDITION_TITLE, LICENCE_INFO, SERVER_FULL_VERSION, register
-from stdapi.models import initialize_bedrock_models, update_unified_models_collections
+from stdapi.models import (
+    drain_model_refresh,
+    initialize_bedrock_models,
+    update_unified_models_collections,
+)
 from stdapi.models.audio.amazon_polly import initialize_polly_models
 from stdapi.models.audio.amazon_transcribe import (
     initialize_transcribe_models,
@@ -109,6 +113,7 @@ _DRAINED_REGISTRIES: Final = (
     "realtime_readers",
     "file_indexing",
     "indexing_jobs",
+    "model_refresh",
 )
 
 
@@ -139,6 +144,7 @@ async def drain_background_tasks() -> dict[str, int]:
                 drain_session_stops(timeout),
                 drain_indexing(timeout),
                 drain_indexing_jobs(timeout),
+                drain_model_refresh(timeout),
             ),
             strict=True,
         )

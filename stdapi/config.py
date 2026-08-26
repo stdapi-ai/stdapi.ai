@@ -2024,18 +2024,67 @@ class _Settings(BaseSettings):
 
     model_cache_seconds: int = Field(
         default=900,
+        ge=1,
         description=(
-            "Cache lifetime in seconds for the Bedrock models list. "
-            "When a request needs the model list (e.g., model lookup, /models endpoint) "
-            "and the cache has expired, the server queries AWS Bedrock (in parallel across "
-            "all configured regions) to discover newly available models, check for model "
-            "access changes, and update inference profiles. This is a lazy refresh that "
-            "occurs on-demand, not a background task, which can temporarily increase request "
-            "latency when the cache is being refreshed. All AWS API requests are executed "
-            "concurrently to minimize the latency penalty. Lower values provide faster "
-            "detection of new models but increase AWS API calls and may cause more requests "
-            "to experience refresh latency. Default: 900 seconds (15 minutes) for a balance "
-            "between freshness and performance."
+            "Age in seconds at which the cached model list is refreshed. "
+            "Once it is reached, the next request needing the list (a model "
+            "lookup, /v1/models, /search_models) is answered from the cached "
+            "list straight away and the refresh runs in the background, so no "
+            "request waits for it: the server queries AWS Bedrock in parallel "
+            "across all configured regions to discover newly available models, "
+            "pick up model access changes, and update inference profiles.\n\n"
+            "Lower values detect a new model sooner and cost more AWS API "
+            "calls; higher values do the opposite, and widen the window in "
+            "which the list still advertises a model AWS has withdrawn. "
+            "model_cache_max_stale_seconds bounds that window when refreshes "
+            "keep failing.\n\n"
+            "Example: 900 (15 minutes, default), 300 (5 minutes), "
+            "3600 (1 hour)"
+        ),
+    )
+
+    model_cache_max_stale_seconds: int = Field(
+        default=86400,
+        ge=0,
+        description=(
+            "Maximum age in seconds the cached model list may reach while its "
+            "refresh keeps failing. Under this age a request is answered from "
+            "the cached list and the refresh runs in the background; beyond "
+            "it, the next request waits for a successful refresh instead, so a "
+            "deployment whose refreshes fail silently cannot serve an "
+            "arbitrarily old list, and a model that has been withdrawn stops "
+            "being advertised. Each failed refresh is reported in the server "
+            "log, as an error once the list is more than two "
+            "model_cache_seconds old.\n\n"
+            "Set to 0 to always wait for a refresh once the list has expired, "
+            "which is the freshest and the slowest setting.\n\n"
+            "Example: 86400 (24 hours, default), 3600 (1 hour), 0 (never "
+            "serve an expired list)"
+        ),
+    )
+
+    model_cache_shared: bool = Field(
+        default=False,
+        description=(
+            "If true, share the model list between this deployment's servers "
+            "through the DynamoDB table named by aws_dynamodb_table, which "
+            "must be set. One server refreshes the list and publishes it; the "
+            "others read it instead of querying AWS Bedrock themselves, so a "
+            "fleet performs one discovery pass per model_cache_seconds instead "
+            "of one per server, and a server that starts serves requests "
+            "without a discovery pass of its own.\n\n"
+            "The table is only read and written when the list has expired, so "
+            "the cost is a few requests per server per model_cache_seconds "
+            "plus the published list itself; see the cost management "
+            "documentation. Any table error is reported in the server log and "
+            "the server falls back to querying AWS Bedrock itself.\n\n"
+            "Servers only share a list when they run the same version, in the "
+            "same AWS account, with the same aws_bedrock_* and aws_sagemaker_* "
+            "configuration; anything else is read as an empty cache, which is "
+            "why a rolling deployment briefly has every server discovering on "
+            "its own again.\n\n"
+            "Example: true\n\n"
+            "False (default): each server keeps its own model list."
         ),
     )
 
@@ -3035,8 +3084,9 @@ class _Settings(BaseSettings):
         """Ensure the shared DynamoDB table is named completely or not at all.
 
         Raises:
-            ValueError: If the table name is not one DynamoDB accepts, or if a
-                region is set without a table for it to hold.
+            ValueError: If the table name is not one DynamoDB accepts, if a
+                region is set without a table for it to hold, or if a feature
+                needing the table is enabled without one.
         """
         if table := self.aws_dynamodb_table:
             if not _DYNAMODB_TABLE_RE(table):
@@ -3045,10 +3095,18 @@ class _Settings(BaseSettings):
                     "3 to 255 characters, letters, digits, '_', '-' and '.' only."
                 )
                 raise ValueError(msg)
-        elif self.aws_dynamodb_region:
+            return
+        if self.aws_dynamodb_region:
             msg = (
                 "aws_dynamodb_region requires aws_dynamodb_table: without a "
                 "table there is nothing in that region to reach."
+            )
+            raise ValueError(msg)
+        if self.model_cache_shared:
+            msg = (
+                "model_cache_shared requires aws_dynamodb_table: the shared "
+                "model list lives in that table. Set aws_dynamodb_table, or "
+                "set model_cache_shared to false."
             )
             raise ValueError(msg)
 
