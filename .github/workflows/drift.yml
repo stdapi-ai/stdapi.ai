@@ -37,6 +37,28 @@ jobs:
             tests: tests/test_docs_assets_drift.py
     env:
       FORCE_COLOR: "1"
+      # Configuration is validated on import and refuses an environment naming
+      # no region, so without one the detectors die before comparing anything.
+      # The value is a placeholder: almost everything this lane compares is read
+      # from a public vendor page rather than from that region. No credentials
+      # are configured, and blocking the metadata endpoint and the credential
+      # files turns a stray call into an immediate failure instead of an
+      # unattended job that hangs until it times out.
+      #
+      # One comparison is not a page read: the pricing detector also checks that
+      # the AWS Price List API still publishes no rate the hand-copied tables
+      # carry, over a signed call. Credential-free, that call cannot be made and
+      # the test skips, so this leg records `incomplete` and opens a tracking
+      # issue instead of reporting a detector that never ran as green. Running
+      # it here needs an OIDC role this repository may assume, limited to
+      # `pricing:GetProducts`, and `id-token: write` on this job; that role does
+      # not exist yet, and minting a token for one that does not is a privilege
+      # this lane is deliberately without.
+      AWS_EC2_METADATA_DISABLED: "true"
+      AWS_CONFIG_FILE: /dev/null
+      AWS_SHARED_CREDENTIALS_FILE: /dev/null
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
     steps:
       - uses: actions/checkout@v6
         with:
@@ -54,8 +76,10 @@ jobs:
       # -m drift scopes the run to the lane's one live test, leaving the same
       # file's offline classifier tests (already covered by the Test workflow)
       # out of this schedule. A source that cannot be read is reported in the
-      # captured output but never turns this step red, and a run that could
-      # compare nothing at all skips, which is not a failure either.
+      # captured output but never turns this step red. A detector that ran but
+      # skipped compared nothing, which is not a pass either -- it is the
+      # outcome that used to report green while doing none of the work, so -rs
+      # names in the report which test did not execute and why.
       # Every matrix value reaches the shell through the environment, never
       # through an expansion the runner splices into the script itself.
       - name: Run the detector
@@ -64,8 +88,13 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p report
-          if pytest --drift -m drift "$TESTS" -q \
+          if pytest --drift -m drift "$TESTS" -q -rs \
+              --junit-xml=report/junit.xml \
               | tee report/drift-report.txt; then
+            if grep -q "<skipped" report/junit.xml; then
+              echo incomplete > report/status.txt
+              exit 1
+            fi
             echo pass > report/status.txt
           else
             echo fail > report/status.txt
