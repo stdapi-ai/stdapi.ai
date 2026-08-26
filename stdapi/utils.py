@@ -61,6 +61,16 @@ match_bedrock_prompt_router_arn = compile_regex(
     "arn:aws(?:-[^:]+)?:bedrock:(?P<region>[a-z0-9-]{1,20}):[0-9]{12}:(?:prompt-router|default-prompt-router)/[a-zA-Z0-9_.:-]+\\Z"
 ).match
 
+#: Marketplace model endpoint ARN matcher, in the shape bedrock-runtime takes as a model ID
+match_marketplace_endpoint_arn = compile_regex(
+    "arn:aws(?:-[^:]+)?:sagemaker:(?P<region>[a-z0-9-]{1,20}):[0-9]{12}:endpoint/(?P<name>[a-zA-Z0-9-]+)\\Z"
+).match
+
+#: Public-hub content ARN matcher, whose last two segments name a listing and its version
+match_sagemaker_hub_content_arn = compile_regex(
+    "arn:aws(?:-[^:]+)?:sagemaker:[a-z0-9-]{1,20}:[^:]*:hub-content/SageMakerPublicHub/Model/(?P<name>[^/]+)/(?P<version>[^/]+)\\Z"
+).match
+
 #: Prompt Management prompt ARN matcher, with the optional version suffix Bedrock accepts as a model ID
 match_bedrock_prompt_arn = compile_regex(
     "(?P<base>arn:aws(?:-[^:]+)?:bedrock:(?P<region>[a-z0-9-]{1,20}):[0-9]{12}:prompt/[0-9a-zA-Z]{10})(?::(?P<version>[0-9]{1,5}))?\\Z"

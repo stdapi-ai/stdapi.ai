@@ -301,6 +301,18 @@ Mantle models appear in the same catalogue as the rest, under the same `/v1/mode
 
 [:octicons-arrow-right-24: Bedrock Mantle Configuration](operations_configuration.md#bedrock-mantle-enabled)
 
+### :material-storefront-outline: Bedrock Marketplace Model Endpoints { #bedrock-marketplace-endpoints }
+
+Deploy a model from the **Amazon Bedrock Marketplace** catalog onto a managed endpoint in your own account, and stdapi.ai serves it beside the rest — same `/v1/models` listing, same chat completions, responses and messages APIs, no client-side change.
+
+- **Discovered, never deployed** — The gateway lists the endpoints you deployed and publishes the ones that are ready to serve. It never creates, updates or deletes one: that is capacity you pay for, and it belongs in your own infrastructure-as-code
+- **Opt-in and region-scoped** — Off unless you [enable it](operations_configuration.md#bedrock-marketplace-endpoints-enabled), and only in the regions you serve: an endpoint is invoked in its own region, so one deployed elsewhere is never published
+
+!!! warning "These endpoints bill by the hour, not by the token"
+    A model endpoint runs on dedicated instances and is charged for every hour it exists, whether or not anything calls it, and there is no scale-to-zero on this path. stdapi.ai reports the tokens it served and **no cost**, because AWS publishes no per-token rate for them — your bill is instance-hours. See [Marketplace model endpoint costs](operations_cost_management.md#bedrock-marketplace-model-endpoints).
+
+[:octicons-arrow-right-24: Marketplace Model Endpoints Configuration](operations_configuration.md#bedrock-marketplace-endpoints-enabled)
+
 ### Amazon S3 as the file layer
 
 S3 backs the whole API surface, not just file storage, which buys three things a file API bolted onto a database cannot:

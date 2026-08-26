@@ -84,6 +84,11 @@ _BEST_EFFORT_PRICED_DIMENSIONS: Final[frozenset[Dimension]] = frozenset(
     {Dimension.TEXT_UNITS}
 )
 
+#: Services AWS bills on something other than the quantities recorded here, so no
+#: price can resolve and a miss is never a catalog gap. A Marketplace model endpoint
+#: is billed by the instance-hour of the endpoint, not by the tokens it serves.
+UNPRICED_SERVICES: Final[frozenset[Service]] = frozenset({Service.BEDROCK_MARKETPLACE})
+
 
 @dataclass(frozen=True, slots=True)
 class UsageKey:
@@ -492,10 +497,12 @@ def _compute_record_totals(
     Returns:
         Per-currency running totals (see :func:`_add_dimension_cost`), and the
         dimensions for which at least one bucket had no resolvable price,
-        excluding :data:`_BEST_EFFORT_PRICED_DIMENSIONS`.
+        excluding :data:`_BEST_EFFORT_PRICED_DIMENSIONS` and every dimension of
+        a :data:`UNPRICED_SERVICES` record.
     """
     totals: dict[str, Decimal] = {}
     unpriced: set[Dimension] = set()
+    priced_service = record.service not in UNPRICED_SERVICES
     for dimension, quantity in record.quantities.items():
         if quantity <= 0:
             continue
@@ -513,7 +520,11 @@ def _compute_record_totals(
                 spec,
                 record.context,
             )
-            if price is None and dimension not in _BEST_EFFORT_PRICED_DIMENSIONS:
+            if (
+                price is None
+                and priced_service
+                and dimension not in _BEST_EFFORT_PRICED_DIMENSIONS
+            ):
                 unpriced.add(dimension)
             _add_dimension_cost(bucket_quantity, price, totals)
     return totals, unpriced
@@ -810,7 +821,10 @@ def record_bedrock_usage(
 
     Args:
         model: Bedrock model ID.
-        service: Serving endpoint (bedrock-runtime or bedrock-mantle).
+        service: Serving endpoint (bedrock-runtime, bedrock-mantle, or a
+            Marketplace model endpoint). Pass ``region`` explicitly for
+            anything other than bedrock-runtime: only that one falls back to
+            the model's shared invocation state for it.
         tier: Service tier (standard, flex, priority, batch). Defaults to this
             model's shared invocation state (see :func:`get_model_state`) --
             pass it explicitly for any call that may run concurrently with a

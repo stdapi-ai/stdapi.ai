@@ -5010,6 +5010,10 @@ async def test_bedrock_model_pricing_coverage() -> None:
         for model_id, details in registered.items():
             if model_id in _KNOWN_PRICING_GAPS:
                 continue
+            # A Marketplace model endpoint is billed by the instance-hour and AWS
+            # publishes no per-token rate for it: nothing here could resolve.
+            if details.service == models.MARKETPLACE_SERVICE:
+                continue
             if missing := _missing_regions(model_id, [str(r) for r in details.regions]):
                 unpriced[model_id] = missing
         for model_id in DEPRECATED_MODELS:
