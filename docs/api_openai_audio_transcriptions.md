@@ -45,7 +45,7 @@ Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable 
 | `json`                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Structured transcription                                         |
 | `text`                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Plain text output                                                |
 | `verbose_json`             |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | With timestamps and details (Amazon Transcribe; not Bedrock models) |
-| `diarized_json`            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | With speaker identification (Amazon Transcribe; not Bedrock models); rejected with `stream=true` |
+| `diarized_json`            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | With speaker identification (Amazon Transcribe; not Bedrock models); streams as `transcript.text.segment` events with `stream=true` |
 | `srt`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Subtitle format with timing (Amazon Transcribe; not Bedrock models); rejected with `stream=true` |
 | `vtt`                      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | WebVTT subtitle format (Amazon Transcribe; not Bedrock models); rejected with `stream=true` |
 | **Language**               |                                          |                                                                  |
@@ -54,7 +54,8 @@ Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable 
 | Auto language detection    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Automatic identification                                         |
 | Detected `languages` in response |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | The `json` response reports the detected language(s) as a `languages` array (Amazon Transcribe only) |
 | **Streaming**              |                                          |                                                                  |
-| `stream` (SSE streaming)   |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Set `stream: true` to receive incremental results as server-sent events. Carries text only, so `srt`, `vtt` and `diarized_json` are rejected rather than answered without their cues or speaker labels; `verbose_json` is accepted but degrades to text-only events — timestamps and segments are dropped |
+| `stream` (SSE streaming)   |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Set `stream: true` to receive incremental results as server-sent events. `srt` and `vtt` are rejected rather than answered without their cues; `verbose_json` is accepted but degrades to text-only events — timestamps and segments are dropped |
+| `transcript.text.segment` events | :material-cog:{ .model-dep role="img" aria-label="Model-dependent" } | Speaker segments streamed as they are finalized, with `response_format=diarized_json` on a model that labels speakers |
 | **Advanced**               |                                          |                                                                  |
 | `timestamp_granularities`  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Word or segment level; requires `response_format=verbose_json` (Amazon Transcribe only) |
 | Speaker diarization        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Automatic speaker separation; requires `response_format=diarized_json` (Amazon Transcribe only) |
@@ -137,7 +138,7 @@ Any Amazon Bedrock model that accepts the `SPEECH` input modality through the Co
 - **Or use OpenAI model names directly**: `whisper-1`, `gpt-transcribe`, `gpt-live-transcribe`, `gpt-4o-transcribe`, and `gpt-4o-mini-transcribe` work out of the box (they map to `amazon.transcribe`)
 - Auto-detect language or specify it for faster processing, or list the expected languages with `languages` for multi-language audio
 - Word-level or segment-level timestamps with `verbose_json`
-- **Speaker Diarization** :material-account-multiple:{ .highlight }: Automatically identify and label different speakers with `diarized_json`
+- **Speaker Diarization** :material-account-multiple:{ .highlight }: Automatically identify and label different speakers with `diarized_json`, in one response or streamed segment by segment. Each speaker gets one of the sequential capital letters `A`, `B`, ... in the order the speakers are first heard — rolling over to `AA`, `AB`, ... past 26 speakers — and keeps it for the whole transcript
 - **Native Subtitles** :material-file-video:{ .highlight }: SRT/VTT files generated directly by Amazon Transcribe with precise timing
 
 !!! tip "OpenAI Model Compatibility"
@@ -290,7 +291,7 @@ The following parameters from Amazon Transcribe's [StartTranscriptionJob API](ht
 - `VocabularyFilterName` / `VocabularyFilterMethod` (string / `mask`, `remove`, `tag`): Profanity or sensitive-word filtering
 - `ShowAlternatives` / `MaxAlternatives` (bool / integer `2`-`10`): Return multiple candidate transcriptions per segment
 - `ChannelIdentification` (bool): Transcribe each audio channel separately (incompatible with `diarized_json`)
-- `MaxSpeakerLabels` (integer `2`-`30`): Maximum speakers to identify with `response_format=diarized_json` (default `10`)
+- `MaxSpeakerLabels` (integer `2`-`30`): Maximum speakers to identify with `response_format=diarized_json` (default `10`). It has no effect on a streamed transcription delivered phrase by phrase (see [Streaming](#streaming)). Amazon Transcribe distinguishes at most 30 speakers whatever the value, and separates them less reliably past about five
 - `ShowSpeakerLabels` (bool): Always on with `response_format=diarized_json`; setting it directly with another format runs AWS speaker labeling without exposing speaker data in the response
 - `ToxicityDetection` (list): Toxic-content flagging — `[{"ToxicityCategories": ["ALL"]}]`
 - `IdentifyMultipleLanguages` / `LanguageOptions` (bool / list): Multi-language identification, optionally restricted to a candidate list (supersedes `language`; cannot be combined with the standard `languages` parameter)
@@ -307,7 +308,17 @@ Each phrase is sent as it is recognized, rather than after the whole recording, 
 
 A request naming neither is still streamed, but its events arrive together once the recording has been read and its language detected. Operators can set [`AWS_TRANSCRIBE_STREAM_LANGUAGES`](operations_configuration.md#aws-transcribe-stream-languages) to the languages their callers actually send, which gives those requests the faster path too. The same applies to a request using any provider-specific parameter above other than `VocabularyName`, `VocabularyFilterName` and `VocabularyFilterMethod`, which are the only ones a phrase-by-phrase transcript can carry.
 
-Streamed events carry text only, which is why `srt`, `vtt` and `diarized_json` are rejected with `stream=true` rather than answered without their cues or speaker labels.
+### Speaker segments
+
+With `response_format=diarized_json`, each stretch of transcript spoken by one speaker is also sent as a `transcript.text.segment` event, carrying the segment's `id`, `start`, `end`, `speaker` and `text`. Segments are interleaved with the deltas and always precede the final `transcript.text.done`.
+
+A speaker is attached only once the recognizer has settled the words it labels, so a segment is sent once and its speaker never changes afterwards. Segments carry the same speaker labels as the non-streamed `diarized_json` response. Naming the language is what gets the segments phrase by phrase instead of together at the end: send `language`, or two or more expected `languages`.
+
+Each delta belonging to a segment names that segment's `id` in its `segment_id` field, so the two can be correlated without matching their text. Text no speaker was attributed to — including text the recognizer never settled — arrives as a delta with no `segment_id` and no segment event of its own, so the concatenated deltas — not the segments — are the complete transcript.
+
+A model that reports no speakers rejects `diarized_json` with `stream=true` rather than answering with an unlabelled transcript.
+
+Streamed events carry no subtitle cues, which is why `srt` and `vtt` are rejected with `stream=true`.
 
 ## Available Request Headers
 
@@ -320,7 +331,7 @@ This endpoint supports standard Bedrock headers for enhanced control over your r
 | `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier  |
 | `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`) |
 
-The guardrail evaluates the transcript the model produced, not the audio sent. On a streamed request the events are withheld until the transcript is complete, so the guardrail sees the whole text before any of it is delivered. `X-Amzn-Bedrock-Trace` is accepted but has no effect on this route — no guardrail trace is returned.
+The guardrail evaluates the transcript the model produced, not the audio sent. On a streamed request the events are withheld until the transcript is complete, so the guardrail sees the whole text before any of it is delivered. When it masks content, the stream carries the masked transcript as a single delta and the speaker segments are withheld, each one repeating text the guardrail took out — so a streamed `diarized_json` request answers with the masked transcript, where the same request without `stream=true` fails with `content_filter` instead. `X-Amzn-Bedrock-Trace` is accepted but has no effect on this route — no guardrail trace is returned.
 
 ### Performance Optimization
 
@@ -433,6 +444,26 @@ curl -N -X POST "$BASE/v1/audio/transcriptions" \
   -F model=amazon.transcribe \
   -F language=en \
   -F stream=true
+```
+
+**Stream speaker segments as they are recognized:**
+
+```bash
+curl -N -X POST "$BASE/v1/audio/transcriptions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -F file=@meeting-recording.mp3 \
+  -F model=amazon.transcribe \
+  -F response_format=diarized_json \
+  -F language=en \
+  -F stream=true
+```
+
+Each completed speaker segment arrives as a `transcript.text.segment` event beside the text deltas:
+
+```
+data: {"delta":"Good morning, how can I help?","type":"transcript.text.delta","segment_id":"seg_0"}
+
+data: {"id":"seg_0","start":0.01,"end":4.27,"speaker":"A","text":"Good morning, how can I help?","type":"transcript.text.segment"}
 ```
 
 !!! tip "Naming the language starts the transcript sooner"

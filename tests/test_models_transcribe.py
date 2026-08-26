@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from aws_sdk_transcribe_streaming.models import (
     Alternative,
+    Item,
+    ItemType,
     Result,
     Transcript,
     TranscriptEvent,
@@ -57,8 +59,10 @@ from stdapi.models.audio.amazon_transcribe import (
 )
 from stdapi.monitoring import REQUEST_ID, REQUEST_LOG
 from stdapi.types.openai_audio import (
+    TranscriptionStreamEvent,
     TranscriptionTextDeltaEvent,
     TranscriptionTextDoneEvent,
+    TranscriptionTextSegmentEvent,
     TranscriptionVerbose,
     TranslationVerbose,
     UsageDuration,
@@ -558,6 +562,48 @@ def _transcript_events(
     ]
 
 
+def _diarized_transcript_event(
+    result_id: str, transcript: str, words: list[tuple[str, str, float, float]]
+) -> TranscriptResultStreamTranscriptEvent:
+    """Build one finalized result whose every word carries a speaker.
+
+    Args:
+        result_id: Identifier the result is restated under.
+        transcript: The alternative's whole transcript.
+        words: (content, speaker, start, end) tuples, in order.
+
+    Returns:
+        The event, as a session with speaker partitioning on delivers it.
+    """
+    return TranscriptResultStreamTranscriptEvent(
+        TranscriptEvent(
+            transcript=Transcript(
+                results=[
+                    Result(
+                        result_id=result_id,
+                        is_partial=False,
+                        alternatives=[
+                            Alternative(
+                                transcript=transcript,
+                                items=[
+                                    Item(
+                                        content=content,
+                                        speaker=speaker,
+                                        start_time=start,
+                                        end_time=end,
+                                        type=ItemType.PRONUNCIATION,
+                                    )
+                                    for content, speaker, start, end in words
+                                ],
+                            )
+                        ],
+                    )
+                ]
+            )
+        )
+    )
+
+
 def _fake_live_session(
     monkeypatch: pytest.MonkeyPatch,
     events: list[TranscriptResultStreamTranscriptEvent],
@@ -573,7 +619,19 @@ def _fake_live_session(
     Returns:
         A record of what the session was asked to do.
     """
-    record: dict[str, Any] = {"opened": False, "sent": 0, "closed": Event()}
+    record: dict[str, Any] = {
+        "opened": False,
+        "sent": 0,
+        "closed": Event(),
+        "request": None,
+    }
+
+    class _Client:
+        """Stands in for the streaming client the session factory is handed."""
+
+        @staticmethod
+        def start_stream_transcription(request: object) -> None:
+            record["request"] = request
 
     class _Session:
         """The subset of ``BidiSession`` the streaming path uses.
@@ -597,8 +655,9 @@ def _fake_live_session(
                 yield event
 
     @asynccontextmanager
-    async def _open(*_args: object, **_kwargs: object) -> Any:  # noqa: ANN401
+    async def _open(*args: Any, **_kwargs: Any) -> Any:  # noqa: ANN401
         record["opened"] = True
+        args[2](_Client(), region)
         yield _Session()
 
     async def _frames(*_args: object, **_kwargs: object) -> Any:  # noqa: ANN401
@@ -1772,6 +1831,7 @@ class TestCanStreamLive:
         "extra",
         [
             _TranscribeExtraParams(ShowSpeakerLabels=True),
+            _TranscribeExtraParams(MaxSpeakerLabels=4),
             _TranscribeExtraParams(ChannelIdentification=True),
             _TranscribeExtraParams(MaxAlternatives=2),
             _TranscribeExtraParams(
@@ -1780,17 +1840,21 @@ class TestCanStreamLive:
                 ]
             ),
         ],
-        ids=["speaker_labels", "channels", "alternatives", "toxicity"],
+        ids=["speaker_labels", "max_speakers", "channels", "alternatives", "toxicity"],
     )
     def test_job_only_parameters_give_it_up(
         self, extra: _TranscribeExtraParams
     ) -> None:
-        """Anything the streamed events cannot carry sends the request to the job."""
+        """Anything the streamed events cannot carry sends the request to the job.
+
+        A live session has no speaker cap to set, so honouring
+        ``MaxSpeakerLabels`` means giving the session up rather than dropping it.
+        """
         assert _can_stream_live(extra) is False
 
 
 def _split_stream(
-    collected: list[TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent],
+    collected: list[TranscriptionStreamEvent],
 ) -> tuple[list[TranscriptionTextDeltaEvent], TranscriptionTextDoneEvent]:
     """Split a transcript stream into its delta events and its terminal done event."""
     done = collected[-1]
@@ -1816,10 +1880,130 @@ class TestLiveTranscriptionStream:
          stdapi/models/audio/amazon_transcribe.py:AudioModel.stt_stream
     """
 
+    async def test_diarized_json_streams_speaker_segments_from_the_session(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The live path answers ``diarized_json`` with segment events too.
+
+        This is the path a caller naming a streamable language gets, and the
+        only one that has to ask the session for speaker labels in the first
+        place, so both the request it opens and the events it produces are
+        checked here.
+
+        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/diarization.html
+             stdapi/models/audio/amazon_transcribe.py:_stream_input
+        """
+        session = _fake_live_session(
+            monkeypatch,
+            [
+                _diarized_transcript_event(
+                    "r1", "Hello there", [("Hello", "0", 0.0, 0.5)]
+                ),
+                _diarized_transcript_event(
+                    "r2", "Hi back", [("Hi", "1", 1.0, 1.4), ("back", "1", 1.4, 1.8)]
+                ),
+            ],
+        )
+
+        collected = [
+            event
+            async for event in AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt_stream(
+                _FakeAudioContent(),  # type: ignore[arg-type]
+                "diarized_json",
+                language="en",
+                logprobs=False,
+            )
+        ]
+
+        assert session["request"].show_speaker_label is True
+        assert [event.type for event in collected] == [
+            "transcript.text.delta",
+            "transcript.text.segment",
+            "transcript.text.delta",
+            "transcript.text.segment",
+            "transcript.text.done",
+        ]
+        segments = [
+            event
+            for event in collected
+            if isinstance(event, TranscriptionTextSegmentEvent)
+        ]
+        assert [segment.id for segment in segments] == ["seg_0", "seg_1"]
+        assert [segment.speaker for segment in segments] == ["A", "B"]
+        assert [segment.text for segment in segments] == ["Hello", "Hi back"]
+        assert [(segment.start, segment.end) for segment in segments] == [
+            (0.0, 0.5),
+            (1.0, 1.8),
+        ]
+
+    @pytest.mark.parametrize(
+        ("transcript", "words"),
+        [
+            ("Hello there", [("Hello", "0", 0.0, 0.5), ("there", "1", 0.5, 1.0)]),
+            (
+                "こんにちはさようなら",
+                [("こんにちは", "0", 0.0, 0.5), ("さようなら", "1", 0.5, 1.0)],
+            ),
+        ],
+        ids=["spaced", "unspaced"],
+    )
+    async def test_a_speaker_change_inside_one_result_keeps_the_transcript_spacing(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        transcript: str,
+        words: list[tuple[str, str, float, float]],
+    ) -> None:
+        """The deltas of one result rebuild that result's transcript exactly.
+
+        Amazon Transcribe attributes a speaker per word, so a single result
+        routinely spans a speaker change and is cut in two. Only the transcript
+        knows whether the two halves are written with a space between them:
+        Japanese separates nothing, so re-joining them with a space would make
+        the streamed transcript differ from the non-streamed one for the same
+        audio.
+
+        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/diarization-streaming.html
+             stdapi/models/audio/amazon_transcribe.py:_speaker_run
+        """
+        _fake_live_session(
+            monkeypatch, [_diarized_transcript_event("r1", transcript, words)]
+        )
+
+        collected = [
+            event
+            async for event in AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt_stream(
+                _FakeAudioContent(),  # type: ignore[arg-type]
+                "diarized_json",
+                language="ja",
+                logprobs=False,
+            )
+        ]
+
+        deltas = [
+            event
+            for event in collected
+            if isinstance(event, TranscriptionTextDeltaEvent)
+        ]
+        segments = [
+            event
+            for event in collected
+            if isinstance(event, TranscriptionTextSegmentEvent)
+        ]
+        done = collected[-1]
+        assert isinstance(done, TranscriptionTextDoneEvent)
+        assert [segment.text for segment in segments] == [word for word, *_ in words]
+        # The non-streamed response returns this same transcript for this audio.
+        assert "".join(event.delta for event in deltas) == transcript
+        assert done.text == transcript
+
     async def test_finalized_results_are_streamed_as_deltas_then_a_done_event(
         self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
     ) -> None:
-        """Two finalized results yield two deltas and a done event carrying both."""
+        """Two finalized results yield two deltas and a done event carrying both.
+
+        The stream is not diarized, so no delta may name a segment: a
+        ``segment_id`` would point at an event this stream never sends.
+        """
         events = _transcript_events(
             [("r1", False, "Hello there")], [("r2", False, "second part")]
         )
@@ -1836,10 +2020,11 @@ class TestLiveTranscriptionStream:
         ]
 
         deltas, done = _split_stream(collected)
-        assert [event.delta for event in deltas] == ["Hello there", "second part"]
+        assert [event.delta for event in deltas] == ["Hello there", " second part"]
         # The deltas rebuild the final transcript, so the two cannot disagree.
-        assert " ".join(event.delta for event in deltas) == done.text
+        assert "".join(event.delta for event in deltas) == done.text
         assert done.text == "Hello there second part"
+        assert [event.segment_id for event in deltas] == [None, None]
         assert done.usage is None, "Transcribe bills duration, not tokens"
         assert session["opened"], "no live session was opened"
         assert session["sent"] == _FAKE_AUDIO_FRAMES
@@ -1899,6 +2084,54 @@ class TestLiveTranscriptionStream:
         assert [event.delta for event in deltas] == ["unfinished words"]
         assert done.text == "unfinished words"
 
+    async def test_a_diarized_result_left_partial_arrives_without_a_segment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Text no speaker was attributed to streams as an unlabelled delta.
+
+        A result the session never settled has no speaker, so it can carry no
+        ``segment_id`` and gets no segment event: the concatenated deltas, not
+        the segments, are what makes the complete transcript.
+
+        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/diarization-streaming.html
+             stdapi/models/audio/amazon_transcribe.py:_StreamedTranscript.remainder
+        """
+        _fake_live_session(
+            monkeypatch,
+            [
+                _diarized_transcript_event("r1", "Hello", [("Hello", "0", 0.0, 0.5)]),
+                *_transcript_events([("r2", True, "unfinished words")]),
+            ],
+        )
+
+        collected = [
+            event
+            async for event in AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt_stream(
+                _FakeAudioContent(),  # type: ignore[arg-type]
+                "diarized_json",
+                language="en",
+                logprobs=False,
+            )
+        ]
+
+        deltas = [
+            event
+            for event in collected
+            if isinstance(event, TranscriptionTextDeltaEvent)
+        ]
+        segments = [
+            event
+            for event in collected
+            if isinstance(event, TranscriptionTextSegmentEvent)
+        ]
+        done = collected[-1]
+        assert isinstance(done, TranscriptionTextDoneEvent)
+        assert [event.delta for event in deltas] == ["Hello", " unfinished words"]
+        assert [event.segment_id for event in deltas] == ["seg_0", None]
+        assert len(segments) == 1, "the unsettled text must get no segment of its own"
+        assert segments[0].text == "Hello"
+        assert done.text == "Hello unfinished words"
+
     async def test_usage_is_recorded_for_the_audio_that_was_streamed(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1926,6 +2159,86 @@ class TestLiveTranscriptionStream:
         duration, region = recorded[0]
         assert duration == pytest.approx(_FAKE_AUDIO_SECONDS, abs=0.01)
         assert region == "us-east-1"
+
+    async def test_a_caller_leaving_mid_stream_is_still_billed_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Abandoning the stream bills the seconds AWS was already sent, once.
+
+        A client disconnect closes the generator part way through, and AWS has
+        already been paid for the audio the session took, so dropping the record
+        would leave that spend untracked -- while recording it twice would bill
+        the caller for audio sent once.
+
+        Ref: stdapi/models/audio/amazon_transcribe.py:AudioModel._live_transcript
+        """
+        recorded: list[tuple[float, str]] = []
+        _fake_live_session(
+            monkeypatch,
+            _transcript_events([("r1", False, "hi")], [("r2", False, "there")]),
+            region="us-east-1",
+        )
+
+        def _record(duration: float, *, region: str = "") -> int:
+            recorded.append((duration, region))
+            return 15
+
+        monkeypatch.setattr(amazon_transcribe, "record_transcribe_usage", _record)
+
+        stream = AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt_stream(
+            _FakeAudioContent(),  # type: ignore[arg-type]
+            "text",
+            language="en",
+            logprobs=False,
+        )
+        first = await anext(stream)
+        await stream.aclose()
+
+        assert isinstance(first, TranscriptionTextDeltaEvent)
+        assert first.delta == "hi", "the caller left before the second result"
+        assert len(recorded) == 1, "the abandoned stream must bill exactly once"
+        duration, region = recorded[0]
+        assert duration == pytest.approx(_FAKE_AUDIO_SECONDS, abs=0.01)
+        assert region == "us-east-1"
+
+    async def test_a_session_that_never_opened_bills_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A request failing before any audio is sent records no usage.
+
+        The recorder floors what it is given at the 15-second billing minimum,
+        so recording zero seconds would bill a quarter minute of audio AWS
+        never received.
+
+        Ref: stdapi/usage.py:record_transcribe_usage
+        """
+        recorded: list[float] = []
+        _fake_live_session(monkeypatch, _transcript_events([("r1", False, "hi")]))
+
+        @asynccontextmanager
+        async def _unavailable(*_args: object, **_kwargs: object) -> Any:  # noqa: ANN401
+            msg = "The transcription service is unavailable. Retry the request."
+            raise ApiError(msg, status=503)
+            yield  # pragma: no cover - the context never opens
+
+        def _record(duration: float, **_kwargs: object) -> int:
+            recorded.append(duration)
+            return 15
+
+        monkeypatch.setattr(amazon_transcribe, "open_bidi_stream", _unavailable)
+        monkeypatch.setattr(amazon_transcribe, "record_transcribe_usage", _record)
+
+        with pytest.raises(ApiError) as exc_info:
+            async for _ in AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt_stream(
+                _FakeAudioContent(),  # type: ignore[arg-type]
+                "text",
+                language="en",
+                logprobs=False,
+            ):
+                pass
+
+        assert exc_info.value.status == 503
+        assert not recorded, "no audio was sent, so nothing may be billed"
 
     async def test_no_transcription_job_is_started(
         self, monkeypatch: pytest.MonkeyPatch

@@ -28,8 +28,7 @@ if TYPE_CHECKING:
         AudioTimestampGranularities,
         TranscriptionCreateResponse,
         TranscriptionDiarized,
-        TranscriptionTextDeltaEvent,
-        TranscriptionTextDoneEvent,
+        TranscriptionStreamEvent,
         TranslationCreateResponse,
     )
 
@@ -67,6 +66,9 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
     SUPPORTED_TIMESTAMP_GRANULARITIES: frozenset[AudioTimestampGranularities] = (
         frozenset()
     )
+
+    #: Whether a streamed transcription can carry speaker-labelled segments.
+    STREAMED_DIARIZATION_SUPPORTED: ClassVar[bool] = False
 
     #: Transcription prompt
     TRANSCRIPTION_PROMPT = "Transcribe the audio."
@@ -149,7 +151,7 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         languages: list[str] | None = None,  # noqa: ARG002
         *,
         logprobs: bool,  # noqa: ARG002
-    ) -> AsyncGenerator[TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent]:
+    ) -> AsyncGenerator[TranscriptionStreamEvent]:
         """Transcribe audio to text with streaming response.
 
         Args:
@@ -164,7 +166,7 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             logprobs: If true, return log probabilities.
 
         Yields:
-            TranscriptionTextDeltaEvent or TranscriptionTextDoneEvent objects.
+            Transcription delta, segment and done events.
 
         Raises:
             ApiError: If streaming transcription is not supported by this model.
@@ -296,6 +298,26 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         if value:
             param = "include.logprobs"
             raise UnsupportedParameterError(param)
+
+    @classmethod
+    def _validate_streamed_diarization(cls, value: AudioResponseFormat) -> None:
+        """Validate that a streamed request only asks for speakers a model can label.
+
+        Args:
+            value: The requested response format.
+
+        Raises:
+            ApiError: If speaker-labelled segments were asked for and this model
+                produces none.
+        """
+        if value == "diarized_json" and not cls.STREAMED_DIARIZATION_SUPPORTED:
+            msg = (
+                "Response format 'diarized_json' is not available with stream=true "
+                "on this model, which reports no speakers. Stream with "
+                "response_format='json' or 'text', or request 'diarized_json' "
+                "from `amazon.transcribe`, which labels speakers."
+            )
+            raise ApiError(msg)
 
     @classmethod
     def _validate_response_formats(

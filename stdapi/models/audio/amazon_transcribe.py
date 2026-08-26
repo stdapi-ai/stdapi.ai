@@ -4,12 +4,15 @@ from asyncio import CancelledError, create_task, gather, get_running_loop, sleep
 from asyncio import timeout as async_timeout
 from contextlib import aclosing, contextmanager, suppress
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired
 from zlib import compress
 
 from aws_sdk_transcribe_streaming.models import (
     AudioEvent,
     AudioStreamAudioEvent,
+    Item,
+    ItemType,
     StartStreamTranscriptionInput,
 )
 from botocore.exceptions import ClientError, ParamValidationError
@@ -60,8 +63,10 @@ from stdapi.types.openai_audio import (
     TranscriptionDiarizedSegment,
     TranscriptionLanguage,
     TranscriptionSegment,
+    TranscriptionStreamEvent,
     TranscriptionTextDeltaEvent,
     TranscriptionTextDoneEvent,
+    TranscriptionTextSegmentEvent,
     TranscriptionVerbose,
     TranscriptionWord,
     Translation,
@@ -1054,13 +1059,17 @@ def _stream_language_params(
 
 
 def _stream_input(
-    language_params: dict[str, Any], extra: _TranscribeExtraParams | None
+    language_params: dict[str, Any],
+    extra: _TranscribeExtraParams | None,
+    *,
+    diarize: bool = False,
 ) -> StartStreamTranscriptionInput:
     """Build the request one live session is opened with.
 
     Args:
         language_params: The session's already-resolved language fields.
         extra: Optional extra parameters, filtered to what a session honours.
+        diarize: Whether the session must attribute each word to a speaker.
 
     Returns:
         The session request.
@@ -1073,6 +1082,7 @@ def _stream_input(
     return StartStreamTranscriptionInput(
         media_encoding="pcm",
         media_sample_rate_hertz=_STREAM_SAMPLE_RATE,
+        show_speaker_label=diarize,
         **language_params,
         **{_STREAM_EXTRA_FIELDS[name]: value for name, value in vocabularies.items()},
     )
@@ -1166,52 +1176,178 @@ async def _send_stream_audio(
     await session.close_input()
 
 
+@dataclass(frozen=True, slots=True)
+class _TranscriptPart:
+    """One stretch of transcript, and the speaker it was attributed to.
+
+    Attributes:
+        text: The transcript of the stretch.
+        speaker: The backend's own speaker label, None when unattributed.
+        start: Start of the stretch, in seconds.
+        end: End of the stretch, in seconds.
+        lead: The transcript's own text between this stretch and the one before
+            it, None when no transcript text spans the gap.
+    """
+
+    text: str
+    speaker: str | None = None
+    start: float = 0.0
+    end: float = 0.0
+    lead: str | None = None
+
+
+def _spaced_items(items: list[Item], transcript: str) -> Generator[tuple[Item, str]]:
+    """Pair each item with its content and the text preceding it in *transcript*.
+
+    Words are attributed one by one, but only the transcript knows how they are
+    written down -- a language that separates its words with spaces and one
+    that writes them together are told apart by nothing else.
+
+    Args:
+        items: The words and punctuation of one alternative, in order.
+        transcript: That alternative's own transcript.
+
+    Yields:
+        Each item, and the text it contributes, separator included.
+    """
+    position = 0
+    for index, item in enumerate(items):
+        content = item.content or ""
+        start = transcript.find(content, position) if content else -1
+        if start < 0:
+            # The transcript does not restate the items: space the words the
+            # way a language that separates them would.
+            spaced = index > 0 and item.type != ItemType.PUNCTUATION
+            yield item, f" {content}" if spaced else content
+            continue
+        yield item, transcript[position:start] + content
+        position = start + len(content)
+
+
+def _speaker_run(
+    run: list[tuple[Item, str]], speaker: str | None, *, continues: bool
+) -> _TranscriptPart:
+    """Join one run of items into the part it makes up.
+
+    Args:
+        run: The run's items and their texts, in order (at least one).
+        speaker: The speaker every word of the run was attributed to.
+        continues: Whether another run of the same result precedes this one, so
+            what the transcript writes between them is this run's separator --
+            a space in a language that separates its words, nothing at all in
+            one that does not.
+
+    Returns:
+        The part, spanning the run's first word to its last item.
+    """
+    joined = "".join(text for _, text in run)
+    text = joined.lstrip()
+    return _TranscriptPart(
+        text=text,
+        speaker=speaker,
+        start=run[0][0].start_time,
+        end=max(item.end_time for item, _ in run),
+        lead=joined[: len(joined) - len(text)] if continues else None,
+    )
+
+
+def _speaker_runs(items: list[Item], transcript: str) -> Generator[_TranscriptPart]:
+    """Cut one finalized result into runs of consecutive words sharing a speaker.
+
+    Amazon Transcribe attributes a speaker per word rather than per result, and
+    a result routinely spans a speaker change. Punctuation is attributed to
+    nobody, so it stays with the run it terminates instead of opening one.
+
+    Args:
+        items: The words and punctuation of one alternative, in order.
+        transcript: That alternative's own transcript, which the runs are cut
+            out of so they keep its spacing.
+
+    Yields:
+        One part per speaker run, in order, empty ones dropped.
+    """
+    run: list[tuple[Item, str]] = []
+    speaker: str | None = None
+    continues = False
+    for item, text in _spaced_items(items, transcript):
+        spoken = item.type != ItemType.PUNCTUATION
+        if spoken and speaker is not None and item.speaker != speaker:
+            yield _speaker_run(run, speaker, continues=continues)
+            run, speaker, continues = [], None, True
+        if spoken and speaker is None:
+            speaker = item.speaker
+        run.append((item, text))
+    if run:
+        yield _speaker_run(run, speaker, continues=continues)
+
+
 class _StreamedTranscript:
     """The text a live session has recognized, in the order it recognized it.
 
     Amazon Transcribe restates a result while it refines it and marks it final
-    once it will not change, so a result becomes one delta when it is finalized
-    -- or, for one the session ends without finalizing, from its last restatement.
+    once it will not change, so a result is read out when it is finalized -- or,
+    for one the session ends without finalizing, from its last restatement.
+    Nothing is emitted before that, which is what makes a speaker attribution
+    final the moment it is sent.
     """
 
-    __slots__ = ("_finalized", "_partial", "seconds")
+    __slots__ = ("_diarize", "_finalized", "_partial", "seconds")
 
-    def __init__(self) -> None:
-        """Start with nothing recognized and no audio sent."""
+    def __init__(self, *, diarize: bool = False) -> None:
+        """Start with nothing recognized and no audio sent.
+
+        Args:
+            diarize: Whether the session was opened with speaker partitioning,
+                so each result is cut into one part per speaker.
+        """
+        self._diarize = diarize
         self._finalized: set[str] = set()
         self._partial: dict[str, str] = {}
         self.seconds = 0.0
 
-    def read(self, event: Any) -> Generator[str]:  # noqa: ANN401
-        """Take one session event, yielding the text it completes.
+    def read(self, event: Any) -> Generator[_TranscriptPart]:  # noqa: ANN401
+        """Take one session event, yielding the parts it completes.
 
         Args:
             event: The event the session delivered.
 
         Yields:
-            The transcript of each result the event finalized.
+            The parts of each result the event finalized.
         """
         transcript = getattr(getattr(event, "value", event), "transcript", None)
         for result in getattr(transcript, "results", None) or ():
             alternatives = result.alternatives or ()
-            text = (alternatives[0].transcript if alternatives else None) or ""
+            alternative = alternatives[0] if alternatives else None
+            text = (alternative.transcript if alternative is not None else None) or ""
             if result.is_partial:
                 self._partial[result.result_id] = text
-            elif result.result_id not in self._finalized:
-                self._finalized.add(result.result_id)
-                self._partial.pop(result.result_id, None)
-                if text:
-                    yield text
+                continue
+            if result.result_id in self._finalized:
+                continue
+            self._finalized.add(result.result_id)
+            self._partial.pop(result.result_id, None)
+            if self._diarize and alternative is not None and alternative.items:
+                runs = [
+                    part for part in _speaker_runs(alternative.items, text) if part.text
+                ]
+                if runs:
+                    yield from runs
+                    continue
+            if text:
+                yield _TranscriptPart(
+                    text=text, start=result.start_time, end=result.end_time
+                )
 
-    def remainder(self) -> Generator[str]:
-        """Yield the text of every result the session never finalized.
+    def remainder(self) -> Generator[_TranscriptPart]:
+        """Yield every result the session ended without finalizing.
 
         Yields:
-            Each unfinalized result's last known transcript.
+            Each unfinalized result's last known transcript, unattributed: the
+            speaker of a result Transcribe never settled is not known.
         """
         for text in self._partial.values():
             if text:
-                yield text
+                yield _TranscriptPart(text=text)
 
 
 class _KeywordsUnsupportedError(ApiError):
@@ -1254,6 +1390,7 @@ class AudioModel(AudioModelBase[None, None]):
         {"json", "text", "srt", "verbose_json", "vtt", "diarized_json"}
     )
     SUPPORTED_TIMESTAMP_GRANULARITIES = frozenset({"word", "segment"})
+    STREAMED_DIARIZATION_SUPPORTED = True
 
     @classmethod
     def get_aliases(
@@ -1554,8 +1691,13 @@ class AudioModel(AudioModelBase[None, None]):
         languages: list[str] | None = None,
         *,
         logprobs: bool,
-    ) -> AsyncGenerator[TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent]:
+    ) -> AsyncGenerator[TranscriptionStreamEvent]:
         """Transcribe audio to text with streaming response.
+
+        With ``diarized_json``, each stretch of transcript a single speaker is
+        heard in is preceded by the delta naming its segment and followed by the
+        segment event itself, carrying the sequential capital-letter label that
+        speaker keeps for the rest of the stream.
 
         Args:
             audio_content: Audio file to transcribe
@@ -1570,7 +1712,7 @@ class AudioModel(AudioModelBase[None, None]):
             logprobs: If true, return log probabilities.
 
         Yields:
-            TranscriptionTextDeltaEvent or TranscriptionTextDoneEvent objects
+            Transcription delta, segment and done events.
 
         Raises:
             ApiError: When transcription fails
@@ -1584,14 +1726,18 @@ class AudioModel(AudioModelBase[None, None]):
             with validation_error_handler():
                 extra = _TranscribeExtraParams(**extra_params)  # type: ignore[arg-type]
 
+        diarize = response_format == "diarized_json"
         language_params = _stream_language_params(language, languages, extra)
         regions = transcribe_stream_regions()
         if language_params is not None and regions and _can_stream_live(extra):
-            events = self._live_transcript(
-                audio_content, _stream_input(language_params, extra), regions
+            parts = self._live_transcript(
+                audio_content,
+                _stream_input(language_params, extra, diarize=diarize),
+                regions,
+                diarize=diarize,
             )
         else:
-            events = self._job_transcript(
+            parts = self._job_transcript(
                 audio_content,
                 response_format,
                 language,
@@ -1601,17 +1747,39 @@ class AudioModel(AudioModelBase[None, None]):
                 languages,
             )
         full_text_parts: list[str] = []
-        async with aclosing(events):
-            async for text in events:
-                full_text_parts.append(text)
+        speakers: dict[str, str] = {}
+        segments = 0
+        async with aclosing(parts):
+            async for part in parts:
+                speaker = part.speaker if diarize else None
+                # The separator travels with the delta, so deltas concatenate
+                # exactly. Only a gap no transcript text spans -- between two
+                # results -- takes a space the transcript did not write.
+                lead = " " if part.lead is None else part.lead
+                delta = f"{lead}{part.text}" if full_text_parts else part.text
+                full_text_parts.append(delta)
                 yield TranscriptionTextDeltaEvent(
-                    delta=text, type="transcript.text.delta"
+                    delta=delta,
+                    type="transcript.text.delta",
+                    segment_id=f"seg_{segments}" if speaker is not None else None,
                 )
+                if speaker is not None:
+                    yield TranscriptionTextSegmentEvent(
+                        id=f"seg_{segments}",
+                        start=part.start,
+                        end=part.end,
+                        speaker=speakers.setdefault(
+                            speaker, _speaker_label(len(speakers))
+                        ),
+                        text=part.text,
+                        type="transcript.text.segment",
+                    )
+                    segments += 1
 
         # OpenAI's done event reports token usage only, which no duration-billed
         # transcription has.
         yield TranscriptionTextDoneEvent(
-            text=" ".join(full_text_parts), type="transcript.text.done"
+            text="".join(full_text_parts), type="transcript.text.done"
         )
 
     async def _live_transcript(
@@ -1619,7 +1787,9 @@ class AudioModel(AudioModelBase[None, None]):
         audio_content: InputFile,
         request: StartStreamTranscriptionInput,
         regions: list[RegionName],
-    ) -> AsyncGenerator[str]:
+        *,
+        diarize: bool = False,
+    ) -> AsyncGenerator[_TranscriptPart]:
         """Transcribe an upload over a live session, yielding text as it lands.
 
         The audio is sent by a task of its own so the session's answers are read
@@ -1630,14 +1800,16 @@ class AudioModel(AudioModelBase[None, None]):
             audio_content: Audio file to transcribe.
             request: The session request, already carrying its language fields.
             regions: Candidate regions, in priority order.
+            diarize: Whether the session attributes each word to a speaker, so
+                every completed result is cut into one part per speaker.
 
         Yields:
-            The transcript of each result the session completes, in order.
+            The parts of each result the session completes, in order.
 
         Raises:
             ApiError: The session could not be opened or completed.
         """
-        transcript = _StreamedTranscript()
+        transcript = _StreamedTranscript(diarize=diarize)
         try:
             async with open_bidi_stream(
                 "transcribe",
@@ -1656,8 +1828,8 @@ class AudioModel(AudioModelBase[None, None]):
                             limit.reschedule(
                                 get_running_loop().time() + _STREAM_EVENT_TIMEOUT
                             )
-                            for text in transcript.read(event):
-                                yield text
+                            for part in transcript.read(event):
+                                yield part
                 except TimeoutError as exception:
                     msg = (
                         "The audio could not be transcribed in time. Retry the request."
@@ -1667,10 +1839,13 @@ class AudioModel(AudioModelBase[None, None]):
                     sender.cancel()
                     with suppress(CancelledError, Exception):
                         await sender
-            for text in transcript.remainder():
-                yield text
+            for part in transcript.remainder():
+                yield part
         finally:
-            record_transcribe_usage(transcript.seconds, region=_SERVED_REGION.get())
+            # A session that never took audio has nothing to bill, and the
+            # recorder would otherwise book the 15-second minimum for it.
+            if transcript.seconds:
+                record_transcribe_usage(transcript.seconds, region=_SERVED_REGION.get())
 
     async def _job_transcript(
         self,
@@ -1681,11 +1856,13 @@ class AudioModel(AudioModelBase[None, None]):
         temperature: float | None,
         extra_params: JsonMapping | None,
         languages: list[str] | None,
-    ) -> AsyncGenerator[str]:
+    ) -> AsyncGenerator[_TranscriptPart]:
         """Transcribe an upload as a job, yielding its transcript once complete.
 
         Serves the requests a live session cannot: those naming no language it
-        could be opened with, and those asking for a job-only setting.
+        could be opened with, and those asking for a job-only setting. Speaker
+        attribution is complete by the time the job finishes, so a diarized
+        request gets the same segments here, all at once.
 
         Args:
             audio_content: Audio file to transcribe.
@@ -1697,7 +1874,7 @@ class AudioModel(AudioModelBase[None, None]):
             languages: Optional expected input language codes.
 
         Yields:
-            Each transcript of the finished job.
+            Each part of the finished job.
 
         Raises:
             ApiError: When transcription fails.
@@ -1714,8 +1891,18 @@ class AudioModel(AudioModelBase[None, None]):
         record_transcribe_usage(
             _get_audio_duration(transcript_data), region=_SERVED_REGION.get()
         )
+        if response_format == "diarized_json":
+            for segment in transcript_data.get("audio_segments") or ():
+                if segment["transcript"]:
+                    yield _TranscriptPart(
+                        text=segment["transcript"],
+                        speaker=segment.get("speaker_label"),
+                        start=float(segment["start_time"]),
+                        end=float(segment["end_time"]),
+                    )
+            return
         for transcript in transcript_data["transcripts"]:
-            yield transcript["transcript"]
+            yield _TranscriptPart(text=transcript["transcript"])
 
     async def stt_translate(
         self,

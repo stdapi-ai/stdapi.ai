@@ -161,7 +161,7 @@ class AudioModel(AudioModelBase[Any, Any]):
     async def stt_stream(
         self,
         audio_content: InputFile,
-        response_format: AudioResponseFormat,  # noqa: ARG002
+        response_format: AudioResponseFormat,
         language: str | None = None,
         prompt: str | None = None,
         temperature: float | None = None,
@@ -175,7 +175,8 @@ class AudioModel(AudioModelBase[Any, Any]):
 
         Args:
             audio_content: Audio file to transcribe.
-            response_format: Format for output (only "text" is supported for streaming).
+            response_format: Format for output; ``diarized_json`` is refused,
+                the model reporting no speakers.
             language: Optional language code for the input audio (ISO-639-1 format).
             prompt: Optional prompt for transcription.
             temperature: Optional temperature for transcription.
@@ -192,6 +193,7 @@ class AudioModel(AudioModelBase[Any, Any]):
         Raises:
             ApiError: When an unsupported format is requested or transcription fails.
         """
+        self._validate_streamed_diarization(response_format)
         self._validate_converse_supported()
         full_text_parts: list[str] = []
         usage: TokenUsageTypeDef | None = None
