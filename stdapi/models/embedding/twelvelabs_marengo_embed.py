@@ -16,9 +16,12 @@ from stdapi.models.embedding import EmbeddingModelBase, EmbeddingResponse
 from stdapi.usage import record_bedrock_usage
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from types_aiobotocore_bedrock.literals import RegionName
 
     from stdapi.models import InvokeResult
+    from stdapi.models.embedding import EmbedInputValue
     from stdapi.pricing import Routing
     from stdapi.types import JsonMapping
 
@@ -233,20 +236,25 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
     async def embed_text(
         self,
-        inputs: list[InputFileUrl | str],
+        inputs: Sequence[EmbedInputValue],
         dimensions: int | None,
         extra_params: JsonMapping,
     ) -> EmbeddingResponse:
         """Get embeddings for text.
 
         Args:
-            inputs: Texts to embed.
+            inputs: Texts and media to embed, one vector each.
             dimensions: Number of dimensions.
             extra_params: Extra model parameters.
 
         Returns:
             Embedding response.
+
+        Raises:
+            ApiError: When ``dimensions`` is set, or an input groups several
+                content parts.
         """
+        values = self._single_part_inputs(inputs)
         if dimensions is not None:
             msg = "'dimensions' option is not supported by TwelveLabs Marengo embedding models."
             raise ApiError(msg)
@@ -256,7 +264,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
         await prefetch_all_content_types()
 
-        if text_image := await self._get_text_image_input(inputs):
+        if text_image := await self._get_text_image_input(values):
             result = await self._embed_text_image(
                 image_text=text_image[0],
                 value=text_image[1],
@@ -273,7 +281,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
                 self._embed(
                     value=value, extra_params=extra_params, force_s3_data=force_s3_data
                 )
-                for value in inputs
+                for value in values
             ):
                 embeddings.extend(
                     vector["embedding"] for vector in result.response["data"]
@@ -515,7 +523,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         )
 
     def _is_v2(self) -> bool:
-        """Check if the model is version 3+."""
+        """Whether the model is a Marengo Embed 2.x model."""
         return "-2-" in self.model.id
 
     async def _get_text_image_input(

@@ -11,7 +11,10 @@ from stdapi.input_file import InputFile, InputFileUrl
 from stdapi.models.embedding import EmbeddingModelBase, EmbeddingResponse
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from stdapi.models import InvokeResult
+    from stdapi.models.embedding import EmbedInputValue
     from stdapi.types import JsonMapping
 
 
@@ -65,20 +68,24 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
     async def embed_text(
         self,
-        inputs: list[InputFileUrl | str],
+        inputs: Sequence[EmbedInputValue],
         dimensions: int | None,
         extra_params: JsonMapping,
     ) -> EmbeddingResponse:
         """Get embeddings for text.
 
         Args:
-            inputs: Texts to embed.
+            inputs: Texts and images to embed, one vector each.
             dimensions: Number of dimensions.
             extra_params: Extra model parameters.
 
         Returns:
             Embedding response.
+
+        Raises:
+            ApiError: When an input groups several content parts.
         """
+        values = self._single_part_inputs(inputs)
         request = self._base_request(dimensions, extra_params)
 
         input_tokens = 0
@@ -88,7 +95,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             {} if "embeddingTypes" in request else None
         )
         for result in await self._gather_bounded(
-            self._invoke(request, value) for value in inputs
+            self._invoke(request, value) for value in values
         ):
             embeddings.append(result.response["embedding"])
             input_tokens += (
@@ -161,19 +168,23 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
     async def build_batch_request(
         self,
-        inputs: list[InputFileUrl | str],
+        inputs: Sequence[EmbedInputValue],
         dimensions: int | None,
         extra_params: JsonMapping,
     ) -> dict[str, Any]:
         """Build the request body of one embedding, without sending it.
 
         Args:
-            inputs: Texts to embed.
+            inputs: The single text or image to embed.
             dimensions: Number of dimensions.
             extra_params: Extra model parameters.
 
         Returns:
             The request body.
+
+        Raises:
+            ApiError: When the request carries more than one input, or an
+                input grouping several content parts.
         """
         return await self._with_input(  # type: ignore[return-value]
             self._base_request(dimensions, extra_params), self._one_input(inputs)

@@ -11,14 +11,24 @@ from base64 import b64decode, b64encode
 from os import getenv
 from struct import unpack
 from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from cohere.errors import BadRequestError
+from cohere.types import (
+    EmbedImageUrl,
+    EmbedInput,
+    ImageUrlEmbedContent,
+    TextEmbedContent,
+)
 
 from stdapi.api_errors import UnsupportedModelError
 from stdapi.config import SETTINGS
-from stdapi.input_file import InputFile
+from stdapi.input_file import InputFile, InputFileUrl
+from stdapi.models import InvokeResult
 from stdapi.models.embedding import EmbeddingImageDescription, EmbeddingResponse
+from stdapi.models.embedding.cohere_embed import EmbeddingModel
 from stdapi.routes import cohere_embed, cohere_embed_v1
 from tests._helpers import make_model_details
 
@@ -55,6 +65,9 @@ _PNG_DATA_URI = f"data:image/png;base64,{b64encode(_PNG).decode()}"
 
 #: Bucket name allow-listed by the stubbed S3 image-input test.
 _S3_BUCKET = "embed-inputs"
+
+#: Inputs a Cohere Embed model accepts per request, deliberately not enforced here.
+_COHERE_MAX_INPUTS = 96
 
 
 def _serve_png(monkeypatch: pytest.MonkeyPatch, source_name: str) -> None:
@@ -121,6 +134,17 @@ def embed_backend(monkeypatch: pytest.MonkeyPatch) -> _StubEmbeddingModel:
         monkeypatch.setattr(module, "validate_model", _validate_model)
         monkeypatch.setattr(module, "get_embedding_model", lambda _model_id: stub)
     return stub
+
+
+@pytest.fixture
+def validated_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub model validation only, keeping the real embedding model classes."""
+
+    async def _validate_model(model_id: str, modality: str) -> ModelDetails:
+        assert modality == "EMBEDDING"
+        return make_model_details(model_id, output_modalities=["EMBEDDING"])
+
+    monkeypatch.setattr(cohere_embed, "validate_model", _validate_model)
 
 
 @pytest.mark.local
@@ -391,7 +415,10 @@ class TestCohereEmbedRoute:
     def test_no_input_is_rejected(
         self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
-        """A request without texts or images fails validation.
+        """A request without texts, images or inputs fails validation.
+
+        The message names every field that would satisfy the endpoint, `inputs`
+        included, so a client is not told to send one it already sent.
 
         Ref: stdapi/types/cohere_embed.py:_EmbedRequestBase
         """
@@ -404,6 +431,7 @@ class TestCohereEmbedRoute:
         assert set(body) == {"message", "id"}
         assert "texts" in body["message"]
         assert "images" in body["message"]
+        assert "inputs" in body["message"]
         assert not embed_backend.calls
 
     def test_non_float_embedding_types_are_rejected_for_unsupported_backends(
@@ -607,13 +635,130 @@ class TestCohereEmbedRoute:
         (call,) = embed_backend.calls
         assert call["extra_params"]["embedding_types"] == ["float"]
 
-    def test_fused_inputs_are_rejected(
+    def test_fused_input_is_forwarded_as_one_grouped_entry(
         self, app_client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
-        """The v2 fused multimodal `inputs` field is rejected with a clear error.
+        """An `inputs` entry with several content parts embeds into one vector.
+
+        The parts of one entry travel to the backend grouped together, in the
+        order they were sent, which is what makes the result a single fused
+        embedding instead of one embedding per part.
 
         Ref: https://docs.cohere.com/reference/embed
-             stdapi/types/cohere_embed.py:_EmbedRequestBase
+             stdapi/types/cohere_embed.py:EmbedRequest
+        """
+        response = app_client.post(
+            "/cohere/v2/embed",
+            json={
+                "model": "cohere.embed-v4:0",
+                "input_type": "search_document",
+                "inputs": [
+                    {
+                        "content": [
+                            {"type": "text", "text": "a red bicycle"},
+                            {"type": "image_url", "image_url": {"url": _PNG_DATA_URI}},
+                        ]
+                    }
+                ],
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["embeddings"] == {"float": [[0.1, 0.2]]}, "one vector per entry"
+        assert body["meta"]["billed_units"] == {"input_tokens": 7, "images": 1}
+        (call,) = embed_backend.calls
+        (entry,) = call["inputs"]
+        text_part, image_part = entry
+        assert text_part == "a red bicycle"
+        assert isinstance(image_part, InputFile)
+        assert call["extra_params"] == {"input_type": "search_document"}
+
+    def test_fused_inputs_are_appended_after_texts_and_images_in_order(
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
+    ) -> None:
+        """`texts`, `images` and `inputs` are embedded in that order.
+
+        The response returns one vector per input in request order, so a client
+        combining the three fields has to be able to map `embeddings[i]` back to
+        what it sent.
+
+        Ref: https://stdapi.ai/api_cohere_embed/
+             stdapi/routes/cohere_embed.py:embed
+        """
+        response = app_client.post(
+            "/cohere/v2/embed",
+            json={
+                "model": "cohere.embed-v4:0",
+                "input_type": "search_document",
+                "texts": ["plain text"],
+                "images": [_PNG_DATA_URI],
+                "inputs": [
+                    {
+                        "content": [
+                            {"type": "text", "text": "fused text"},
+                            {"type": "image_url", "image_url": {"url": _PNG_DATA_URI}},
+                        ]
+                    },
+                    {"content": [{"type": "text", "text": "single part"}]},
+                ],
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["embeddings"] == {"float": [[0.1, 0.2]] * 4}
+        assert body["texts"] == ["plain text"], "only `texts` is echoed back"
+        assert body["meta"]["billed_units"] == {"input_tokens": 7, "images": 2}
+        (call,) = embed_backend.calls
+        plain, image, fused, single = call["inputs"]
+        assert plain == "plain text"
+        assert isinstance(image, InputFile)
+        assert fused[0] == "fused text"
+        assert isinstance(fused[1], InputFile)
+        assert single == "single part", (
+            "a one-part entry is equivalent to the same `texts` entry"
+        )
+
+    @pytest.mark.parametrize(
+        "model", ["cohere.embed-v4:0", "amazon.titan-embed-text-v2:0"]
+    )
+    def test_single_part_text_input_is_equivalent_to_a_text_entry(
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel, model: str
+    ) -> None:
+        """A one-part `inputs` entry is embedded like the same `texts` entry.
+
+        Flattening it makes `inputs` usable on every embedding model, not only
+        on the ones that can fuse several parts into one vector. The equality
+        stops at the vector: the response `texts` array echoes the `texts`
+        field alone, so a text sent through `inputs` is not echoed.
+
+        Ref: https://docs.cohere.com/reference/embed
+             stdapi/types/cohere_embed.py:EmbedRequest
+        """
+        response = app_client.post(
+            "/cohere/v2/embed",
+            json={
+                "model": model,
+                "input_type": "search_document",
+                "inputs": [{"content": [{"type": "text", "text": "hello"}]}],
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["embeddings"] == {"float": [[0.1, 0.2]]}
+        assert "texts" not in body, "only the `texts` field is echoed back"
+        (call,) = embed_backend.calls
+        assert call["inputs"] == ["hello"]
+
+    def test_fused_inputs_are_not_forwarded_as_extra_model_parameters(
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
+    ) -> None:
+        """`inputs` is a declared field, so it never reaches the backend as an extra.
+
+        Unknown request fields are forwarded as additional model parameters; a
+        second, unshaped copy of `inputs` would reach the model beside the one
+        the route builds.
+
+        Ref: stdapi/aws_bedrock.py:get_extra_model_parameters
         """
         response = app_client.post(
             "/cohere/v2/embed",
@@ -623,11 +768,157 @@ class TestCohereEmbedRoute:
                 "inputs": [{"content": [{"type": "text", "text": "a"}]}],
             },
         )
+        assert response.status_code == 200, response.text
+        (call,) = embed_backend.calls
+        assert call["extra_params"] == {"input_type": "search_document"}
+
+    def test_inputs_alone_satisfies_the_input_requirement(
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
+    ) -> None:
+        """A request carrying only `inputs` is accepted.
+
+        Ref: stdapi/types/cohere_embed.py:_EmbedRequestBase
+        """
+        response = app_client.post(
+            "/cohere/v2/embed",
+            json={
+                "model": "cohere.embed-v4:0",
+                "input_type": "search_document",
+                "inputs": [{"content": [{"type": "text", "text": "a"}]}],
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert embed_backend.calls
+
+    @pytest.mark.parametrize("field", ["texts", "inputs"])
+    def test_more_inputs_than_the_cohere_limit_are_forwarded(
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel, field: str
+    ) -> None:
+        """The 96-input Cohere limit is a model limit and is not enforced here.
+
+        Models that embed one input per call take far more than 96, so a cap on
+        `texts` or `inputs` would reject a legitimate request to Titan, Nova or
+        Marengo; the resolved model refuses what it cannot take.
+
+        Ref: https://docs.cohere.com/reference/embed
+             stdapi/types/cohere_embed.py:EmbedRequest
+        """
+        count = _COHERE_MAX_INPUTS + 1
+        entries: list[Any] = (
+            [f"chunk {index}" for index in range(count)]
+            if field == "texts"
+            else [
+                {"content": [{"type": "text", "text": f"chunk {index}"}]}
+                for index in range(count)
+            ]
+        )
+        response = app_client.post(
+            "/cohere/v2/embed",
+            json={
+                "model": "amazon.titan-embed-text-v2:0",
+                "input_type": "search_document",
+                field: entries,
+            },
+        )
+        assert response.status_code == 200, response.text
+        (call,) = embed_backend.calls
+        assert len(call["inputs"]) == count
+
+    def test_empty_input_content_is_rejected(
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
+    ) -> None:
+        """An `inputs` entry with no content part is rejected.
+
+        An empty entry has nothing to embed but would still claim a position in
+        the returned vector list.
+
+        Ref: stdapi/types/cohere_embed.py:EmbedInput
+        """
+        response = app_client.post(
+            "/cohere/v2/embed",
+            json={
+                "model": "cohere.embed-v4:0",
+                "input_type": "search_document",
+                "inputs": [{"content": []}],
+            },
+        )
         assert response.status_code == 400
         body = response.json()
         assert set(body) == {"message", "id"}
-        assert "inputs" in body["message"]
+        assert "content" in body["message"]
         assert not embed_backend.calls
+
+    def test_unknown_input_content_type_is_rejected(
+        self, app_client: TestClient, embed_backend: _StubEmbeddingModel
+    ) -> None:
+        """A content part of an unknown type is rejected rather than ignored.
+
+        Ref: https://docs.cohere.com/reference/embed
+             stdapi/types/cohere_embed.py:EmbedInputContent
+        """
+        response = app_client.post(
+            "/cohere/v2/embed",
+            json={
+                "model": "cohere.embed-v4:0",
+                "input_type": "search_document",
+                "inputs": [{"content": [{"type": "audio_url", "text": "a"}]}],
+            },
+        )
+        assert response.status_code == 400
+        body = response.json()
+        assert set(body) == {"message", "id"}
+        assert "audio_url" in body["message"]
+        assert not embed_backend.calls
+
+    def test_every_text_part_of_a_fused_input_is_guarded(
+        self,
+        app_client: TestClient,
+        embed_backend: _StubEmbeddingModel,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Guardrails screen the text inside `inputs`, not only `texts`.
+
+        A text part reaching the model unscreened would be a guardrail bypass
+        that a client can trigger by moving its text into a fused entry.
+
+        Ref: https://stdapi.ai/api_cohere_embed/
+             stdapi/aws_bedrock.py:apply_guardrail_to_texts
+        """
+        seen: list[Any] = []
+
+        async def _guard(items: list[Any], *, source: str) -> list[Any]:
+            assert source == "INPUT"
+            seen.extend(item for item in items if isinstance(item, str))
+            return [f"[{item}]" if isinstance(item, str) else item for item in items]
+
+        monkeypatch.setattr(cohere_embed, "apply_guardrail_to_texts", _guard)
+
+        response = app_client.post(
+            "/cohere/v2/embed",
+            json={
+                "model": "cohere.embed-v4:0",
+                "input_type": "search_document",
+                "texts": ["plain"],
+                "inputs": [
+                    {
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": _PNG_DATA_URI}},
+                            {"type": "text", "text": "second part"},
+                        ]
+                    },
+                    {"content": [{"type": "text", "text": "third input"}]},
+                ],
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert seen == ["plain", "second part", "third input"]
+        (call,) = embed_backend.calls
+        plain, fused, single = call["inputs"]
+        assert plain == "[plain]"
+        assert isinstance(fused[0], InputFile), "image parts pass through unchanged"
+        assert fused[1] == "[second part]"
+        assert single == "[third input]"
 
     def test_priority_is_ignored(
         self, app_client: TestClient, embed_backend: _StubEmbeddingModel
@@ -796,6 +1087,132 @@ class TestCohereEmbedRoute:
         assert "images" not in body
         assert "images" not in body["meta"]["billed_units"]
         assert body["texts"] == ["hello"]
+
+
+@pytest.mark.local
+@pytest.mark.usefixtures("validated_model")
+class TestCohereFusedInputSupport:
+    """POST /cohere/v2/embed: fused `inputs` entries on models that cannot fuse.
+
+    These requests are refused by the resolved model itself, before any backend
+    call, so they run against the real embedding model classes.
+
+    Ref: https://docs.cohere.com/reference/embed
+         stdapi/models/embedding/__init__.py:EmbeddingModelBase._single_part_inputs
+    """
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "cohere.embed-multilingual-v3",
+            "cohere.embed-english-v3",
+            "amazon.titan-embed-text-v2:0",
+            "amazon.titan-embed-image-v1",
+            "amazon.nova-2-multimodal-embeddings-v1:0",
+            "twelvelabs.marengo-embed-3-0-v1:0",
+        ],
+    )
+    def test_multi_part_input_is_rejected(
+        self, app_client: TestClient, model: str
+    ) -> None:
+        """A model that cannot fuse content parts refuses the request.
+
+        Splitting the entry would answer with two vectors where one was asked
+        for, silently shifting every following index.
+
+        Ref: stdapi/models/embedding/__init__.py:EmbeddingModelBase._single_part_inputs
+        """
+        response = app_client.post(
+            "/cohere/v2/embed",
+            json={
+                "model": model,
+                "input_type": "search_document",
+                "inputs": [
+                    {
+                        "content": [
+                            {"type": "text", "text": "a red bicycle"},
+                            {"type": "image_url", "image_url": {"url": _PNG_DATA_URI}},
+                        ]
+                    }
+                ],
+            },
+        )
+        assert response.status_code == 400, response.text
+        body = response.json()
+        assert set(body) == {"message", "id"}
+        assert "Embed v4" in body["message"]
+
+    def test_texts_and_images_on_v3_name_no_backend_identifier(
+        self, app_client: TestClient
+    ) -> None:
+        """The mixed-content refusal names the model generation, not a backend ID.
+
+        A client calling `embed-multilingual-v3.0` never sent a Bedrock model
+        identifier and cannot look one up in Cohere's catalogue.
+
+        Ref: stdapi/models/embedding/cohere_embed.py:EmbeddingModel._build_request
+        """
+        response = app_client.post(
+            "/cohere/v2/embed",
+            json={
+                "model": "cohere.embed-multilingual-v3",
+                "input_type": "search_document",
+                "texts": ["a red bicycle"],
+                "images": [_PNG_DATA_URI],
+            },
+        )
+        assert response.status_code == 400, response.text
+        message = response.json()["message"]
+        assert "Cohere Embed v4" in message
+        assert "cohere.embed" not in message, "no backend model identifier"
+
+
+@pytest.mark.local
+class TestCohereFusedRequestBody:
+    """The Cohere Embed v4 request body a fused `inputs` entry produces.
+
+    The route hands the model one nested list per fused entry; this is where
+    that grouping becomes a single `inputs` element. Splitting it would answer
+    with one vector per content part instead of one per entry, shifting every
+    following index without any error.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v4.html
+         stdapi/models/embedding/cohere_embed.py:EmbeddingModel._to_input_contents
+    """
+
+    async def test_fused_entry_becomes_one_grouped_inputs_element(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A multi-part entry is sent as one `inputs` element carrying both parts.
+
+        Ref: stdapi/models/embedding/cohere_embed.py:EmbeddingModel._to_input_contents
+        """
+        model = EmbeddingModel("cohere.embed-v4:0")
+        monkeypatch.setattr(
+            type(model),
+            "invoke",
+            AsyncMock(
+                return_value=InvokeResult(response={"embeddings": [[0.1], [0.2]]})
+            ),
+        )
+        response = await model.embed_text(
+            [["a red bicycle", InputFileUrl(_PNG_DATA_URI)], "Bonjour le monde"],
+            dimensions=None,
+            extra_params={},
+        )
+        request = model.invoke.call_args.args[0]  # type: ignore[attr-defined]
+        assert request["inputs"] == [
+            {
+                "content": [
+                    {"type": "text", "text": "a red bicycle"},
+                    {"type": "image_url", "image_url": {"url": _PNG_DATA_URI}},
+                ]
+            },
+            {"content": [{"type": "text", "text": "Bonjour le monde"}]},
+        ], "one entry per input, the fused one keeping both parts"
+        assert "texts" not in request
+        assert "images" not in request
+        assert response.embeddings == [[0.1], [0.2]]
 
 
 @pytest.mark.local
@@ -1101,6 +1518,9 @@ class TestCohereEmbedV1Route:
         assert set(body) == {"message", "id"}
         assert "texts" in body["message"]
         assert "images" in body["message"]
+        assert "inputs" not in body["message"], (
+            "v1 must not offer a field it does not accept"
+        )
         assert not embed_backend.calls
 
     def test_fused_inputs_are_rejected(
@@ -1361,8 +1781,9 @@ class TestCohereEmbedIntegration:
     ) -> None:
         """An image data URI is embedded, billed as one image, and its metadata echoed.
 
-        Bedrock accepts at most one image per Cohere Embed call and reports its
-        format and pixel size, which the route echoes as `images`.
+        Cohere Embed v3 accepts a single image per call and v4 takes several;
+        one is enough to pin the echo of the format and pixel size the model
+        reports, which the route returns as `images`.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v3.html
         """
@@ -1386,6 +1807,267 @@ class TestCohereEmbedIntegration:
         assert image.height > 0
         assert image.format
         assert "png" in image.format.lower(), "the submitted data URI is a PNG"
+
+    def test_embed_fused_text_and_image(
+        self,
+        cohere_client: cohere.ClientV2,
+        cohere_embed_v4_model: str,
+        sample_image_file_base64: str,
+        use_official_api: bool,
+    ) -> None:
+        """A text and an image sent as one input embed into a single vector.
+
+        The point of `inputs` is that the caption and the picture share one
+        vector: one entry in, one vector out, and the image's tokens inside the
+        same billed count.
+
+        Ref: https://docs.cohere.com/reference/embed
+             stdapi/models/embedding/cohere_embed.py:EmbeddingModel._build_request
+        """
+        response = cohere_client.embed(
+            model=cohere_embed_v4_model,
+            input_type="search_document",
+            inputs=[
+                EmbedInput(
+                    content=[
+                        TextEmbedContent(text=_SAMPLE_TEXT),
+                        ImageUrlEmbedContent(
+                            image_url=EmbedImageUrl(url=sample_image_file_base64)
+                        ),
+                    ]
+                )
+            ],
+            embedding_types=["float"],
+        )
+        assert response.embeddings.float_ is not None
+        (vector,) = response.embeddings.float_
+        assert len(vector) in _COHERE_V4_DIMENSIONS
+        assert response.meta is not None
+        assert response.meta.billed_units is not None
+        assert (response.meta.billed_units.input_tokens or 0) > 0, (
+            "the image is billed inside the input token count"
+        )
+        if not use_official_api:
+            assert response.meta.billed_units.images == 1, (
+                "the image part is reported as one submitted image"
+            )
+            assert not response.images, (
+                "no image metadata is reported for a fused input"
+            )
+
+    def test_single_part_image_input_echoes_its_metadata(
+        self,
+        cohere_client: cohere.ClientV2,
+        cohere_embed_v4_model: str,
+        sample_image_file_base64: str,
+        use_official_api: bool,
+    ) -> None:
+        """A one-part image `inputs` entry reports metadata, unlike a fused one.
+
+        The entry is submitted exactly as the same `images` entry would be, so
+        the model still describes the image -- which is the difference a client
+        reading `images` has to know about.
+
+        Ref: https://docs.cohere.com/reference/embed
+             stdapi/types/cohere_embed.py:EmbedRequest.embed_inputs
+        """
+        response = cohere_client.embed(
+            model=cohere_embed_v4_model,
+            input_type="search_document",
+            inputs=[
+                EmbedInput(
+                    content=[
+                        ImageUrlEmbedContent(
+                            image_url=EmbedImageUrl(url=sample_image_file_base64)
+                        )
+                    ]
+                )
+            ],
+            embedding_types=["float"],
+        )
+        assert response.embeddings.float_ is not None
+        (vector,) = response.embeddings.float_
+        assert len(vector) in _COHERE_V4_DIMENSIONS
+        if not use_official_api:
+            assert response.images is not None
+            (image,) = response.images
+            assert image.width > 0
+            assert image.height > 0
+            assert image.format
+            assert "png" in image.format.lower(), "the submitted data URI is a PNG"
+
+    def test_fused_inputs_return_one_vector_per_entry(
+        self,
+        cohere_client: cohere.ClientV2,
+        cohere_embed_v4_model: str,
+        sample_image_file_base64: str,
+    ) -> None:
+        """Two fused inputs return two distinct vectors, in request order.
+
+        Ref: https://docs.cohere.com/reference/embed
+        """
+        response = cohere_client.embed(
+            model=cohere_embed_v4_model,
+            input_type="search_document",
+            inputs=[
+                EmbedInput(
+                    content=[
+                        TextEmbedContent(text=_SAMPLE_TEXT),
+                        ImageUrlEmbedContent(
+                            image_url=EmbedImageUrl(url=sample_image_file_base64)
+                        ),
+                    ]
+                ),
+                EmbedInput(content=[TextEmbedContent(text="Bonjour le monde")]),
+            ],
+            embedding_types=["float"],
+        )
+        assert response.embeddings.float_ is not None
+        first, second = response.embeddings.float_
+        assert len(first) == len(second)
+        assert first != second
+
+    def test_texts_combined_with_inputs_return_one_vector_each(
+        self,
+        cohere_client: cohere.ClientV2,
+        cohere_embed_v4_model: str,
+        sample_image_file_base64: str,
+        use_official_api: bool,
+    ) -> None:
+        """`texts` sent together with `inputs` embeds both, texts first.
+
+        Cohere documents a maximum per field but never says whether the fields
+        may be combined, so this is the test that checks the vendor accepts the
+        combination the endpoint advertises rather than only that this gateway
+        does. A failure here is a product bug, not a lane to relax.
+
+        Ref: https://docs.cohere.com/reference/embed
+             stdapi/types/cohere_embed.py:EmbedRequest.embed_inputs
+        """
+        response = cohere_client.embed(
+            model=cohere_embed_v4_model,
+            input_type="search_document",
+            texts=[_SAMPLE_TEXT],
+            inputs=[
+                EmbedInput(
+                    content=[
+                        TextEmbedContent(text="A red bicycle leaning on a wall"),
+                        ImageUrlEmbedContent(
+                            image_url=EmbedImageUrl(url=sample_image_file_base64)
+                        ),
+                    ]
+                ),
+                EmbedInput(content=[TextEmbedContent(text="Bonjour le monde")]),
+            ],
+            embedding_types=["float"],
+        )
+        assert response.embeddings.float_ is not None
+        plain, fused, single = response.embeddings.float_
+        assert len({len(plain), len(fused), len(single)}) == 1, (
+            "one vector per input, all of the model's width"
+        )
+        assert plain != fused
+        assert fused != single
+        assert single != plain
+        if not use_official_api:
+            assert response.texts == [_SAMPLE_TEXT], "only `texts` is echoed back"
+            assert not response.images, (
+                "a request carrying a text returns no image metadata"
+            )
+            assert response.meta is not None
+            assert response.meta.billed_units is not None
+            assert response.meta.billed_units.images == 1
+
+    def test_more_texts_than_the_cohere_limit_are_refused(
+        self, cohere_client: cohere.ClientV2, cohere_embed_multilingual_model: str
+    ) -> None:
+        """A Cohere model embeds 96 texts and refuses 97 with a 400.
+
+        The endpoint deliberately forwards any number of `texts`, because other
+        embedding models take far more than 96, so the documented cap rests
+        entirely on the model refusing the excess -- the half never covered.
+        The refusal names no count, so the boundary itself is what pins the
+        limit; the over-long half is free, being refused before inference with
+        no token count reported at all.
+
+        Ref: https://docs.cohere.com/reference/embed
+             stdapi/types/cohere_embed.py:EmbedRequest
+        """
+        texts = [f"chunk {index}" for index in range(_COHERE_MAX_INPUTS + 1)]
+        accepted = cohere_client.embed(
+            model=cohere_embed_multilingual_model,
+            input_type="search_document",
+            texts=texts[:_COHERE_MAX_INPUTS],
+            embedding_types=["float"],
+        )
+        assert accepted.embeddings.float_ is not None
+        assert len(accepted.embeddings.float_) == _COHERE_MAX_INPUTS
+        with pytest.raises(BadRequestError) as refused:
+            cohere_client.embed(
+                model=cohere_embed_multilingual_model,
+                input_type="search_document",
+                texts=texts,
+                embedding_types=["float"],
+            )
+        assert refused.value.status_code == 400
+
+    @pytest.mark.gateway("Bedrock-specific model")
+    def test_single_part_input_on_a_non_cohere_model(
+        self, cohere_client: cohere.ClientV2, embedding_model: str
+    ) -> None:
+        """A one-part `inputs` entry works on a model that cannot fuse parts.
+
+        Ref: stdapi/types/cohere_embed.py:EmbedRequest
+        """
+        response = cohere_client.embed(
+            model=embedding_model,
+            input_type="search_document",
+            inputs=[EmbedInput(content=[TextEmbedContent(text=_SAMPLE_TEXT)])],
+            embedding_types=["float"],
+        )
+        assert response.embeddings.float_ is not None
+        (vector,) = response.embeddings.float_
+        assert len(vector) > 0
+
+    @pytest.mark.slow
+    @pytest.mark.xdist_group("moderations_guardrail")
+    def test_guardrail_blocks_a_text_part_of_a_fused_input(
+        self, live_client: httpx.Client, live_guardrail: str, cohere_embed_v4_model: str
+    ) -> None:
+        """A blocked word inside a fused entry stops the request.
+
+        The text of a fused entry is screened exactly like a `texts` entry, so
+        moving it into `inputs` is not a way around the configured guardrail.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-content-filters.html
+             stdapi/routes/cohere_embed.py:embed
+        """
+        response = live_client.post(
+            "/cohere/v2/embed",
+            headers={
+                "X-Amzn-Bedrock-GuardrailIdentifier": live_guardrail,
+                "X-Amzn-Bedrock-GuardrailVersion": "DRAFT",
+            },
+            json={
+                "model": cohere_embed_v4_model,
+                "input_type": "search_document",
+                "inputs": [
+                    {"content": [{"type": "text", "text": _SAMPLE_TEXT}]},
+                    {
+                        "content": [
+                            {"type": "text", "text": "harmless"},
+                            {"type": "text", "text": "BLOCKWORDXYZ"},
+                        ]
+                    },
+                ],
+            },
+        )
+        assert response.status_code == 400, response.text
+        body = response.json()
+        assert set(body) == {"message", "id"}
+        assert body["message"] == "Blocked by test guardrail.", (
+            "the guardrail's own blocked-input messaging is returned"
+        )
 
     @pytest.mark.slow
     def test_every_advertised_model_embeds(

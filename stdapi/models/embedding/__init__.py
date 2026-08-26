@@ -15,14 +15,24 @@ from stdapi.api_errors import ApiError
 from stdapi.models import ModelBase, get_model, load_model_plugins
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Iterable
+    from collections.abc import Awaitable, Iterable, Sequence
     from re import Pattern
 
     from stdapi.input_file import InputFileUrl
     from stdapi.types import JsonMapping
 
+#: One input to embed: a text, an image, or content parts fused into one vector.
+type EmbedInputValue = InputFileUrl | str | list[InputFileUrl | str]
+
 #: Concurrent invocations per request, for models that embed one input per call.
 _EMBED_CONCURRENCY = 8
+
+#: Refusal returned for an input grouping several content parts into one vector.
+FUSED_INPUTS_UNSUPPORTED = (
+    "Embedding several content parts into a single vector is supported by "
+    "Cohere Embed v4 only. Send one content part per input, or select a "
+    "Cohere Embed v4 model."
+)
 
 
 class EmbeddingImageDescription(BaseModel):
@@ -77,14 +87,15 @@ class EmbeddingModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
     @abstractmethod
     async def embed_text(
         self,
-        inputs: list[InputFileUrl | str],
+        inputs: Sequence[EmbedInputValue],
         dimensions: int | None,
         extra_params: JsonMapping,
     ) -> EmbeddingResponse:
         """Get embeddings for text.
 
         Args:
-            inputs: Texts to embed.
+            inputs: Texts and images to embed, one vector per entry; an entry
+                listing several values embeds them together into one vector.
             dimensions: Number of dimensions.
             extra_params: Extra model parameters.
 
@@ -94,7 +105,7 @@ class EmbeddingModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
 
     async def build_batch_request(
         self,
-        inputs: list[InputFileUrl | str],  # noqa: ARG002
+        inputs: Sequence[EmbedInputValue],  # noqa: ARG002
         dimensions: int | None,  # noqa: ARG002
         extra_params: JsonMapping,  # noqa: ARG002
     ) -> dict[str, Any]:
@@ -105,7 +116,7 @@ class EmbeddingModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         resource this server placed in one region.
 
         Args:
-            inputs: Texts to embed.
+            inputs: Texts and images to embed.
             dimensions: Number of dimensions.
             extra_params: Extra model parameters.
 
@@ -140,8 +151,8 @@ class EmbeddingModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             f"The model `{self._model_id}` is not available for batched requests."
         )
 
-    @staticmethod
-    def _one_input(inputs: list[InputFileUrl | str]) -> InputFileUrl | str:
+    @classmethod
+    def _one_input(cls, inputs: Sequence[EmbedInputValue]) -> InputFileUrl | str:
         """Return the only input of a request, for a model that embeds one at a time.
 
         Args:
@@ -159,7 +170,29 @@ class EmbeddingModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
                 f"carries {len(inputs)}. Send one request per input."
             )
             raise ApiError(msg)
-        return inputs[0]
+        return cls._single_part_inputs(inputs)[0]
+
+    @staticmethod
+    def _single_part_inputs(
+        inputs: Sequence[EmbedInputValue],
+    ) -> list[InputFileUrl | str]:
+        """Return the inputs of a model that embeds one content part per vector.
+
+        Args:
+            inputs: The request's inputs.
+
+        Returns:
+            The inputs, one value each.
+
+        Raises:
+            ApiError: When an input groups several content parts.
+        """
+        values: list[InputFileUrl | str] = []
+        for value in inputs:
+            if isinstance(value, list):
+                raise ApiError(FUSED_INPUTS_UNSUPPORTED)
+            values.append(value)
+        return values
 
     @staticmethod
     async def _gather_bounded[T](invocations: Iterable[Awaitable[T]]) -> list[T]:
