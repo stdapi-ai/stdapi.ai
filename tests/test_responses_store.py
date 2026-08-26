@@ -21,9 +21,10 @@ from pydantic_core import to_json
 from stdapi import responses_store
 from stdapi.api_errors import ApiError
 from stdapi.config import SETTINGS
+from stdapi.monitoring import REQUEST_TIME
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterator, Mapping
 
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
@@ -213,6 +214,15 @@ class _InvocationDocumentsClient:
         return {"invocationStep": {"payload": {"contentBlocks": [{"text": text}]}}}
 
 
+@pytest.fixture(autouse=True)
+def request_time() -> Iterator[datetime]:
+    """Bind the request start time a created session is tagged with."""
+    started = datetime(2024, 5, 6, 7, 8, 9, tzinfo=UTC)
+    token = REQUEST_TIME.set(started)
+    yield started
+    REQUEST_TIME.reset(token)
+
+
 @pytest.fixture
 def stub(monkeypatch: pytest.MonkeyPatch) -> _StubSessionClient:
     """Stub the AWS client and request metadata."""
@@ -221,8 +231,8 @@ def stub(monkeypatch: pytest.MonkeyPatch) -> _StubSessionClient:
     monkeypatch.setattr(
         responses_store, "build_metadata", lambda **_: {"aws-apn-id": "apn"}
     )
-    # Isolate the kind-tag cache from other tests reusing the same session IDs.
-    monkeypatch.setattr(responses_store, "_KIND_CACHE", {})
+    # Isolate the session-tag cache from other tests reusing the same session IDs.
+    monkeypatch.setattr(responses_store, "_TAG_CACHE", {})
     return client
 
 
@@ -234,8 +244,8 @@ def missing_stub(monkeypatch: pytest.MonkeyPatch) -> _StubSessionClient:
     monkeypatch.setattr(
         responses_store, "build_metadata", lambda **_: {"aws-apn-id": "apn"}
     )
-    # Isolate the kind-tag cache from other tests reusing the same session IDs.
-    monkeypatch.setattr(responses_store, "_KIND_CACHE", {})
+    # Isolate the session-tag cache from other tests reusing the same session IDs.
+    monkeypatch.setattr(responses_store, "_TAG_CACHE", {})
     return client
 
 
@@ -267,7 +277,11 @@ class TestStoredResponseSessions:
         (name, params) = stub.requests[0]
         assert name == "create_session"
         assert params == {
-            "tags": {"aws-apn-id": "apn", "stdapi-ai.stored-object": "response"},
+            "tags": {
+                "aws-apn-id": "apn",
+                "stdapi-ai.stored-object": "response",
+                "stdapi-ai.created-at": "1714979289",
+            },
             "encryptionKeyArn": "arn:kms",
         }
 
@@ -290,8 +304,28 @@ class TestStoredResponseSessions:
         (name, params) = stub.requests[0]
         assert name == "create_session"
         assert params == {
-            "tags": {"aws-apn-id": "apn", "stdapi-ai.stored-object": "chat_completion"}
+            "tags": {
+                "aws-apn-id": "apn",
+                "stdapi-ai.stored-object": "chat_completion",
+                "stdapi-ai.created-at": "1714979289",
+            }
         }
+
+    async def test_created_session_is_tagged_with_the_reported_creation_time(
+        self, stub: _StubSessionClient, request_time: datetime
+    ) -> None:
+        """The creation-time tag holds the instant the request started.
+
+        Tagging that instant is what lets a listing order stored objects on
+        the same quantity they publish.
+
+        Ref: stdapi/responses_store.py:create_stored_response_session
+        """
+        await responses_store.create_stored_response_session("chat_completion")
+        (_name, params) = stub.requests[0]
+        assert params["tags"][responses_store.CREATED_AT_TAG] == str(
+            int(request_time.timestamp())
+        )
 
     async def test_try_create_session_access_denied_returns_none(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
@@ -1164,7 +1198,7 @@ class TestListStoredSessions:
     async def test_returns_session_id_and_created_at_pairs(
         self, stub: _StubSessionClient
     ) -> None:
-        """Each result pair holds the session ID and its ListSessions creation time.
+        """A session carrying no creation-time tag reports the session's own time.
 
         Ref: stdapi/responses_store.py:list_stored_sessions
         """
@@ -1176,6 +1210,124 @@ class TestListStoredSessions:
         sessions = await responses_store.list_stored_sessions("response")
         assert sessions == [("resp-1", created_at)]
 
+    async def test_creation_time_comes_from_the_tag(
+        self, stub: _StubSessionClient
+    ) -> None:
+        """The listed time is the one the object reports, not the session's own.
+
+        Listing on the session's own creation time would order stored objects
+        by a quantity no client can see.
+
+        Ref: stdapi/responses_store.py:list_stored_sessions
+        """
+        stub.sessions = [
+            {
+                "sessionId": "resp-1",
+                "sessionArn": "arn:resp-1",
+                "createdAt": datetime(2024, 3, 4, tzinfo=UTC),
+            }
+        ]
+        stub.tags = {
+            "arn:resp-1": {
+                "stdapi-ai.stored-object": "response",
+                "stdapi-ai.created-at": "1700000000",
+            }
+        }
+        sessions = await responses_store.list_stored_sessions("response")
+        assert sessions == [("resp-1", datetime.fromtimestamp(1700000000, UTC))]
+
+    async def test_creation_time_survives_the_tag_cache(
+        self, stub: _StubSessionClient
+    ) -> None:
+        """A second listing reports the tagged time without re-fetching the tags.
+
+        The tags are cached per session, so a cache that kept only the kind
+        would silently fall back to the session's own creation time and change
+        the order between two identical listings.
+
+        Ref: stdapi/responses_store.py:_cached_session_tags
+        """
+        stub.sessions = [
+            {
+                "sessionId": "resp-1",
+                "sessionArn": "arn:resp-1",
+                "createdAt": datetime(2024, 3, 4, tzinfo=UTC),
+            }
+        ]
+        stub.tags = {
+            "arn:resp-1": {
+                "stdapi-ai.stored-object": "response",
+                "stdapi-ai.created-at": "1700000000",
+            }
+        }
+        expected = [("resp-1", datetime.fromtimestamp(1700000000, UTC))]
+        assert await responses_store.list_stored_sessions("response") == expected
+        assert await responses_store.list_stored_sessions("response") == expected
+        assert [name for name, _ in stub.requests].count("list_tags_for_resource") == 1
+
+    @pytest.mark.parametrize("stamp", ["not-a-number", "9" * 30, "-99999999999999999"])
+    async def test_an_unusable_creation_time_tag_falls_back(
+        self, stub: _StubSessionClient, stamp: str
+    ) -> None:
+        """A tag value that names no instant leaves the session's own time in place.
+
+        Session tags are editable outside this API, so an unreadable value
+        must degrade to the session's creation time rather than fail the
+        listing.
+
+        Ref: stdapi/responses_store.py:list_stored_sessions
+        """
+        created_at = datetime(2024, 3, 4, tzinfo=UTC)
+        stub.sessions = [
+            {"sessionId": "resp-1", "sessionArn": "arn:resp-1", "createdAt": created_at}
+        ]
+        stub.tags = {
+            "arn:resp-1": {
+                "stdapi-ai.stored-object": "response",
+                "stdapi-ai.created-at": stamp,
+            }
+        }
+        sessions = await responses_store.list_stored_sessions("response")
+        assert sessions == [("resp-1", created_at)]
+
+    async def test_tagged_and_untagged_sessions_are_ordered_together(
+        self, stub: _StubSessionClient
+    ) -> None:
+        """A listing mixing tagged and untagged sessions orders them on one scale.
+
+        Every deployment upgraded from an earlier version lists both: objects
+        stored since carry the reported creation time as a tag, the ones
+        stored before carry none and fall back to the session's own time. A
+        fallback returning anything else would sort every older object to one
+        end of the listing.
+
+        Ref: stdapi/responses_store.py:list_stored_sessions
+        """
+        stub.sessions = [
+            {
+                "sessionId": "resp-tagged",
+                "sessionArn": "arn:resp-tagged",
+                "createdAt": datetime(2024, 3, 4, tzinfo=UTC),
+            },
+            {
+                "sessionId": "resp-legacy",
+                "sessionArn": "arn:resp-legacy",
+                "createdAt": datetime(2023, 12, 1, tzinfo=UTC),
+            },
+        ]
+        stub.tags = {
+            "arn:resp-tagged": {
+                "stdapi-ai.stored-object": "response",
+                "stdapi-ai.created-at": "1700000000",
+            },
+            "arn:resp-legacy": {"stdapi-ai.stored-object": "response"},
+        }
+        sessions = await responses_store.list_stored_sessions("response")
+        assert sorted(sessions, key=lambda session: session[1], reverse=True) == [
+            ("resp-legacy", datetime(2023, 12, 1, tzinfo=UTC)),
+            ("resp-tagged", datetime.fromtimestamp(1700000000, UTC)),
+        ]
+
     async def test_second_list_call_does_not_refetch_tags(
         self, stub: _StubSessionClient
     ) -> None:
@@ -1184,7 +1336,7 @@ class TestListStoredSessions:
         The kind tag never changes, so the second listing must classify the
         session from the cache and issue no further ListTagsForResource call.
 
-        Ref: stdapi/responses_store.py:_cached_kind_tag
+        Ref: stdapi/responses_store.py:_cached_session_tags
         """
         stub.sessions = [
             {
@@ -1210,7 +1362,7 @@ class TestListStoredSessions:
         A missing tag is cached as a sentinel rather than as a cache miss, so a
         foreign session does not cost one ListTagsForResource call per listing.
 
-        Ref: stdapi/responses_store.py:_cached_kind_tag
+        Ref: stdapi/responses_store.py:_cached_session_tags
         """
         stub.sessions = [
             {
@@ -1294,30 +1446,35 @@ class TestListStoredSessions:
             if name == "list_sessions"
         ] == [2, 2, 1]
 
-    async def test_kind_cache_clears_when_exceeding_limit(
+    async def test_tag_cache_clears_when_exceeding_limit(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The kind-tag cache is cleared once its size exceeds ``_KIND_CACHE_LIMIT``.
+        """The session-tag cache is cleared once its size exceeds ``_TAG_CACHE_LIMIT``.
 
-        Because a session's kind never changes, the cache is bounded by a full
+        Because a session's tags never change, the cache is bounded by a full
         clear rather than by eviction, and the freshly fetched entry survives.
 
-        Ref: stdapi/responses_store.py:_cached_kind_tag
+        Ref: stdapi/responses_store.py:_cached_session_tags
         """
-        monkeypatch.setattr(responses_store, "_KIND_CACHE_LIMIT", 2)
-        cache = responses_store._KIND_CACHE  # noqa: SLF001 (isolated per-test by the stub fixture)
-        cache.update({"sess-0": "response", "sess-1": "response", "sess-2": "response"})
+        monkeypatch.setattr(responses_store, "_TAG_CACHE_LIMIT", 2)
+        cache = responses_store._TAG_CACHE  # noqa: SLF001 (isolated per-test by the stub fixture)
+        cache.update({f"sess-{index}": ("response", "") for index in range(3)})
 
         class _TagOnlyClient:
             """Client stub exposing only the tag-lookup call."""
 
             async def list_tags_for_resource(self, **_params: Any) -> dict[str, Any]:  # noqa: ANN401
-                return {"tags": {"stdapi-ai.stored-object": "response"}}
+                return {
+                    "tags": {
+                        "stdapi-ai.stored-object": "response",
+                        "stdapi-ai.created-at": "1700000000",
+                    }
+                }
 
-        kind = await responses_store._cached_kind_tag(  # noqa: SLF001
+        tags = await responses_store._cached_session_tags(  # noqa: SLF001
             _TagOnlyClient(),  # type: ignore[arg-type]
             "sess-3",
             "arn:sess-3",
         )
-        assert kind == "response"
+        assert tags == ("response", "1700000000")
         assert set(cache) == {"sess-3"}
