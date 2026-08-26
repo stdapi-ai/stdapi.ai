@@ -1155,7 +1155,13 @@ def vector_backend(monkeypatch: pytest.MonkeyPatch) -> _FakeBackend:
     monkeypatch.setattr(s3_vectors, "vectors_client", lambda: backend.vectors)
     monkeypatch.setattr(engine, "get_embedding_model", lambda _model_id: backend.model)
 
-    async def _validate_model(model_id: str, _modality: str) -> SimpleNamespace:
+    async def _validate_model(
+        model_id: str, _modality: str, *, route: str
+    ) -> SimpleNamespace:
+        # Asserted, not swallowed: the scope a wildcard model name resolves in
+        # comes from the route, so a call site that stopped passing it would
+        # widen the match set silently.
+        assert route == "openai_embedding"
         return SimpleNamespace(id=model_id)
 
     monkeypatch.setattr(engine, "validate_model", _validate_model)

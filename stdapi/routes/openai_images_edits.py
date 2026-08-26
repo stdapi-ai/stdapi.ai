@@ -212,7 +212,12 @@ async def edit_images(
         ),
     ] = "",
     model: Annotated[
-        str, Form(description="The model to use for image generation.", max_length=255)
+        str,
+        Form(
+            description="The model to use for image generation. "
+            "Wildcard patterns are accepted and select the most recent matching model.",
+            max_length=255,
+        ),
     ] = "",
     mask: Annotated[
         UploadFile | None,
@@ -376,6 +381,7 @@ async def edit_images(
             request.model,
             input_modality="IMAGE",
             output_modality="IMAGE",
+            route="openai_image_edit",
             error_status=400,
         )
     ).id

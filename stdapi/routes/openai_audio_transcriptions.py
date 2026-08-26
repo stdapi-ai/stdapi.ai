@@ -220,7 +220,8 @@ async def create_transcription(
                 "The transcription model to use.\n"
                 "`amazon.transcribe`, `amazon.nova-2-sonic-v1:0` (lowest cost, `json`/`text` "
                 "output only, no timestamps, 10 minutes of audio maximum), or another "
-                "speech-to-text model (e.g. Mistral Voxtral)."
+                "speech-to-text model (e.g. Mistral Voxtral). "
+                "Wildcard patterns are accepted and select the most recent matching model."
             )
         ),
     ] = AWS_TRANSCRIBE_MODEL_ID,
@@ -443,6 +444,7 @@ async def create_transcription(
             request.model,
             input_modality="SPEECH",
             output_modality="TEXT",
+            route="openai_audio_transcription",
             bedrock_only=False,
         )
     ).id

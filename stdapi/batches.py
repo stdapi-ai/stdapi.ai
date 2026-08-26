@@ -616,7 +616,16 @@ async def _resolve_model(model: str) -> ChatModel:
     """
     model_id = _batch_model_id(
         model,
-        (await validate_model(model, input_modality="TEXT", output_modality="TEXT")).id,
+        (
+            await validate_model(
+                model,
+                input_modality="TEXT",
+                output_modality="TEXT",
+                # Every chat route indexes the same models; a pattern in a batch
+                # is scoped to them rather than to the whole catalogue.
+                route="openai_chat_completion",
+            )
+        ).id,
     )
     resolved = get_chat_model(model_id)
     if not isinstance(resolved, ChatModel):
@@ -637,7 +646,9 @@ async def _resolve_embedding_model(model: str) -> EmbeddingModelBase[Any, Any]:
     Raises:
         ApiError: When the model cannot serve batched requests.
     """
-    model_id = _batch_model_id(model, (await validate_model(model, "EMBEDDING")).id)
+    model_id = _batch_model_id(
+        model, (await validate_model(model, "EMBEDDING", route="openai_embedding")).id
+    )
     return get_embedding_model(model_id)
 
 
@@ -648,11 +659,13 @@ class PreparedRequest:
     Attributes:
         custom_id: Client-chosen identifier of the request.
         model: Model name as written by the client.
+        model_id: Resolved backend model identifier.
         model_input: The request body a batched invocation accepts.
     """
 
     custom_id: str
     model: str
+    model_id: str
     model_input: JsonMapping
 
 
@@ -675,9 +688,8 @@ async def _prepare_openai_request(
     if body.stream:
         msg = f"Line {index + 1}: 'stream' is not available for batched requests."
         raise ApiError(msg)
-    request, _, choices = await (
-        await _resolve_model(body.model)
-    ).build_completion_request(body)
+    resolved = await _resolve_model(body.model)
+    request, _, choices = await resolved.build_completion_request(body)
     if choices > 1:
         msg = (
             f"Line {index + 1}: 'n' must be 1 for batched requests; ask for one "
@@ -685,7 +697,9 @@ async def _prepare_openai_request(
         )
         raise ApiError(msg)
     _check_batchable(request, index, "Line")
-    return PreparedRequest(custom_id, body.model, _to_model_input(request))
+    return PreparedRequest(
+        custom_id, body.model, resolved.model.id, _to_model_input(request)
+    )
 
 
 async def _prepare_embedding_request(
@@ -729,7 +743,7 @@ async def _prepare_embedding_request(
         # The model knows nothing of the file it came from; the position does.
         msg = f"Line {index + 1}: {exc}"
         raise ApiError(msg, status=exc.status) from exc
-    return PreparedRequest(custom_id, body.model, model_input)
+    return PreparedRequest(custom_id, body.model, model.model.id, model_input)
 
 
 async def _prepare_anthropic_request(
@@ -750,12 +764,11 @@ async def _prepare_anthropic_request(
     if entry.params.stream:
         msg = f"Request {index + 1}: 'stream' is not available for batched requests."
         raise ApiError(msg)
-    request, _ = await (await _resolve_model(entry.params.model)).build_message_request(
-        entry.params
-    )
+    resolved = await _resolve_model(entry.params.model)
+    request, _ = await resolved.build_message_request(entry.params)
     _check_batchable(request, index, "Request")
     return PreparedRequest(
-        entry.custom_id, entry.params.model, _to_model_input(request)
+        entry.custom_id, entry.params.model, resolved.model.id, _to_model_input(request)
     )
 
 
@@ -785,13 +798,17 @@ async def _prepare_all[T](
 def _group_by_model(
     prepared: Sequence[PreparedRequest],
 ) -> dict[str, list[PreparedRequest]]:
-    """Group translated requests by the model name they carry.
+    """Group translated requests by the model they resolved to.
+
+    Grouping on the resolved model rather than on the name each request wrote
+    keeps two names of one model — an alias, a pattern, the ID itself — in a
+    single job instead of two.
 
     Args:
         prepared: The translated requests, in input order.
 
     Returns:
-        Requests keyed by model name, each list in input order.
+        Requests keyed by resolved model ID, each list in input order.
 
     Raises:
         ApiError: When the batch fans out to more models than allowed, or a
@@ -799,7 +816,7 @@ def _group_by_model(
     """
     groups: dict[str, list[PreparedRequest]] = {}
     for item in prepared:
-        groups.setdefault(item.model, []).append(item)
+        groups.setdefault(item.model_id, []).append(item)
     if len(groups) > MAX_MODELS_PER_BATCH:
         msg = (
             f"A batch may name at most {MAX_MODELS_PER_BATCH} different models; "
@@ -869,7 +886,7 @@ async def _submit_job(
     payload: str,
     index: int,
     endpoint: str,
-    model: str,
+    model_id: str,
     items: Sequence[PreparedRequest],
     role_arn: str,
 ) -> BatchJobRef:
@@ -879,7 +896,7 @@ async def _submit_job(
         payload: Bare 32-char batch payload.
         index: Zero-based position of the job within the batch.
         endpoint: API endpoint every request of the batch targets.
-        model: Model name as written by the client.
+        model_id: Resolved identifier of the model running the job.
         items: The model's translated requests, in input order.
         role_arn: Service role the backend assumes to read and write storage.
 
@@ -889,13 +906,15 @@ async def _submit_job(
     Raises:
         ApiError: When the model cannot run batched requests.
     """
-    job_model = await _resolve_job_model(endpoint, model)
+    # What the caller wrote, to name in anything they read back.
+    model = items[0].model
+    job_model = await _resolve_job_model(endpoint, model_id)
     region = await job_model.select_region(s3_required=True)
     bucket = require_s3_bucket_for_region(region, feature=_FEATURE)
     try:
         # A model with no inference profile answers its own identifier, which
         # is the only form the backend accepts for it.
-        model_id = job_model.model.get_id(region, inference_profile=True)
+        invocation_id = job_model.model.get_id(region, inference_profile=True)
     except ModelRegionUnavailableError as exc:
         msg = f"The model `{model}` is not available for batched requests."
         raise ApiError(msg) from exc
@@ -914,7 +933,7 @@ async def _submit_job(
             response = await client.create_model_invocation_job(
                 jobName=_job_name(payload, index),
                 roleArn=role_arn,
-                modelId=model_id,
+                modelId=invocation_id,
                 modelInvocationType=_invocation_type(endpoint),
                 inputDataConfig={
                     "s3InputDataConfig": {
@@ -933,7 +952,7 @@ async def _submit_job(
             error = exc.response["Error"]
             if error["Code"] == "ValidationException":
                 raise _refused_job(
-                    model, (model_id, job_model.model.id), error["Message"]
+                    model, (invocation_id, job_model.model.id), error["Message"]
                 ) from exc
             raise
     job_arn = response["jobArn"]
@@ -1083,11 +1102,11 @@ async def create_batch(
                 payload=payload,
                 index=index,
                 endpoint=endpoint,
-                model=model,
+                model_id=model_id,
                 items=items,
                 role_arn=role_arn,
             )
-            for index, (model, items) in enumerate(groups.items())
+            for index, (model_id, items) in enumerate(groups.items())
         ),
         return_exceptions=True,
     )
@@ -1834,7 +1853,7 @@ async def iter_anthropic_results(
             if error is None:
                 result: JsonMapping = {
                     "type": "succeeded",
-                    "message": await _to_message(line, ref.model, custom_id),
+                    "message": await _to_message(line, ref.model_id, custom_id),
                 }
             elif error[0] == "expired":
                 result = {"type": "expired"}
@@ -2014,18 +2033,20 @@ async def prepare_openai_requests(
             bodies.append(params.model_validate(body))
         custom_ids.append(str(line.get("custom_id", "")))
     _validate_custom_ids(custom_ids, "Line")
-    if len({body.model for body in bodies}) > 1:
-        msg = (
-            "Every request in a batch input file must name the same model. "
-            "Split the file into one file per model."
-        )
-        raise ApiError(msg)
-    return await _prepare_all(
+    prepared = await _prepare_all(
         list(zip(custom_ids, bodies, strict=True)),
         (lambda item, index: _prepare_embedding_request(item[0], item[1], index))  # type: ignore[arg-type]
         if embeddings
         else (lambda item, index: _prepare_openai_request(item[0], item[1], index)),  # type: ignore[arg-type]
     )
+    # Compared once resolved: two names of one model are one model.
+    if len({item.model_id for item in prepared}) > 1:
+        msg = (
+            "Every request in a batch input file must name the same model. "
+            "Split the file into one file per model."
+        )
+        raise ApiError(msg)
+    return prepared
 
 
 async def prepare_anthropic_requests(

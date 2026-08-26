@@ -17,6 +17,7 @@ from stdapi.models import (
     get_all_models_details_and_modalities,
     get_all_models_search_indexes,
     initialize_bedrock_models,
+    match_model_names,
     resolve_model_alias,
 )
 from stdapi.monitoring import log_request_params, log_response_params
@@ -123,7 +124,9 @@ class ModelPricing(BaseModel):
         "A model that only handles text would otherwise appear in a route-only search and then fail "
         "at request time.\n"
         "4. **Legacy models are excluded by default.** Add `legacy=true` if you specifically need "
-        "a deprecated model (e.g. to check what it should be migrated to).\n\n"
+        "a deprecated model (e.g. to check what it should be migrated to).\n"
+        "5. Use `model` with a wildcard pattern to see everything that pattern matches, newest "
+        "first, before sending it as a model name on a request.\n\n"
         "**Examples:**\n"
         "- Text generation: `route=openai_chat_completion`\n"
         "- Vision (image input): `route=openai_chat_completion&input_modalities=IMAGE`\n"
@@ -138,7 +141,10 @@ class ModelPricing(BaseModel):
         "and verify audio output support in the model documentation. The built-in "
         "`web_search` tool on `openai_response` is model-specific and not tracked either."
     ),
-    response_description="A list of extended model details sorted by model ID",
+    response_description=(
+        "A list of extended model details sorted by model ID, or newest first "
+        "when a `model` pattern is given"
+    ),
     response_model_exclude_none=True,
     responses={
         200: {"description": "OK"},
@@ -197,6 +203,20 @@ async def search_models(
             "legacy=true to list them."
         ),
     ] = None,
+    model: Annotated[
+        str | None,
+        Query(
+            min_length=1,
+            max_length=255,
+            description="Filter to the models a name or a wildcard pattern matches, by "
+            "ID or by alternative name (e.g. claude-sonnet-*). Returns the whole match "
+            "set newest first -- everything the pattern could select, not just the one "
+            "it would on a request, since a tie, a route mismatch, a deprecated match "
+            "or a pending-subscription match changes what a request actually resolves "
+            "to. Add `route` to narrow it to one endpoint, as a pattern on a request is "
+            "scoped. Models with no known release date come last and are never selected.",
+        ),
+    ] = None,
     _: Annotated[None, Depends(authenticate)] = None,
 ) -> list[ModelDetails]:
     """Search the model catalogue with optional filters and return extended metadata.
@@ -212,6 +232,8 @@ async def search_models(
             decides whether a batched request is accepted.
         legacy: Filter by legacy/deprecated status. Legacy models are excluded when
             omitted; pass True to list them.
+        model: Filter to the models a name or wildcard pattern matches, by ID or
+            alias, ordering the result newest first.
 
     Returns:
         Filtered and sorted list of model details.
@@ -229,6 +251,7 @@ async def search_models(
             "streaming": streaming,
             "batch": batch,
             "legacy": legacy,
+            "model": model,
         }
     )
     await initialize_bedrock_models()
@@ -264,7 +287,31 @@ async def search_models(
     # Legacy models are not guaranteed to stay invokable, so they are excluded by
     # default and only surfaced when explicitly requested with legacy=true.
     models_ids &= legacy_models if legacy else non_legacy_models
-    return log_response_params([models[model_id] for model_id in sorted(models_ids)])
+    if model is not None:
+        models_ids &= match_model_names(model, models_ids, models)
+        # Newest first: the whole match set, in the order a pattern would pick
+        # from, so a model it cannot pick is seen rather than inferred.
+        ordered = sorted(models_ids, key=lambda model_id: _by_release(models[model_id]))
+    else:
+        ordered = sorted(models_ids)
+    return log_response_params([models[model_id] for model_id in ordered])
+
+
+def _by_release(model: ModelDetails) -> tuple[bool, float, str]:
+    """Return the sort key placing the most recently released model first.
+
+    Args:
+        model: The model to order.
+
+    Returns:
+        Undated last, then descending release date, then model ID.
+    """
+    released = model.start_of_life_time
+    return (
+        released is None,
+        -released.timestamp() if released is not None else 0.0,
+        model.id,
+    )
 
 
 def _filter_by_modality(

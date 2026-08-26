@@ -95,7 +95,9 @@ async def rerank(
             options or invalid values.
     """
     log_request_params(request)
-    model_id = (await validate_model(request.model, RERANKING_MODALITY)).id
+    model_id = (
+        await validate_model(request.model, RERANKING_MODALITY, route="cohere_rerank")
+    ).id
     extra_params = get_extra_model_parameters(model_id, request)
     if request.max_tokens_per_doc is not None:
         extra_params["max_tokens_per_doc"] = request.max_tokens_per_doc

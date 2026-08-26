@@ -265,7 +265,10 @@ class _ImageBaseParams(BaseModelRequestWithExtra):
     """Request body for generating images."""
 
     model: str = Field(
-        description="Model for image generation.", min_length=1, max_length=255
+        description="Model for image generation. "
+        "Wildcard patterns are accepted and select the most recent matching model.",
+        min_length=1,
+        max_length=255,
     )
     response_format: Literal["url", "b64_json"] = Field(
         default="url",

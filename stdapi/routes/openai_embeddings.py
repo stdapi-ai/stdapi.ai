@@ -137,7 +137,9 @@ async def create_embeddings(
             options or invalid values.
     """
     log_request_params(request, user_id=request.user)
-    model_id = (await validate_model(request.model, "EMBEDDING")).id
+    model_id = (
+        await validate_model(request.model, "EMBEDDING", route="openai_embedding")
+    ).id
     raw_inputs = request.input if isinstance(request.input, list) else [request.input]
     # `EmbeddingCreateParams._unsupported` rejects any non-str/InputFileUrl item,
     # so every element here is already one of the two.

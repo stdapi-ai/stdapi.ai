@@ -574,7 +574,13 @@ async def _generate_image_b64(
         )
         raise ApiError(msg, status=400)
     validated = await validate_model(
-        model_id, input_modality="TEXT", output_modality="IMAGE", error_status=400
+        model_id,
+        input_modality="TEXT",
+        output_modality="IMAGE",
+        # The tool generates an image, so a pattern here selects among the
+        # image models, not among the ones serving the response itself.
+        route="openai_image_generation",
+        error_status=400,
     )
     size = args.get("size") or tool.size or "1024x1024"
     try:

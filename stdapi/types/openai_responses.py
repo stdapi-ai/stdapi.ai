@@ -600,7 +600,11 @@ class ImageGeneration(BaseModelRequest):
     input_image_mask: ImageGenerationInputImageMask | None = Field(
         default=None, description="Mask for inpainting."
     )
-    model: str | None = Field(default=None, description="Image generation model.")
+    model: str | None = Field(
+        default=None,
+        description="Image generation model. Wildcard patterns are accepted "
+        "and select the most recent matching model.",
+    )
     moderation: Literal["auto", "low"] | None = Field(
         default=None, description="Moderation level. Default: auto."
     )
@@ -4158,7 +4162,12 @@ class ResponseCreateParams(BaseModelRequestWithExtra):
     Undeclared fields are forwarded to the model as extra parameters.
     """
 
-    model: str = Field(description="Model ID used to generate the response.")
+    model: str = Field(
+        min_length=1,
+        max_length=255,
+        description="Model ID used to generate the response. Wildcard patterns "
+        "are accepted and select the most recent matching model.",
+    )
     input: str | ResponseInputParam | None = Field(
         default=None,
         description="Text, image, or file inputs to the model, used to generate a response.",
@@ -4372,7 +4381,10 @@ class InputTokenCountParams(BaseModelRequest):
     Counts input tokens without producing a response.
     """
 
-    model: str = Field(description="Model ID.")
+    model: str = Field(
+        description="Model ID. Wildcard patterns are accepted and select the "
+        "most recent matching model."
+    )
     input: str | ResponseInputParam | None = Field(
         default=None, description="Text, image, or file inputs."
     )
@@ -4477,7 +4489,10 @@ class CompactParams(BaseModelRequest):
     requests can send back as input.
     """
 
-    model: str = Field(description="Model ID.")
+    model: str = Field(
+        description="Model ID. Wildcard patterns are accepted and select the "
+        "most recent matching model."
+    )
     input: ResponseInputParam | None = Field(
         default=None, description="Conversation inputs to compact."
     )

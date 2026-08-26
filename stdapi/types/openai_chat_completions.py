@@ -1197,7 +1197,11 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         description="List of messages comprising the conversation. Supports text, document, video, image, and audio depending on the model.",
     )
     model: str = Field(
-        ..., min_length=1, description="Model ID to generate the response"
+        ...,
+        min_length=1,
+        max_length=255,
+        description="Model ID to generate the response. Wildcard patterns are "
+        "accepted and select the most recent matching model.",
     )
     audio: ChatCompletionAudioParam | None = Field(
         default=None,
