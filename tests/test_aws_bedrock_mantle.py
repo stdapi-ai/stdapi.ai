@@ -38,6 +38,7 @@ from starlette.datastructures import Headers
 from stdapi import aws_bedrock_mantle
 from stdapi import models as stdapi_models
 from stdapi.api_errors import ApiError
+from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, GUARDRAIL_REQUEST_OVERRIDE_VAR
 from stdapi.aws_bedrock_mantle import (
     API_PATHS,
     MANTLE_PROJECT_VAR,
@@ -98,6 +99,9 @@ if TYPE_CHECKING:
     from aiohttp import ClientResponse
     from fastapi import Request
     from types_aiobotocore_bedrock.literals import RegionName
+    from types_aiobotocore_bedrock_runtime.type_defs import (
+        GuardrailStreamConfigurationTypeDef,
+    )
 
     from stdapi.aws_bedrock_mantle import SseEvent
 
@@ -337,6 +341,100 @@ class TestMantleUsageExtractors:
 def _error_body(message: str) -> str:
     """Build a Mantle JSON error body carrying *message*."""
     return dumps({"error": {"message": message}})
+
+
+class TestGuardrailOnMantle:
+    """A guardrail that cannot be carried refuses the call instead of vanishing.
+
+    Bedrock Mantle has no guardrail parameter, and nothing on that transport
+    reads ``GUARDRAIL_CONFIG_VAR``. Serving the request regardless would answer
+    a caller who asked to be guarded with an unguarded answer and no sign of
+    it, so both invocation entry points fail closed.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html
+         stdapi/aws_bedrock_mantle.py:refuse_unappliable_guardrail
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_guardrail_context(self) -> Iterator[None]:
+        """Put both context variables back, so no later test inherits a guardrail.
+
+        A context variable set inside a test outlives it, and one left holding
+        a guardrail refuses every Mantle invocation the rest of the module
+        makes.
+
+        Yields:
+            Control to the test.
+        """
+        config = GUARDRAIL_CONFIG_VAR.set(None)  # type: ignore[arg-type]
+        override = GUARDRAIL_REQUEST_OVERRIDE_VAR.set(False)
+        try:
+            yield
+        finally:
+            GUARDRAIL_CONFIG_VAR.reset(config)
+            GUARDRAIL_REQUEST_OVERRIDE_VAR.reset(override)
+
+    @staticmethod
+    def _guardrail() -> GuardrailStreamConfigurationTypeDef:
+        """Return a guardrail configuration in the shape the context var holds."""
+        return {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
+
+    def test_no_guardrail_lets_the_call_through(self) -> None:
+        """The guard is inert on the ordinary path, which carries no guardrail."""
+        GUARDRAIL_CONFIG_VAR.set(None)  # type: ignore[arg-type]
+
+        aws_bedrock_mantle.refuse_unappliable_guardrail()
+
+    def test_a_request_selected_guardrail_is_refused(self) -> None:
+        """A caller naming a guardrail is told it cannot apply, not ignored."""
+        GUARDRAIL_CONFIG_VAR.set(self._guardrail())
+        GUARDRAIL_REQUEST_OVERRIDE_VAR.set(True)
+
+        with pytest.raises(ApiError, match="Amazon Bedrock Mantle") as raised:
+            aws_bedrock_mantle.refuse_unappliable_guardrail()
+
+        assert "drop the guardrail" in str(raised.value)
+
+    @pytest.mark.parametrize("entry_point", ["invoke", "invoke_stream"])
+    async def test_both_entry_points_refuse_before_reaching_the_endpoint(
+        self, entry_point: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Neither invocation path can be reached with a guardrail outstanding.
+
+        Asserted through the entry points rather than on the guard alone: the
+        defect this closes was the guard being absent from the request path,
+        which a direct call to it would not notice.
+        """
+        reached = False
+
+        async def _unreachable(*_args: object, **_kwargs: object) -> NoReturn:
+            nonlocal reached
+            reached = True
+            raise AssertionError
+
+        monkeypatch.setattr(aws_bedrock_mantle, "_request_with_retry", _unreachable)
+        GUARDRAIL_CONFIG_VAR.set(self._guardrail())
+        GUARDRAIL_REQUEST_OVERRIDE_VAR.set(True)
+
+        with pytest.raises(ApiError, match="Amazon Bedrock Mantle"):
+            await getattr(aws_bedrock_mantle, entry_point)(
+                "us-east-1", "/chat/completions", {}, single_region=True
+            )
+
+        assert not reached, "the guardrail-less request was sent upstream anyway"
+
+    def test_a_configured_guardrail_is_refused(self) -> None:
+        """A deployment-wide guardrail is not silently skipped for a Mantle model.
+
+        The startup check refuses a guardrail combined with
+        ``aws_bedrock_mantle_preferred_models``, but a Mantle-only model in a
+        deployment that guards everything else reaches here instead.
+        """
+        GUARDRAIL_CONFIG_VAR.set(self._guardrail())
+        GUARDRAIL_REQUEST_OVERRIDE_VAR.set(False)
+
+        with pytest.raises(ApiError, match="this server is configured with"):
+            aws_bedrock_mantle.refuse_unappliable_guardrail()
 
 
 class TestMapError:

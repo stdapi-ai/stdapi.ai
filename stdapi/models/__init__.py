@@ -2105,7 +2105,7 @@ def _merge_mantle_models(
     """Merge previously-collected Mantle models into *all_models*.
 
     bedrock-runtime keeps priority for dual-homed models unless the model is
-    explicitly preferred on Mantle.
+    preferred on Mantle -- which the GPT-5.6 family is by default.
 
     Args:
         all_models: Resolved bedrock-runtime models, updated in-place.

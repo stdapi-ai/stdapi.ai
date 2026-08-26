@@ -13,9 +13,11 @@ class ChatModel(_BaseChatModel):
     on the Bedrock Mantle endpoint only: on ``bedrock-runtime`` the Responses API
     answers ``400 "web search is not supported for this request"`` and Converse
     answers ``400 "This model doesn't support the systemTool field"``.  The
-    GPT-5.6 models are served by both endpoints and resolve to this runtime class
-    by default, so a server tool has to be refused here rather than forwarded as
-    a function tool no client can answer (issue #186).
+    GPT-5.6 models are served by both endpoints and reach this runtime class only
+    where the deployment has taken them out of
+    ``aws_bedrock_mantle_preferred_models``, so a server tool has to be refused
+    here rather than forwarded as a function tool no client can answer
+    (issue #186).
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
     """

@@ -109,11 +109,12 @@ class TestMantleModelDiscovery:
 
     @pytest.mark.usefixtures("local_test_client")
     def test_dual_homed_models_stay_on_runtime(self) -> None:
-        """Models on both endpoints are served by bedrock-runtime by default.
+        """Models on both endpoints are served by bedrock-runtime unless preferred.
 
         Mantle discovery must not steal a model that bedrock-runtime can serve:
-        only an explicit ``aws_bedrock_mantle_preferred_models`` entry flips the
-        priority, so every dual-homed entry left on runtime is non-preferred.
+        only an ``aws_bedrock_mantle_preferred_models`` entry flips the priority
+        -- the setting's own default among them, which covers the GPT-5.6 family
+        -- so every dual-homed entry left on runtime is non-preferred.
         """
         from stdapi.models import (  # noqa: PLC0415
             MANTLE_MODELS,
