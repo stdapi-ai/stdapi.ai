@@ -226,6 +226,8 @@ That is because the Anthropic, OpenAI and Cohere models Bedrock serves are also 
 
 What the base URL buys is the catalogue behind it. A model name is resolved against the catalogue your deployment actually serves — Amazon Bedrock, Bedrock Mantle, Polly, Transcribe and Comprehend, across every region you enable — so the choice spans providers instead of one vendor's list. A name the catalogue does not contain is answered with `404`: it is never mapped onto another vendor's model of roughly similar class, because that would serve you a different model than the one you asked for. Use [`GET /search_models`](api_search_models.md) to find one.
 
+Anywhere a request accepts a model name, it also accepts a glob pattern — `claude-sonnet-*`, say — and the server serves the most recently released model that matches. The response always names the concrete model that served the request, never the pattern. See [Model Wildcard Patterns](operations_configuration.md#model-wildcard-patterns) for the syntax and its rules, and [`GET /search_models`](api_search_models.md#query-parameters) to see everything a pattern matches before relying on it.
+
 ### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Using the OpenAI-Compatible API
 
 **To connect your OpenAI application:**

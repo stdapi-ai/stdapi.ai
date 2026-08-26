@@ -178,6 +178,8 @@ Each line pairs a `custom_id` with its outcome:
 !!! warning "Results Are Not in Request Order"
     Result lines may come back in any order, as upstream also warns. Match a result to its request with `custom_id`, never with the line number.
 
+Each result line's `message.model` names the model that actually served the request, so a request sent with an alias or a [wildcard pattern](operations_configuration.md#model-wildcard-patterns) comes back naming the resolved model rather than the string it was sent as — a parser matching on the string it wrote needs to match on the resolved ID instead.
+
 ## Limits
 
 | Limit                        | Value                    |

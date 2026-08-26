@@ -218,7 +218,10 @@ async def create_message(
     return await get_chat_model(
         (
             await validate_model(
-                request.model, input_modality="TEXT", output_modality="TEXT"
+                request.model,
+                input_modality="TEXT",
+                output_modality="TEXT",
+                route="anthropic_message",
             )
         ).id
     ).create_message(request, f"msg_{REQUEST_ID.get()}")
@@ -298,7 +301,10 @@ async def count_tokens(
     log_request_params(request)
     warn_mcp_connector_ignored(request)
     model = await validate_model(
-        request.model, input_modality="TEXT", output_modality="TEXT"
+        request.model,
+        input_modality="TEXT",
+        output_modality="TEXT",
+        route="anthropic_message_count_tokens",
     )
     reject_unsupported_token_counting(model)
     model_id = model.get_id()

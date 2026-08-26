@@ -129,7 +129,9 @@ def _to_batch(state: BatchState) -> Batch:
         )
         if usage is not None
         else None,
-        model=record.jobs[0].model if record.jobs else None,
+        # The model that ran the batch, not the name the client wrote: it is the
+        # only one that still means something once the job has ended.
+        model=record.jobs[0].model_id if record.jobs else None,
         metadata=record.metadata,
         errors=BatchErrors(data=[_FAILED_BATCH_ERROR]) if status == "failed" else None,
     )

@@ -123,8 +123,14 @@ class _StubEmbeddingModel:
 def embed_backend(monkeypatch: pytest.MonkeyPatch) -> _StubEmbeddingModel:
     """Stub model validation and the embedding backend."""
 
-    async def _validate_model(model_id: str, modality: str) -> ModelDetails:
+    async def _validate_model(
+        model_id: str, modality: str, *, route: str
+    ) -> ModelDetails:
         assert modality == "EMBEDDING"
+        # Asserted, not swallowed: the scope a wildcard model name is resolved
+        # in comes from the route, so a call site that stopped passing it would
+        # widen the match set silently.
+        assert route in {"cohere_embed", "cohere_embed_v1"}
         if model_id == "unknown-model":
             raise UnsupportedModelError(model_id)
         resolved_id = _MODEL_ALIASES.get(model_id, model_id)
@@ -141,8 +147,11 @@ def embed_backend(monkeypatch: pytest.MonkeyPatch) -> _StubEmbeddingModel:
 def validated_model(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub model validation only, keeping the real embedding model classes."""
 
-    async def _validate_model(model_id: str, modality: str) -> ModelDetails:
+    async def _validate_model(
+        model_id: str, modality: str, *, route: str
+    ) -> ModelDetails:
         assert modality == "EMBEDDING"
+        assert route == "cohere_embed"
         return make_model_details(model_id, output_modalities=["EMBEDDING"])
 
     monkeypatch.setattr(cohere_embed, "validate_model", _validate_model)

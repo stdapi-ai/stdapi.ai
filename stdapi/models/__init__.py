@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from fnmatch import translate as fnmatch_translate
 from functools import partial
 from importlib import import_module
 from pkgutil import iter_modules
@@ -25,7 +26,7 @@ from pydantic import AwareDatetime, BaseModel, Field, JsonValue, ValidationError
 from pydantic_core import from_json, to_json
 
 import stdapi.region_routing as _region_routing
-from stdapi.api_errors import ApiError, UnsupportedModelError
+from stdapi.api_errors import AmbiguousModelError, ApiError, UnsupportedModelError
 from stdapi.aws import get_client
 from stdapi.aws_bedrock import (
     BEDROCK_PROMPT_VAR,
@@ -113,6 +114,7 @@ if TYPE_CHECKING:
         AsyncIterable,
         Awaitable,
         Callable,
+        Iterable,
         Sequence,
     )
 
@@ -449,6 +451,15 @@ _ALL_MODELS_BATCH: set[str] = set()
 #: Model IDs known not to be batch-capable (search_models filter index)
 _ALL_MODELS_NON_BATCH: set[str] = set()
 
+#: Characters that make a requested model a pattern naming a family
+_WILDCARD_CHARS: Final = ("*", "?")
+
+#: Characters a pattern must name before its first wildcard, so it selects something
+_WILDCARD_MIN_LITERALS: Final = 3
+
+#: Longest wildcard pattern accepted, matching the max_length on model ID fields
+_WILDCARD_MAX_LENGTH: Final = 255
+
 #: Mantle-served model ID to the bedrock-runtime model ID naming the same model
 _MANTLE_RUNTIME_TWINS: dict[str, str] = {}
 
@@ -581,6 +592,9 @@ class ModelDetails(BaseModel):
     marketplace_endpoints: dict[RegionName, str] | None = Field(
         default=None, exclude=True
     )
+    #: Set when only ``aws_bedrock_marketplace_auto_subscribe`` admitted this model,
+    #: so its first use opens a paid subscription; internal, never published.
+    pending_subscription: bool | None = Field(default=None, exclude=True)
     supported_routes: list[str] = []
     supported_mcp_tools: list[str] = []
 
@@ -1556,6 +1570,167 @@ def resolve_model_alias(model_id: str) -> str:
         Canonical model ID.
     """
     return MODEL_ALIASES.get(model_id, model_id)
+
+
+def is_model_wildcard(model_id: str) -> bool:
+    """Return whether *model_id* is a pattern naming a family instead of a model.
+
+    Args:
+        model_id: Model ID, alias or pattern, as the caller wrote it.
+
+    Returns:
+        ``True`` when it carries a wildcard character.
+    """
+    return any(char in model_id for char in _WILDCARD_CHARS)
+
+
+def match_model_names(
+    pattern: str, model_ids: Iterable[str], models: Mapping[str, ModelDetails]
+) -> set[str]:
+    """Return the models of *model_ids* the pattern names, by ID or by alias.
+
+    Both name spaces are searched: a family is written one way as a model ID
+    (``amazon.nova-*``) and another as an alias (``claude-sonnet-*``).
+
+    Args:
+        pattern: Wildcard pattern as the caller wrote it.
+        model_ids: The model IDs to match against.
+        models: The catalogue those IDs belong to.
+
+    Returns:
+        The matching model IDs.
+
+    Raises:
+        ApiError: When the pattern is longer than a model ID may be.
+    """
+    # The bound is enforced here rather than only at the callers because this is
+    # where the compile happens: translating and compiling a long pattern costs
+    # time proportional to its length, on the event loop and under the catalogue
+    # lock, whatever route handed it in.
+    _check_wildcard_length(pattern)
+    # `fnmatch.translate` emits atomic groups, so a pattern taken from a request
+    # cannot be built to backtrack catastrophically.
+    matches = re_compile(fnmatch_translate(pattern)).match
+    return {
+        model_id
+        for model_id in model_ids
+        if matches(model_id)
+        or any(matches(name) for name in models[model_id].aliases or ())
+    }
+
+
+def _check_wildcard_length(pattern: str) -> None:
+    """Refuse a pattern too long to be worth translating and compiling.
+
+    Args:
+        pattern: Wildcard pattern as the caller wrote it.
+
+    Raises:
+        ApiError: When the pattern is longer than a model ID may be.
+    """
+    if len(pattern) > _WILDCARD_MAX_LENGTH:
+        msg = (
+            f"The model pattern is {len(pattern)} characters long: patterns are "
+            f"limited to {_WILDCARD_MAX_LENGTH} characters."
+        )
+        raise ApiError(msg)
+
+
+def _check_wildcard_syntax(pattern: str) -> None:
+    """Refuse a pattern before it is ever handed to `fnmatch`/`re.compile`.
+
+    Args:
+        pattern: Wildcard pattern as the caller wrote it.
+
+    Raises:
+        ApiError: When the pattern is too long, uses a character class, or
+            names too little to select a model with.
+    """
+    _check_wildcard_length(pattern)
+    if "[" in pattern:
+        # Glob syntax here is '*' and '?' only: a character class would also
+        # defeat the literal-run check below, since it is not a _WILDCARD_CHARS
+        # member and so is never counted as part of the pattern's prefix.
+        msg = f"The model `{pattern}` uses '[': character classes are not supported."
+        raise ApiError(msg)
+    if (
+        min(
+            (pattern.find(char) for char in _WILDCARD_CHARS if char in pattern),
+            default=len(pattern),
+        )
+        < _WILDCARD_MIN_LITERALS
+    ):
+        msg = (
+            f"The model `{pattern}` names too little to select a model: write at "
+            f"least {_WILDCARD_MIN_LITERALS} characters before the first '*' or '?'."
+        )
+        raise ApiError(msg)
+
+
+def _resolve_model_wildcard(
+    pattern: str,
+    models: Mapping[str, ModelDetails],
+    route: str | None,
+    output_modality: str | None,
+    input_modality: str | None,
+) -> ModelDetails | None:
+    """Select the most recently released model *pattern* names.
+
+    Candidates are the models this server can serve on *route* and in the
+    requested modalities, minus the legacy, deprecated and never-subscribed
+    ones.  Among them the newest release date wins; a model whose release date
+    is unknown is never a winner, and never makes an otherwise unique match
+    ambiguous.  Ordering by release date instead of by version fragment is what
+    keeps an unusually-named version from being read as the newest one.
+
+    Scans the catalogue once per request, deliberately: the pattern space is
+    unbounded, so nothing can be pre-computed, and the answer must follow the
+    catalogue as it stands rather than a resolution cached beside it.
+
+    Caller holds ``_CACHE["access_lock"]``.
+
+    Args:
+        pattern: Wildcard pattern as the caller wrote it.
+        models: The catalogue to select from (Bedrock-only, or every service).
+        route: Operation ID or route path the model must serve, when known.
+        output_modality: Required output modality, when known.
+        input_modality: Required input modality, when known.
+
+    Returns:
+        The selected model, or ``None`` when the pattern names none.
+
+    Raises:
+        ApiError: When the pattern is too long, uses a character class, or names
+            too little to select a model with.
+        AmbiguousModelError: When several matches share the newest release date.
+    """
+    _check_wildcard_syntax(pattern)
+    # Legacy models stay in the catalogue when the operator asks for them, so
+    # they are excluded here rather than assumed absent.
+    candidates = _ALL_MODELS_NON_LEGACY & models.keys()
+    if route is not None:
+        candidates &= _ALL_MODELS_BY_ROUTE_OR_TOOL.get(route, set())
+    if output_modality:
+        candidates &= _ALL_MODELS_OUTPUT_MODALITY.get(output_modality, set())
+    if input_modality:
+        candidates &= _ALL_MODELS_INPUT_MODALITY.get(input_modality, set())
+    latest: list[ModelDetails] = []
+    latest_date: AwareDatetime | None = None
+    for model_id in match_model_names(pattern, candidates, models):
+        model = models[model_id]
+        if (
+            (released := model.start_of_life_time) is None
+            or model.pending_subscription
+            or model_id in DEPRECATED_MODELS
+        ):
+            continue
+        if latest_date is None or released > latest_date:
+            latest_date, latest = released, [model]
+        elif released == latest_date:
+            latest.append(model)
+    if len(latest) > 1:
+        raise AmbiguousModelError(pattern, sorted(model.id for model in latest))
+    return latest[0] if latest else None
 
 
 def _find_model_class(
@@ -3288,7 +3463,10 @@ async def _check_model_availability(model: ModelDetails) -> list[str]:
         model: Candidate model from ``_get_bedrock_models_from_region``.
 
     Returns:
-        Issue labels; empty when the model is fully available.
+        Issue labels; empty when the model is fully available.  A model missing
+        only its agreement is available when
+        ``aws_bedrock_marketplace_auto_subscribe`` is set, and is marked as
+        opening a paid subscription on first use.
 
     Raises:
         BotoCoreError: When the availability call fails.
@@ -3298,17 +3476,7 @@ async def _check_model_availability(model: ModelDetails) -> list[str]:
     availability = await bedrock_client.get_foundation_model_availability(
         modelId=model.id
     )
-    if (
-        availability["authorizationStatus"] == "AUTHORIZED"
-        and availability["entitlementAvailability"] == "AVAILABLE"
-        and availability["regionAvailability"] == "AVAILABLE"
-        and (
-            SETTINGS.aws_bedrock_marketplace_auto_subscribe
-            or availability["agreementAvailability"]["status"] == "AVAILABLE"
-        )
-    ):
-        return []
-    return [
+    issues = [
         issue
         for issue, value, expected in (
             ("unauthorized", availability["authorizationStatus"], "AUTHORIZED"),
@@ -3322,6 +3490,12 @@ async def _check_model_availability(model: ModelDetails) -> list[str]:
         )
         if value != expected
     ]
+    if issues == ["no_agreement"] and SETTINGS.aws_bedrock_marketplace_auto_subscribe:
+        # Usable, but its first request opens a paid subscription, so it is only
+        # ever served to a caller who named it.
+        model.pending_subscription = True
+        return []
+    return issues
 
 
 def load_model_plugins[ModelT: ModelBase[Any, Any]](
@@ -3990,28 +4164,95 @@ def _raise_model_not_found(
     ) from None
 
 
+def _check_model_modalities(
+    model: ModelDetails,
+    model_id: str,
+    output_modality: str | None,
+    input_modality: str | None,
+) -> None:
+    """Refuse a model that cannot serve the modalities the route needs.
+
+    Args:
+        model: The resolved model.
+        model_id: The model ID to name in the refusal.
+        output_modality: Required output modality, when the route has one.
+        input_modality: Required input modality, when the route has one.
+
+    Raises:
+        ApiError: When the model supports neither.
+    """
+    if output_modality and output_modality not in model.output_modalities:
+        msg = f"Model '{model_id}' does not support {output_modality.lower()} output modality."
+        raise ApiError(msg)
+    if input_modality and input_modality not in model.input_modalities:
+        msg = f"Model '{model_id}' does not support {input_modality.lower()} input modality."
+        raise ApiError(msg)
+
+
+def _lookup_model(
+    model_id: str,
+    *,
+    models: Mapping[str, ModelDetails],
+    wildcard: bool,
+    route: str | None,
+    output_modality: str | None,
+    input_modality: str | None,
+) -> ModelDetails | None:
+    """Find the model *model_id* names, whether it names one or a family of them.
+
+    Caller holds ``_CACHE["access_lock"]``.
+
+    Args:
+        model_id: Model ID, alias target or wildcard pattern.
+        models: The catalogue to look up in.
+        wildcard: Whether *model_id* is a pattern.
+        route: Operation ID or path the model must serve, when known.
+        output_modality: Required output modality, when known.
+        input_modality: Required input modality, when known.
+
+    Returns:
+        The model, or ``None`` when the catalogue holds none.
+
+    Raises:
+        ApiError: When the pattern names too little to select a model with.
+        AmbiguousModelError: When several matches share the newest release date.
+    """
+    model = models.get(model_id)
+    if model is None and wildcard:
+        return _resolve_model_wildcard(
+            model_id, models, route, output_modality, input_modality
+        )
+    return model
+
+
 async def validate_model(
     model_id: str,
     output_modality: str | None = None,
     input_modality: str | None = None,
     *,
+    route: str | None = None,
     bedrock_only: bool = True,
     error_status: int | None = None,
 ) -> ModelDetails:
     """Validate *model_id* and return its ``ModelDetails``.
 
-    Resolves aliases and ARNs, refreshes the cache on a miss, checks modality support,
-    and records the model ID in the request log. An alias carrying configuration
-    applies it to the rest of the request.
+    Resolves aliases, ARNs and wildcard patterns, refreshes the cache on a miss,
+    checks modality support, and records the model ID in the request log. An alias
+    carrying configuration applies it to the rest of the request.
+
+    An exact model ID, then an exact alias, then a deprecation replacement always
+    win over a pattern, so naming a model can never be overridden by one.
 
     If the model is not found and is listed in :data:`~stdapi.models.deprecation.DEPRECATED_MODELS`,
     and :attr:`~stdapi.config.Settings.aws_bedrock_deprecated_model_fallback` is enabled,
     the lookup is transparently retried with the replacement model ID.
 
     Args:
-        model_id: Model ID, alias, or ARN to validate.
+        model_id: Model ID, alias, ARN or wildcard pattern to validate.
         output_modality: Required output modality (e.g. ``"TEXT"``).
         input_modality: Required input modality (e.g. ``"IMAGE"``).
+        route: Operation ID or path of the route the model must serve. Only a
+            pattern uses it, to select among the models that route accepts.
         bedrock_only: Restrict lookup to Bedrock models (default ``True``).
         error_status: HTTP status code override for ``UnsupportedModelError``.
 
@@ -4021,20 +4262,30 @@ async def validate_model(
     Raises:
         UnsupportedModelError: If the model is not found.
         ApiError: If the model does not support the requested modality.
+        AmbiguousModelError: If a pattern names several equally recent models.
     """
     if MODEL_ALIAS_OVERLAYS:
         apply_alias_overlay(MODEL_ALIAS_OVERLAYS.get(model_id))
     model_id = resolve_model_alias(model_id)
     original_id = model_id
     models = _MODELS if bedrock_only else _ALL_MODELS
+    wildcard = is_model_wildcard(model_id)
     await refresh_stale_catalog()
+    lookup = partial(
+        _lookup_model,
+        models=models,
+        wildcard=wildcard,
+        route=route,
+        output_modality=output_modality,
+        input_modality=input_modality,
+    )
     if model_id.startswith("arn:"):
         model = _marketplace_endpoint_from_arn(
             model_id
         ) or await _validate_model_from_arn(model_id)
     else:
         async with _CACHE["access_lock"]:
-            model = models.get(model_id)
+            model = lookup(model_id)
 
     if model is None:
         # About to answer "no such model": the one case worth waiting for a
@@ -4042,20 +4293,18 @@ async def validate_model(
         if _refresh_due():
             await _refresh_bedrock_models(None)
         async with _CACHE["access_lock"]:
-            model = models.get(model_id)
+            model = lookup(model_id)
             if model is None:
                 fallback_model, model_id = _resolve_deprecated(models, model_id)
                 if SETTINGS.aws_bedrock_deprecated_model_fallback:
                     model = fallback_model
         if model is None:
             _raise_model_not_found(original_id, model_id, error_status)
+    if wildcard:
+        # The pattern was an input; everything downstream names the model it chose.
+        model_id = original_id = model.id
 
-    if output_modality and output_modality not in model.output_modalities:
-        msg = f"Model '{model_id}' does not support {output_modality.lower()} output modality."
-        raise ApiError(msg)
-    if input_modality and input_modality not in model.input_modalities:
-        msg = f"Model '{model_id}' does not support {input_modality.lower()} input modality."
-        raise ApiError(msg)
+    _check_model_modalities(model, model_id, output_modality, input_modality)
     log = REQUEST_LOG.get()
     log["model_id"] = model_id
     _warn_model_lifecycle(model, original_id, model_id)

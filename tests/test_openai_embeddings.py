@@ -661,7 +661,13 @@ class TestEmbeddingsRouteMapping:
 
         calls: list[dict[str, object]] = []
 
-        async def _validate_model(model_id: str, *_args: object) -> ModelDetails:
+        async def _validate_model(
+            model_id: str, *_args: object, route: str
+        ) -> ModelDetails:
+            # Asserted, not swallowed: the scope a wildcard model name resolves
+            # in comes from the route, so a call site that stopped passing it
+            # would widen the match set silently.
+            assert route == "openai_embedding"
             resolved = _MODEL_ALIASES.get(model_id, model_id)
             return make_model_details(resolved, output_modalities=["EMBEDDING"])
 

@@ -72,7 +72,11 @@ class EmbeddingCreateParams(BaseModelRequestWithExtra):
         "Token arrays are UNSUPPORTED on this implementation. An empty array is rejected.",
     )
     model: str = Field(
-        ..., description="ID of the model to use.", min_length=1, max_length=255
+        ...,
+        description="ID of the model to use. Wildcard patterns are accepted and "
+        "select the most recent matching model.",
+        min_length=1,
+        max_length=255,
     )
     dimensions: int | None = Field(
         default=None,

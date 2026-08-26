@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends
 
+from stdapi.api_errors import ApiError
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.aws_bedrock import (
@@ -26,6 +27,7 @@ from stdapi.aws_bedrock import (
     resolve_moderation_model,
 )
 from stdapi.config import SETTINGS
+from stdapi.models import is_model_wildcard
 from stdapi.models.capabilities import register_route_capability
 from stdapi.models.moderation import (
     GUARDRAIL_CHECKS_MODERATION_MODEL,
@@ -154,6 +156,12 @@ async def create_moderation(
             invalid.
     """
     log_request_params(body)
+    if body.model is not None and is_model_wildcard(body.model):
+        msg = (
+            "A model pattern is not available on this endpoint. Name the "
+            "moderation model, or omit 'model' to use the default one."
+        )
+        raise ApiError(msg)
     items = [body.input] if isinstance(body.input, str) else list(body.input)
     # "model" is echoed back to the client, so it keeps the requested spelling;
     # each backend is built with its own model ID, which is what usage is billed

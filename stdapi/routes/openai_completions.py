@@ -158,7 +158,10 @@ async def create_completion(
     return await get_chat_model(
         (
             await validate_model(
-                request.model, input_modality="TEXT", output_modality="TEXT"
+                request.model,
+                input_modality="TEXT",
+                output_modality="TEXT",
+                route="openai_completion",
             )
         ).id
     ).create_text_completion(

@@ -1934,7 +1934,10 @@ async def _open_session(websocket: WebSocket, model: str | None) -> None:
         raise ApiError(message)
     model_id = (
         await validate_model(
-            requested, input_modality="SPEECH", output_modality="SPEECH"
+            requested,
+            input_modality="SPEECH",
+            output_modality="SPEECH",
+            route="openai_realtime",
         )
     ).id
     realtime_model = get_realtime_model(model_id)

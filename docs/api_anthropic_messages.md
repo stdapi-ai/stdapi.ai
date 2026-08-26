@@ -146,6 +146,10 @@ For Claude 4 and later, a date-stripped shortcut (e.g. `claude-haiku-4-5`) is al
 
 Aliases for non-Anthropic models are also supported as normal.
 
+### Wildcard Model Patterns
+
+`model` also accepts a [glob pattern](operations_configuration.md#model-wildcard-patterns) — `claude-sonnet-*`, say — and the server serves the most recently released match. The response's `model` field always names the concrete model that served the request, streaming and non-streaming alike — never the alias or the pattern the request named.
+
 ## Advanced Features
 
 ### Prompt Caching

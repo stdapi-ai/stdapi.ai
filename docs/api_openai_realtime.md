@@ -163,6 +163,9 @@ curl "$BASE/search_models?route=openai_realtime" \
 
 Pass the returned model ID as `model` on the WebSocket URL, or in the `session.model` field of an ephemeral secret's configuration. See the [Search Models API](api_search_models.md) for the full filter syntax.
 
+!!! note "`session.model` does not accept a wildcard pattern; the WebSocket's `model` does"
+    `POST /v1/realtime/client_secrets` fixes the model into the signed token before a connection exists, so `session.model` must name an exact model — a [wildcard pattern](operations_configuration.md#model-wildcard-patterns) is rejected. The `model` query parameter of `WS /v1/realtime` itself has no such constraint and accepts a pattern.
+
 ## Authentication
 
 Open the WebSocket with one of three credentials, carried in whichever channel the client can use:

@@ -1449,6 +1449,9 @@ export AWS_BEDROCK_MANTLE_ENDPOINT_URL='https://bedrock-mantle.{region}.api.aws'
 export AWS_BEDROCK_MANTLE_PREFERRED_MODELS='openai.gpt-5.6,anthropic.claude-haiku-4-5'
 ```
 
+!!! info "Not the same as a wildcard model name"
+    This setting matches models by ID prefix and takes no glob syntax; it selects a *set* of models for the operator's own routing, where a [wildcard model name](#model-wildcard-patterns) selects *one* model for a single request.
+
 !!! warning "The default is a price change for the GPT-5.6 family"
     Both endpoints charge the same In-Region rate, but Mantle has no cross-region inference profiles, so a model preferred here stops riding the Global profile that bedrock-runtime uses by default ([`AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL`](#cross-region-global)). For GPT-5.6 that is **exactly 10% more per token** — $4.40 / $22.00 per million input / output tokens for Sol, $2.20 / $13.20 for Terra and $0.22 / $1.32 for Luna, against $4.00 / $20.00, $2.00 / $12.00 and $0.20 / $1.20 on the Global profile. Cached tokens and the long-context rates move by the same 10%; a deployment already pinned In-Region pays what it paid.
 
@@ -4546,6 +4549,9 @@ Configure default inference parameters applied automatically to specific models.
 
 Only the outer JSON shape (an object of per-model objects) is validated at startup. The parameter values above are validated lazily, the first time a model with configured defaults is used: a wrong type, or a value below the lower bounds shown in the table, fails that request with HTTP `400`. The numeric ceilings (for example the usual `top_p` maximum of `1.0`) are enforced by Amazon Bedrock and the target model.
 
+!!! info "Not the same as a wildcard model name"
+    The keys of this setting match models by ID prefix and take no glob syntax; they select a *set* of models for the operator's own defaults, where a [wildcard model name](#model-wildcard-patterns) selects *one* model for a single request.
+
 ### Configuration Examples { #default-model-params-examples }
 
 **Basic Parameters:**
@@ -4671,6 +4677,9 @@ Configure default service tiers applied automatically to specific Bedrock models
 | `flex`     | Cost-optimized flexible compute                   |
 | `priority` | Lower-latency priority compute                    |
 | `reserved` | Dedicated reserved capacity (requires AWS contract) |
+
+!!! info "Not the same as a wildcard model name"
+    The keys of this setting match models by ID prefix and take no glob syntax; they select a *set* of models for the operator's own defaults, where a [wildcard model name](#model-wildcard-patterns) selects *one* model for a single request.
 
 #### `AWS_BEDROCK_ALLOW_SERVICE_TIER_OVERRIDE` { #aws-bedrock-allow-service-tier-override }
 
@@ -4899,18 +4908,43 @@ curl https://api.example.com/v1/chat/completions \
 
 ```mermaid
 graph LR
-    A[API Request] --> B{Alias Exists?}
-    B -->|Yes| C[Resolve to Model ID]
-    B -->|No| D[Use as Model ID]
-    C --> E[Model Validation]
-    D --> E
-    E --> F[Execute Request]
+    A[Model Name] --> B{Exact Model ID?}
+    B -->|Yes| F[Resolved Model]
+    B -->|No| C{Exact Alias?}
+    C -->|Yes| F
+    C -->|No| D{Deprecated Model?}
+    D -->|Yes| F
+    D -->|No| E{Wildcard Pattern?}
+    E -->|Yes| F
+    E -->|No| G[404 Not Found]
 ```
 
-1. :material-numeric-1-circle: **User-configured aliases** override default aliases
-2. :material-numeric-2-circle: **Default aliases** apply if not overridden
-3. :material-numeric-3-circle: **Non-aliased names** pass through unchanged
-4. :material-numeric-4-circle: **Resolved model ID** is validated and used for the request
+1. :material-numeric-1-circle: **An exact model ID** wins outright, a model served through [Bedrock Mantle](#summary-bedrock-mantle) included.
+2. :material-numeric-2-circle: **An exact alias** resolves next — a [built-in default](#model-aliases-section) or one set in [`MODEL_ALIASES`](#model-aliases). An alias configured with a name that happens to look like a wildcard pattern — `claude-*`, say — is still a plain alias, and it wins here, before pattern resolution is ever tried; worth knowing, because it is easy to configure by accident.
+3. :material-numeric-3-circle: **A deprecation replacement** applies to a name [`AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK`](#bedrock-deprecated-model-fallback) covers.
+4. :material-numeric-4-circle: **A [wildcard pattern](#model-wildcard-patterns)** resolves last, only once none of the above named a model.
+
+The resolved model is validated and used for the request; a name matching none of the above answers `404`. The response names the concrete model that served the request, never the alias or the pattern it was sent as — except [`POST /v1/moderations`](api_openai_moderations.md), which echoes the `model` value the caller sent, by design.
+
+### Model Wildcard Patterns { #model-wildcard-patterns }
+
+Anywhere a request names a model, it may name a glob pattern instead of an exact name, and the server serves the most recently released match — the same release date [`GET /search_models`](api_search_models.md) publishes as `start_of_life_time` and [`GET /v1/models`](api_openai_models.md) publishes as `created` for each model.
+
+- **Glob syntax only** — `*` and `?`, case-sensitive; no regular expressions, no character classes (`[...]` is refused with `400`, not treated as a class or as a literal). `claude-sonnet-*`, `claude-opus-*` and `amazon.nova-*` all work.
+- **At least three characters before the first `*` or `?`.** A broader pattern is refused with `400`, and a bare `*` is never accepted.
+- **At most 255 characters.** A longer pattern is refused with `400`.
+- **Matched against both model IDs and aliases.**
+- **Scoped to the endpoint called** — the same pattern can resolve to a different model on chat than on embeddings.
+- **Resolved once, when the request is accepted.** A batch job created with a pattern is pinned to the model that pattern meant that day, and reports that concrete model for its whole life.
+- **Never a legacy model, a model [`AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK`](#bedrock-deprecated-model-fallback) covers, or a model whose first use would open a paid Marketplace subscription.** Name one of those explicitly and it still resolves exactly as it does today; a pattern only ever skips over it.
+- **A model whose release date the server cannot order is never selected by a pattern**, and its presence never makes an otherwise-unique match ambiguous — a property of that model, not of any particular catalogue. On [`POST /v1/audio/speech`](api_openai_audio_speech.md) every model is one of these — Polly carries no release date — so a pattern there is accepted but never matches anything, and always answers `404`.
+
+!!! warning "Ambiguity is refused, never guessed"
+    When two or more matches were released on the same date, the request fails with `400` naming them, and asks you to name one explicitly or narrow the pattern. `openai.gpt-5.6-*` (Sol, Terra and Luna, released together) and `stability.*` on the image routes are real examples: sibling models released together are often priced differently, so picking one would spend your money on a model you never named.
+
+Use [`GET /search_models?model=<pattern>`](api_search_models.md#query-parameters) to see everything a pattern matches, newest first, before relying on it in a request — the recommended way to check what a pattern will do.
+
+Two routes take a concrete model only, never a pattern: [`POST /v1/moderations`](api_openai_moderations.md) resolves the model before the request is examined, and [`POST /v1/realtime/client_secrets`](api_openai_realtime.md#ephemeral-client-secrets) fixes the model into the ephemeral token before a connection exists — the realtime WebSocket endpoint's own `model` parameter does accept a pattern.
 
 ---
 
@@ -5059,6 +5093,9 @@ export ANTHROPIC_BETA_ALLOWLIST='new-feature-2026-03-01,another-flag-2026-04-01'
 # Also strip a project-specific control field some client leaks into requests
 export EXTRA_MODEL_PARAMS_DENYLIST='x_internal_debug_flag,x_proxy_trace_id'
 ```
+
+!!! info "Not the same as a wildcard model name"
+    This denylist matches *parameter names*, and separately, the settings above it match *models* by ID prefix — neither takes glob syntax. A [wildcard model name](#model-wildcard-patterns) is a different mechanism again: it selects *one* model for a single request, not a set of parameters or models for the operator's own configuration.
 
 #### `EXTRA_MODEL_PARAMS_DROP_ALL` { #extra-model-params-drop-all }
 

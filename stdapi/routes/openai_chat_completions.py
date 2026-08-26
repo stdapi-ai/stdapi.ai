@@ -210,7 +210,10 @@ async def create_chat_completion(
         store = False
     model_id = (
         await validate_model(
-            request.model, input_modality="TEXT", output_modality="TEXT"
+            request.model,
+            input_modality="TEXT",
+            output_modality="TEXT",
+            route="openai_chat_completion",
         )
     ).id
     # After the model: an alias may carry the guardrail 'moderation' reports on.

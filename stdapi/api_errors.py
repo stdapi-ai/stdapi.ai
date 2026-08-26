@@ -11,7 +11,7 @@ from botocore.exceptions import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Generator, Sequence
 
 #: AWS error codes meaning the identity a call was signed with was denied it.
 ACCESS_DENIED_CODES: Final = frozenset({"AccessDeniedException", "AccessDenied"})
@@ -70,6 +70,27 @@ class UnsupportedModelError(ApiError):
             f"The model `{model}` does not exist or you do not have access to it."
             f"{extra} Call the models endpoint to list the models this server provides.",
             status=status,
+        )
+
+
+class AmbiguousModelError(ApiError):
+    """A model pattern names several models the server cannot choose between."""
+
+    code = "ambiguous_model"
+    param = "model"
+
+    def __init__(self, pattern: str, candidates: Sequence[str]) -> None:
+        """Refuse a pattern that does not name one model, and list the ones it names.
+
+        Args:
+            pattern: The model pattern as the caller wrote it.
+            candidates: The models the pattern matches, all released on the same
+                date.  Already public on the models endpoint.
+        """
+        super().__init__(
+            f"The model `{pattern}` matches several models released on the same "
+            f"date: {', '.join(candidates)}. Name the one you want, or use a "
+            "pattern that matches only it."
         )
 
 

@@ -149,6 +149,9 @@ Guardrails are regional: a plain guardrail ID is applied in the primary Bedrock 
 
 Guardrail checks (`InvokeGuardrailChecks`) are available in a limited set of AWS regions only (currently `us-east-1`, `us-east-2`, `us-west-2`, `eu-west-2`, `eu-north-1`, `ap-northeast-1`, and `ap-southeast-2`): calls run in the configured Bedrock regions that offer the operation, in priority order with multi-region failover, and the backend is unavailable when none of them does.
 
+!!! note "`model` does not accept a wildcard pattern"
+    Unlike the routes that generate a response, `/v1/moderations` chooses the classification model before the request is examined, so `model` must name an exact value from the table above — a [wildcard pattern](operations_configuration.md#model-wildcard-patterns) is rejected.
+
 !!! note "Required IAM Permission"
     Guardrail checks moderation requires the `bedrock:InvokeGuardrailChecks` IAM action. See [IAM Permissions](operations_configuration.md#iam-permissions). Deployments without it keep working: when guardrail checks are only reached as the default `omni-moderation-*` resolution, an `AccessDenied` response degrades the request to Comprehend toxicity detection with a logged warning.
 

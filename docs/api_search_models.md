@@ -19,7 +19,7 @@ Discover available models by capability — filter by modality, route, region, s
 
 ## How It Works
 
-All query parameters are optional. Parameters combine with **AND** logic — only models matching every supplied filter are returned. Results are sorted by model ID. With no filters, every active (non-legacy) model is returned (see the `legacy` note below for deprecated-model lookups).
+All query parameters are optional. Parameters combine with **AND** logic — only models matching every supplied filter are returned. Results are sorted by model ID, except that a `model` filter sorts its matches **newest first** instead — see the note below. With no filters, every active (non-legacy) model is returned (see the `legacy` note below for deprecated-model lookups).
 
 **Agent workflow:** call `search_models` first to obtain the correct model ID, then pass it to the target endpoint. To compare costs before picking, pass the shortlisted IDs to the [Model Pricing API](api_model_pricing.md).
 
@@ -27,6 +27,7 @@ All query parameters are optional. Parameters combine with **AND** logic — onl
 
 | Parameter           | Type      | Description                                                                                                                                                              |
 |---------------------|-----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `model`             | `string`  | A [wildcard pattern](operations_configuration.md#model-wildcard-patterns) (e.g. `claude-sonnet-*`) or an exact model name. Returns the whole match set, newest first — everything a pattern *could* select, not just the one it would |
 | `input_modalities`  | `string`  | Repeatable. Filter by input modality: `TEXT`, `IMAGE`, `VIDEO`, `AUDIO`, `SPEECH`                                                                                        |
 | `output_modalities` | `string`  | Repeatable. Filter by output modality: `TEXT`, `IMAGE`, `VIDEO`, `SPEECH`, `EMBEDDING`, `RERANKING`, `MODERATION`                                                        |
 | `route`             | `string`  | Filter to models supporting a route path (e.g. `/v1/chat/completions`) **or** an MCP tool name (e.g. `openai_chat_completion`) — both formats are accepted transparently |
@@ -37,6 +38,9 @@ All query parameters are optional. Parameters combine with **AND** logic — onl
 
 !!! note "Modality values are case-insensitive"
     `TEXT`, `text`, and `Text` are all accepted.
+
+!!! tip "`model` is how you check a pattern before using it"
+    A `model` filter returns every match, sorted newest first by release date, with models of unknown release date last — including the ones a pattern cannot select. This is the recommended way to see what a pattern would resolve to, and whether it would be refused as ambiguous, before sending it on a request. Add `route` to narrow it to one endpoint, exactly as a pattern on a request is scoped. Unlike a pattern on a request, this filter accepts any pattern, `*` included, and — like every other search — it lists non-legacy models unless you pass `legacy=true`.
 
 !!! warning "Batch support is advertised on a best-effort basis"
     `batch` is a discovery hint, not a guarantee, and it is never used to reject a request: a batch naming a model that is not advertised is still submitted, and only the backend decides. So a model with `batch: false` — or with no `batch` field at all — may well run a batch successfully, and the authoritative answer is what you get back when you submit one. Treat it as a shortlist to start from, not as a list of the only models that work.
@@ -122,6 +126,14 @@ curl -G "$BASE/search_models" \
 curl -G "$BASE/search_models" \
   --data-urlencode "route=openai_chat_completion" \
   --data-urlencode "batch=true" \
+  -H "Authorization: Bearer $API_KEY"
+```
+
+**Everything a wildcard pattern matches, newest first:**
+
+```bash
+curl -G "$BASE/search_models" \
+  --data-urlencode "model=claude-sonnet-*" \
   -H "Authorization: Bearer $API_KEY"
 ```
 

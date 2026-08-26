@@ -477,7 +477,7 @@ class ChatModel(ChatModelBase[Any, Any]):
                 log_request_sse_stream_event(
                     anthropic_adapter.format_stream(
                         message_id,
-                        request.model,
+                        self._model_id,
                         (await self.converse_stream(bedrock_request))["stream"],
                         forced_tool,
                         self._resp_stream_map_tool_use,
@@ -493,7 +493,8 @@ class ChatModel(ChatModelBase[Any, Any]):
                 response["stopReason"],
                 response["usage"],
                 message_id,
-                request.model,
+                # Report the model the prompt router actually invoked, when applicable.
+                _invoked_model_id(response) or self._model_id,
                 forced_tool,
                 self._resp_map_tool_result,
                 self._resp_map_tool_use,

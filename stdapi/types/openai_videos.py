@@ -19,7 +19,10 @@ class VideoCreateParams(BaseModelRequestWithFormExtra):
     """Video creation parameters shared by the JSON and multipart formats."""
 
     model: str = Field(
-        description="The video generation model to use.", min_length=1, max_length=255
+        description="The video generation model to use. "
+        "Wildcard patterns are accepted and select the most recent matching model.",
+        min_length=1,
+        max_length=255,
     )
     prompt: str = Field(
         description="Text prompt that describes the video to generate.", min_length=1

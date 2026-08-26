@@ -159,7 +159,11 @@ async def rerank_v1(
     if request.max_chunks_per_doc is not None:
         msg = "'max_chunks_per_doc' is not supported on this implementation."
         raise ApiError(msg)
-    model_id = (await validate_model(request.model, RERANKING_MODALITY)).id
+    model_id = (
+        await validate_model(
+            request.model, RERANKING_MODALITY, route="cohere_rerank_v1"
+        )
+    ).id
     # The query and documents are independent AWS guardrail calls; run them concurrently.
     documents, query = await gather(
         apply_guardrail_to_texts(

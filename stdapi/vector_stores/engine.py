@@ -387,7 +387,9 @@ async def resolve_embedding_model() -> tuple[str, int]:
         ApiError: When the configured model cannot produce an embedding.
     """
     model_id = (
-        await validate_model(SETTINGS.vector_store_embedding_model, "EMBEDDING")
+        await validate_model(
+            SETTINGS.vector_store_embedding_model, "EMBEDDING", route="openai_embedding"
+        )
     ).id
     vectors = await _embed(model_id, ["."])
     if not vectors or not vectors[0]:

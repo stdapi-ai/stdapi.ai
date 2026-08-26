@@ -131,6 +131,8 @@ Any chat or embedding model available for batch inference in your configured Ama
 
 A model that cannot serve batched requests is refused when the batch is created, naming the model. A model this deployment normally serves through another Amazon Bedrock endpoint is batched under the identifier the batch endpoint knows it by, so it needs nothing from you.
 
+A batch's own `model` field, and the `model` field of each request in the JSONL body, may name a [wildcard pattern](operations_configuration.md#model-wildcard-patterns) instead of an exact model. It is resolved once, when the batch is created: the concrete model that pattern meant that day is what the batch reports and runs for its whole life, even after a newer release would resolve it differently.
+
 ## Workflow
 
 ### 1. Upload the requests

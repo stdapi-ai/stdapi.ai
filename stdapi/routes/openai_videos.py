@@ -249,7 +249,13 @@ async def create_video(
     prompt: Annotated[
         str, Form(description="Text prompt that describes the video to generate.")
     ] = "",
-    model: Annotated[str, Form(description="The video generation model to use.")] = "",
+    model: Annotated[
+        str,
+        Form(
+            description="The video generation model to use. "
+            "Wildcard patterns are accepted and select the most recent matching model."
+        ),
+    ] = "",
     seconds: Annotated[
         str | None,
         Form(
@@ -308,6 +314,7 @@ async def create_video(
             request.model,
             input_modality="TEXT",
             output_modality="VIDEO",
+            route="openai_video_generation",
             error_status=400,
         )
     ).id

@@ -93,7 +93,9 @@ async def embed(
             options or invalid values.
     """
     log_request_params(request)
-    model_id = (await validate_model(request.model, "EMBEDDING")).id
+    model_id = (
+        await validate_model(request.model, "EMBEDDING", route="cohere_embed")
+    ).id
     extra_params = get_extra_model_parameters(model_id, request)
     native_embedding_types = resolve_embedding_types(model_id, request.embedding_types)
     if model_id.startswith("cohere."):
