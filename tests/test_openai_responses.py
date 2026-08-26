@@ -8,13 +8,31 @@ from __future__ import annotations
 
 import base64
 import json
+from collections import Counter
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from itertools import pairwise
-from typing import TYPE_CHECKING, Any, get_args
+from typing import TYPE_CHECKING, Any, Literal, get_args
 
 import pytest
 from botocore.exceptions import ClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
 from openai import BadRequestError, NotFoundError, OpenAI
+from openai.types.responses import Response as SdkResponse
+from openai.types.responses import (
+    ResponseCompletedEvent,
+    ResponseCreatedEvent,
+    ResponseError,
+    ResponseErrorEvent,
+    ResponseFailedEvent,
+    ResponseFunctionCallArgumentsDeltaEvent,
+    ResponseIncompleteEvent,
+    ResponseTextDeltaEvent,
+    ResponseWebSearchCallCompletedEvent,
+    ResponseWebSearchCallInProgressEvent,
+    ResponseWebSearchCallSearchingEvent,
+)
+from openai.types.responses.response import IncompleteDetails
 from openai.types.responses.response_file_search_tool_call import (
     ResponseFileSearchToolCall as SDKFileSearchToolCall,
 )
@@ -43,15 +61,26 @@ from stdapi.usage import record_bedrock_usage
 from stdapi.vector_stores import SearchResult, StoreRecord
 from stdapi.vector_stores.backend import IndexCapabilities
 from tests._helpers import strip_code_fence
+from tests.conftest import OUTPUT_DIR
 from tests.test_openai_vector_stores import _PLANTED
 from tests.test_openai_vector_stores import indexed_store as _indexed_store
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Sequence
+    from collections.abc import (
+        AsyncGenerator,
+        Awaitable,
+        Callable,
+        Generator,
+        Iterable,
+        Sequence,
+    )
+    from pathlib import Path
 
     from openai import APIStatusError
-    from openai.types.responses import Response as SdkResponse
-    from openai.types.responses import ResponseFileSearchToolCallParam
+    from openai.types.responses import (
+        ResponseFileSearchToolCallParam,
+        ResponseStreamEvent,
+    )
     from starlette.testclient import TestClient as TestClientType
 
     from stdapi.models import ModelDetails
@@ -117,6 +146,200 @@ def _error_envelope(error: APIStatusError) -> dict[str, Any]:
     envelope = error.body
     assert isinstance(envelope, dict), f"Expected an error envelope: {envelope!r}"
     return envelope
+
+
+#: Streaming events carrying the terminal state of a response.
+_TERMINAL_RESPONSE_EVENTS = frozenset(
+    {"response.completed", "response.incomplete", "response.failed", "error"}
+)
+
+
+@dataclass(slots=True)
+class _WebSearchStreamCapture:
+    """Everything a streamed web-search response emitted.
+
+    The counters the web-search assertions read are recorded beside a census of
+    every event type, the complete web-search lifecycle and the terminal event,
+    so a failing run reports the stream it actually saw rather than a bare
+    integer. A response that ends on ``response.incomplete`` with a search item
+    still open, and one whose transport was cut, produce the same counters and
+    are told apart only by the terminal event and ``stream_error``.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+    """
+
+    #: Number of events received, per event type.
+    seen: Counter[str] = field(default_factory=Counter)
+    #: Every ``response.web_search_call.*`` event: (type, item_id, output_index).
+    ws_lifecycle: list[tuple[str, str | None, int | None]] = field(default_factory=list)
+    ws_in_progress: int = 0
+    ws_completed: int = 0
+    text_delta_count: int = 0
+    func_call_delta_count: int = 0
+    completed: bool = False
+    #: Type of the last terminal event, or ``None`` when the stream carried none.
+    terminal_event: str | None = None
+    terminal_status: str | None = None
+    incomplete_reason: str | None = None
+    error: str | None = None
+    response_id: str | None = None
+    #: Exception that interrupted the iteration, or ``None`` when it ran out.
+    stream_error: str | None = None
+    #: Model the capture ran against, ``None`` for a synthesized stream.
+    model: str | None = None
+    #: Lane the capture ran on ("official" or "local"), ``None`` when synthesized.
+    lane: str | None = None
+
+    @property
+    def ws_events(self) -> list[str]:
+        """The lifecycle without ``searching``, as the assertions read it."""
+        return [
+            name
+            for name, _item_id, _output_index in self.ws_lifecycle
+            if name != "response.web_search_call.searching"
+        ]
+
+    @property
+    def context(self) -> str:
+        """Diagnostic summary appended to every assertion of the stream."""
+        return (
+            f"[response_id={self.response_id} terminal={self.terminal_event} "
+            f"status={self.terminal_status} incomplete={self.incomplete_reason} "
+            f"error={self.error} stream_error={self.stream_error} "
+            f"ws_lifecycle={self.ws_lifecycle} events={dict(self.seen)}]"
+        )
+
+    def record(self, event: ResponseStreamEvent) -> None:
+        """Fold one streamed event into the capture.
+
+        Args:
+            event: Event yielded by the stream.
+        """
+        self.seen[event.type] += 1
+        response = getattr(event, "response", None)
+        if response is not None and self.response_id is None:
+            self.response_id = response.id
+        if event.type.startswith("response.web_search_call."):
+            self.ws_lifecycle.append(
+                (
+                    event.type,
+                    getattr(event, "item_id", None),
+                    getattr(event, "output_index", None),
+                )
+            )
+        match event.type:
+            case "response.web_search_call.in_progress":
+                self.ws_in_progress += 1
+            case "response.web_search_call.completed":
+                self.ws_completed += 1
+            case "response.output_text.delta":
+                self.text_delta_count += 1
+            case "response.function_call_arguments.delta":
+                self.func_call_delta_count += 1
+            case "response.completed":
+                self.completed = True
+        if event.type not in _TERMINAL_RESPONSE_EVENTS:
+            return
+        self.terminal_event = event.type
+        if response is None:  # the ``error`` event carries no response payload
+            code = getattr(event, "code", None)
+            self.error = f"{code}: {getattr(event, 'message', None)}"
+            return
+        self.terminal_status = response.status
+        if response.incomplete_details is not None:
+            self.incomplete_reason = response.incomplete_details.reason
+        if response.error is not None:
+            self.error = f"{response.error.code}: {response.error.message}"
+
+    def dump(self, path: Path) -> None:
+        """Append the capture to a log file, so it outlives the terminal buffer.
+
+        Both lanes append to the same file, so the line is prefixed with the
+        model and lane; a synthesized stream leaves both ``None``.
+
+        Args:
+            path: File the capture line is appended to.
+        """
+        with path.open("a", encoding="utf-8") as log:
+            log.write(
+                f"{datetime.now(UTC).isoformat()} model={self.model} "
+                f"lane={self.lane} {self.context}\n"
+            )
+
+
+def _capture_web_search_stream(
+    stream: Iterable[ResponseStreamEvent],
+    path: Path,
+    *,
+    model: str | None = None,
+    lane: str | None = None,
+) -> _WebSearchStreamCapture:
+    """Consume a streamed web-search response, recording every event it carried.
+
+    Args:
+        stream: Streamed response events.
+        path: File the capture is appended to, whether or not the stream ended
+            cleanly.
+        model: Model the request targeted, recorded on the persisted line.
+        lane: Lane the request ran on ("official" or "local"), recorded on the
+            persisted line.
+
+    Returns:
+        The bookkeeping the assertions read and report.
+
+    Raises:
+        Exception: Whatever interrupted the iteration, re-raised once the
+            capture has been written.
+    """
+    capture = _WebSearchStreamCapture(model=model, lane=lane)
+    try:
+        for event in stream:
+            capture.record(event)
+    except Exception as exc:
+        capture.stream_error = f"{type(exc).__name__}: {exc}"
+        raise
+    finally:
+        capture.dump(path)
+    return capture
+
+
+def _assert_web_search_stream(capture: _WebSearchStreamCapture) -> None:
+    """Assert the search lifecycle and terminal state a web-search stream must carry.
+
+    Shared by ``test_web_search_tool_streaming`` and
+    ``test_web_search_type_tool_streaming`` so the two controls cannot drift
+    apart silently.
+
+    Args:
+        capture: Capture returned by ``_capture_web_search_stream``.
+    """
+    assert capture.ws_in_progress >= 1, (
+        f"Expected response.web_search_call.in_progress event {capture.context}"
+    )
+    assert capture.ws_completed >= 1, (
+        f"Expected response.web_search_call.completed event {capture.context}"
+    )
+    assert capture.ws_events[0] == "response.web_search_call.in_progress", (
+        f"web_search lifecycle must open with in_progress {capture.context}"
+    )
+    assert capture.ws_events[-1] == "response.web_search_call.completed", (
+        f"web_search lifecycle must close with completed {capture.context}"
+    )
+    assert capture.text_delta_count >= 1, (
+        f"Expected at least one output_text.delta event {capture.context}"
+    )
+    assert capture.func_call_delta_count == 0, (
+        f"function_call_arguments.delta must not leak {capture.context}"
+    )
+    # The capture explains a failure; it must not absolve one. A stream that
+    # ends `response.incomplete` is the shape this instrumentation exists to
+    # diagnose, so accepting it here would record clean runs forever and
+    # leave the flake uncaptured.
+    assert capture.terminal_event == "response.completed", (
+        f"the stream ended {capture.terminal_event!r}"
+        f"{f' ({capture.incomplete_reason})' if capture.incomplete_reason else ''}"
+        f" instead of completing {capture.context}"
+    )
 
 
 class TestResponses:
@@ -915,10 +1138,7 @@ class TestResponses:
 
     @pytest.mark.expensive
     def test_web_search_tool(
-        self,
-        openai_client: OpenAI,
-        responses_web_search_model: str,
-        use_official_api: bool,
+        self, openai_client: OpenAI, responses_web_search_model: str
     ) -> None:
         """``web_search_preview`` yields a completed ``web_search_call`` search action.
 
@@ -977,16 +1197,13 @@ class TestResponses:
         ``.completed``; the suppressed server tool must not surface as
         ``response.function_call_arguments.*`` events.
 
+        Instrumented identically to its ``web_search`` twin, which fails
+        intermittently (issue #169), so a run here is a control sample against
+        the same shape of data.
+
         Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
              stdapi/models/chat/_adapters/_openai_responses.py:format_stream
         """
-        ws_events: list[str] = []
-        ws_in_progress = 0
-        ws_completed = 0
-        text_delta_count = 0
-        func_call_delta_count = 0
-        completed = False
-
         try:
             stream = openai_client.responses.create(
                 model=responses_web_search_model,
@@ -998,36 +1215,14 @@ class TestResponses:
             if "nova_grounding is not supported" in str(exc):
                 pytest.xfail("nova_grounding unavailable in cross-region routing")
             raise
-        for event in stream:
-            match event.type:
-                case "response.web_search_call.in_progress":
-                    ws_in_progress += 1
-                    ws_events.append(event.type)
-                case "response.web_search_call.completed":
-                    ws_completed += 1
-                    ws_events.append(event.type)
-                case "response.output_text.delta":
-                    text_delta_count += 1
-                case "response.function_call_arguments.delta":
-                    func_call_delta_count += 1
-                case "response.completed":
-                    completed = True
+        capture = _capture_web_search_stream(
+            stream,
+            OUTPUT_DIR / "web_search_preview_streaming.log",
+            model=responses_web_search_model,
+            lane="official" if use_official_api else "local",
+        )
 
-        assert ws_in_progress >= 1, (
-            "Expected response.web_search_call.in_progress event"
-        )
-        assert ws_completed >= 1, "Expected response.web_search_call.completed event"
-        assert ws_events[0] == "response.web_search_call.in_progress", (
-            f"web_search lifecycle must open with in_progress: {ws_events}"
-        )
-        assert ws_events[-1] == "response.web_search_call.completed", (
-            f"web_search lifecycle must close with completed: {ws_events}"
-        )
-        assert text_delta_count >= 1, "Expected at least one output_text.delta event"
-        assert func_call_delta_count == 0, (
-            f"function_call_arguments.delta must not leak: {func_call_delta_count} events"
-        )
-        assert completed, "Expected response.completed event"
+        _assert_web_search_stream(capture)
 
     @pytest.mark.expensive
     def test_web_search_type_tool(
@@ -1069,23 +1264,21 @@ class TestResponses:
 
     @pytest.mark.expensive
     def test_web_search_type_tool_streaming(
-        self, openai_client: OpenAI, responses_web_search_model: str
+        self,
+        openai_client: OpenAI,
+        responses_web_search_model: str,
+        use_official_api: bool,
     ) -> None:
         """Streaming the ``web_search`` tool type emits the same lifecycle events.
 
         The event names are shared with ``web_search_preview`` because both tool
         spellings resolve to the same Bedrock server tool.
 
+        This one fails intermittently on the vendor lane; see issue #169.
+
         Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
              stdapi/models/chat/_adapters/_openai_responses.py:format_stream
         """
-        ws_events: list[str] = []
-        ws_in_progress = 0
-        ws_completed = 0
-        text_delta_count = 0
-        func_call_delta_count = 0
-        completed = False
-
         try:
             stream = openai_client.responses.create(
                 model=responses_web_search_model,
@@ -1097,36 +1290,14 @@ class TestResponses:
             if "nova_grounding is not supported" in str(exc):
                 pytest.xfail("nova_grounding unavailable in cross-region routing")
             raise
-        for event in stream:
-            match event.type:
-                case "response.web_search_call.in_progress":
-                    ws_in_progress += 1
-                    ws_events.append(event.type)
-                case "response.web_search_call.completed":
-                    ws_completed += 1
-                    ws_events.append(event.type)
-                case "response.output_text.delta":
-                    text_delta_count += 1
-                case "response.function_call_arguments.delta":
-                    func_call_delta_count += 1
-                case "response.completed":
-                    completed = True
+        capture = _capture_web_search_stream(
+            stream,
+            OUTPUT_DIR / "web_search_type_streaming.log",
+            model=responses_web_search_model,
+            lane="official" if use_official_api else "local",
+        )
 
-        assert ws_in_progress >= 1, (
-            "Expected response.web_search_call.in_progress event"
-        )
-        assert ws_completed >= 1, "Expected response.web_search_call.completed event"
-        assert ws_events[0] == "response.web_search_call.in_progress", (
-            f"web_search lifecycle must open with in_progress: {ws_events}"
-        )
-        assert ws_events[-1] == "response.web_search_call.completed", (
-            f"web_search lifecycle must close with completed: {ws_events}"
-        )
-        assert text_delta_count >= 1, "Expected at least one output_text.delta event"
-        assert func_call_delta_count == 0, (
-            f"function_call_arguments.delta must not leak: {func_call_delta_count} events"
-        )
-        assert completed, "Expected response.completed event"
+        _assert_web_search_stream(capture)
 
     @pytest.mark.expensive
     def test_web_search_tool_on_a_natively_served_model(
@@ -4087,3 +4258,342 @@ class TestFileSearchToolLive:
         assert answered[0].results, "the streamed item carries the included passages"
         assert deltas, "the grounded answer must still be streamed as text"
         assert completed
+
+
+class TestWebSearchStreamCapture:
+    """The web-search stream capture records what a failing run has to explain.
+
+    The two ``--expensive`` web-search streaming tests count events and assert
+    on the counters; the capture is what makes a failure of those counters
+    diagnosable, so it is proved here against synthesised streams instead of by
+    paying for a live search that may not misbehave.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+         tests/test_openai_responses.py:_capture_web_search_stream
+    """
+
+    @staticmethod
+    def _response(
+        *,
+        status: Literal[
+            "in_progress", "completed", "incomplete", "failed"
+        ] = "in_progress",
+        incomplete_reason: Literal["max_output_tokens", "content_filter"] | None = None,
+        error: ResponseError | None = None,
+    ) -> SdkResponse:
+        """Build a minimal Response payload for a streaming event.
+
+        Args:
+            status: Status the payload reports.
+            incomplete_reason: Reason an incomplete response stopped early.
+            error: Error a failed response carries.
+
+        Returns:
+            A Response object carrying only what the capture reads.
+        """
+        return SdkResponse(
+            id="resp_169",
+            created_at=0.0,
+            model="gpt-5-nano",
+            object="response",
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+            status=status,
+            incomplete_details=(
+                IncompleteDetails(reason=incomplete_reason)
+                if incomplete_reason is not None
+                else None
+            ),
+            error=error,
+        )
+
+    def test_a_response_left_with_a_search_open_reports_why(
+        self, tmp_path: Path
+    ) -> None:
+        """An incomplete response names its terminal event, status and reason.
+
+        This is the failure shape the two web-search streaming assertions
+        cannot tell apart on their own: the first search completed, the second
+        never did, and the counters alone say only that the last lifecycle
+        event was ``in_progress``.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             tests/test_openai_responses.py:_capture_web_search_stream
+        """
+        events: list[ResponseStreamEvent] = [
+            ResponseCreatedEvent(
+                response=self._response(), sequence_number=0, type="response.created"
+            ),
+            ResponseWebSearchCallInProgressEvent(
+                item_id="ws_1",
+                output_index=0,
+                sequence_number=1,
+                type="response.web_search_call.in_progress",
+            ),
+            ResponseWebSearchCallSearchingEvent(
+                item_id="ws_1",
+                output_index=0,
+                sequence_number=2,
+                type="response.web_search_call.searching",
+            ),
+            ResponseWebSearchCallCompletedEvent(
+                item_id="ws_1",
+                output_index=0,
+                sequence_number=3,
+                type="response.web_search_call.completed",
+            ),
+            ResponseTextDeltaEvent(
+                content_index=0,
+                delta="Python ",
+                item_id="msg_1",
+                logprobs=[],
+                output_index=1,
+                sequence_number=4,
+                type="response.output_text.delta",
+            ),
+            ResponseWebSearchCallInProgressEvent(
+                item_id="ws_2",
+                output_index=2,
+                sequence_number=5,
+                type="response.web_search_call.in_progress",
+            ),
+            ResponseIncompleteEvent(
+                response=self._response(
+                    status="incomplete", incomplete_reason="max_output_tokens"
+                ),
+                sequence_number=6,
+                type="response.incomplete",
+            ),
+        ]
+        log = tmp_path / "capture.log"
+
+        capture = _capture_web_search_stream(events, log)
+
+        assert capture.ws_in_progress == 2
+        assert capture.ws_completed == 1
+        assert capture.text_delta_count == 1
+        assert capture.func_call_delta_count == 0
+        assert capture.completed is False
+        assert capture.ws_events[-1] == "response.web_search_call.in_progress"
+        assert "response.web_search_call.searching" not in capture.ws_events, (
+            "the asserted lifecycle stays the open/close pair it always was"
+        )
+        assert capture.ws_lifecycle == [
+            ("response.web_search_call.in_progress", "ws_1", 0),
+            ("response.web_search_call.searching", "ws_1", 0),
+            ("response.web_search_call.completed", "ws_1", 0),
+            ("response.web_search_call.in_progress", "ws_2", 2),
+        ], (
+            "the searching event is kept and each event carries the item it "
+            "belongs to, so a lifecycle that reopened a new item -- rather "
+            "than re-emitting the closed one -- is distinguishable"
+        )
+        assert capture.terminal_event == "response.incomplete"
+        assert capture.terminal_status == "incomplete"
+        assert capture.incomplete_reason == "max_output_tokens"
+        assert capture.stream_error is None
+        assert capture.response_id == "resp_169"
+        assert capture.seen["response.web_search_call.in_progress"] == 2
+        for expected in (
+            "resp_169",
+            "response.incomplete",
+            "max_output_tokens",
+            "response.web_search_call.searching",
+        ):
+            assert expected in capture.context, (
+                f"every assertion message must carry {expected!r}: {capture.context}"
+            )
+        assert log.read_text(encoding="utf-8").rstrip().endswith(capture.context), (
+            "the capture is persisted so a lost terminal buffer costs nothing"
+        )
+
+    def test_an_interrupted_stream_is_persisted_before_it_is_re_raised(
+        self, tmp_path: Path
+    ) -> None:
+        """A transport interruption reaches the caller, with its capture on disk.
+
+        A cut transport and a response that simply stopped early leave the same
+        counters, so the exception is what distinguishes them and it must be
+        recorded rather than replaced.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             tests/test_openai_responses.py:_capture_web_search_stream
+        """
+        message = "peer closed the connection"
+
+        def _cut() -> Generator[ResponseStreamEvent]:
+            yield ResponseWebSearchCallInProgressEvent(
+                item_id="ws_1",
+                output_index=0,
+                sequence_number=0,
+                type="response.web_search_call.in_progress",
+            )
+            raise RuntimeError(message)
+
+        log = tmp_path / "capture.log"
+
+        with pytest.raises(RuntimeError, match="peer closed the connection"):
+            _capture_web_search_stream(_cut(), log)
+
+        persisted = log.read_text(encoding="utf-8")
+        assert "stream_error=RuntimeError: peer closed the connection" in persisted
+        assert "terminal=None" in persisted, "no terminal event reached the client"
+        assert "response.web_search_call.in_progress" in persisted
+
+    def test_an_error_event_is_recorded_as_the_terminal_event(
+        self, tmp_path: Path
+    ) -> None:
+        """The ``error`` event carries no response payload and is still captured.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             tests/test_openai_responses.py:_capture_web_search_stream
+        """
+        events: list[ResponseStreamEvent] = [
+            ResponseErrorEvent(
+                code="server_error",
+                message="upstream failure",
+                param=None,
+                sequence_number=0,
+                type="error",
+            )
+        ]
+
+        capture = _capture_web_search_stream(events, tmp_path / "capture.log")
+
+        assert capture.terminal_event == "error"
+        assert capture.error == "server_error: upstream failure"
+        assert capture.terminal_status is None
+        assert capture.completed is False
+
+    def test_a_mid_stream_failure_is_recorded_as_the_error_then_failed_pair(
+        self, tmp_path: Path
+    ) -> None:
+        """A failed stream reports the last terminal event, not the first.
+
+        The adapter yields ``error`` and then ``response.failed``, so the pair
+        must leave the capture naming the response event and its status.
+
+        Ref: stdapi/models/chat/_adapters/_openai_responses.py:format_stream
+        """
+        events: list[ResponseStreamEvent] = [
+            ResponseErrorEvent(
+                code="server_error",
+                message="upstream failure",
+                param=None,
+                sequence_number=0,
+                type="error",
+            ),
+            ResponseFailedEvent(
+                response=self._response(
+                    status="failed",
+                    error=ResponseError(
+                        code="server_error", message="upstream failure"
+                    ),
+                ),
+                sequence_number=1,
+                type="response.failed",
+            ),
+        ]
+
+        capture = _capture_web_search_stream(events, tmp_path / "capture.log")
+
+        assert capture.terminal_event == "response.failed"
+        assert capture.terminal_status == "failed"
+        assert capture.error == "server_error: upstream failure"
+        assert capture.seen["error"] == 1
+        assert capture.completed is False
+
+    def test_a_clean_stream_records_the_completed_terminal_event(
+        self, tmp_path: Path
+    ) -> None:
+        """A passing web-search run leaves every asserted counter where it must be.
+
+        This is the stream the two ``--expensive`` tests demand, so their
+        expectations are proved against a known-good shape offline.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             tests/test_openai_responses.py:_capture_web_search_stream
+        """
+        events: list[ResponseStreamEvent] = [
+            ResponseCreatedEvent(
+                response=self._response(), sequence_number=0, type="response.created"
+            ),
+            ResponseWebSearchCallInProgressEvent(
+                item_id="ws_1",
+                output_index=0,
+                sequence_number=1,
+                type="response.web_search_call.in_progress",
+            ),
+            ResponseWebSearchCallSearchingEvent(
+                item_id="ws_1",
+                output_index=0,
+                sequence_number=2,
+                type="response.web_search_call.searching",
+            ),
+            ResponseWebSearchCallCompletedEvent(
+                item_id="ws_1",
+                output_index=0,
+                sequence_number=3,
+                type="response.web_search_call.completed",
+            ),
+            ResponseTextDeltaEvent(
+                content_index=0,
+                delta="Python ",
+                item_id="msg_1",
+                logprobs=[],
+                output_index=1,
+                sequence_number=4,
+                type="response.output_text.delta",
+            ),
+            ResponseCompletedEvent(
+                response=self._response(status="completed"),
+                sequence_number=5,
+                type="response.completed",
+            ),
+        ]
+
+        capture = _capture_web_search_stream(events, tmp_path / "capture.log")
+
+        assert capture.completed is True
+        assert capture.terminal_event == "response.completed"
+        assert capture.terminal_status == "completed"
+        assert capture.incomplete_reason is None
+        assert capture.error is None
+        assert capture.ws_events == [
+            "response.web_search_call.in_progress",
+            "response.web_search_call.completed",
+        ]
+        assert capture.text_delta_count == 1
+        assert capture.func_call_delta_count == 0
+
+    def test_a_leaked_function_call_delta_is_counted(self, tmp_path: Path) -> None:
+        """The leak counter moves, so the live ``== 0`` assertions mean something.
+
+        Both web-search streaming tests read ``func_call_delta_count == 0`` to
+        prove the suppressed server tool never surfaces as a function call; a
+        counter no test ever sees move would satisfy them unrecorded.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             tests/test_openai_responses.py:_capture_web_search_stream
+        """
+        events: list[ResponseStreamEvent] = [
+            ResponseFunctionCallArgumentsDeltaEvent(
+                delta='{"query":"latest Python version"}',
+                item_id="fc_1",
+                output_index=0,
+                sequence_number=0,
+                type="response.function_call_arguments.delta",
+            ),
+            ResponseCompletedEvent(
+                response=self._response(status="completed"),
+                sequence_number=1,
+                type="response.completed",
+            ),
+        ]
+
+        capture = _capture_web_search_stream(events, tmp_path / "capture.log")
+
+        assert capture.func_call_delta_count == 1
+        assert capture.seen["response.function_call_arguments.delta"] == 1
