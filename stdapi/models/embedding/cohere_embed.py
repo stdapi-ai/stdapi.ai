@@ -17,11 +17,15 @@ from stdapi.models.embedding import (
     EmbeddingModelBase,
     EmbeddingResponse,
 )
+from stdapi.usage import record_bedrock_usage
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
+
+    from types_aiobotocore_bedrock_runtime.literals import ServiceTierTypeType
 
     from stdapi.models.embedding import EmbedInputValue
+    from stdapi.pricing import Routing
     from stdapi.types import JsonMapping
 
 _EmbeddingType = Literal["float", "int8", "uint8", "binary", "ubinary"]
@@ -173,6 +177,44 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
                 else None
             ),
         )
+
+    def _record_invoke_usage(
+        self,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        response: Mapping[str, Any],
+        *,
+        region: str = "",
+        tier: ServiceTierTypeType | None = None,
+        routing: Routing | None = None,
+    ) -> None:
+        """Record invoke usage plus the images Embed v3 bills separately.
+
+        Args:
+            input_tokens: Number of input tokens consumed.
+            output_tokens: Number of output tokens consumed.
+            response: The parsed response body, whose ``images`` list is counted.
+            region: Region that served the call.
+            tier: Service tier that served the call.
+            routing: Serving profile of the call.
+        """
+        super()._record_invoke_usage(
+            input_tokens,
+            output_tokens,
+            response,
+            region=region,
+            tier=tier,
+            routing=routing,
+        )
+        # Later versions bill the image inside the token count; v3 meters it apart.
+        if self._is_v3 and (images := response.get("images")):
+            record_bedrock_usage(
+                self._model_id,
+                tier=tier,
+                region=region,
+                routing=routing,
+                input_images=len(images),
+            )
 
     async def _build_request(
         self,
