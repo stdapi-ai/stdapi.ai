@@ -385,6 +385,41 @@ async def mantle_http_session() -> AsyncGenerator[ClientSession]:
         await session.close()
 
 
+def refuse_unappliable_guardrail() -> None:
+    """Refuse an invocation carrying a guardrail Bedrock Mantle cannot apply.
+
+    Amazon Bedrock Mantle has no guardrail parameter: a ``guardrailConfig`` is
+    a bedrock-runtime concept, and nothing on this transport can carry one.
+    Serving the request anyway would answer a caller who asked to be guarded
+    with an unguarded answer and no indication of it, which is the one failure
+    a safety control must not have. Configuration-wide conflicts are refused at
+    startup already; this is the per-request half, and the case of a
+    Mantle-only model in a deployment that configured a guardrail for the rest.
+
+    Raises:
+        ApiError: When a guardrail applies to this request.
+    """
+    # Imported here: stdapi.aws imports this module, so stdapi.aws_bedrock
+    # cannot be reached from its top level.
+    from stdapi.aws_bedrock import (  # noqa: PLC0415
+        GUARDRAIL_CONFIG_VAR,
+        GUARDRAIL_REQUEST_OVERRIDE_VAR,
+    )
+
+    if GUARDRAIL_CONFIG_VAR.get(None) is None:
+        return
+    msg = (
+        "A guardrail cannot be applied to a model served through Amazon Bedrock "
+        "Mantle, which has no guardrail support. Send this request to a model "
+        "served through Amazon Bedrock, or drop the guardrail."
+        if GUARDRAIL_REQUEST_OVERRIDE_VAR.get(False)
+        else "This model is served through Amazon Bedrock Mantle, which has no "
+        "guardrail support, so the guardrail this server is configured with "
+        "cannot be applied to it. Use a model served through Amazon Bedrock."
+    )
+    raise ApiError(msg)
+
+
 def _map_error(status: int, body: str, region: RegionName) -> MantleError:
     """Map a Mantle HTTP error response to a :class:`MantleError`.
 
@@ -573,8 +608,10 @@ async def invoke(
         Parsed JSON response body.
 
     Raises:
+        ApiError: When a guardrail applies and cannot be carried.
         MantleError: On upstream errors.
     """
+    refuse_unappliable_guardrail()
     return await _read_json(
         await _request_with_retry(
             region, path, payload, headers, single_region=single_region
@@ -656,8 +693,10 @@ async def invoke_stream(
         client disconnect).
 
     Raises:
+        ApiError: When a guardrail applies and cannot be carried.
         MantleError: On upstream errors before the stream opens.
     """
+    refuse_unappliable_guardrail()
     response = await _request_with_retry(
         region, path, payload, headers, single_region=single_region
     )
