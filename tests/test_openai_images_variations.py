@@ -16,6 +16,7 @@ from openai import BadRequestError, NotFoundError, OpenAI
 
 from stdapi.api_errors import UnsupportedModelError
 from stdapi.routes import openai_images_variations
+from tests import conftest
 
 # Import validation helpers from generations tests
 from .test_openai_images_generations import (
@@ -27,6 +28,11 @@ from .test_openai_images_generations import (
 
 if TYPE_CHECKING:
     from starlette.testclient import TestClient
+
+    from tests.conftest import VariationSize
+
+#: Image model implementing editing but no variation operation.
+_NO_VARIATION_MODEL = "stability.stable-fast-upscale-v1:0"
 
 
 class TestImagesVariationsBasic:
@@ -43,23 +49,27 @@ class TestImagesVariationsBasic:
 
     @pytest.mark.expensive
     def test_create_variation_basic(
-        self, openai_client: OpenAI, sample_image_file: bytes
+        self,
+        openai_client: OpenAI,
+        sample_image_file: bytes,
+        image_variation_model: str,
+        image_variation_size: VariationSize,
     ) -> None:
         """A prompt-less variation returns one presigned URL and image-only usage.
 
         ``response_format="url"`` uploads each result to S3 and returns a
-        presigned URL, so ``b64_json`` stays unset. Stable Diffusion 3.5 renders
-        at its own native resolution from the aspect ratio derived from ``size``,
-        so the echoed ``size`` is the produced image's size and only its 1:1
-        ratio is guaranteed.
+        presigned URL, so ``b64_json`` stays unset. A variation carries no
+        requested resolution to the backend, which renders at its own; the
+        echoed ``size`` is therefore the produced image's, and only the square
+        ratio of the square source image is guaranteed.
 
         Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/ShareObjectPreSignedURL.html
              stdapi/models/image/stability_stable_diffusion.py:TextToImageJob
         """
         response = openai_client.images.create_variation(
             image=sample_image_file,
-            model="stability.sd3-5-large-v1:0",
-            size="512x512",
+            model=image_variation_model,
+            size=image_variation_size,
             n=1,
         )
 
@@ -89,7 +99,11 @@ class TestImagesVariationsBasic:
 
     @pytest.mark.expensive
     def test_create_variations_multiple(
-        self, openai_client: OpenAI, sample_image_file: bytes
+        self,
+        openai_client: OpenAI,
+        sample_image_file: bytes,
+        image_variation_model: str,
+        image_variation_size: VariationSize,
     ) -> None:
         """``n=2`` returns two separately stored images.
 
@@ -100,8 +114,8 @@ class TestImagesVariationsBasic:
         """
         response = openai_client.images.create_variation(
             image=sample_image_file,
-            model="stability.sd3-5-large-v1:0",
-            size="512x512",
+            model=image_variation_model,
+            size=image_variation_size,
             n=2,
         )
 
@@ -119,7 +133,11 @@ class TestImagesVariationsBasic:
 
     @pytest.mark.expensive
     def test_create_variation_b64_json(
-        self, openai_client: OpenAI, sample_image_file: bytes
+        self,
+        openai_client: OpenAI,
+        sample_image_file: bytes,
+        image_variation_model: str,
+        image_variation_size: VariationSize,
     ) -> None:
         """``response_format="b64_json"`` returns inline PNG data and no URL.
 
@@ -130,8 +148,8 @@ class TestImagesVariationsBasic:
         """
         response = openai_client.images.create_variation(
             image=sample_image_file,
-            model="stability.sd3-5-large-v1:0",
-            size="512x512",
+            model=image_variation_model,
+            size=image_variation_size,
             n=1,
             response_format="b64_json",
         )
@@ -190,17 +208,16 @@ class TestImagesVariationsErrors:
     ) -> None:
         """A model whose job class implements no variation operation is rejected.
 
-        ``stability.stable-fast-upscale-v1:0`` passes the route's IMAGE→IMAGE
-        modality check, so the rejection comes from the job base class, which
-        raises for every operation the concrete job does not override.
+        The upscale model passes the route's IMAGE→IMAGE modality check, so the
+        rejection comes from the job base class, which raises for every
+        operation the concrete job does not override.
 
         Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._create_image_variations
              stdapi/models/image/stability_stable_fast_upscale.py:_FastUpscaleJob
         """
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.create_variation(
-                image=sample_image_file,
-                model="stability.stable-fast-upscale-v1:0",  # Only supports generation and editing
+                image=sample_image_file, model=_NO_VARIATION_MODEL
             )
 
         body = exc_info.value.body
@@ -208,7 +225,7 @@ class TestImagesVariationsErrors:
         assert exc_info.value.status_code == 400
         assert body["type"] == "invalid_request_error"
         assert "image variations are not supported by" in body["message"].lower()
-        assert "stability.stable-fast-upscale-v1:0" in body["message"]
+        assert _NO_VARIATION_MODEL in body["message"]
 
     @pytest.mark.gateway(
         "Bedrock chat model catalog is gateway-specific; no equivalent "
@@ -248,7 +265,11 @@ class TestImagesVariationsProviderParams:
 
     @pytest.mark.expensive
     def test_variation_with_strength(
-        self, openai_client: OpenAI, sample_image_file_base64: str
+        self,
+        openai_client: OpenAI,
+        sample_image_file_base64: str,
+        image_variation_model: str,
+        image_variation_size: VariationSize,
     ) -> None:
         """Stability's numeric ``strength`` extra parameter is accepted in a JSON body.
 
@@ -264,9 +285,9 @@ class TestImagesVariationsProviderParams:
         response = http_client.post(
             f"{openai_client.base_url}images/variations",
             json={
-                "model": "stability.sd3-5-large-v1:0",
+                "model": image_variation_model,
                 "image": {"image_url": sample_image_file_base64},
-                "size": "512x512",
+                "size": image_variation_size,
                 "n": 1,
                 "strength": 0.7,
             },
@@ -283,7 +304,11 @@ class TestImagesVariationsProviderParams:
 
     @pytest.mark.expensive
     def test_variation_with_negative_prompt(
-        self, openai_client: OpenAI, sample_image_file: bytes
+        self,
+        openai_client: OpenAI,
+        sample_image_file: bytes,
+        image_variation_model: str,
+        image_variation_size: VariationSize,
     ) -> None:
         """Stability's string ``negative_prompt`` extra parameter is accepted over multipart.
 
@@ -296,8 +321,8 @@ class TestImagesVariationsProviderParams:
         """
         response = openai_client.images.create_variation(
             image=sample_image_file,
-            model="stability.sd3-5-large-v1:0",
-            size="512x512",
+            model=image_variation_model,
+            size=image_variation_size,
             n=1,
             extra_body={"negative_prompt": "blurry, low quality"},
         )
@@ -317,13 +342,17 @@ class TestImagesVariationsJsonBody:
     """
 
     pytestmark = pytest.mark.gateway(
-        "Variations endpoint removed from official OpenAI API; "
-        "stability.sd3-5-large-v1:0 not available there."
+        "the official OpenAI API removed the variations endpoint, and the "
+        "Bedrock model this route's variations run on has no counterpart there"
     )
 
     @pytest.mark.expensive
     def test_variation_with_file_id(
-        self, openai_client: OpenAI, sample_image_file: bytes
+        self,
+        openai_client: OpenAI,
+        sample_image_file: bytes,
+        image_variation_model: str,
+        image_variation_size: VariationSize,
     ) -> None:
         """A Files API ``file_id`` reference in a JSON body produces a variation.
 
@@ -343,10 +372,10 @@ class TestImagesVariationsJsonBody:
             response = http_client.post(
                 f"{openai_client.base_url}images/variations",
                 json={
-                    "model": "stability.sd3-5-large-v1:0",
+                    "model": image_variation_model,
                     "image": {"file_id": uploaded.id},
                     "response_format": "b64_json",
-                    "size": "512x512",
+                    "size": image_variation_size,
                     "n": 1,
                 },
                 headers={"Authorization": f"Bearer {openai_client.api_key}"},
@@ -362,7 +391,9 @@ class TestImagesVariationsJsonBody:
         finally:
             openai_client.files.delete(uploaded.id)
 
-    def test_missing_image_returns_400(self, openai_client: OpenAI) -> None:
+    def test_missing_image_returns_400(
+        self, openai_client: OpenAI, image_variation_model: str
+    ) -> None:
         """A JSON body without ``image`` is rejected, naming that field.
 
         ``image`` is the only required field the JSON body adds over the
@@ -374,7 +405,7 @@ class TestImagesVariationsJsonBody:
         http_client = openai_client._client  # noqa: SLF001
         response = http_client.post(
             f"{openai_client.base_url}images/variations",
-            json={"model": "stability.sd3-5-large-v1:0"},
+            json={"model": image_variation_model},
             headers={"Authorization": f"Bearer {openai_client.api_key}"},
         )
         assert response.status_code == 400
@@ -440,7 +471,9 @@ class TestImagesVariationsModelField:
         assert response.json()["error"]["code"] == "model_not_found"
         assert probed_model_ids == ["probe-model-id"]
 
-    def test_multipart_missing_image_returns_400(self, app_client: TestClient) -> None:
+    def test_multipart_missing_image_returns_400(
+        self, app_client: TestClient, image_variation_model: str
+    ) -> None:
         """A multipart request without an 'image' file returns 400, not an unhandled error.
 
         Regression: the ValidationError for the missing 'image' file was raised
@@ -451,7 +484,7 @@ class TestImagesVariationsModelField:
              stdapi/main.py:handle_validation_exception
         """
         response = app_client.post(
-            "/v1/images/variations", data={"model": "stability.sd3-5-large-v1:0"}
+            "/v1/images/variations", data={"model": image_variation_model}
         )
         assert response.status_code == 400
         assert response.json()["error"]["type"] == "invalid_request_error"
@@ -531,3 +564,29 @@ class TestImagesVariationsSizeAuto:
         assert response.status_code == 400
         assert response.json()["error"]["code"] == "model_not_found"
         assert probed_model_ids == ["probe-model-id"]
+
+
+@pytest.mark.local
+class TestImageVariationSizeValidation:
+    """``conftest.variation_size`` rejects a mapped size the SDK does not type.
+
+    Repointing ``MODEL_MAPPINGS["local"]["image_variation"]`` at a model whose
+    cheapest size (:data:`conftest.IMAGE_MODEL_SIZES`) is not one of the three
+    sizes ``images.create_variation`` accepts must fail loudly here, not as a
+    live 400 from an ``--expensive`` run.
+
+    Ref: tests/conftest.py:variation_size
+    """
+
+    def test_a_size_outside_the_sdk_literal_is_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A model mapped to an untyped size raises instead of being cast blind."""
+        monkeypatch.setitem(conftest.IMAGE_MODEL_SIZES, "probe-model-id", "1536x1024")
+
+        with pytest.raises(AssertionError, match="does not accept"):
+            conftest.variation_size("probe-model-id")
+
+    def test_a_size_inside_the_sdk_literal_is_accepted(self) -> None:
+        """A model mapped to one of the three typed sizes returns it unchanged."""
+        assert conftest.variation_size("amazon.titan-image-generator-v2:0") == "512x512"
