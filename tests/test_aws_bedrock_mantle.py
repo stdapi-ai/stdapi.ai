@@ -73,6 +73,7 @@ from stdapi.models.chat._mantle.google_gemma4 import ChatModel as GemmaChatModel
 from stdapi.models.chat._mantle.open_weight import ChatModel as OpenWeightChatModel
 from stdapi.models.chat._mantle.openai_gpt5 import ChatModel as GptChatModel
 from stdapi.models.chat._mantle.openai_gpt_oss import ChatModel as GptOssChatModel
+from stdapi.models.chat._mantle.qwen_vl import ChatModel as QwenVisionChatModel
 from stdapi.models.chat._mantle.xai_grok import ChatModel as GrokChatModel
 from stdapi.models.chat.openai_gpt import ChatModel as OpenAiGptChatModel
 from stdapi.monitoring import REQUEST, REQUEST_ID, EventLog
@@ -702,6 +703,7 @@ class TestMantleModelClassResolution:
          stdapi/models/chat/_mantle/_default.py:ChatModel._api_paths
          stdapi/models/chat/_mantle/anthropic_claude.py:ChatModel
          stdapi/models/chat/_mantle/open_weight.py:ChatModel
+         stdapi/models/chat/_mantle/qwen_vl.py:ChatModel
     """
 
     @pytest.mark.parametrize(
@@ -875,6 +877,57 @@ class TestMantleModelClassResolution:
         generation. The remaining seven sit behind bare provider prefixes and
         assert continuity: they fail only if a prefix is later narrowed to a
         version, which is the change this test exists to make expensive.
+        """
+        _assert_open_weight_binding(model_id)
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "qwen.qwen3-vl-235b-a22b-instruct",
+            "qwen.qwen3.5-vl-8b-instruct",
+            "qwen.qwen4-vl-32b",
+            "qwen.qwen-vl-max",
+        ],
+    )
+    def test_qwen_vision_ids_use_the_vision_class(self, model_id: str) -> None:
+        """Qwen vision-language IDs bind to the vision class, image input included.
+
+        ``qwen.qwen3-vl-235b-a22b-instruct`` answered a question whose answer
+        was only inside the attached image (measured 2026-08-26), and the
+        sibling model AWS serves elsewhere on Bedrock publishes ``TEXT, IMAGE``
+        for the same weights. Bound to the text-only open-weight class instead,
+        it is offered as a text-only model: a client selecting a model by its
+        input modalities never sends it the image it can read, and the two
+        catalog entries for the same weights contradict each other.
+
+        ``qwen-vl-max`` carries no version number at all, which is why both
+        patterns allow the version to be absent: a matcher requiring one leaves
+        that model on the text-only class, or on the generic fallback.
+        """
+        model = get_mantle_chat_model(model_id)
+        assert type(model) is QwenVisionChatModel
+        assert model.INPUT_MODALITIES == ("TEXT", "IMAGE")
+        assert set(model.NATIVE_APIS) == {"chat_completions"}
+        assert (
+            model._api_paths("chat_completions")[0] == "/v1/chat/completions"  # noqa: SLF001
+        )
+        assert model.native_store_supported() is False
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "qwen.qwen3-32b",
+            "qwen.qwen3-235b-a22b-2507",
+            "qwen.qwen3-coder-next",
+            "qwen.qwen4-32b",
+        ],
+    )
+    def test_qwen_ids_without_the_vl_line_stay_text_only(self, model_id: str) -> None:
+        """Qwen IDs outside the vision-language line keep the text-only class.
+
+        Every Qwen model outside that line refused an image part when it was
+        sent one (measured 2026-08-26), so claiming image input for the whole
+        provider prefix would offer a capability those models do not have.
         """
         _assert_open_weight_binding(model_id)
 
