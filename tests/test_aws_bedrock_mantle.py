@@ -23,6 +23,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from gc import collect as gc_collect
 from json import JSONDecodeError, dumps, loads
+from re import Pattern
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 from urllib.parse import unquote
 
@@ -60,10 +61,14 @@ from stdapi.models import MANTLE_MODELS, MANTLE_SERVICE, ModelDetails
 from stdapi.models.chat import get_chat_model, serves_via_mantle
 from stdapi.models.chat._adapters._openai_responses import encode_compaction_content
 from stdapi.models.chat._anthropic_claude import AnthropicClaudeChatModel
+from stdapi.models.chat._mantle import (
+    _MANTLE_CHAT_MODEL_REGISTRY,
+    get_mantle_chat_model,
+)
 from stdapi.models.chat._mantle import _convert as mantle_convert
 from stdapi.models.chat._mantle import _default as mantle_default
-from stdapi.models.chat._mantle import get_mantle_chat_model
 from stdapi.models.chat._mantle._default import _scrub_error_event
+from stdapi.models.chat._mantle.anthropic_claude import ChatModel as ClaudeChatModel
 from stdapi.models.chat._mantle.google_gemma4 import ChatModel as GemmaChatModel
 from stdapi.models.chat._mantle.open_weight import ChatModel as OpenWeightChatModel
 from stdapi.models.chat._mantle.openai_gpt5 import ChatModel as GptChatModel
@@ -83,6 +88,7 @@ from stdapi.types.openai_chat_completions import (
 from stdapi.types.openai_completions import CompletionCreateParams
 from stdapi.types.openai_responses import Response, ResponseCreateParams
 from tests._helpers import make_event_log, make_model_details
+from tests.conftest import REPO_ROOT
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Iterator, Mapping
@@ -633,6 +639,54 @@ def _message_payload() -> dict[str, Any]:
     }
 
 
+def _assert_open_weight_binding(model_id: str) -> None:
+    """Assert *model_id* binds to the open-weight class, with its served contract.
+
+    Args:
+        model_id: Mantle model identifier to resolve.
+    """
+    model = get_mantle_chat_model(model_id)
+    # Exact type: a narrower subclass of this family must not satisfy the check.
+    assert type(model) is OpenWeightChatModel
+    assert set(model.NATIVE_APIS) == {"chat_completions"}
+    assert (
+        model._api_paths("chat_completions")[0] == "/v1/chat/completions"  # noqa: SLF001
+    )
+    assert model.native_store_supported() is False
+    # The family's providers have nothing in common but the API they answer, so
+    # it can only claim the modalities all of them support.
+    assert model.INPUT_MODALITIES == ("TEXT",)
+
+
+#: Every model the published catalogue serves through Mantle.
+_CATALOG_MANTLE_MODEL_IDS: tuple[str, ...] = tuple(
+    sorted(
+        entry["id"]
+        for entry in loads(
+            (REPO_ROOT / "docs" / "models" / "catalog.json").read_text(encoding="utf-8")
+        )["models"]
+        if entry["service"] == MANTLE_SERVICE
+    )
+)
+assert _CATALOG_MANTLE_MODEL_IDS, "catalog.json lists no AWS Bedrock Mantle model"
+
+#: IDs no *Mantle* catalogue entry carries: future versions and unserved providers.
+_FUTURE_MANTLE_MODEL_IDS: tuple[str, ...] = (
+    "anthropic.claude-opus-5",
+    "google.gemma-3-4b-it",
+    "google.gemma-5-e4b",
+    "minimax.minimax-m3",
+    "mistral.mistral-large-4-123b-instruct",
+    "nvidia.nemotron-nano-4-30b",
+    "openai.gpt-5.6-sol",
+    "openai.gpt-daybreak-blue-5.6-sol",
+    "qwen.qwen-vl-max",
+    "qwen.qwen4-vl-32b",
+    "writer.palmyra-x6-v1:0",
+    "zai.glm-5",
+)
+
+
 class TestMantleModelClassResolution:
     """Model IDs, including future versions, bind to the right Mantle class.
 
@@ -646,6 +700,8 @@ class TestMantleModelClassResolution:
          https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-daybreak-blue-56-sol.html
          stdapi/models/chat/_mantle/__init__.py:get_mantle_chat_model
          stdapi/models/chat/_mantle/_default.py:ChatModel._api_paths
+         stdapi/models/chat/_mantle/anthropic_claude.py:ChatModel
+         stdapi/models/chat/_mantle/open_weight.py:ChatModel
     """
 
     @pytest.mark.parametrize(
@@ -734,6 +790,167 @@ class TestMantleModelClassResolution:
         assert model._api_paths("responses")[0] == "/openai/v1/responses"  # noqa: SLF001
         assert model.native_store_supported() is True
         assert model.INPUT_MODALITIES == ("TEXT", "IMAGE")
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "anthropic.claude-haiku-4-5",
+            "anthropic.claude-opus-5",
+            "anthropic.claude-sonnet-6",
+            "anthropic.claude-fable-5",
+            "anthropic.claude-mythos-preview",
+        ],
+    )
+    def test_claude_versions_use_the_claude_class(self, model_id: str) -> None:
+        """Claude IDs resolve to the Claude class, Messages-only and vision-capable.
+
+        The matcher is the bare ``anthropic.`` prefix, so no version pins it.
+        Unmatched, Claude falls back to the generic Mantle class, which claims
+        the Responses API these models do not serve and advertises them as
+        text-only.
+        """
+        model = get_mantle_chat_model(model_id)
+        assert type(model) is ClaudeChatModel
+        assert set(model.NATIVE_APIS) == {"messages"}
+        assert model._api_paths("messages") == ["/anthropic/v1/messages"]  # noqa: SLF001
+        assert model.INPUT_MODALITIES == ("TEXT", "IMAGE")
+        assert model.native_store_supported() is False
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "qwen.qwen3-32b",
+            "zai.glm-4.6",
+            "deepseek.v3.1",
+            "moonshotai.kimi-k2-thinking",
+            "google.gemma-3-4b-it",
+            "mistral.mistral-large-3-675b-instruct",
+            "minimax.minimax-m2.5",
+            "nvidia.nemotron-nano-3-30b",
+            "writer.palmyra-x5-v1:0",
+        ],
+    )
+    def test_every_open_weight_provider_uses_the_open_weight_class(
+        self, model_id: str
+    ) -> None:
+        """Each provider the open-weight family claims binds to that class.
+
+        ``mistral``, ``minimax``, ``nvidia`` and ``writer`` have no
+        Mantle-served model in the published catalog, and Gemma 3 is served
+        elsewhere on Bedrock (``docs/models/catalog.json``, generated
+        2026-08-26): those cases carry the provider's real model ID and assert
+        the matcher alternative, not a model reachable on Mantle today.
+        """
+        _assert_open_weight_binding(model_id)
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "qwen.qwen4-32b",
+            "zai.glm-6",
+            "deepseek.v4",
+            "moonshotai.kimi-k3",
+            "google.gemma-3-1b-it",
+            "mistral.mistral-large-4-123b-instruct",
+            "minimax.minimax-m3",
+            "nvidia.nemotron-nano-4-30b",
+            "writer.palmyra-x6-v1:0",
+        ],
+    )
+    def test_future_open_weight_versions_keep_the_open_weight_class(
+        self, model_id: str
+    ) -> None:
+        """Next-generation IDs from each provider stay on the open-weight class.
+
+        A matcher narrowed to today's version numbers would leave them on the
+        generic Mantle class, which is Responses-only and probes the wrong
+        surface first — a wrongly published capability discovered on the next
+        model release rather than here.
+
+        Only two alternatives of the matcher carry a version at all, so only
+        two of these cases can detect that narrowing on their own:
+        ``qwen.qwen4-32b`` against the ``-vl`` exclusion, and
+        ``google.gemma-3-1b-it`` against the ``gemma-3`` pin — Gemma 4 and later
+        have their own class, so a wider Gemma 3 stands in for a next
+        generation. The remaining seven sit behind bare provider prefixes and
+        assert continuity: they fail only if a prefix is later narrowed to a
+        version, which is the change this test exists to make expensive.
+        """
+        _assert_open_weight_binding(model_id)
+
+    @pytest.mark.parametrize(
+        "model_id", [*_CATALOG_MANTLE_MODEL_IDS, *_FUTURE_MANTLE_MODEL_IDS]
+    )
+    def test_at_most_one_mantle_family_pattern_claims_a_model(
+        self, model_id: str
+    ) -> None:
+        """No model ID is claimed by two Mantle family patterns at once.
+
+        The catalog picks a class with a different rule than a request does:
+        it keeps the first pattern that matches while iterating an unordered
+        set of classes, so two patterns claiming the same ID publish whichever
+        one that process happened to visit first — a capability that changes
+        between restarts. Overlapping families must therefore exclude each
+        other in their own patterns.
+
+        The cases are derived from every Mantle-served model in
+        ``docs/models/catalog.json`` rather than hand-picked, so a model added
+        to the catalogue is covered without a test edit and no served ID can
+        overlap unnoticed; the future-family IDs are the explicit extras the
+        catalogue cannot supply.
+
+        Ref: stdapi/models/__init__.py:_find_model_class
+        """
+        claimed = [
+            model_cls.__module__
+            for matcher, model_cls in _MANTLE_CHAT_MODEL_REGISTRY
+            if isinstance(matcher, Pattern) and matcher.match(model_id)
+        ]
+        assert len(claimed) <= 1, f"{model_id} is claimed by {claimed}"
+
+    @pytest.mark.parametrize(
+        "model_id", [*_CATALOG_MANTLE_MODEL_IDS, *_FUTURE_MANTLE_MODEL_IDS]
+    )
+    def test_the_request_path_and_the_catalog_path_bind_the_same_class(
+        self, model_id: str
+    ) -> None:
+        """A request and the catalogue resolve *model_id* to the same class.
+
+        The two paths do not share a resolution rule: ``get_mantle_chat_model``
+        walks a registry sorted patterns-first by descending length, while the
+        catalog's ``_find_model_class`` scores every string-prefix matcher
+        above every ``Pattern`` matcher. The overlap check above cannot see
+        that divergence — it only compares ``Pattern`` matchers against each
+        other — so a ``Pattern`` overlapping a string prefix (e.g. a new
+        family's regex claiming an ID that ``openai.gpt-oss`` or ``xai.``
+        already owns by prefix) would bind one class at request time and
+        publish another's capabilities in the catalogue with neither check
+        noticing.
+
+        Ref: stdapi/models/__init__.py:_find_model_class
+             stdapi/models/chat/_mantle/__init__.py:get_mantle_chat_model
+        """
+        served = type(get_mantle_chat_model(model_id))
+        catalogued = stdapi_models._find_model_class(model_id, mantle=True)  # noqa: SLF001
+        assert served is catalogued
+
+    def test_a_provider_outside_every_family_falls_back_to_the_default_class(
+        self,
+    ) -> None:
+        """A Mantle ID no family matcher claims binds to the generic class.
+
+        ``ai21.`` has no Mantle family today, on either resolution path: the
+        request falls back to ``_default.ChatModel`` and the catalog's
+        ``_find_model_class`` returns ``None`` for it, which is what makes the
+        catalogue serve the generic ``TEXT``-only capabilities for such an ID
+        instead of raising.
+
+        Ref: stdapi/models/__init__.py:get_model
+             stdapi/models/__init__.py:_find_model_class
+        """
+        model_id = "ai21.jamba-x"
+        assert type(get_mantle_chat_model(model_id)) is mantle_default.ChatModel
+        assert stdapi_models._find_model_class(model_id, mantle=True) is None  # noqa: SLF001
 
 
 class TestMantleSystemMessageAsMessages:
