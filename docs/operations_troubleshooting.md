@@ -239,6 +239,14 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     - With [`AWS_TRANSCRIBE_REGION`](operations_configuration.md#aws-transcribe-region) unset, a job runs in whichever candidate Region has a co-located bucket, so a single-Region key fails as soon as failover moves the job. Use a [multi-Region key](https://docs.aws.amazon.com/kms/latest/developerguide/multi-region-keys-overview.html), or pin the Region.
     - A key policy conditioned on the [encryption context](operations_configuration.md#aws-transcribe-output-encryption-key-arn) must not require `stdapi-ai.user_id`: it is sent only when the request identifies an end user, so requiring it denies every anonymous call.
 
+??? failure "A streamed transcription delivers nothing until the recording ends"
+    `stream=true` always answers with server-sent events, but they arrive phrase by phrase only when the request can be served that way. Otherwise every event is delivered at once, after the whole recording has been read — which reads as a stream that hangs and then completes in a single burst. See [Streaming](api_openai_audio_transcriptions.md#streaming).
+
+    - **Name the language expected**: send `language`, or two or more `languages`. A request naming neither has to read the recording before it can tell which language it is in.
+    - **Set [`AWS_TRANSCRIBE_STREAM_LANGUAGES`](operations_configuration.md#aws-transcribe-stream-languages)** to the languages your callers actually send, which gives phrase-by-phrase delivery to requests that name none.
+    - **Drop provider-specific parameters other than `VocabularyName`, `VocabularyFilterName` and `VocabularyFilterMethod`.** `MaxSpeakerLabels`, `ShowSpeakerLabels`, `ChannelIdentification`, `MaxAlternatives`, `ToxicityDetection`, `ContentRedaction`, `IdentifyMultipleLanguages` and the rest are honoured in full, but the request that uses one is answered in a single burst rather than phrase by phrase.
+    - `response_format=diarized_json` on its own does not cost the phrase-by-phrase delivery: its `transcript.text.segment` events are interleaved with the deltas like any other.
+
 ??? failure "`amazon.nova-2-sonic-v1:0` is missing from `/v1/models` or returns `404`"
     The model is not offered in every AWS Region, and the catalog only lists what the configured Regions serve. [Check the model's regions](models.md).
 

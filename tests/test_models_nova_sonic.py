@@ -39,7 +39,10 @@ from stdapi.models import ModelDetails, _compute_model_capabilities
 from stdapi.models.audio import amazon_nova_sonic as sonic
 from stdapi.models.audio import get_audio_model
 from stdapi.pricing import Dimension, Service, resolve_price
-from stdapi.types.openai_audio import TranscriptionTextDoneEvent
+from stdapi.types.openai_audio import (
+    TranscriptionTextDeltaEvent,
+    TranscriptionTextDoneEvent,
+)
 from stdapi.usage import USAGE, init_usage, usage_log_entries
 from tests.conftest import set_test_price
 from tests.test_aws_bidi import FakeDuplexStream
@@ -919,7 +922,7 @@ class TestStreamingContract:
         deltas = "".join(
             event.delta
             for event in events
-            if not isinstance(event, TranscriptionTextDoneEvent)
+            if isinstance(event, TranscriptionTextDeltaEvent)
         )
         assert deltas == done.text == "first part. second part."
         assert done.usage is not None
