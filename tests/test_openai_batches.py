@@ -20,15 +20,18 @@ Ref: https://developers.openai.com/api/docs/guides/batch.md
 
 import contextlib
 from datetime import UTC, datetime
+from itertools import count
 from json import dumps, loads
 from math import sqrt
 from time import monotonic, sleep
 from typing import TYPE_CHECKING, Any, Literal
+from uuid import UUID
 
 import pytest
 from botocore.exceptions import ClientError
 
 from stdapi import batches
+from stdapi.files import payload_created_at
 from tests import _batches
 from tests._batches import chat_lines, converse_output
 
@@ -1171,6 +1174,106 @@ class TestOpenAIBatchLifecycle:
         assert after["status"] == "validating"
         assert "cancelling_at" not in after
 
+    def test_a_batch_reports_the_time_it_was_named(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`created_at` is the instant the batch was named, not when submitting ended.
+
+        Creating a batch names it first and then starts one job per model it
+        contains, so a wall clock read once that fan-out has finished runs
+        later than the identifier the batch is listed under — by the whole
+        submission latency. The clock below stands far in the future to prove
+        the reported time is not read from it, and the completion window runs
+        from the reported time.
+
+        Ref: https://developers.openai.com/api/docs/guides/batch
+             stdapi/batches.py:create_batch
+        """
+        _batches.install(monkeypatch)
+        monkeypatch.setattr(batches, "now_utc_timestamp", lambda: 2_000_000_000)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        body = _create(app_client, file_id)
+        named = payload_created_at(body["id"].removeprefix("batch_"))
+        assert body["created_at"] == named
+        assert body["expires_at"] == named + 24 * 3600
+
+    def test_a_batch_stored_with_another_time_keeps_reporting_it(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A stored `created_at` that disagrees with the identifier is reported as stored.
+
+        Batches created by an earlier version recorded `created_at` once
+        submission had ended, so it can sit later than the identifier the
+        batch is listed under. Reading it back from the identifier instead
+        would move both the reported time and the `expires_at` deadline the
+        completion window runs from, for every batch already stored.
+
+        Ref: https://developers.openai.com/api/docs/guides/batch
+             stdapi/batches.py:_read_record
+        """
+        s3, _ = _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        batch_id = _create(app_client, file_id)["id"]
+        payload = batch_id.removeprefix("batch_")
+        key = batches.batch_s3_key(payload)
+        stored = loads(s3.objects[_batches.BUCKET, key])
+        recorded = payload_created_at(payload) + 600
+        stored["created_at"] = recorded
+        s3.objects[_batches.BUCKET, key] = dumps(stored).encode()
+
+        body = app_client.get(f"/v1/batches/{batch_id}").json()
+        assert body["created_at"] == recorded
+        assert body["expires_at"] == recorded + 24 * 3600
+
+    def test_paging_a_listing_orders_by_the_times_it_reports(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Batches page back newest first, reporting times in that same order.
+
+        A listing pages in identifier order, so the time each batch reports has
+        to be the one its identifier carries: a time read from any other clock
+        gives a client a sequence its own timestamps contradict. The reported
+        times are therefore asserted against the identifiers rather than merely
+        against each other — three batches created inside one second report the
+        same value, so a descending-order check alone passes on a listing that
+        publishes an order it does not use. The wall clock is moved far from
+        the identifiers' instant for the whole creation: it is the negative
+        control, and a reported time read from it fails the comparison instead
+        of coinciding with it.
+
+        Ref: https://developers.openai.com/api/docs/guides/batch
+             stdapi/batches.py:list_batches
+        """
+        _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        with monkeypatch.context() as clock:
+            clock.setattr(batches, "now_utc_timestamp", lambda: 2_000_000_000)
+            oldest, middle, newest = (
+                _create(app_client, file_id)["id"] for _ in range(3)
+            )
+
+        paged: list[dict[str, Any]] = []
+        cursor: str | None = None
+        for _page in range(3):
+            body = app_client.get(
+                f"/v1/batches?limit=1{f'&after={cursor}' if cursor else ''}"
+            ).json()
+            assert cursor not in [item["id"] for item in body["data"]]
+            paged.extend(body["data"])
+            cursor = paged[-1]["id"]
+            assert body["has_more"] is (len(paged) < 3)
+
+        assert [item["id"] for item in paged] == [newest, middle, oldest]
+        times = [item["created_at"] for item in paged]
+        assert times == [
+            payload_created_at(item["id"].removeprefix("batch_")) for item in paged
+        ], times
+        assert times == sorted(times, reverse=True), times
+
+        single = app_client.get("/v1/batches?limit=100").json()["data"]
+        assert [item["id"] for item in single] == [newest, middle, oldest]
+        assert [item["created_at"] for item in single] == times
+
     def test_a_recent_batch_is_listed_past_the_scan_window(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1192,6 +1295,98 @@ class TestOpenAIBatchLifecycle:
         batch_id = _create(app_client, file_id)["id"]
         body = app_client.get("/v1/batches?limit=10").json()
         assert [item["id"] for item in body["data"]] == [batch_id]
+
+    def test_a_recent_batch_is_dropped_past_the_scan_page_budget(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Past the page budget the window is taken from the oldest records.
+
+        The scan walks storage oldest first and gives up after a fixed number
+        of pages, so once more records are stored than those pages cover, the
+        trailing window it keeps is the newest of the records it *reached* —
+        not the newest stored. The budget is lowered here rather than seeding
+        the hundreds of thousands of records the shipped one takes. This is the
+        limitation the API documentation states; it fails when the scan learns
+        to seek the tail, which is the point at which that text comes out.
+
+        Ref: https://stdapi.ai/api_openai_batches/#listing-order
+             stdapi/batches.py:_scan_bucket
+        """
+        from stdapi.config import SETTINGS  # noqa: PLC0415
+
+        s3, _ = _batches.install(monkeypatch)
+        monkeypatch.setattr(batches, "_LIST_SCAN_PAGES", 1)
+        for index in range(1000):
+            key = f"{SETTINGS.aws_s3_batches_prefix}{index:032x}"
+            s3.objects[_batches.BUCKET, key] = b"{}"
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        batch_id = _create(app_client, file_id)["id"]
+
+        body = app_client.get("/v1/batches?limit=10").json()
+        assert batch_id not in [item["id"] for item in body["data"]]
+
+    def test_batches_sharing_a_second_page_in_identifier_order(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two batches created in the same second keep one order across pages.
+
+        `created_at` is published in whole seconds, so batches created inside
+        one second report the same value and the identifier is what breaks the
+        tie — the stability the API documentation promises a client paging
+        with `after`.
+
+        Ref: https://stdapi.ai/api_openai_batches/#listing-order
+             stdapi/batches.py:list_batches
+        """
+        _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        minted = count(1)
+        monkeypatch.setattr(
+            "stdapi.files._core.uuid7",
+            lambda: UUID(
+                bytes=(1_700_000_000_123).to_bytes(6, "big")
+                + next(minted).to_bytes(10, "big")
+            ),
+        )
+        older, newer = (_create(app_client, file_id)["id"] for _ in range(2))
+
+        body = app_client.get("/v1/batches?limit=10").json()
+        assert [item["id"] for item in body["data"]] == [newer, older]
+        assert {item["created_at"] for item in body["data"]} == {1_700_000_000}
+
+        page = app_client.get("/v1/batches?limit=1").json()
+        assert [item["id"] for item in page["data"]] == [newer]
+        page = app_client.get(f"/v1/batches?limit=1&after={newer}").json()
+        assert [item["id"] for item in page["data"]] == [older]
+
+    def test_a_cursor_older_than_the_scan_window_pages_nothing(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An `after` cursor naming a batch past the scan window returns an empty page.
+
+        The listing carries the most recent batches only, so a cursor naming
+        a batch pushed out of that window pages nothing even though an older
+        batch follows it and both are still retrievable by ID — the
+        limitation the API documentation states.
+
+        Ref: https://stdapi.ai/api_openai_batches/#listing-order
+             stdapi/batches.py:list_batches
+        """
+        from stdapi.config import SETTINGS  # noqa: PLC0415
+
+        s3, _ = _batches.install(monkeypatch)
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        older, cursor = (_create(app_client, file_id)["id"] for _ in range(2))
+        # Sort after every real payload, so both batches fall out of the window.
+        for index in range(1000):
+            key = f"{SETTINGS.aws_s3_batches_prefix}z{index:031x}"
+            s3.objects[_batches.BUCKET, key] = b"{}"
+
+        for batch_id in (older, cursor):
+            assert app_client.get(f"/v1/batches/{batch_id}").status_code == 200
+        body = app_client.get(f"/v1/batches?limit=10&after={cursor}").json()
+        assert body["data"] == []
+        assert body["has_more"] is False
 
     def test_failed_job_reports_a_failed_batch(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch

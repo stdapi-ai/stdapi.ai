@@ -14,13 +14,14 @@ Ref: https://stdapi.ai/api_openai_files/
 from base64 import b32encode
 from binascii import crc32
 from re import compile as re_compile
-from uuid import uuid7
+from uuid import UUID, uuid7
 
 import pytest
 
 from stdapi.files import _core
-from stdapi.files._core import decode_id_payload, encode_id_payload
+from stdapi.files._core import decode_id_payload, encode_id_payload, payload_created_at
 from stdapi.types import FILE_ID_PATTERN, UPLOAD_ID_PATTERN
+from stdapi.utils import now_utc_timestamp
 
 pytestmark = pytest.mark.local
 
@@ -75,6 +76,32 @@ def test_legacy_base32_payloads_do_not_sort_in_creation_order() -> None:
     payloads = [_legacy_payload(_BUCKET) for _ in range(500)]
 
     assert payloads != sorted(payloads)
+
+
+def test_payload_created_at_decodes_the_second_the_payload_was_minted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A payload decodes back to the second it encodes.
+
+    Anything listed by payload order — files, batches — reports the creation
+    time read from the payload rather than from a clock consulted later, so
+    the order a client pages in and the times it is given agree only while
+    this decode is exact.
+
+    Ref: stdapi/files/_core.py:payload_created_at
+    """
+    before = now_utc_timestamp()
+    assert (
+        before <= payload_created_at(encode_id_payload(_BUCKET)) <= now_utc_timestamp()
+    )
+
+    second = 1_700_000_060
+    monkeypatch.setattr(
+        _core,
+        "uuid7",
+        lambda: UUID(bytes=(second * 1000).to_bytes(6, "big") + bytes(10)),
+    )
+    assert payload_created_at(encode_id_payload(_BUCKET)) == second
 
 
 def test_payload_round_trips_to_its_uuid_and_bucket_fingerprint() -> None:

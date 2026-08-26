@@ -10,6 +10,7 @@ from stdapi.files._core import get_file as get_file
 from stdapi.files._core import get_file_content as get_file_content
 from stdapi.files._core import list_files as list_files
 from stdapi.files._core import parse_file_id as parse_file_id
+from stdapi.files._core import payload_created_at as payload_created_at
 from stdapi.files._core import put_file_content as put_file_content
 from stdapi.files._core import resolve_file_bucket as resolve_file_bucket
 from stdapi.files._core import upload_file as upload_file

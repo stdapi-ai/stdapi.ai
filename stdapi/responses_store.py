@@ -9,12 +9,14 @@ continue a stored object without shared server state.
 
 The stored object ID is its API ID (``resp-<session ID>`` or
 ``chatcmpl-<session ID>``); the object kind is recorded as a session tag so
-listings can tell chat completions and responses apart. Sessions live in
-the primary Bedrock region. The session wire calls themselves live in
-``stdapi.aws_bedrock_sessions``.
+listings can tell chat completions and responses apart, and the creation time
+the object reports is recorded beside it so listings order on the same
+quantity they publish. Sessions live in the primary Bedrock region. The
+session wire calls themselves live in ``stdapi.aws_bedrock_sessions``.
 """
 
 from contextlib import suppress
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, Never
 
 from botocore.exceptions import ClientError
@@ -31,11 +33,10 @@ from stdapi.aws_bedrock_sessions import (
     scan_sessions_by_tag,
 )
 from stdapi.config import SETTINGS
-from stdapi.monitoring import build_metadata, log_error_details
+from stdapi.monitoring import REQUEST_TIME, build_metadata, log_error_details
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
-    from datetime import datetime
 
     from types_aiobotocore_bedrock_agent_runtime.client import (
         AgentsforBedrockRuntimeClient,
@@ -54,6 +55,9 @@ type StoredObjectKind = Literal["chat_completion", "response", "conversation"]
 #: Session tag key holding the stored object kind.
 KIND_TAG: str = "stdapi-ai.stored-object"
 
+#: Session tag key holding, in Unix seconds, the creation time the object reports.
+CREATED_AT_TAG: str = "stdapi-ai.created-at"
+
 #: Maximum UTF-8 bytes per invocation step text block (stays under the payload quota).
 _CHUNK_SIZE: int = 200_000
 
@@ -69,13 +73,13 @@ _TAG_FETCH_CONCURRENCY: int = 16
 #: Maximum concurrent invocation-step puts when persisting a chunked document.
 _STEP_PUT_CONCURRENCY: int = 8
 
-#: Cache of session ID to stored-object kind, avoiding repeated tag fetches.
-_KIND_CACHE: dict[str, str] = {}
+#: Cache of session ID to its ``(kind, creation time)`` tags, avoiding repeated fetches.
+_TAG_CACHE: dict[str, tuple[str, str]] = {}
 
-#: Cache size above which it is cleared, since the kind tag never changes.
-_KIND_CACHE_LIMIT: int = 4_096
+#: Cache size above which it is cleared, since a session's tags never change.
+_TAG_CACHE_LIMIT: int = 4_096
 
-#: Sentinel cached value meaning the session has no kind tag (untagged/foreign).
+#: Sentinel cached tag value meaning the session does not carry that tag.
 _UNTAGGED: str = ""
 
 #: Stored object kind declared by each document ``response.object`` field.
@@ -145,6 +149,9 @@ def _kind_mismatches(document: Mapping[str, Any], kind: StoredObjectKind) -> boo
 async def create_stored_response_session(kind: StoredObjectKind) -> str:
     """Create the AWS Bedrock session backing a stored object.
 
+    The instant the stored object reports as its creation is tagged onto the
+    session, so a listing orders on the quantity it publishes.
+
     Args:
         kind: Stored object kind, recorded as a session tag for listing.
 
@@ -154,14 +161,15 @@ async def create_stored_response_session(kind: StoredObjectKind) -> str:
     """
     client = _client()
     key = SETTINGS.aws_bedrock_session_encryption_key_arn
-    tags = build_metadata(apn=True) | {KIND_TAG: kind}
+    created_at = str(int(REQUEST_TIME.get().timestamp()))
+    tags = build_metadata(apn=True) | {KIND_TAG: kind, CREATED_AT_TAG: created_at}
     with handle_bedrock_client_error():
         response = await client.create_session(
             tags=tags,
             **({"encryptionKeyArn": key} if key else {}),  # type: ignore[arg-type]
         )
     session_id: str = response["sessionId"]
-    _KIND_CACHE[session_id] = kind
+    _TAG_CACHE[session_id] = (kind, created_at)
     return session_id
 
 
@@ -204,27 +212,30 @@ async def try_create_stored_response_session(kind: StoredObjectKind) -> str | No
         return None
 
 
-async def _cached_kind_tag(
+async def _cached_session_tags(
     client: AgentsforBedrockRuntimeClient, session_id: str, session_arn: str
-) -> str | None:
-    """Return a session's cached (or freshly fetched) kind tag value.
+) -> tuple[str, str]:
+    """Return a session's cached (or freshly fetched) stdapi tag values.
 
     Args:
         client: bedrock-agent-runtime client.
         session_id: Session ID, used as the cache key.
-        session_arn: Session ARN, used to fetch the tag on a cache miss.
+        session_arn: Session ARN, used to fetch the tags on a cache miss.
 
     Returns:
-        The session's kind tag value, or None when untagged.
+        The session's kind and reported-creation-time tag values, each
+        ``_UNTAGGED`` when the session does not carry that tag.
     """
-    if session_id in _KIND_CACHE:
-        return _KIND_CACHE[session_id] or None
-    tags = await client.list_tags_for_resource(resourceArn=session_arn)
-    session_kind = tags.get("tags", {}).get(KIND_TAG)
-    if len(_KIND_CACHE) > _KIND_CACHE_LIMIT:
-        _KIND_CACHE.clear()
-    _KIND_CACHE[session_id] = session_kind or _UNTAGGED
-    return session_kind
+    if (cached := _TAG_CACHE.get(session_id)) is not None:
+        return cached
+    tags = (await client.list_tags_for_resource(resourceArn=session_arn)).get(
+        "tags", {}
+    )
+    entry = (tags.get(KIND_TAG, _UNTAGGED), tags.get(CREATED_AT_TAG, _UNTAGGED))
+    if len(_TAG_CACHE) > _TAG_CACHE_LIMIT:
+        _TAG_CACHE.clear()
+    _TAG_CACHE[session_id] = entry
+    return entry
 
 
 async def _session_kind_tag_or_none(
@@ -245,11 +256,33 @@ async def _session_kind_tag_or_none(
     with handle_bedrock_client_error():
         try:
             session = await client.get_session(sessionIdentifier=session_id)
-            return await _cached_kind_tag(client, session_id, session["sessionArn"])
+            kind, _created_at = await _cached_session_tags(
+                client, session_id, session["sessionArn"]
+            )
         except ClientError as exc:
             if is_unknown_identifier(exc):
                 return None
             raise
+        else:
+            return kind or None
+
+
+def _reported_created_at(stamp: str, fallback: datetime) -> datetime:
+    """Return the creation time a stored object reports.
+
+    Args:
+        stamp: Unix seconds from the session's creation-time tag, or
+            ``_UNTAGGED`` for a session stored before it was recorded.
+        fallback: The session's own creation time, used when there is no
+            usable tag.
+
+    Returns:
+        The creation time the stored object reports.
+    """
+    try:
+        return datetime.fromtimestamp(int(stamp), UTC)
+    except ValueError, OverflowError, OSError:
+        return fallback
 
 
 async def list_stored_sessions(kind: StoredObjectKind) -> list[tuple[str, datetime]]:
@@ -262,18 +295,22 @@ async def list_stored_sessions(kind: StoredObjectKind) -> list[tuple[str, dateti
         kind: Stored object kind to list.
 
     Returns:
-        Unordered ``(session ID, creation time)`` pairs.
+        Unordered ``(session ID, reported creation time)`` pairs.
     """
     client = _client()
+    reported: dict[str, str] = {}
 
     async def _kind_tag(summary: SessionSummaryTypeDef) -> str | None:
-        """Return the session's cached (or freshly fetched) kind tag value."""
-        return await _cached_kind_tag(
-            client, summary["sessionId"], summary["sessionArn"]
+        """Return the session's kind tag, keeping its creation-time tag aside."""
+        session_id = summary["sessionId"]
+        kind_tag, created_at = await _cached_session_tags(
+            client, session_id, summary["sessionArn"]
         )
+        reported[session_id] = created_at
+        return kind_tag or None
 
     with handle_bedrock_client_error():
-        return await scan_sessions_by_tag(
+        sessions = await scan_sessions_by_tag(
             client,
             kind,
             _kind_tag,
@@ -281,6 +318,10 @@ async def list_stored_sessions(kind: StoredObjectKind) -> list[tuple[str, dateti
             scan_limit=_LIST_SCAN_LIMIT,
             concurrency=_TAG_FETCH_CONCURRENCY,
         )
+    return [
+        (session_id, _reported_created_at(reported.get(session_id, _UNTAGGED), created))
+        for session_id, created in sessions
+    ]
 
 
 async def save_stored_response(response_id: str, document: Mapping[str, Any]) -> None:
@@ -354,7 +395,7 @@ async def delete_stored_response(response_id: str, kind: StoredObjectKind) -> No
     session_id = _session_id(response_id)
     with not_found_as_404(lambda: _not_found(response_id)):
         await end_and_delete_session(client, session_id)
-    _KIND_CACHE.pop(session_id, None)
+    _TAG_CACHE.pop(session_id, None)
 
 
 async def discard_stored_response_session(

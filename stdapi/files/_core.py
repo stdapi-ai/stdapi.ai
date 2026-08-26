@@ -269,6 +269,18 @@ def _payload_created_ms(payload: str) -> int:
     return int.from_bytes(decode_id_payload(payload)[:6], "big")
 
 
+def payload_created_at(payload: str) -> int:
+    """Return the creation time encoded in *payload*'s UUIDv7, in Unix seconds.
+
+    Identifiers sort by this time, so anything listed by identifier reports
+    its creation time from here rather than from a clock read later.
+
+    Args:
+        payload: Bare 32-char base32 identifier payload.
+    """
+    return _payload_created_ms(payload) // 1000
+
+
 def _record_from_head(payload: str, head: HeadObjectOutputTypeDef) -> FileRecord:
     """Build a ``FileRecord`` from a ``HeadObject`` response.
 

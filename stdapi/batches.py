@@ -39,6 +39,7 @@ from stdapi.files import (
     get_file,
     get_file_content,
     parse_file_id,
+    payload_created_at,
     put_file_content,
     resolve_file_bucket,
 )
@@ -255,7 +256,8 @@ class BatchRecord:
         batch_id: Bare 32-char payload identifying the batch.
         bucket: S3 bucket holding this record.
         surface: API the batch was created through.
-        created_at: Unix timestamp of creation.
+        created_at: Unix timestamp read from ``batch_id``; the completion
+            window runs from it.
         endpoint: API endpoint every request targets.
         completion_window: Time frame within which the batch is processed.
         input_file_id: Files API identifier of the submitted requests.
@@ -1098,7 +1100,7 @@ async def create_batch(
         batch_id=payload,
         bucket=bucket,
         surface=surface,
-        created_at=now_utc_timestamp(),
+        created_at=payload_created_at(payload),
         endpoint=endpoint,
         completion_window=completion_window,
         input_file_id=input_file_id,
@@ -1337,11 +1339,16 @@ async def _delete_job_data(ref: BatchJobRef) -> None:
 
 
 async def _scan_bucket(bucket: str) -> list[str]:
-    """Return the newest batch payloads stored in *bucket*, in creation order.
+    """Return the newest batch payloads the scan reaches in *bucket*.
 
     Payloads sort by creation time and storage walks them oldest first, so the
     scan keeps a trailing window: a listing shows recent batches rather than
-    the first ones ever created.
+    the first ones ever created. Storage cannot be walked backwards, so the
+    window holds the newest of the records the page budget *reached*: past
+    ``_LIST_SCAN_PAGES`` pages it is taken from the oldest keys instead and the
+    newest batches drop out of every listing. That is documented as a
+    limitation in ``docs/api_openai_batches.md``; lifting it means seeking the
+    tail (``StartAfter``) rather than raising the budget.
 
     Args:
         bucket: The bucket to scan.
@@ -1380,6 +1387,9 @@ async def list_batches(
     limit: int = 20,
 ) -> tuple[list[BatchState], bool]:
     """List this server's batches, newest first.
+
+    Batches order on their identifier, which is also where each one reads the
+    creation time it reports, so paging order and reported times agree.
 
     Args:
         surface: API the batches must have been created through.

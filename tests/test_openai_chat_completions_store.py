@@ -12,6 +12,7 @@ Ref: https://developers.openai.com/api/reference/resources/chat/subresources/com
 
 from datetime import UTC, datetime
 from re import fullmatch
+from time import sleep
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
@@ -25,12 +26,16 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from openai import OpenAI
+    from openai.types.chat import ChatCompletion as SdkChatCompletion
     from starlette.testclient import TestClient
 
     from stdapi.models import ModelDetails
 from stdapi.routes import openai_chat_completions
 from stdapi.types.openai_chat_completions import ChatCompletion, CompletionCreateParams
 from tests._helpers import make_model_details
+
+#: Seconds between the two live stored completions, so their reported times differ.
+_STORE_GAP_SECONDS: float = 1.5
 
 
 def _canned_completion(completion_id: str, model: str) -> ChatCompletion:
@@ -58,14 +63,23 @@ class _StubChatBackend:
         self.requests: list[tuple[CompletionCreateParams, str]] = []
         #: Overrides the returned completion ID, mimicking Mantle passthrough.
         self.upstream_id: str | None = None
+        #: Overrides the returned creation time, mimicking Mantle passthrough.
+        self.upstream_created: int | None = None
+        #: ``created`` arguments received, in call order; the same value the
+        #: session's creation-time tag records, so it is the listing's sort key.
+        self.created_args: list[int] = []
 
     async def create_completion(
         self, request: CompletionCreateParams, completion_id: str, created: int
     ) -> ChatCompletion | EventSourceResponse:
         """Record the request and return a canned completion, or a stream when requested."""
         self.requests.append((request, completion_id))
+        self.created_args.append(created)
         completion = _canned_completion(
             self.upstream_id or completion_id, request.model
+        )
+        completion.created = (
+            created if self.upstream_created is None else self.upstream_created
         )
         if not request.stream:
             return completion
@@ -143,10 +157,13 @@ def _store_completion(
     *,
     model: str = "m",
     metadata: dict[str, str] | None = None,
+    created: int | None = None,
 ) -> None:
     """Register a stored chat completion document for *session_id*."""
     completion = _canned_completion(f"chatcmpl-{session_id}", model)
     completion.metadata = metadata
+    if created is not None:
+        completion.created = created
     store.documents[f"chatcmpl-{session_id}"] = {
         "messages": [],
         "response": completion.model_dump(
@@ -262,6 +279,64 @@ class TestStoreOnChatCreate:
         ((completion_id, document),) = store.saved
         assert completion_id == "chatcmpl-sess-1"
         assert document["response"]["id"] == "chatcmpl-sess-1"
+
+    def test_store_rewrites_upstream_backend_creation_time(
+        self, app_client: TestClient, backend: _StubChatBackend, store: _StubStore
+    ) -> None:
+        """A backend that ignores `created` (e.g. Mantle passthrough) is rewritten when stored.
+
+        The listing orders stored completions on the request-arrival time the
+        session records as its creation-time tag, and the route hands that same
+        instant to the backend as ``created``. Asserting the reported and
+        stored times against that argument — rather than against a window
+        around the call — is what couples the published time to the sort key:
+        a completion reporting a time from another clock would publish an order
+        the listing does not use.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/list
+             stdapi/routes/openai_chat_completions.py:create_chat_completion
+             stdapi/responses_store.py:CREATED_AT_TAG
+        """
+        backend.upstream_created = 1752000000
+        before = int(datetime.now(UTC).timestamp())
+        response = app_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "amazon.nova-micro-v1:0",
+                "messages": [{"role": "user", "content": "hello"}],
+                "store": True,
+            },
+        )
+        assert response.status_code == 200, response.text
+        created = response.json()["created"]
+        assert before <= created <= int(datetime.now(UTC).timestamp())
+        (sort_key,) = backend.created_args
+        assert created == sort_key
+        ((_, document),) = store.saved
+        assert document["response"]["created"] == sort_key
+
+    def test_without_store_upstream_backend_creation_time_passes_through(
+        self, app_client: TestClient, backend: _StubChatBackend, store: _StubStore
+    ) -> None:
+        """Without store=true, the backend's own creation time is returned untouched.
+
+        Nothing lists an unstored completion, so there is no order for its
+        reported time to agree with and the upstream value stands.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+             stdapi/routes/openai_chat_completions.py:create_chat_completion
+        """
+        backend.upstream_created = 1752000000
+        response = app_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "amazon.nova-micro-v1:0",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["created"] == 1752000000
+        assert not store.saved
 
     def test_without_store_upstream_backend_id_passes_through(
         self, app_client: TestClient, backend: _StubChatBackend, store: _StubStore
@@ -877,6 +952,87 @@ class TestListChatCompletions:
         body = response.json()
         assert [item["id"] for item in body["data"]] == ["chatcmpl-s2", "chatcmpl-s3"]
 
+    def test_paging_returns_the_completions_in_the_order_they_report(
+        self, app_client: TestClient, store: _StubStore
+    ) -> None:
+        """Walking every page returns the completions in reported-creation order.
+
+        A client paging through the listing, or rebuilding the order from
+        `created`, has to get the same sequence either way, so both invariants
+        are asserted together. Storage lists the sessions in an order of its
+        own — reversed below — so neither sequence comes out right unless the
+        route sorts on the time each completion reports.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/list
+             stdapi/routes/openai_chat_completions.py:list_chat_completions
+        """
+        stamps = (1752000000, 1752000030, 1752000090)
+        store.sessions = [
+            (f"s{index}", datetime.fromtimestamp(stamp, UTC))
+            for index, stamp in reversed(list(enumerate(stamps)))
+        ]
+        for index, stamp in enumerate(stamps):
+            _store_completion(store, f"s{index}", created=stamp)
+
+        paged: list[dict[str, Any]] = []
+        cursor: str | None = None
+        for _page in range(3):
+            body = app_client.get(
+                f"/v1/chat/completions?limit=1{f'&after={cursor}' if cursor else ''}"
+            ).json()
+            assert cursor not in [item["id"] for item in body["data"]]
+            paged.extend(body["data"])
+            cursor = paged[-1]["id"]
+            assert body["has_more"] is (len(paged) < 3)
+
+        assert [item["id"] for item in paged] == [
+            "chatcmpl-s0",
+            "chatcmpl-s1",
+            "chatcmpl-s2",
+        ]
+        assert [item["created"] for item in paged] == sorted(stamps)
+
+    def test_completions_of_the_same_second_page_in_a_fixed_order(
+        self, app_client: TestClient, store: _StubStore
+    ) -> None:
+        """Completions reporting one creation second still page deterministically.
+
+        Creation time is published in whole seconds, so two completions stored
+        in the same second report the same value. Ordering on that value alone
+        would leave their relative position to the order storage happened to
+        list them in, and a cursor could then skip or repeat one between two
+        pages. Both directions are walked one entry at a time, since `desc` is
+        what a client paging with the SDK asks for.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/list
+             stdapi/routes/openai_chat_completions.py:list_chat_completions
+        """
+        same_second = datetime.fromtimestamp(1752000000, UTC)
+        listed = [("sa", same_second), ("sb", same_second)]
+        for session_id, _ in listed:
+            _store_completion(store, session_id, created=1752000000)
+
+        expected = {"asc": ["chatcmpl-sa", "chatcmpl-sb"]}
+        expected["desc"] = expected["asc"][::-1]
+        for storage_order in (listed, listed[::-1]):
+            store.sessions = list(storage_order)
+            for order, ids in expected.items():
+                body = app_client.get(f"/v1/chat/completions?order={order}").json()
+                assert [item["id"] for item in body["data"]] == ids
+
+                walked: list[str] = []
+                cursor: str | None = None
+                for _page in range(2):
+                    page = app_client.get(
+                        f"/v1/chat/completions?order={order}&limit=1"
+                        f"{f'&after={cursor}' if cursor else ''}"
+                    ).json()
+                    assert cursor not in [item["id"] for item in page["data"]]
+                    walked.extend(item["id"] for item in page["data"])
+                    cursor = walked[-1]
+                    assert page["has_more"] is (len(walked) < 2)
+                assert walked == ids
+
     def test_after_unknown_cursor_is_not_found(
         self, app_client: TestClient, store: _StubStore
     ) -> None:
@@ -1413,3 +1569,50 @@ class TestStoredChatCompletionsLive:
             openai_client.chat.completions.retrieve(created.id)
         assert excinfo.value.status_code == 404
         assert created.id in excinfo.value.message
+
+    @pytest.mark.gateway("official API stores completions asynchronously (delayed)")
+    def test_listing_pages_in_the_order_it_reports(
+        self, openai_client: OpenAI, chat_model: str
+    ) -> None:
+        """Paging a listing returns the completions in the order their `created` states.
+
+        Both invariants are asserted together across a page boundary, since
+        either alone passes on a listing that publishes an order it does not
+        use. The two completions are stored far enough apart that their
+        reported times differ, and the marker keeps the assertion to this
+        test's own completions, so a sibling storing one meanwhile cannot
+        change the answer.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/list
+             stdapi/routes/openai_chat_completions.py:list_chat_completions
+        """
+        marker = uuid4().hex
+
+        def _create() -> SdkChatCompletion:
+            return openai_client.chat.completions.create(
+                model=chat_model,
+                messages=[{"role": "user", "content": "Reply with the word: banana"}],
+                max_completion_tokens=16,
+                store=True,
+                metadata={"test-marker": marker},
+            )
+
+        first = _create()
+        sleep(_STORE_GAP_SECONDS)
+        second = _create()
+        try:
+            assert second.created > first.created
+            first_page = openai_client.chat.completions.list(
+                order="desc", limit=1, metadata={"test-marker": marker}
+            )
+            assert [item.id for item in first_page.data] == [second.id]
+            assert first_page.has_more is True
+            next_page = openai_client.chat.completions.list(
+                order="desc", limit=1, after=second.id, metadata={"test-marker": marker}
+            )
+            assert [item.id for item in next_page.data] == [first.id]
+            paged = [*first_page.data, *next_page.data]
+            assert [item.created for item in paged] == [second.created, first.created]
+        finally:
+            for completion in (first, second):
+                openai_client.chat.completions.delete(completion.id)

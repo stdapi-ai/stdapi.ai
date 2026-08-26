@@ -51,13 +51,13 @@ from stdapi.aws_s3 import (
 from stdapi.config import SETTINGS
 from stdapi.files._core import (
     FileRecord,
-    _payload_created_ms,
     _record_from_head,
     _require_bucket,
     _validate_filename,
     decode_id_payload,
     encode_id_payload,
     file_id_s3_key,
+    payload_created_at,
     resolve_file_bucket,
 )
 from stdapi.utils import now_utc_timestamp
@@ -187,7 +187,7 @@ def _created_at_from_upload_id(upload_id: str) -> int:
     Returns:
         Unix timestamp in seconds.
     """
-    return _payload_created_ms(upload_id[7:]) // 1000
+    return payload_created_at(upload_id[7:])
 
 
 def _make_part_id(upload_id: str, part_number: int) -> str:

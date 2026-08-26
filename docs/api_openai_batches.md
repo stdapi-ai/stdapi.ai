@@ -33,7 +33,7 @@ A batch is created from a file of requests, runs without a connection held open,
 | Endpoint                    | Method | What It Does                          | MCP Tool              |
 |-----------------------------|--------|---------------------------------------|-----------------------|
 | `/v1/batches`               | `POST` | Create a batch from an uploaded file  | `openai_batch`        |
-| `/v1/batches`               | `GET`  | List batches, newest first            | `openai_batch_list`   |
+| `/v1/batches`               | `GET`  | List batches, [newest first](#listing-order) | `openai_batch_list`   |
 | `/v1/batches/{batch_id}`    | `GET`  | Retrieve a batch and its counters     | `openai_batch_get`    |
 | `/v1/batches/{batch_id}/cancel` | `POST` | Cancel a batch that is still running | `openai_batch_cancel` |
 
@@ -62,7 +62,7 @@ A batch is created from a file of requests, runs without a connection held open,
 | **Lifecycle**                    |                                          |                                                                             |
 | Retrieve / poll                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `validating` → `in_progress` → `finalizing` → `completed`                    |
 | Cancel                           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `cancelling` then `cancelled`; requests already answered stay in `output_file_id`, and a batch that has ended is unchanged |
-| List batches                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Newest first, with an `after` cursor                                        |
+| List batches                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Newest first by `created_at`, with an `after` cursor — see [Listing Order](#listing-order) |
 | `output_file_id` / `error_file_id` |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Readable through the [Files API](api_openai_files.md)                     |
 | `usage`                          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Token totals, reported once the batch ends                                  |
 | `finalizing` status              |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Reported with `finalizing_at` while the results of a batch whose requests have run are being assembled; `completed` follows once they are readable |
@@ -84,6 +84,43 @@ A batch is created from a file of requests, runs without a connection held open,
 
 !!! note "Prompt Caching and Batches"
     Batched requests neither read nor write a prompt cache, on any model. A request carrying a cache hint is still accepted and answered — the hint is dropped rather than the request — so a batch reports no cached tokens in `usage.input_tokens_details`. Nothing is lost by leaving the hint in: batched requests are already billed at the batch rate, and the cache discount was never available at that rate.
+
+## Listing Order
+
+Batches are listed **most recent first**, ordered by the `created_at` each one
+reports, so paging with the `after` cursor and sorting a page on `created_at`
+give the same sequence. Batches sharing a second are ordered by identifier, so
+the sequence is stable from one page to the next. `created_at` is the moment the
+batch was created, and the 24-hour processing window reported as `expires_at`
+runs from it.
+
+!!! warning "The Listing Window"
+    A listing does not reach every batch ever created. It is answered from a
+    window of the **1,000 most recent batch records** held in the bucket set by
+    [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket), and an `after`
+    cursor naming a batch outside that window returns an empty page. Three
+    things narrow it further:
+
+    - The window is **shared with the [Anthropic Message Batches](api_anthropic_batches.md)
+      surface**: records created through either API count against the same
+      1,000, and each listing then shows only its own.
+    - **Deleted batches keep their slot.** A deleted batch is not listed, but
+      its record still occupies one of the 1,000.
+    - Beyond roughly **100,000 stored batch records**, the window is taken from
+      the *oldest* records rather than the newest, and recent batches stop
+      appearing altogether.
+
+    Retrieving a batch by its identifier is unaffected — that works for as long
+    as the record exists. Keep the identifiers you need rather than relying on
+    the listing to find them again, and delete batches you are done with.
+
+!!! warning "Batches Created Before 1.17"
+    A batch created by an earlier version reports a `created_at` captured a
+    moment after the batch itself was created, which can place it a few seconds
+    out of order relative to a batch created alongside it. Those values are kept
+    as they were recorded. While such batches can still appear in a listing,
+    page with the `after` cursor rather than rebuilding the order from
+    `created_at`.
 
 ## Model Support
 
