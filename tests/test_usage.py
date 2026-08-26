@@ -701,7 +701,11 @@ class TestEmitUsageMetrics:
         assert payload["Model"] == "emfmodel"
         quantity_directive, cost_directive = payload["_aws"]["CloudWatchMetrics"]
         assert quantity_directive["Dimensions"] == [["Model"]]
-        assert {m["Name"] for m in quantity_directive["Metrics"]} == {"InputTokens"}
+        assert {m["Name"] for m in quantity_directive["Metrics"]} == {
+            "InputTokens",
+            "Requests",
+        }
+        assert payload["Requests"] == 1
         assert cost_directive["Dimensions"] == [["Model", "Currency"]]
         assert {m["Name"] for m in cost_directive["Metrics"]} == {"Cost"}
         assert {
@@ -733,16 +737,16 @@ class TestEmitUsageMetrics:
         metrics = payload["_aws"]["CloudWatchMetrics"][0]
         assert metrics["Dimensions"] == [["Model"]]
 
-    def test_a_record_with_nothing_to_report_emits_no_line(
+    def test_a_record_with_no_billed_quantity_still_counts_its_request(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A record with no billed quantity and no cost is skipped, not emitted empty.
+        """An invocation that billed nothing measurable is still an invocation.
 
         ``total_tokens`` is a reporting total rather than one of the billed
         ``Dimension`` entries in ``_DIMENSION_INFO``, so a record carrying only
-        it has empty ``quantities`` and nothing to meter. An EMF directive that
-        declares dimensions but names no metric is an invalid document
-        CloudWatch rejects, so the whole line is dropped.
+        it has empty ``quantities``. The request count is what the usage API
+        reports as ``num_model_requests``, and dropping the line would make it
+        under-report the call.
         """
         monkeypatch.setattr(SETTINGS, "cloudwatch_metrics", True)
         get_model_state("emfmodel").region = "us-east-1"
@@ -754,7 +758,10 @@ class TestEmitUsageMetrics:
         emit_usage_metrics()
 
         assert usage.USAGE.get(), "the record itself must still exist"
-        assert written == []
+        assert len(written) == 1
+        directive = written[0]["_aws"]["CloudWatchMetrics"][0]
+        assert [m["Name"] for m in directive["Metrics"]] == ["Requests"]
+        assert written[0]["Requests"] == 1
 
     def test_multi_currency_emits_one_extra_line_without_duplicating_quantities(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1590,3 +1597,177 @@ class TestConcurrentSameModelUsageAttribution:
         key, record = next(iter(records.items()))
         assert key.region == "us-west-2"  # Last write wins.
         assert record.quantities[Dimension.INPUT_TOKENS] == 3000
+
+
+class TestUsageApiDimensions:
+    """The dimensions the usage API reads back, published only when it is on.
+
+    The endpoint split needs ``Operation`` as a real metric dimension: an EMF
+    property is not queryable, and CloudWatch does not aggregate custom metrics
+    across dimensions, so an ungrouped total has to come from a dimension set
+    that exists.
+
+    Ref: https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html
+         stdapi/usage.py:emit_usage_metrics
+    """
+
+    @staticmethod
+    def _emit(monkeypatch: pytest.MonkeyPatch, path: str) -> list[dict[str, Any]]:
+        """Record one usage entry under *path* and return the EMF lines.
+
+        Args:
+            monkeypatch: The patcher.
+            path: The route path the request ran under.
+
+        Returns:
+            Every EMF line the emitter wrote.
+        """
+        monkeypatch.setattr(SETTINGS, "cloudwatch_metrics", True)
+        token = usage.OPERATION.set(path)
+        try:
+            get_model_state("emfmodel").region = "us-east-1"
+            record_bedrock_usage("emfmodel", input_tokens=1000)
+        finally:
+            usage.OPERATION.reset(token)
+        written: list[dict[str, Any]] = []
+        monkeypatch.setattr(usage, "stdout_write", written.append)
+        emit_usage_metrics()
+        return written
+
+    def test_a_known_route_publishes_the_operation_dimension_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The ["Model"] roll-up stays, and the endpoint split is added beside it."""
+        monkeypatch.setattr(SETTINGS, "usage_api", True)
+        payload = self._emit(monkeypatch, "/v1/chat/completions")[0]
+        assert payload["Operation"] == "chat.completions"
+        directive = payload["_aws"]["CloudWatchMetrics"][0]
+        assert directive["Dimensions"] == [["Model"], ["Model", "Operation"]]
+
+    def test_nothing_extra_is_published_when_the_usage_api_is_off(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The extra dimension sets are extra stored series, so they are opt-in."""
+        monkeypatch.setattr(SETTINGS, "usage_api", False)
+        payload = self._emit(monkeypatch, "/v1/chat/completions")[0]
+        assert "Operation" not in payload
+        assert payload["_aws"]["CloudWatchMetrics"][0]["Dimensions"] == [["Model"]]
+
+    def test_a_route_outside_the_table_publishes_no_operation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An allow list, so a dimension value is never caller-controlled."""
+        monkeypatch.setattr(SETTINGS, "usage_api", True)
+        payload = self._emit(monkeypatch, "/v1/vector_stores/vs_abc/files")[0]
+        assert "Operation" not in payload
+        assert payload["_aws"]["CloudWatchMetrics"][0]["Dimensions"] == [["Model"]]
+
+    def test_a_route_prefix_does_not_change_the_dimension_value(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The value is stable across deployments, whatever prefix serves the route."""
+        monkeypatch.setattr(SETTINGS, "openai_routes_prefix", "/openai")
+        monkeypatch.setattr(
+            usage, "_ROUTE_PREFIXES", ("/openai", SETTINGS.anthropic_routes_prefix)
+        )
+        monkeypatch.setattr(SETTINGS, "usage_api", True)
+        payload = self._emit(monkeypatch, "/openai/v1/chat/completions")[0]
+        assert payload["Operation"] == "chat.completions"
+
+    def test_a_path_parameter_never_reaches_the_dimension(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A vector store search is one bounded value, not one per store."""
+        assert usage.metric_operation("/v1/vector_stores/vs_abc/search") == (
+            "vector_stores.search"
+        )
+        assert usage.metric_operation("/v1/vector_stores/vs_xyz/search") == (
+            "vector_stores.search"
+        )
+
+    def test_the_tenant_key_is_published_as_its_own_dimension_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Its own set, so a query grouping by model is unaffected by it."""
+        from stdapi.monitoring import TENANT, Tenant  # noqa: PLC0415
+
+        monkeypatch.setattr(SETTINGS, "usage_api", True)
+        token = TENANT.set(Tenant(key_id="key1", name="tenant"))
+        try:
+            payload = self._emit(monkeypatch, "/v1/chat/completions")[0]
+        finally:
+            TENANT.reset(token)
+        assert payload["ApiKey"] == "key1"
+        assert payload["_aws"]["CloudWatchMetrics"][0]["Dimensions"] == [
+            ["Model"],
+            ["Model", "Operation"],
+            ["Model", "Operation", "ApiKey"],
+        ]
+
+    def test_cost_carries_the_tenant_key_but_never_the_caller(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The costs endpoint reports per key, never per user, so nothing else is stored."""
+        from stdapi.monitoring import PRINCIPAL, Principal  # noqa: PLC0415
+
+        monkeypatch.setattr(SETTINGS, "usage_api", True)
+        monkeypatch.setattr(SETTINGS, "cloudwatch_metrics_user_dimension", True)
+        monkeypatch.setattr(SETTINGS, "cloudwatch_metrics", True)
+        set_test_price(
+            "emfmodel", "us-east-1", Dimension.INPUT_TOKENS, "0.000003", "USD"
+        )
+        token = PRINCIPAL.set(Principal(subject="bob"))
+        operation = usage.OPERATION.set("/v1/chat/completions")
+        try:
+            get_model_state("emfmodel").region = "us-east-1"
+            record_bedrock_usage("emfmodel", input_tokens=1000)
+            compute_costs()
+            written: list[dict[str, Any]] = []
+            monkeypatch.setattr(usage, "stdout_write", written.append)
+            emit_usage_metrics()
+        finally:
+            usage.OPERATION.reset(operation)
+            PRINCIPAL.reset(token)
+        cost_directive = written[0]["_aws"]["CloudWatchMetrics"][-1]
+        assert cost_directive["Dimensions"] == [["Model", "Currency"]]
+
+    def test_the_caller_is_not_published_unless_the_operator_asked_for_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One series per user is a bill the operator has to opt into."""
+        from stdapi.monitoring import PRINCIPAL, Principal  # noqa: PLC0415
+
+        monkeypatch.setattr(SETTINGS, "usage_api", True)
+        monkeypatch.setattr(SETTINGS, "cloudwatch_metrics_user_dimension", False)
+        token = PRINCIPAL.set(Principal(subject="bob"))
+        try:
+            payload = self._emit(monkeypatch, "/v1/chat/completions")[0]
+        finally:
+            PRINCIPAL.reset(token)
+        assert "User" not in payload
+
+    def test_the_caller_is_published_when_the_operator_asked_for_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Turning the setting on is what makes group_by=user_id answerable."""
+        from stdapi.monitoring import PRINCIPAL, Principal  # noqa: PLC0415
+
+        monkeypatch.setattr(SETTINGS, "usage_api", True)
+        monkeypatch.setattr(SETTINGS, "cloudwatch_metrics_user_dimension", True)
+        token = PRINCIPAL.set(Principal(subject="bob"))
+        try:
+            payload = self._emit(monkeypatch, "/v1/chat/completions")[0]
+        finally:
+            PRINCIPAL.reset(token)
+        assert payload["User"] == "bob"
+        assert ["Model", "Operation", "User"] in (
+            payload["_aws"]["CloudWatchMetrics"][0]["Dimensions"]
+        )
+
+    def test_every_recorder_call_counts_one_request(self) -> None:
+        """Two invocations of one model in one request are two model requests."""
+        get_model_state("emfmodel").region = "us-east-1"
+        record_bedrock_usage("emfmodel", input_tokens=10)
+        record_bedrock_usage("emfmodel", input_tokens=10)
+        entry = usage.usage_log_entries()[0]
+        assert entry["requests"] == 2

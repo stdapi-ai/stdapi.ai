@@ -72,7 +72,7 @@ RUN python -m stdapi.docs_assets
 # botocore/data is pruned to this list and the smoke test below instantiates
 # every entry to catch a miss.  The bidirectional stream clients need no entry:
 # they are not botocore clients and carry their own generated service models.
-ENV BOTOCORE_SERVICES="bedrock bedrock-agent bedrock-agent-runtime bedrock-runtime comprehend dynamodb meteringmarketplace polly pricing s3 s3vectors secretsmanager sqs ssm sso sso-oidc sts transcribe translate"
+ENV BOTOCORE_SERVICES="bedrock bedrock-agent bedrock-agent-runtime bedrock-runtime cloudwatch comprehend dynamodb meteringmarketplace polly pricing s3 s3vectors secretsmanager sqs ssm sso sso-oidc sts transcribe translate"
 
 # Optimize Python code
 # Can't remove "annotated-doc" .dist-info - needed at runtime
