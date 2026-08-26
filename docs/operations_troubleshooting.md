@@ -133,6 +133,29 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     - Try the name with and without its `anthropic.` / `openai.` / `cohere.` prefix: both forms resolve for those three families, so `anthropic.claude-fable-5` and `claude-fable-5` reach the same model, as do `openai.gpt-oss-120b-1:0` and `gpt-oss-120b`. Cohere additionally spells its versions with a dot, so `cohere.embed-english-v3` answers to `embed-english-v3.0` and `cohere.rerank-v3-5:0` to `rerank-v3.5` — not to `embed-english-v3` or `rerank-v3-5`. Models from other providers are served under their Bedrock IDs only, so name the ID or alias it. A model version Bedrock has retired needs a current one, whichever form you use.
     - Only if the model *is* one Bedrock serves and it is still missing: verify `AWS_BEDROCK_REGIONS` includes a region that offers it — see the [Bedrock model availability table](https://docs.aws.amazon.com/bedrock/latest/userguide/models-regions.html). Adding regions never makes a name Bedrock does not serve resolve.
 
+??? failure "A model that has been removed still appears in `/v1/models`, or a new one takes minutes to show up"
+    Expected, within a bounded window. The model list is discovered from Amazon Bedrock and kept for [`MODEL_CACHE_SECONDS`](operations_configuration.md#model-cache-seconds) (15 minutes by default); once it expires the request that notices is answered from the list in hand and the refresh runs behind it, so no request pays for the discovery pass. A model AWS has withdrawn — or that this account has lost access to — can therefore stay listed until that refresh lands, and a request naming it is accepted and then fails at the backend with the same `404 model_not_found` as any unknown model. See [Model List Refresh](operations_resilience.md#model-list-refresh).
+
+    - **A model that is new** is never served from an expired list: naming one the list does not know makes the server refresh before it answers, so it is usable as soon as it exists.
+    - **Shorten the window** with a lower `MODEL_CACHE_SECONDS`, at the cost of more discovery calls.
+    - **Remove it entirely** with `MODEL_CACHE_MAX_STALE_SECONDS=0`, which makes every expiry refresh synchronously — the freshest and the slowest setting.
+    - Only if the list is *very* old, or a model that exists never appears, is this a fault rather than the window — see the next entry.
+
+??? failure "The model list never changes, or keeps advertising models that are gone"
+    A refresh that keeps failing leaves the list frozen. It is reported in the server log rather than in a response, because the request that triggered it was answered from the list already in memory.
+
+    - Look for `Refreshing the model list from AWS Bedrock failed` in the server log. It is logged at `warning`, and at `error` once the list is more than two [`MODEL_CACHE_SECONDS`](operations_configuration.md#model-cache-seconds) old — the signal that the list is drifting toward the ceiling.
+    - The usual causes are a revoked `bedrock:ListFoundationModels` or `bedrock:GetFoundationModelAvailability` permission and a prolonged outage in every configured region. Check [Bedrock IAM](operations_iam_permissions.md#bedrock-iam) first.
+    - Beyond [`MODEL_CACHE_MAX_STALE_SECONDS`](operations_configuration.md#model-cache-max-stale-seconds) (24 hours by default) requests stop being answered from the frozen list and wait for a refresh instead, so a deployment in this state eventually surfaces the real error to clients as a `503` rather than serving a list it cannot confirm.
+
+??? failure "Enabling `MODEL_CACHE_SHARED` did not make startup any faster"
+    A published model list is only read by servers running the **same version, in the same AWS account, with the same `AWS_BEDROCK_*` and `AWS_SAGEMAKER_*` configuration** — every setting under those prefixes, not only the ones discovery reads. Anything else reads as an empty cache and the server discovers the catalogue itself, exactly as it would with the feature off, so changing one of those settings costs the fleet one discovery pass each rather than pointing at a table or permission fault.
+
+    - **During a rolling deployment this is expected**: the new version recognises nothing the old one published, so the first server of each version performs a full discovery pass and publishes for the rest. Changing any `AWS_BEDROCK_*` setting has the same effect, once.
+    - **If it never gets faster**, the table itself is the suspect. Every failure is reported in the server log at `WARNING`, naming the DynamoDB action, the table and the setting to fix — a missing `dynamodb:GetItem`/`PutItem`/`Query` on the table ARN is the common one, see [Shared Table IAM](operations_iam_permissions.md#shared-table).
+    - **A single-container deployment gains nothing** by design: there is no second server to share with, and the first one still has to discover the catalogue.
+    - Setting it without [`AWS_DYNAMODB_TABLE`](operations_configuration.md#aws-dynamodb-table) fails startup with a message naming both settings.
+
 ??? failure "A deployed Marketplace model endpoint does not appear in the model list"
     A [Bedrock Marketplace model endpoint](operations_cost_management.md#bedrock-marketplace-model-endpoints) is discovered, never created — the gateway only ever lists an endpoint that already exists in your account. Work through the checks in order:
 

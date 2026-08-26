@@ -1,7 +1,7 @@
 ---
 title: Resilience & Failover
 description: Infrastructure-level and application-level resilience for stdapi.ai on AWS — multi-AZ ECS, ALB health checks, Bedrock cross-region inference, S3 durability, and multi-region request routing where each enabled region contributes its own independent Bedrock quota.
-keywords: AWS high availability, multi-AZ ECS Fargate, ALB resilience, Bedrock cross-region inference, S3 durability, AWS Bedrock region routing, multi-region AI, quota management, regional failover, region strategy, lowest latency, round robin, ordered routing, prompt caching, S3 region routing, cross-region S3 copy, model region restrict, deprecated models failover, deprecated model fallback
+keywords: AWS high availability, multi-AZ ECS Fargate, ALB resilience, Bedrock cross-region inference, S3 durability, AWS Bedrock region routing, multi-region AI, quota management, regional failover, region strategy, lowest latency, round robin, ordered routing, prompt caching, S3 region routing, cross-region S3 copy, model region restrict, deprecated models failover, deprecated model fallback, model list refresh, stale model cache, shared model cache, DynamoDB model cache, withdrawn model
 ---
 
 # :material-shield-check: Resilience & Failover
@@ -333,6 +333,50 @@ Setting an explicit region for any of these services pins it to that single regi
 ### :material-rocket-launch-outline: Fault-Tolerant Startup
 
 A Bedrock region that cannot be reached at startup (invalid region for the account, network issue, throttling) does not block the server from starting: it is skipped with an `unreachable_bedrock_regions` warning, its models are served from the remaining regions, and the region is retried automatically on the next model list refresh ([`MODEL_CACHE_SECONDS`](operations_configuration.md#model-cache-seconds)). Startup only fails when **every** configured region is unreachable, or when **every** per-model availability check errors — see [Unreachable Region Tolerance](operations_configuration.md#aws-bedrock-regions).
+
+### :material-refresh-auto: Model List Refresh { #model-list-refresh }
+
+The list of models a server offers is discovered from Amazon Bedrock across every configured region and kept for [`MODEL_CACHE_SECONDS`](operations_configuration.md#model-cache-seconds) (default 15 minutes). What happens when it expires is what decides whether a request pays for the refresh.
+
+#### No Request Waits for a Refresh
+
+Once the list has expired, the request that notices is answered from the list already in memory and the refresh runs behind it. Whatever the discovery pass costs — it fans out across regions in parallel, but it is still several AWS calls per region — no client sees it.
+
+| Cache state | What the request gets |
+|---|---|
+| Within `MODEL_CACHE_SECONDS` | The cached list, at the cost of one comparison |
+| Expired, under [`MODEL_CACHE_MAX_STALE_SECONDS`](operations_configuration.md#model-cache-max-stale-seconds) | The cached list immediately; one refresh starts in the background |
+| Expired, at or beyond that age | Waits for a successful refresh |
+| No list at all (a server that started without one) | Waits for a successful refresh |
+
+However many requests arrive at once, exactly **one** refresh runs per server; the rest are answered from the list in memory. A refresh still running when the server is asked to stop is awaited with the rest of the deferred work, within [`SHUTDOWN_DRAIN_TIMEOUT`](operations_configuration.md#shutdown-drain-timeout).
+
+A refresh that fails reaches no client: it is recorded in the server log and retried shortly rather than raised at whoever happened to trigger it. Once the list is more than two `MODEL_CACHE_SECONDS` old, those entries are raised to `error` — which is the signal that the list is drifting toward the ceiling above.
+
+#### What a Client Can Observe
+
+Serving an expired list has one consequence worth stating plainly: **`/v1/models` and `/search_models` can list a model AWS has withdrawn**, and a request naming it is accepted rather than rejected up front. It then fails at the backend, and comes back as the same `404 model_not_found` an unknown model has always produced.
+
+Three things bound that window:
+
+1. The list is refreshed as soon as any request notices it has expired — including a request that simply names a model, so ordinary traffic heals the list rather than waiting for someone to call `/v1/models`.
+2. A model the list does *not* know is never answered from an expired list: the server refreshes first, then answers, so a newly released model is usable as soon as it exists.
+3. `MODEL_CACHE_MAX_STALE_SECONDS` (default 24 hours) is the hard bound. Beyond it requests wait for a successful refresh, so a server whose refreshes are failing stops advertising what it can no longer confirm.
+
+This is the same guarantee the API has always made: [the catalogue advertises, the backend decides](api_overview.md). Deprecated and legacy models are handled separately and are unaffected — see [Deprecated Model Fallback](#deprecated-model-fallback) above.
+
+#### Sharing One List Across a Fleet
+
+By default each server discovers the catalogue for itself: *N* servers means *N* discovery passes per interval, and a server that starts is not useful until its own pass finishes. Setting [`MODEL_CACHE_SHARED`](operations_configuration.md#model-cache-shared) with an [`AWS_DYNAMODB_TABLE`](operations_configuration.md#aws-dynamodb-table) changes that: one server refreshes and publishes the list, the others read it.
+
+- **One refresh per fleet.** A server whose list has expired first claims a short lease in the table; the one that wins it refreshes and publishes, the rest keep serving what they have and pick up the published list on their next check. A server that crashes mid-refresh only holds the lease until it expires.
+- **Faster scale-out.** A starting server reads the published list instead of discovering, so it is ready in a couple of table reads rather than a full multi-region pass — which matters most where tasks start often (autoscaling, rolling deployments).
+- **Never a new point of failure.** Any table error is recorded in the server log, naming the permission or the setting to fix, and the server falls back to discovering the catalogue itself. Nothing about it reaches a client.
+- **Version-scoped by design.** A published list is only read by servers running the same version, in the same AWS account, with the same `AWS_BEDROCK_*` **and** `AWS_SAGEMAKER_*` configuration — every setting under those prefixes. During a rolling deployment the new version finds no list it recognises and discovers its own, which is what stops two versions from feeding each other a catalogue neither can serve; changing any of those settings has the same effect once, and then the fleet shares again.
+- **Freshness is unchanged.** A server reading a published list inherits its age rather than restarting the interval, so sharing makes the fleet consistent without making any list older than `MODEL_CACHE_SECONDS`. A server whose list has passed `MODEL_CACHE_MAX_STALE_SECONDS` discovers for itself rather than waiting on the publisher, so the ceiling above holds across a fleet exactly as it does on a single server.
+- **A model nobody has published yet can still 404 briefly.** Point 2 above — an unknown model is never answered from an expired list — is bounded by the publisher here: a server that lost the lease waits for what the publisher produces rather than discovering, so a model released moments ago can be reported as unknown for the publisher's discovery pass plus up to a minute more. Naming it again once the list is published resolves it.
+
+The table is only touched when a list has expired, so this costs a few requests per server per interval plus the published list itself — [priced here](operations_cost_management.md#model-list-sharing).
 
 ---
 
