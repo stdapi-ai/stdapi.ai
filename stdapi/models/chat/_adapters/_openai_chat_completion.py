@@ -1335,4 +1335,26 @@ async def format_stream(
             yield JSONServerSentEvent(
                 data=chunk.model_dump(mode="json", exclude_none=True)
             )
+    if not end_state:
+        # The stream ran to completion without a messageStop event, so nothing
+        # carried a finish reason. Amazon Bedrock Marketplace model endpoints do
+        # this -- measured against a deployed one: contentBlockStop and then the
+        # stream simply closes -- and a client that reads the finish reason to
+        # know the turn ended sees an unterminated turn. "stop" is what the
+        # non-streamed path answers for the same backend, since
+        # map_bedrock_stop_reason defaults there too, so the two paths agree
+        # rather than one of them being silent. A backend that does send
+        # messageStop is untouched: end_state is already set.
+        yield JSONServerSentEvent(
+            data=ChatCompletionChunk(
+                id=completion_id,
+                choices=[
+                    ChunkChoice(index=0, delta=ChoiceDelta(), finish_reason="stop")
+                ],
+                created=created,
+                model=model_id,
+                object="chat.completion.chunk",
+                service_tier=service_tier,
+            ).model_dump(mode="json", exclude_none=True)
+        )
     yield ServerSentEvent(data="[DONE]", event=None)

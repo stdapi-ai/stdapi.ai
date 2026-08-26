@@ -1582,7 +1582,14 @@ def _make_message_delta_event(
     """Create the ``message_delta`` SSE event.
 
     Args:
-        stop_reason: Final stop reason for the message.
+        stop_reason: Final stop reason for the message, or ``None`` when the
+            stream closed without a ``messageStop`` event -- a deployed Amazon
+            Bedrock Marketplace model endpoint sends ``contentBlockStop`` and
+            then simply closes. The default is applied here rather than left
+            out, because ``exclude_none`` would drop the key entirely and an
+            SDK client branching on ``stop_reason`` would read the turn as
+            unterminated; it is what the non-streamed path answers for the same
+            backend, so the two agree.
         usage_data: Token usage data from Bedrock metadata.
 
     Returns:
@@ -1590,7 +1597,7 @@ def _make_message_delta_event(
     """
     data = RawMessageDeltaEvent(
         type="message_delta",
-        delta=MessageDelta(stop_reason=stop_reason),
+        delta=MessageDelta(stop_reason=stop_reason or _map_stop_reason(None)),
         usage=MessageDeltaUsage(
             output_tokens=usage_data.get("outputTokens", 0),
             input_tokens=usage_data.get("inputTokens", 0),

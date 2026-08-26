@@ -76,10 +76,17 @@ class Service(StrEnum):
 
     Bedrock is split per invocation API: bedrock-runtime (Converse) and
     bedrock-mantle usage are recorded and priced independently.
+
+    ``BEDROCK_MARKETPLACE`` covers models served from a Marketplace model
+    endpoint. AWS bills those by the instance-hour and publishes no per-token
+    rate for them, so the member exists to record quantities under a key that
+    resolves no price rather than to price anything -- see
+    :data:`stdapi.usage.UNPRICED_SERVICES`.
     """
 
     BEDROCK = "bedrock-runtime"
     BEDROCK_MANTLE = "bedrock-mantle"
+    BEDROCK_MARKETPLACE = "bedrock-marketplace"
     POLLY = "polly"
     TRANSCRIBE = "transcribe"
     TRANSLATE = "translate"

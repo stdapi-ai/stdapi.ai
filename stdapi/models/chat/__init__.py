@@ -15,6 +15,7 @@ from stdapi.models import (
     ModelBase,
     get_model,
     is_mantle_served,
+    is_marketplace_endpoint,
     load_model_plugins,
 )
 from stdapi.monitoring import REQUEST
@@ -175,6 +176,12 @@ def get_chat_model(model_id: str) -> ChatModelBase[Any, Any]:
     service header) resolve from the Mantle family registry; every other
     model resolves from the classic Converse registry.
 
+    A Marketplace model endpoint always resolves to the generic Converse
+    implementation. A family class encodes what one *serverless* model does
+    differently, while an endpoint's own divergences are its container's, which
+    Amazon Bedrock has already mapped onto Converse -- so a family matched by
+    accident on the listing name would apply the wrong divergences.
+
     Args:
         model_id: The provider model identifier (e.g., "amazon.nova-micro-v1:0").
 
@@ -189,7 +196,8 @@ def get_chat_model(model_id: str) -> ChatModelBase[Any, Any]:
         from stdapi.models.chat._mantle import get_mantle_chat_model  # noqa: PLC0415
 
         return get_mantle_chat_model(model_id)
-    return get_model(model_id, _CHAT_MODEL_CACHE, _CHAT_MODEL_REGISTRY, __name__)
+    registry = [] if is_marketplace_endpoint(model_id) else _CHAT_MODEL_REGISTRY
+    return get_model(model_id, _CHAT_MODEL_CACHE, registry, __name__)
 
 
 load_model_plugins(

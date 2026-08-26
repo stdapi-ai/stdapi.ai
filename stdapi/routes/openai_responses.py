@@ -39,7 +39,11 @@ from stdapi.conversations import (
     stored_item,
     validate_conversation_id,
 )
-from stdapi.models import resolve_bedrock_prompt, validate_model
+from stdapi.models import (
+    reject_unsupported_token_counting,
+    resolve_bedrock_prompt,
+    validate_model,
+)
 from stdapi.models.capabilities import Capability, register_route_capability
 from stdapi.models.chat import get_chat_model, serves_via_mantle
 from stdapi.models.chat._adapters._openai_responses import (
@@ -960,12 +964,14 @@ async def count_input_tokens(
 
     Raises:
         ApiError: If the model is invalid, the request is unsupported, or the
-            model is served by Bedrock Mantle (400).
+            model is served by Bedrock Mantle or a Marketplace model
+            endpoint (400).
     """
     log_request_params(request)
     model = await validate_model(
         request.model, input_modality="TEXT", output_modality="TEXT", error_status=400
     )
+    reject_unsupported_token_counting(model)
     model_id = model.get_id()
     if serves_via_mantle(model_id):
         msg = "Token counting is not supported for this model on this endpoint."

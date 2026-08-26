@@ -592,8 +592,18 @@ def get_client(service: str, region_name: RegionName | None = None) -> Any:  # n
         AWS client instance.
 
     Raises:
-        KeyError: If multiple regional clients exist and the requested region
-            is not available in the pool.
+        KeyError: If *service* has no pool at all -- the pool is built at
+            start-up and cleared if any client fails, so this is a deployment
+            that never finished starting rather than a missing setting -- or if
+            multiple regional clients exist and the requested region is not
+            among them.
+
+    Both are deliberately loud: on a request path a missing client is a defect,
+    and answering from another region instead would send a call somewhere the
+    operator did not configure. A caller that must survive one -- a catalogue
+    refresh, where an optional feature may not take the whole catalogue down --
+    handles the ``KeyError`` itself and tells the two cases apart with
+    :func:`pooled_clients`.
     """
     clients = _CLIENTS[service]
     try:

@@ -85,6 +85,7 @@ from stdapi.monitoring import (
 )
 from stdapi.pricing import (
     Routing,
+    Service,
     batch_priced_models,
     refresh_price_catalog_for_new_models,
     register_default_prices,
@@ -98,6 +99,7 @@ from stdapi.utils import (
     match_bedrock_app_profile_arn,
     match_bedrock_prompt_arn,
     match_bedrock_prompt_router_arn,
+    match_marketplace_endpoint_arn,
 )
 
 if TYPE_CHECKING:
@@ -300,6 +302,71 @@ MANTLE_SERVICE = "AWS Bedrock Mantle"
 #: Service label for models served by the Amazon Bedrock runtime endpoint.
 RUNTIME_SERVICE = "AWS Bedrock Runtime"
 
+#: Service label for models served by an Amazon Bedrock Marketplace model endpoint.
+MARKETPLACE_SERVICE = "AWS Bedrock Marketplace"
+
+#: Published Marketplace model endpoints, keyed by model ID (see stdapi.models.marketplace_endpoints).
+MARKETPLACE_ENDPOINT_MODELS: dict[str, ModelDetails] = {}
+
+#: Operations answered by the token counter, which no model endpoint can satisfy.
+# Not gated behind Capability.COUNT_TOKENS: the Anthropic counter is also served
+# through Bedrock Mantle's own counter, whose classes do not carry that flag.
+_TOKEN_COUNTING_OPERATIONS: Final[frozenset[str]] = frozenset(
+    {"anthropic_message_count_tokens", "openai_response_input_tokens"}
+)
+
+
+def is_marketplace_endpoint(model_id: str) -> bool:
+    """Whether a model is served by an Amazon Bedrock Marketplace model endpoint.
+
+    Args:
+        model_id: A published model ID, or an endpoint ARN passed as one.
+
+    Returns:
+        True for a discovered endpoint or a well-formed endpoint ARN.
+    """
+    return model_id in MARKETPLACE_ENDPOINT_MODELS or bool(
+        match_marketplace_endpoint_arn(model_id)
+    )
+
+
+def reject_unsupported_token_counting(model: ModelDetails) -> None:
+    """Refuse token counting for a model the token counter cannot name.
+
+    Amazon Bedrock's token counter takes a foundation model identifier, so a
+    model served by a Marketplace model endpoint can never satisfy it. The
+    gateway answers that itself: forwarding the backend's validation error
+    would hand the caller something they cannot act on, for a route the model
+    catalogue already does not advertise for these models.
+
+    Args:
+        model: The model the request named, already resolved.
+
+    Raises:
+        ApiError: When the model is served by a Marketplace model endpoint (400).
+    """
+    if model.service == MARKETPLACE_SERVICE:
+        msg = "Token counting is not supported for this model on this endpoint."
+        raise ApiError(msg, status=400)
+
+
+def usage_service(model_id: str) -> Service:
+    """Return the billing service a model's Bedrock usage is recorded under.
+
+    Args:
+        model_id: The model the invocation billed.
+
+    Returns:
+        ``Service.BEDROCK_MARKETPLACE`` for a Marketplace model endpoint, whose
+        quantities AWS publishes no per-token rate for, else ``Service.BEDROCK``.
+    """
+    return (
+        Service.BEDROCK_MARKETPLACE
+        if is_marketplace_endpoint(model_id)
+        else Service.BEDROCK
+    )
+
+
 #: SPEECH-input model ID prefixes without Bedrock Converse support (bidirectional streaming only).
 NON_CONVERSE_SPEECH_MODEL_PREFIXES: tuple[str, ...] = (
     "amazon.nova-2-sonic",
@@ -487,6 +554,11 @@ class ModelDetails(BaseModel):
     inference_profiles_regional: dict[RegionName, str] | None = Field(
         default=None, exclude=True
     )
+    #: Per-region Marketplace model endpoint ARN, the identifier bedrock-runtime is
+    #: called with. Excluded from the public response: it carries the account ID.
+    marketplace_endpoints: dict[RegionName, str] | None = Field(
+        default=None, exclude=True
+    )
     supported_routes: list[str] = []
     supported_mcp_tools: list[str] = []
 
@@ -518,10 +590,32 @@ class ModelDetails(BaseModel):
         Raises:
             ModelRegionUnavailableError: When *inference_profile* is requested for a
                 specific region that has no profile of its own and no ``global.``
-                profile exists as a safe fallback.
+                profile exists as a safe fallback, or when the model is only served
+                by a Marketplace model endpoint outside *region*.
         """
+        if self.marketplace_endpoints:
+            return self._get_endpoint_id(region)
         if not inference_profile:
             return self.id
+        return self._get_profile_id(region, prefer_regional=prefer_regional)
+
+    def _get_profile_id(
+        self, region: RegionName | None, *, prefer_regional: bool
+    ) -> str:
+        """Return the inference profile ID valid for a specific region.
+
+        Args:
+            region: Target AWS region. If ``None``, returns any available profile.
+            prefer_regional: If True, return the geo-scoped profile cached for
+                *region* instead of ``global.`` when one is available.
+
+        Returns:
+            The profile to invoke, or the bare model ID for an on-demand model.
+
+        Raises:
+            ModelRegionUnavailableError: When *region* has no profile of its own
+                and no ``global.`` profile exists as a safe fallback.
+        """
         if (
             prefer_regional
             and region is not None
@@ -548,6 +642,30 @@ class ModelDetails(BaseModel):
         if region is None:
             return next(iter(profiles.values()))
         msg = f"Model '{self.id}' has no inference profile available in region '{region}'."
+        raise ModelRegionUnavailableError(msg, region=region)
+
+    def _get_endpoint_id(self, region: RegionName | None) -> str:
+        """Return the Marketplace model endpoint ARN valid in a specific region.
+
+        An endpoint is named by its own ARN, in its own region: there is no ID
+        form and no cross-region substitute for it.
+
+        Args:
+            region: Target AWS region. If ``None``, returns any known endpoint.
+
+        Returns:
+            The endpoint ARN to call bedrock-runtime with.
+
+        Raises:
+            ModelRegionUnavailableError: When no endpoint serves this model in
+                *region*.
+        """
+        endpoints = self.marketplace_endpoints or {}
+        if region is None:
+            return next(iter(endpoints.values()))
+        if endpoint := endpoints.get(region):
+            return endpoint
+        msg = f"Model '{self.id}' has no endpoint available in region '{region}'."
         raise ModelRegionUnavailableError(msg, region=region)
 
     def set_inference_profile(self, region: RegionName, name: str) -> None:
@@ -913,8 +1031,10 @@ class ModelBase[RequestT, ResponseT]:
         usage = response.get("usage") or {}
         if not usage and not grounding_requests:
             return
+        model_id = _invoked_model_id(response) or self._model_id
         record_bedrock_usage(
-            _invoked_model_id(response) or self._model_id,
+            model_id,
+            service=usage_service(model_id),
             # AWS reports the tier that actually served the call; it takes
             # precedence over the requested one.
             tier=(response.get("serviceTier") or {}).get("type") or requested_tier,
@@ -955,6 +1075,7 @@ class ModelBase[RequestT, ResponseT]:
         """
         record_bedrock_usage(
             self._model_id,
+            service=usage_service(self._model_id),
             tier=tier,
             region=region,
             routing=routing,
@@ -985,6 +1106,7 @@ class ModelBase[RequestT, ResponseT]:
         usage = usage_from_amazon_bedrock_invocation_metrics(data)
         record_bedrock_usage(
             self._model_id,
+            service=usage_service(self._model_id),
             tier=tier,
             region=region,
             routing=routing,
@@ -1315,8 +1437,12 @@ class ModelBase[RequestT, ResponseT]:
 async def get_model_details(model_id: str) -> ModelDetails:
     """Return Bedrock model details by ID.
 
+    A Marketplace model endpoint ARN is resolved as well: it is a documented
+    way of naming a model, but it is never a catalog key, so the invocation
+    path re-resolving the ID ``validate_model`` returned would otherwise miss.
+
     Args:
-        model_id: Bedrock model identifier.
+        model_id: Bedrock model identifier, or a Marketplace endpoint ARN.
 
     Returns:
         Model details.
@@ -1325,7 +1451,12 @@ async def get_model_details(model_id: str) -> ModelDetails:
         KeyError: If the model is not found.
     """
     async with _CACHE["access_lock"]:
-        return _MODELS[model_id]
+        try:
+            return _MODELS[model_id]
+        except KeyError:
+            if (model := _marketplace_endpoint_from_arn(model_id)) is None:
+                raise
+            return model
 
 
 async def get_all_models_details() -> dict[str, ModelDetails]:
@@ -1520,11 +1651,20 @@ def _compute_model_capabilities(
         and not model_id.startswith(NON_CONVERSE_SPEECH_MODEL_PREFIXES)
     ):
         capability_flags |= Capability.STT | Capability.STT_TRANSLATE
+    excluded_operations: frozenset[str] = frozenset()
+    if model.service == MARKETPLACE_SERVICE:
+        # A model endpoint is served by the generic Converse implementation
+        # whatever its listing name matches (see get_chat_model), so no
+        # capability-gated route applies to one, and it cannot be counted.
+        capability_flags = Capability(0)
+        excluded_operations = _TOKEN_COUNTING_OPERATIONS
     input_mods = model.input_modalities
     output_mods = model.output_modalities
     routes: list[str] = []
     tools: list[str] = []
     for op_id, cap in ROUTE_CAPABILITIES.items():
+        if op_id in excluded_operations:
+            continue
         if cap.required_input_modality not in input_mods:
             continue
         if cap.required_output_modality not in output_mods:
@@ -2238,13 +2378,17 @@ async def _collect_all_models(
     mantle_regions_without_endpoint: dict[str, str],
     unavailable_models: dict[str, dict[str, list[str]]],
 ) -> tuple[dict[str, ModelDetails], dict[str, str]]:
-    """Collect bedrock-runtime and Mantle models concurrently and merge them.
+    """Collect bedrock-runtime, Mantle and Marketplace models and merge them.
 
     Mantle is a separate endpoint, so its discovery runs alongside the
     bedrock-runtime region-candidate collection and availability checks. If the
     bedrock-runtime path raises first, or the caller is cancelled, the
     still-running Mantle task is cancelled and awaited so its outcome is never
     left as an un-retrieved task warning.
+
+    Marketplace model endpoints are discovered on the same ``bedrock``
+    control-plane clients as the foundation models, so their listing runs after
+    the candidate collection rather than beside it.
 
     Args:
         failed_regions: Accumulator mapping unreachable regions to the error.
@@ -2271,6 +2415,16 @@ async def _collect_all_models(
         candidates = await _collect_region_candidates(failed_regions)
         all_models = await _check_candidates(candidates, unavailable_models)
         invalid_arn_mappings = _apply_user_profiles(all_models)
+        if SETTINGS.aws_bedrock_marketplace_endpoints_enabled:
+            # Imported here: the module imports this one for its catalogue types.
+            from stdapi.models.marketplace_endpoints import (  # noqa: PLC0415
+                collect_marketplace_endpoint_models,
+                merge_marketplace_endpoint_models,
+            )
+
+            merge_marketplace_endpoint_models(
+                all_models, await collect_marketplace_endpoint_models(failed_regions)
+            )
         if mantle_task is not None:
             _merge_mantle_models(all_models, await mantle_task)
     except BaseException:
@@ -2390,8 +2544,11 @@ async def _trigger_price_catalog_refresh(
     Args:
         start_event: The event log passed to ``initialize_bedrock_models()``.
         new_model_ids: Model IDs discovered by this refresh that weren't
-            previously registered.
+            previously registered. Marketplace model endpoints are dropped:
+            AWS publishes no Price List row for them, so a reload could never
+            price one and would be retried for every one of them forever.
     """
+    new_model_ids = new_model_ids - MARKETPLACE_ENDPOINT_MODELS.keys()
     if new_model_ids and start_event is None:
         try:
             await refresh_price_catalog_for_new_models(new_model_ids)
@@ -3415,7 +3572,9 @@ async def validate_model(
     original_id = model_id
     models = _MODELS if bedrock_only else _ALL_MODELS
     if model_id.startswith("arn:"):
-        model = await _validate_model_from_arn(model_id)
+        model = _marketplace_endpoint_from_arn(
+            model_id
+        ) or await _validate_model_from_arn(model_id)
     else:
         async with _CACHE["access_lock"]:
             model = models.get(model_id)
@@ -3446,18 +3605,20 @@ async def validate_model(
 async def _validate_model_from_arn(arn: str) -> ModelDetails | None:
     """Resolve an ARN to a ``ModelDetails`` instance, using a TTL cache.
 
-    Supports application inference profiles, cross-region inference profiles, and
-    prompt router ARNs. Caches validated results for one model cache interval.
+    Supports application inference profiles, cross-region inference profiles,
+    prompt router ARNs and Marketplace model endpoints. Caches validated results
+    for one model cache interval.
 
     Args:
-        arn: Bedrock ARN of an inference profile or prompt router.
+        arn: Bedrock ARN of an inference profile, prompt router or model endpoint.
 
     Returns:
         Resolved :class:`ModelDetails` with ``inference_profile`` set to *arn*.
 
     Raises:
-        ApiError: If *arn* does not match a valid inference profile or prompt router,
-            or if the ARN type is disabled by server configuration.
+        ApiError: If *arn* does not match a valid inference profile, prompt router
+            or model endpoint, or if the ARN type is disabled by server
+            configuration.
     """
     models: (
         Sequence[InferenceProfileModelTypeDef]
@@ -3513,6 +3674,44 @@ async def _validate_model_from_arn(arn: str) -> ModelDetails | None:
         model.set_inference_profile(region, arn)
         _USER_PROFILES[arn] = (model, SETTINGS.now() + _CACHE["update_interval"])
         return model
+
+
+def _marketplace_endpoint_from_arn(arn: str) -> ModelDetails | None:
+    """Resolve a Marketplace model endpoint ARN passed as a model ID.
+
+    The endpoint is not looked up: Bedrock answers a wrong ARN itself, and the
+    published catalogue is a hint rather than a gate. Only the region is
+    checked, because calling the wrong one is the gateway's own mistake.
+
+    Args:
+        arn: The ARN to test.
+
+    Returns:
+        Details naming the endpoint, or ``None`` when *arn* is not one.
+
+    Raises:
+        ApiError: If model endpoint ARNs are disabled by server configuration.
+    """
+    if not (result := match_marketplace_endpoint_arn(arn)):
+        return None
+    if not SETTINGS.aws_bedrock_allow_marketplace_endpoint_arn:
+        msg = "Model endpoint ARNs are not allowed by server configuration."
+        raise ApiError(msg)
+    region: RegionName = result.group("region")  # type: ignore[assignment]
+    validate_bedrock_region(region)
+    name: str = result.group("name")
+    return ModelDetails(
+        id=arn,
+        name=name,
+        provider=MARKETPLACE_SERVICE,
+        service=MARKETPLACE_SERVICE,
+        input_modalities=["TEXT"],
+        output_modalities=["TEXT"],
+        response_streaming=True,
+        batch=False,
+        regions=[region],
+        marketplace_endpoints={region: arn},
+    )
 
 
 async def _get_prompt_router_models(

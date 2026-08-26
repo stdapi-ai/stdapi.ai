@@ -10,6 +10,7 @@ from stdapi.auth import authenticate
 from stdapi.config import SETTINGS
 from stdapi.models import (
     MANTLE_SERVICE,
+    MARKETPLACE_SERVICE,
     MODEL_ALIAS_OVERLAYS,
     ModelDetails,
     get_all_models_details,
@@ -375,6 +376,25 @@ def _validated_dimensions(dimension: set[str] | None) -> set[Dimension] | None:
         raise ApiError(msg) from None
 
 
+def _preferred_service(details: ModelDetails | None) -> Service:
+    """Return the pricing service a model's rates are looked up under.
+
+    Args:
+        details: The model's registry entry, when known.
+
+    Returns:
+        The service that serves the model. A Marketplace model endpoint has no
+        published rate at all, so the answer names it and resolves nothing.
+    """
+    match details.service if details is not None else None:
+        case s if s == MANTLE_SERVICE:
+            return Service.BEDROCK_MANTLE
+        case s if s == MARKETPLACE_SERVICE:
+            return Service.BEDROCK_MARKETPLACE
+        case _:
+            return Service.BEDROCK
+
+
 def _pricing_defaults(
     model_id: str, details: ModelDetails | None, alias_tier: str | None = None
 ) -> tuple[str, list[str]]:
@@ -627,11 +647,7 @@ async def model_pricing(
             details,
             alias_overlay.service_tier if alias_overlay is not None else None,
         )
-        preferred_service = (
-            Service.BEDROCK_MANTLE
-            if details is not None and details.service == MANTLE_SERVICE
-            else Service.BEDROCK
-        )
+        preferred_service = _preferred_service(details)
         rows = model_prices(
             resolved_model_id,
             region=region,
