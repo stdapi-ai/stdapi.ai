@@ -258,6 +258,10 @@ Configure **one** API key source. If several are set, precedence is `API_KEY` �
 | [`API_KEY_SECRETSMANAGER_SECRET`](#api-key-secretsmanager-secret) | None      | AWS Secrets Manager secret name containing API key                 |
 | [`API_KEY_SECRETSMANAGER_KEY`](#api-key-secretsmanager-key)       | `api_key` | JSON key name within Secrets Manager secret                        |
 | [`API_KEY`](#api-key)                                             | None      | Direct API key value (not recommended for production)              |
+| [`TENANT_API_KEYS`](#tenant-api-keys)                             | `false`   | Accept per-tenant API keys scoped by the tenant records in the shared DynamoDB table |
+| [`TENANT_KEY_CACHE_SECONDS`](#tenant-key-cache-seconds)           | `60`      | Per-instance validation cache, which is also the revocation window |
+| [`TENANT_KEY_SSM_PARAMETER_PREFIX`](#tenant-key-ssm-parameter-prefix) | None  | SSM prefix minted tenant keys are delivered under, once            |
+| [`TENANT_KEY_SSM_KMS_KEY_ID`](#tenant-key-ssm-kms-key-id)         | None      | KMS key encrypting the delivery parameters, instead of `alias/aws/ssm` |
 | [`AUTHENTICATION_MODE`](#authentication-mode)                     | `any`     | Accepted methods: `any`, `api_key` or `cognito`                    |
 
 Amazon Cognito user pool tokens are an alternative to the API key — see [Amazon Cognito Authentication](#cognito-authentication):
@@ -2220,7 +2224,7 @@ The full IAM reference — required Amazon Bedrock permissions, per-feature poli
 
 ## :material-lock: Authentication
 
-stdapi.ai supports three sources for API key authentication, plus Amazon Cognito user pool tokens.
+stdapi.ai supports three sources for API key authentication, plus Amazon Cognito user pool tokens and per-tenant API keys.
 
 !!! info "API Key Sources"
     **Configure exactly one source.** If several are set, the first match in this precedence order is used and the others are ignored:
@@ -2345,9 +2349,9 @@ export AWS_COGNITO_CLIENT_IDS=1example23456789abcdefghij
 :   `any` — every method that is configured
 
 :octicons-list-unordered-24: **Values**
-:   - `any`: the API key and user pool tokens, whichever is configured
-    - `api_key`: the API key only; startup fails if a user pool is also configured
-    - `cognito`: user pool tokens only; startup fails if an API key source is also configured
+:   - `any`: the API key, tenant API keys and user pool tokens, whichever is configured
+    - `api_key`: the API key and tenant API keys only; startup fails if a user pool is also configured
+    - `cognito`: user pool tokens only; startup fails if an API key source or tenant API keys are also configured
 
 ```bash
 export AUTHENTICATION_MODE=cognito
@@ -2433,6 +2437,77 @@ export AWS_COGNITO_ACCEPT_ID_TOKEN=true
 
 ```bash
 export AWS_COGNITO_ISSUER_TYPE=updated
+```
+
+### Method 5: Tenant API Keys { #tenant-authentication }
+
+Accept per-tenant API keys (`sk-std-...`), each backed by a record in the [shared DynamoDB table](#aws-dynamodb-table) that scopes what the key may call — model allow/deny lists and endpoint restrictions. The records are declared by the operator (the [Terraform module](operations_getting_started.md#quick-start)'s `tenants` variable, or written directly); the secret is minted by the server and delivered once through SSM Parameter Store. How keys are issued, scoped, cached and revoked is described in [Authentication & Security](operations_authentication_security.md#tenant-api-keys). Clients send the key in the `Authorization: Bearer <key>` or `X-API-Key` header, like any API key.
+
+```bash
+export AWS_DYNAMODB_TABLE=stdapi-ai
+export TENANT_API_KEYS=true
+export TENANT_KEY_SSM_PARAMETER_PREFIX=/stdapi-ai/prod/tenant-keys
+```
+
+#### `TENANT_API_KEYS` { #tenant-api-keys }
+
+:octicons-package-24: **Purpose**
+:   Enable per-tenant API keys, validated against the tenant records in the shared DynamoDB table
+
+:octicons-gear-24: **Default**
+:   `false` — tenant-shaped credentials are only compared against the deployment API key, like any other value
+
+:octicons-alert-24: **Requirement**
+:   [`AWS_DYNAMODB_TABLE`](#aws-dynamodb-table) and [`TENANT_KEY_SSM_PARAMETER_PREFIX`](#tenant-key-ssm-parameter-prefix) must both be set, or startup fails
+
+:octicons-lock-24: **IAM Permissions Required**
+:   The [shared table permissions](operations_iam_permissions.md#shared-table), plus `ssm:PutParameter` and `ssm:GetParameter` on the delivery prefix — see [Tenant API Key Delivery](operations_iam_permissions.md#tenant-key-delivery)
+
+#### `TENANT_KEY_CACHE_SECONDS` { #tenant-key-cache-seconds }
+
+:octicons-package-24: **Purpose**
+:   Seconds each server instance caches a validated tenant key before re-reading its records. This is the revocation window: a key revoked, disabled or re-scoped keeps its previous decision for up to this long per instance
+
+:octicons-gear-24: **Default**
+:   `60`
+
+:octicons-list-unordered-24: **Values**
+:   `0` disables the cache and reads the table on every request
+
+#### `TENANT_KEY_SSM_PARAMETER_PREFIX` { #tenant-key-ssm-parameter-prefix }
+
+:octicons-package-24: **Purpose**
+:   SSM Parameter Store prefix minted tenant keys are delivered under, one `SecureString` parameter named `<prefix>/<key id>` per tenant
+
+:octicons-alert-24: **Security Warning**
+:   Use a prefix private to this deployment: any principal allowed to read under it can read every tenant's key. Retrieve each key once, deliver it, then delete the parameter
+
+```bash
+export TENANT_KEY_SSM_PARAMETER_PREFIX=/stdapi-ai/prod/tenant-keys
+```
+
+#### `TENANT_KEY_SSM_KMS_KEY_ID` { #tenant-key-ssm-kms-key-id }
+
+:octicons-package-24: **Purpose**
+:   AWS KMS key encrypting the `SecureString` parameters the minted tenant keys are delivered through
+
+:octicons-gear-24: **Default**
+:   None — the parameters are encrypted with the AWS-managed `alias/aws/ssm` key, whose key policy lets **any principal of the account** holding `ssm:GetParameter` under the prefix decrypt them
+
+:octicons-list-unordered-24: **Values**
+:   A key ID, an alias (`alias/<name>`), or an ARN of either
+
+:octicons-workflow-24: **Effect**
+:   Reading a delivered key then also requires `kms:Decrypt` on that key, so the delivery is protected by a key policy of your own instead of the account-wide reach of the AWS-managed key
+
+:octicons-lock-24: **IAM Permissions Required**
+:   `kms:Encrypt` and `kms:Decrypt` on the key (add `kms:GenerateDataKey` if the account's default parameter tier creates advanced parameters) — see [Tenant API Key Delivery](operations_iam_permissions.md#tenant-key-delivery)
+
+!!! tip "Set for you by the Terraform module"
+    The [Terraform module](operations_getting_started.md#quick-start) passes the deployment's own KMS key here automatically; there is nothing to configure.
+
+```bash
+export TENANT_KEY_SSM_KMS_KEY_ID=alias/stdapi-ai
 ```
 
 ### Authentication Discovery for Agents { #oauth-discovery }

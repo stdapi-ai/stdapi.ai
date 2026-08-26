@@ -2911,7 +2911,7 @@ dev = [
     { name = "pytest-xdist", extra = ["psutil"] },
     { name = "ruff" },
     { name = "stdapi", extra = ["granian", "mcp", "opentelemetry", "uvicorn"] },
-    { name = "types-aiobotocore", extra = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "comprehend", "meteringmarketplace", "polly", "pricing", "s3", "sts", "transcribe", "translate"] },
+    { name = "types-aiobotocore", extra = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "comprehend", "meteringmarketplace", "polly", "pricing", "s3", "ssm", "sts", "transcribe", "translate"] },
     { name = "types-pyyaml" },
 ]
 docs = [
@@ -2929,7 +2929,7 @@ lint = [
     { name = "pyarrow" },
     { name = "ruff" },
     { name = "stdapi", extra = ["opentelemetry", "uvicorn"] },
-    { name = "types-aiobotocore", extra = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "comprehend", "meteringmarketplace", "polly", "pricing", "s3", "sts", "transcribe", "translate"] },
+    { name = "types-aiobotocore", extra = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "comprehend", "meteringmarketplace", "polly", "pricing", "s3", "ssm", "sts", "transcribe", "translate"] },
     { name = "types-pyyaml" },
 ]
 test = [
@@ -3005,7 +3005,7 @@ dev = [
     { name = "stdapi" },
     { name = "stdapi", extras = ["opentelemetry", "uvicorn"] },
     { name = "stdapi", extras = ["opentelemetry", "uvicorn", "granian", "mcp"] },
-    { name = "types-aiobotocore", extras = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "polly", "comprehend", "meteringmarketplace", "pricing", "s3", "sts", "transcribe", "translate"], specifier = ">=3.8" },
+    { name = "types-aiobotocore", extras = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "polly", "comprehend", "meteringmarketplace", "pricing", "s3", "ssm", "sts", "transcribe", "translate"], specifier = ">=3.8" },
     { name = "types-pyyaml" },
 ]
 docs = [
@@ -3024,7 +3024,7 @@ lint = [
     { name = "ruff" },
     { name = "stdapi" },
     { name = "stdapi", extras = ["opentelemetry", "uvicorn"] },
-    { name = "types-aiobotocore", extras = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "polly", "comprehend", "meteringmarketplace", "pricing", "s3", "sts", "transcribe", "translate"], specifier = ">=3.8" },
+    { name = "types-aiobotocore", extras = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "polly", "comprehend", "meteringmarketplace", "pricing", "s3", "ssm", "sts", "transcribe", "translate"], specifier = ">=3.8" },
     { name = "types-pyyaml" },
 ]
 test = [
@@ -3152,6 +3152,9 @@ pricing = [
 s3 = [
     { name = "types-aiobotocore-s3" },
 ]
+ssm = [
+    { name = "types-aiobotocore-ssm" },
+]
 sts = [
     { name = "types-aiobotocore-sts" },
 ]
@@ -3232,6 +3235,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b1/d8/50676b92e2f470f483df68b4675e12407e8a0403c0596d378a692f249847/types_aiobotocore_s3-3.9.0.tar.gz", hash = "sha256:bf6978aa30cd2ae5b49cfd4e6afc2d8996ec48667df4e03dcb56d7ae6d7b04e8", size = 79454, upload-time = "2026-08-02T03:03:37.391Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/4b/78/2a60987f59ccd7e6c3fc3b7da0723c12d8523946f712d407a2401a7a6b72/types_aiobotocore_s3-3.9.0-py3-none-any.whl", hash = "sha256:39691b6336bd5b32d683dd236a262ded628f1ddb3d83aa6b30be082eae94d5bd", size = 87373, upload-time = "2026-08-02T03:03:35.529Z" },
+]
+
+[[package]]
+name = "types-aiobotocore-ssm"
+version = "3.9.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/70/15/84d0f3cd08a3a5f831f3a4a5b0d36d9d0f51191afc1f3adf196c49d30c42/types_aiobotocore_ssm-3.9.0.tar.gz", hash = "sha256:2c3797e57b83a72cce3d1536ed799d73819dc4e997f190304cc019cfcaffbfec", size = 98000, upload-time = "2026-08-02T03:04:29.871Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/90/50/7c3a7d86a973f0127948377db02904df73eb85906b2c2cfc1f3e64169ce3/types_aiobotocore_ssm-3.9.0-py3-none-any.whl", hash = "sha256:79e4afbb8961c11df642b8c93fcf7280d208fb0a459664994a801e7d41bfab69", size = 100228, upload-time = "2026-08-02T03:04:27.288Z" },
 ]
 
 [[package]]

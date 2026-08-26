@@ -108,6 +108,19 @@ SQS_QUEUE_URL_RE = re.compile(
 #: Amazon DynamoDB table name, as the service accepts it.
 _DYNAMODB_TABLE_RE = re.compile(r"^[A-Za-z0-9_.-]{3,255}$").match
 
+#: AWS Systems Manager parameter path prefix, hierarchical and fully qualified.
+_SSM_PARAMETER_PREFIX_RE = re.compile(r"^(?:/[A-Za-z0-9_.-]+)+$").match
+
+#: Longest ``KeyId`` AWS Systems Manager accepts on a parameter.
+_SSM_KEY_ID_MAX = 256
+
+#: AWS KMS key reference as a ``KeyId`` field takes it: key id, alias, or either ARN.
+_KMS_KEY_ID_RE = re.compile(
+    r"^(?:[a-zA-Z0-9-]{36}|alias/[A-Za-z0-9:/_-]{1,250}"
+    r"|arn:aws(?:-[a-z]+)*:kms:[a-zA-Z0-9-]*:[0-9]{12}:"
+    r"(?:key/[a-zA-Z0-9-]{36}|alias/[A-Za-z0-9:/_-]{1,250}))$"
+).fullmatch
+
 #: Built-in set of ``anthropic_beta`` flags known to be supported by AWS Bedrock.
 _ANTHROPIC_BETA_BEDROCK_FLAGS: frozenset[str] = frozenset(
     {
@@ -1398,6 +1411,74 @@ class _Settings(BaseSettings):
         description=(
             "Key name within the AWS Secrets Manager secret containing the API key. "
             "Used only with api_key_secretsmanager_secret. Defaults to 'api_key' if not specified."
+        ),
+    )
+
+    tenant_api_keys: bool = Field(
+        default=False,
+        description=(
+            "Accept per-tenant API keys ('sk-std-...'), validated against the "
+            "tenant records in the DynamoDB table named by aws_dynamodb_table "
+            "and scoped by each record's model and endpoint restrictions. The "
+            "server mints the secret of every declared tenant and delivers it "
+            "once through AWS Systems Manager Parameter Store, under "
+            "tenant_key_ssm_parameter_prefix; both settings are required.\n\n"
+            "The API key and Amazon Cognito settings keep working unchanged "
+            "alongside tenant keys.\n\n"
+            "Required IAM permissions: the aws_dynamodb_table set, plus "
+            "ssm:PutParameter and ssm:GetParameter on "
+            "'tenant_key_ssm_parameter_prefix/*'.\n\n"
+            "Disabled (default): tenant-shaped credentials are only compared "
+            "against the deployment API key, like any other value."
+        ),
+    )
+
+    tenant_key_cache_seconds: float = Field(
+        default=60.0,
+        ge=0.0,
+        description=(
+            "Seconds each server instance caches a tenant API key validation "
+            "before re-reading its records, trading table reads against "
+            "freshness. This is the revocation window: a key revoked, disabled "
+            "or re-scoped keeps its previous decision for up to this long per "
+            "instance. 0 disables the cache and reads the table on every "
+            "request.\n\n"
+            "Only used when tenant_api_keys is enabled. Defaults to 60."
+        ),
+    )
+
+    tenant_key_ssm_parameter_prefix: str | None = Field(
+        default=None,
+        description=(
+            "AWS Systems Manager Parameter Store prefix the minted tenant API "
+            "keys are delivered under, one 'SecureString' parameter named "
+            "'<prefix>/<key id>' per tenant. Retrieve each key once, hand it "
+            "to its tenant, then delete the parameter. Use a prefix private to "
+            "this deployment: any principal allowed to read under it can read "
+            "every tenant's key.\n\n"
+            "Required when tenant_api_keys is enabled.\n\n"
+            "Example: '/stdapi-ai/production/tenant-keys'"
+        ),
+    )
+
+    tenant_key_ssm_kms_key_id: str | None = Field(
+        default=None,
+        description=(
+            "AWS KMS key encrypting the 'SecureString' parameters the minted "
+            "tenant API keys are delivered through, as a key id, an alias "
+            "('alias/<name>') or an ARN of either. Reading a delivered key "
+            "then requires kms:Decrypt on that key on top of ssm:GetParameter "
+            "under the prefix, instead of the AWS-managed key's account-wide "
+            "reach.\n\n"
+            "Only used when tenant_api_keys is enabled. The server's role "
+            "needs kms:Encrypt and kms:Decrypt on the key, plus "
+            "kms:GenerateDataKey if the account creates advanced "
+            "parameters.\n\n"
+            "Example: 'alias/stdapi-ai'\n\n"
+            "Unset (default): the parameters are encrypted with the "
+            "AWS-managed 'alias/aws/ssm' key, whose key policy lets any "
+            "principal of this account holding ssm:GetParameter under the "
+            "prefix decrypt them."
         ),
     )
 
@@ -2934,10 +3015,11 @@ class _Settings(BaseSettings):
             or self.api_key_secretsmanager_secret
         )
         if self.authentication_mode == "api_key":
-            if not api_key_configured:
+            if not api_key_configured and not self.tenant_api_keys:
                 msg = (
                     'authentication_mode "api_key" requires an API key source '
-                    "(api_key, api_key_ssm_parameter or api_key_secretsmanager_secret)."
+                    "(api_key, api_key_ssm_parameter, api_key_secretsmanager_secret "
+                    "or tenant_api_keys)."
                 )
                 raise ValueError(msg)
             if self.aws_cognito_user_pool_id:
@@ -2954,6 +3036,12 @@ class _Settings(BaseSettings):
                 msg = (
                     'authentication_mode "cognito" ignores the configured API key '
                     'source. Use authentication_mode "any" to accept both.'
+                )
+                raise ValueError(msg)
+            if self.tenant_api_keys:
+                msg = (
+                    'authentication_mode "cognito" ignores tenant_api_keys, which '
+                    'is enabled. Use authentication_mode "any" to accept both.'
                 )
                 raise ValueError(msg)
 
@@ -3110,6 +3198,56 @@ class _Settings(BaseSettings):
             )
             raise ValueError(msg)
 
+    def _validate_tenant_keys(self) -> None:
+        """Ensure tenant API keys are configured completely or not at all.
+
+        Raises:
+            ValueError: If tenant keys are enabled without the table or the
+                delivery prefix, if the prefix is not a Parameter Store path,
+                if the delivery KMS key is not a KMS key reference, or if
+                either delivery setting is set without the feature.
+        """
+        if not self.tenant_api_keys:
+            if self.tenant_key_ssm_parameter_prefix:
+                msg = (
+                    "tenant_key_ssm_parameter_prefix requires tenant_api_keys: "
+                    "without the feature no key is ever minted there."
+                )
+                raise ValueError(msg)
+            if self.tenant_key_ssm_kms_key_id:
+                msg = (
+                    "tenant_key_ssm_kms_key_id requires tenant_api_keys: "
+                    "without the feature no key is ever delivered under it."
+                )
+                raise ValueError(msg)
+            return
+        if not self.aws_dynamodb_table:
+            msg = (
+                "tenant_api_keys requires aws_dynamodb_table: the tenant "
+                "records live in that table."
+            )
+            raise ValueError(msg)
+        prefix = (self.tenant_key_ssm_parameter_prefix or "").rstrip("/")
+        if not _SSM_PARAMETER_PREFIX_RE(prefix):
+            msg = (
+                "tenant_api_keys requires tenant_key_ssm_parameter_prefix, an "
+                "AWS Systems Manager Parameter Store path starting with '/' "
+                "and made of letters, digits, '_', '.' and '-' segments, "
+                "e.g. '/stdapi-ai/tenant-keys'."
+            )
+            raise ValueError(msg)
+        self.tenant_key_ssm_parameter_prefix = prefix
+        key_id = self.tenant_key_ssm_kms_key_id
+        if key_id is not None and (
+            len(key_id) > _SSM_KEY_ID_MAX or not _KMS_KEY_ID_RE(key_id)
+        ):
+            msg = (
+                f'Invalid tenant_key_ssm_kms_key_id "{key_id}": must be an AWS '
+                "KMS key id, an alias 'alias/<name>', or an ARN of either, of "
+                f"at most {_SSM_KEY_ID_MAX} characters."
+            )
+            raise ValueError(msg)
+
     @model_validator(mode="after")
     def _validate(self) -> Self:
         """Perform cross-field validation and apply configuration defaults.
@@ -3126,6 +3264,7 @@ class _Settings(BaseSettings):
         self._validate_unique_routes_prefixes()
         self._validate_vector_stores()
         self._validate_dynamodb()
+        self._validate_tenant_keys()
         if (
             self.aws_bedrock_guardrail_identifier
             and not self.aws_bedrock_guardrail_version

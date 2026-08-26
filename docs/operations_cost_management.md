@@ -351,7 +351,8 @@ To split the **AWS bill itself** per end user, give each one an identity of thei
     The identity is taken, in order:
 
     1. the **authenticated caller**, when [Amazon Cognito authentication](operations_authentication_security.md) is enabled — the identity the gateway itself verified;
-    2. the identifier the request declares: `safety_identifier` (or the deprecated `user`) on the OpenAI-compatible APIs, `metadata.user_id` on the Anthropic Messages API.
+    2. the identifier the request declares: `safety_identifier` (or the deprecated `user`) on the OpenAI-compatible APIs, `metadata.user_id` on the Anthropic Messages API;
+    3. the key ID of the verified [tenant API key](operations_authentication_security.md#tenant-api-keys), when the request carried one — so a tenant that identifies no individual user is still attributed as itself.
 
     A request carrying neither runs under the gateway's own identity, unless `AWS_BEDROCK_USER_ROLE_REQUIRE_IDENTITY` is enabled, in which case it is rejected with a `400`. That rejection covers the requests that would run under the end user role, and only those — the services listed in the coverage warning below stay on the gateway's identity either way, with the one exception noted there. Some APIs — audio transcription among them — have no end user field, so there the identity can only come from an authenticated caller.
 

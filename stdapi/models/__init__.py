@@ -81,6 +81,7 @@ from stdapi.models.pricing_overrides import (
 from stdapi.monitoring import (
     REQUEST_ID,
     REQUEST_LOG,
+    TENANT,
     EventLog,
     add_server_warning,
     build_metadata,
@@ -1678,8 +1679,13 @@ def _resolve_model_wildcard(
 
     Candidates are the models this server can serve on *route* and in the
     requested modalities, minus the legacy, deprecated and never-subscribed
-    ones.  Among them the newest release date wins; a model whose release date
-    is unknown is never a winner, and never makes an otherwise unique match
+    ones, and minus whatever the calling tenant's key is not scoped to.
+    Narrowing by tenant scope here, rather than only after a model is chosen,
+    is what lets a pattern resolve to the newest model the tenant may actually
+    use instead of the newest model in the whole catalogue -- which the
+    post-resolution scope check would then always refuse. Among the remaining
+    candidates the newest release date wins; a model whose release date is
+    unknown is never a winner, and never makes an otherwise unique match
     ambiguous.  Ordering by release date instead of by version fragment is what
     keeps an unusually-named version from being read as the newest one.
 
@@ -1714,6 +1720,10 @@ def _resolve_model_wildcard(
         candidates &= _ALL_MODELS_OUTPUT_MODALITY.get(output_modality, set())
     if input_modality:
         candidates &= _ALL_MODELS_INPUT_MODALITY.get(input_modality, set())
+    if (tenant := TENANT.get()) is not None:
+        candidates = {
+            model_id for model_id in candidates if tenant.allows_model(model_id)
+        }
     latest: list[ModelDetails] = []
     latest_date: AwareDatetime | None = None
     for model_id in match_model_names(pattern, candidates, models):
@@ -4233,6 +4243,7 @@ async def validate_model(
     route: str | None = None,
     bedrock_only: bool = True,
     error_status: int | None = None,
+    tenant_scope: bool = True,
 ) -> ModelDetails:
     """Validate *model_id* and return its ``ModelDetails``.
 
@@ -4255,6 +4266,9 @@ async def validate_model(
             pattern uses it, to select among the models that route accepts.
         bedrock_only: Restrict lookup to Bedrock models (default ``True``).
         error_status: HTTP status code override for ``UnsupportedModelError``.
+        tenant_scope: Whether the calling tenant's model scope applies. Only a
+            model the deployment configured for itself, which the caller never
+            named and cannot choose, sets this to ``False``.
 
     Returns:
         Validated :class:`ModelDetails`.
@@ -4303,6 +4317,17 @@ async def validate_model(
     if wildcard:
         # The pattern was an input; everything downstream names the model it chose.
         model_id = original_id = model.id
+
+    # On the resolved ID, after aliases, wildcards, ARNs and deprecation
+    # fallbacks, so no indirection can launder a model the tenant may not use.
+    # The refusal is the not-found shape: to a tenant, a model outside its
+    # scope does not exist.
+    if (
+        tenant_scope
+        and (tenant := TENANT.get()) is not None
+        and not tenant.allows_model(model.id)
+    ):
+        raise UnsupportedModelError(original_id, status=error_status)
 
     _check_model_modalities(model, model_id, output_modality, input_modality)
     log = REQUEST_LOG.get()

@@ -3,9 +3,10 @@
 from hashlib import blake2b
 from hmac import compare_digest
 from secrets import token_bytes
+from typing import TYPE_CHECKING, Any
 
 from botocore.exceptions import ClientError
-from fastapi import Depends
+from fastapi import Depends, Request
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import SecretBytes, SecretStr
 from pydantic_core import from_json
@@ -15,7 +16,18 @@ from stdapi.auth_cognito import CognitoAuthenticator
 from stdapi.aws import CONFIG
 from stdapi.config import AWS_REGION, AWS_SESSION, SETTINGS
 from stdapi.exceptions import ServerError
-from stdapi.monitoring import PRINCIPAL, EventLog, add_server_warning, log_error_details
+from stdapi.monitoring import (
+    PRINCIPAL,
+    TENANT,
+    EventLog,
+    Tenant,
+    add_server_warning,
+    log_error_details,
+)
+from stdapi.tenant_keys import is_tenant_key, verify_tenant_key
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 #: HTTPBearer security scheme for API key authentication
 _authorization_bearer = HTTPBearer(auto_error=False)
@@ -26,6 +38,9 @@ _x_api_key = APIKeyHeader(name="x-api-key", auto_error=False)
 
 #: Personalisation separating the key-derivation seed from the stored hash.
 _DERIVATION_PERSON = b"stdapi-drv"
+
+#: Routeless request standing in when the dependency is called outside FastAPI.
+_DIRECT_CALL_REQUEST = Request({"type": "http"})
 
 
 class AuthenticationHandler:
@@ -118,6 +133,8 @@ class AuthenticationHandler:
             ClientError: If there's an error retrieving the API key from SSM.
             ValueError: If the SSM parameter is not found.
         """
+        # Only called with the setting present; the fallback merely narrows the type.
+        parameter = SETTINGS.api_key_ssm_parameter or ""
         async with AWS_SESSION.create_client(
             "ssm", config=CONFIG, region_name=AWS_REGION
         ) as ssm_client:
@@ -125,13 +142,13 @@ class AuthenticationHandler:
                 return SecretStr(
                     (
                         await ssm_client.get_parameter(
-                            Name=SETTINGS.api_key_ssm_parameter, WithDecryption=True
+                            Name=parameter, WithDecryption=True
                         )
                     )["Parameter"]["Value"]
                 )
             except ClientError as exc:
                 if exc.response["Error"]["Code"] == "ParameterNotFound":
-                    msg = f"SSM Parameter '{SETTINGS.api_key_ssm_parameter}' not found"
+                    msg = f"SSM Parameter '{parameter}' not found"
                     raise ValueError(msg) from exc
                 raise
 
@@ -179,6 +196,29 @@ class AuthenticationHandler:
             True once an API key was found and hashed at startup.
         """
         return self._api_key_hash is not None and self._api_key_salt is not None
+
+    def matches(self, token: str) -> bool:
+        """Whether *token* is the deployment's API key, without deciding anything.
+
+        Lets the dispatcher recognize a deployment key that happens to look
+        like another credential kind, so introducing new kinds never breaks a
+        key that worked before.
+
+        Args:
+            token: The candidate credential.
+
+        Returns:
+            True when it matches the configured key; False when it does not or
+            no key is configured.
+        """
+        if self._api_key_hash is None or self._api_key_salt is None:
+            return False
+        return compare_digest(
+            blake2b(
+                token.encode("utf-8"), salt=self._api_key_salt.get_secret_value()
+            ).digest(),
+            self._api_key_hash.get_secret_value(),
+        )
 
     def verify_credentials(self, token: SecretStr | None) -> None:
         """Verify authentication for API endpoints.
@@ -248,8 +288,9 @@ async def initialize_authentication(start_event: EventLog) -> None:
         )
         raise ServerError(msg)
     user_pool_enabled = await _cognito_authenticator.initialize()
+    tenant_keys_enabled = SETTINGS.tenant_api_keys
     mode = SETTINGS.authentication_mode
-    if (mode == "api_key" and not api_key_enabled) or (
+    if (mode == "api_key" and not api_key_enabled and not tenant_keys_enabled) or (
         mode == "cognito" and not user_pool_enabled
     ):
         msg = (
@@ -257,42 +298,117 @@ async def initialize_authentication(start_event: EventLog) -> None:
             "method is not enabled"
         )
         raise ServerError(msg)
-    if not api_key_enabled and not user_pool_enabled:
+    if not api_key_enabled and not user_pool_enabled and not tenant_keys_enabled:
         add_server_warning(
             start_event,
             "SECURITY risk: Authentication is not enabled "
             "('api_key', 'api_key_ssm_parameter', 'api_key_secretsmanager_secret', "
-            "'aws_cognito_user_pool_id' not set)",
+            "'aws_cognito_user_pool_id', 'tenant_api_keys' not set)",
         )
 
 
 async def authenticate(
     credentials: HTTPAuthorizationCredentials | None = Depends(_authorization_bearer),
     x_api_key: str | None = Depends(_x_api_key),
+    request: Request = _DIRECT_CALL_REQUEST,
 ) -> None:
     """Verify the request credentials dependency for FastAPI routes.
 
     A credential shaped like a signed token is verified against the configured
-    Amazon Cognito user pool and identifies the caller; anything else is
-    compared against the API key, which identifies the deployment rather than a
-    person and so leaves the request with no principal. Both headers carry
-    either kind, ``x-api-key`` taking precedence. No-op when
-    no authentication method is configured, allowing all requests.
+    Amazon Cognito user pool and identifies the caller; one shaped like a
+    tenant API key is verified against the tenant records and scopes the
+    request; anything else is compared against the API key, which identifies
+    the deployment rather than a person and so leaves the request with no
+    principal. Both headers carry any kind, ``x-api-key`` taking precedence --
+    except that a tenant key in ``x-api-key`` verifies *alongside* a Bearer
+    credential rather than instead of it: the tenant key authorizes, the token
+    identifies, and both must hold. No-op when no authentication method is
+    configured, allowing all requests.
 
     Args:
         credentials: HTTP Bearer token credentials from the Authorization header.
         x_api_key: API key from the X-API-Key header.
+        request: The request, whose matched route the tenant scopes apply to.
+            Filled by FastAPI; a direct call without one has no route to test,
+            which fails closed for an endpoint-restricted tenant.
 
     Raises:
-        ApiError: 401 if authentication is required but missing/invalid.
+        ApiError: 401 if authentication is required but missing/invalid, or if
+            a tenant key is not allowed on this endpoint.
     """
-    # Cleared first, every request: a nested tool call must not inherit a principal.
+    # Cleared first, every request: a nested tool call must not inherit an identity.
     PRINCIPAL.set(None)
-    credential = x_api_key
+    TENANT.set(None)
+    bearer: str | None = None
     if credentials is not None:
-        credential = credential or credentials.credentials
+        bearer = credentials.credentials
         credentials.credentials = ""
-    await verify_credential(credential)
+    if (
+        x_api_key
+        and SETTINGS.tenant_api_keys
+        and is_tenant_key(x_api_key)
+        and not _auth_handler.matches(x_api_key)
+    ):
+        tenant = await verify_tenant_key(x_api_key)
+        if bearer:
+            await verify_credential(bearer)
+        # Set last: a Bearer credential that is itself a tenant key must verify
+        # like any other, never re-scope the request onto its own tenant.
+        TENANT.set(tenant)
+    else:
+        await verify_credential(x_api_key or bearer)
+    enforce_tenant_endpoint_scope(request.scope)
+
+
+def scope_route_path(scope: Mapping[str, Any]) -> str | None:
+    """Return the matched route's path template from an ASGI scope.
+
+    Args:
+        scope: The connection's ASGI scope, after routing.
+
+    Returns:
+        The path template, e.g. ``/v1/chat/completions``, or None when no
+        route matched.
+    """
+    route = scope.get("route")
+    return getattr(route, "path_format", None) or getattr(route, "path", None)
+
+
+def enforce_tenant_endpoint_scope(scope: Mapping[str, Any]) -> None:
+    """Refuse the connection when its route is outside the tenant's scope.
+
+    No-op when the current request carries no verified tenant.
+
+    Args:
+        scope: The connection's ASGI scope, after routing.
+
+    Raises:
+        ApiError: 401 when the tenant restricts endpoints and the matched
+            route is not allowed.
+    """
+    if (tenant := TENANT.get()) is not None:
+        _enforce_endpoint_scope(tenant, scope_route_path(scope))
+
+
+def _enforce_endpoint_scope(tenant: Tenant, path: str | None) -> None:
+    """Refuse the request when its route is outside the tenant's scope.
+
+    Args:
+        tenant: The verified tenant.
+        path: The matched route's path template, if known.
+
+    Raises:
+        ApiError: 401 when the tenant restricts endpoints and this one is not
+            allowed -- or not known, which fails closed.
+    """
+    if tenant.endpoints_allow is None and not tenant.endpoints_deny:
+        return
+    if path is None or not tenant.allows_endpoint(path):
+        log_error_details(
+            f"Tenant API key '{tenant.key_id}' is not allowed on this endpoint"
+        )
+        msg = "Unauthorized"
+        raise ApiError(msg, status=401)
 
 
 async def verify_credential(credential: str | None) -> None:
@@ -303,7 +419,19 @@ async def verify_credential(credential: str | None) -> None:
 
     Raises:
         ApiError: 401 if authentication is required but missing/invalid.
+        FeatureUnavailableError: 503 if the credential is a tenant key and the
+            tenant records cannot be read; never accepted, never a 401.
     """
+    if (
+        credential
+        and SETTINGS.tenant_api_keys
+        and is_tenant_key(credential)
+        # The deployment key always wins, whatever it is shaped like: a key
+        # that worked before tenant keys were enabled must keep working.
+        and not _auth_handler.matches(credential)
+    ):
+        TENANT.set(await verify_tenant_key(credential))
+        return
     if _cognito_authenticator.enabled:
         # Three segments is a signed token; a key shaped like one falls through below.
         if credential and credential.count(".") == 2:
@@ -319,10 +447,18 @@ async def verify_credential(credential: str | None) -> None:
             log_error_details("Credentials rejected by the user pool")
             msg = "Unauthorized"
             raise ApiError(msg, status=401)
+    elif not _auth_handler.enabled and SETTINGS.tenant_api_keys:
+        # Same trap with tenant keys as the only method: never fall through to
+        # the disabled comparison, which accepts anything.
+        log_error_details("Credentials rejected: not a tenant API key")
+        msg = "Unauthorized"
+        raise ApiError(msg, status=401)
     _auth_handler.verify_credentials(SecretStr(credential) if credential else None)
 
 
-async def verify_websocket_credentials(credential: str | None) -> None:
+async def verify_websocket_credentials(
+    credential: str | None, scope: Mapping[str, Any] | None = None
+) -> None:
     """Verify the credential a WebSocket client presented.
 
     The HTTP dependency cannot serve this: FastAPI's security schemes are
@@ -332,13 +468,23 @@ async def verify_websocket_credentials(credential: str | None) -> None:
 
     Args:
         credential: The credential read off the connection, if any.
+        scope: The connection's ASGI scope, letting a tenant key's endpoint
+            restrictions apply to the matched WebSocket route.
 
     Raises:
-        ApiError: 401 if authentication is required but missing/invalid.
+        ApiError: 401 if authentication is required but missing/invalid, or if
+            a tenant key is not allowed on this endpoint.
     """
-    # Cleared per connection: a session must not inherit another's principal.
+    # Cleared per connection: a session must not inherit another's identity.
     PRINCIPAL.set(None)
+    TENANT.set(None)
     await verify_credential(credential)
+    if scope is not None:
+        enforce_tenant_endpoint_scope(scope)
+    elif (tenant := TENANT.get()) is not None:
+        # No scope means no matched route to test: fail closed for a
+        # restricted tenant rather than skipping its restrictions.
+        _enforce_endpoint_scope(tenant, None)
 
 
 def realtime_signing_key(person: bytes, size: int) -> bytes | None:

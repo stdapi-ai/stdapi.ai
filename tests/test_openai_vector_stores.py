@@ -1156,12 +1156,15 @@ def vector_backend(monkeypatch: pytest.MonkeyPatch) -> _FakeBackend:
     monkeypatch.setattr(engine, "get_embedding_model", lambda _model_id: backend.model)
 
     async def _validate_model(
-        model_id: str, _modality: str, *, route: str
+        model_id: str, _modality: str, *, route: str, tenant_scope: bool = True
     ) -> SimpleNamespace:
         # Asserted, not swallowed: the scope a wildcard model name resolves in
         # comes from the route, so a call site that stopped passing it would
-        # widen the match set silently.
+        # widen the match set silently. The deployment's own embedding model is
+        # resolved outside the caller's tenant scope, which is asserted the
+        # same way.
         assert route == "openai_embedding"
+        assert tenant_scope is False
         return SimpleNamespace(id=model_id)
 
     monkeypatch.setattr(engine, "validate_model", _validate_model)

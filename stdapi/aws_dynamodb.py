@@ -9,7 +9,9 @@ cannot be added to a table that already exists. Every key is built by
 :func:`item_key`, which forbids the separator inside a part, so two namespaces
 can never produce the same key:
 
-- Tenant API keys: ``pk=KEY#<key id>``, ``sk=key``.
+- Tenant API keys: ``pk=TENANT``, ``sk=tenant#<key id>`` for the
+  operator-declared record and ``sk=secret#<key id>`` for the server-minted
+  credential hash -- one partition, so one query lists every tenant.
 - Shared model cache: ``pk=MODELCACHE#<fingerprint>``, ``sk`` one of
   ``manifest``, ``lease`` or ``shard#<version>#<n>``.
 

@@ -1,7 +1,7 @@
 ---
 title: Authentication & Security
-description: Configuration guide for authenticating and securing requests to stdapi.ai — API keys via SSM/Secrets Manager, Amazon Cognito user pool tokens, OAuth 2.0 discovery for AI agents, external authentication via AWS ALB/API Gateway, and encryption in transit.
-keywords: API authentication, API key, AWS SSM, Secrets Manager, Amazon Cognito user pool, JWT, bearer token, AWS ALB authentication, API Gateway authorizer, OIDC, OAuth 2.0 discovery, protected resource metadata, WWW-Authenticate, MCP client authentication, stdapi.ai security
+description: Configuration guide for authenticating and securing requests to stdapi.ai — API keys via SSM/Secrets Manager, per-tenant API keys with model and endpoint scopes, Amazon Cognito user pool tokens, OAuth 2.0 discovery for AI agents, external authentication via AWS ALB/API Gateway, and encryption in transit.
+keywords: API authentication, API key, AWS SSM, Secrets Manager, tenant API keys, multi-tenant API gateway, scoped API keys, model allow list, API key revocation, Amazon Cognito user pool, JWT, bearer token, AWS ALB authentication, API Gateway authorizer, OIDC, OAuth 2.0 discovery, protected resource metadata, WWW-Authenticate, MCP client authentication, stdapi.ai security
 ---
 
 # :material-lock: Authentication & Security
@@ -12,6 +12,9 @@ stdapi.ai provides flexible authentication options and built-in security mechani
 
 - :material-key: __API Key Authentication__
   <br>Securely stored in AWS SSM Parameter Store or Secrets Manager. Mimics OpenAI and Anthropic auth.
+
+- :material-key-multiple: __Tenant API Keys__
+  <br>One key per customer or team, scoped to models and endpoints, minted server-side and revocable within a minute.
 
 - :material-account-key: __Amazon Cognito User Pool Tokens__
   <br>Per-user and per-application bearer tokens, validated on every request. No key to rotate.
@@ -37,14 +40,15 @@ stdapi.ai provides flexible authentication options and built-in security mechani
 | Method | Best for | AWS infrastructure | Enforced by |
 |---|---|---|---|
 | **API Key** | Server-to-server, simple deployments | Any | stdapi.ai |
+| **[Tenant API keys](#tenant-api-keys)** | Serving several customers or teams from one deployment, each key scoped and revocable | DynamoDB table | stdapi.ai |
 | **Amazon Cognito user pool token** | Per-user access, autonomous agents, revocable credentials | Cognito user pool | stdapi.ai |
 | **OIDC / Cognito / IAM Identity Center** | User-facing apps, SSO, workforce identity | ALB or API Gateway | AWS (before request reaches stdapi.ai) |
 | **AWS IAM** | Service-to-service within AWS | API Gateway | AWS (SigV4) |
 | **No Authentication** | Local development, trusted VPC | Any | Network controls only |
 
-The API key and Cognito tokens can be used together: [`AUTHENTICATION_MODE`](operations_configuration.md#authentication-mode) selects which of them a deployment accepts, and defaults to accepting every method that is configured.
+The API key, tenant API keys and Cognito tokens can be used together: [`AUTHENTICATION_MODE`](operations_configuration.md#authentication-mode) selects which of them a deployment accepts, and defaults to accepting every method that is configured.
 
-When stdapi.ai enforces the credential itself — the API key and Cognito user pool tokens — a rejected request is answered with `401 Unauthorized`, a `WWW-Authenticate: Bearer` challenge, and a body that states nothing beyond `Unauthorized` — the reason is written to the server log only, so the response cannot be used to work out which half of a credential was wrong. That challenge is also where an AI agent starts: see [Authentication Discovery for Agents](#authentication-discovery-for-agents). The edge-enforced methods answer an unauthenticated request themselves, before it reaches stdapi.ai, with whatever their own configuration says — commonly a redirect to the identity provider.
+When stdapi.ai enforces the credential itself — the API key, tenant API keys and Cognito user pool tokens — a rejected request is answered with `401 Unauthorized`, a `WWW-Authenticate: Bearer` challenge, and a body that states nothing beyond `Unauthorized` — the reason is written to the server log only, so the response cannot be used to work out which half of a credential was wrong. That challenge is also where an AI agent starts: see [Authentication Discovery for Agents](#authentication-discovery-for-agents). The edge-enforced methods answer an unauthenticated request themselves, before it reaches stdapi.ai, with whatever their own configuration says — commonly a redirect to the identity provider.
 
 ### :material-key-star: API Key Authentication
 
@@ -120,6 +124,88 @@ Every request is checked against all of the following, and any failure returns t
 
 !!! tip "Both methods, or one"
     With both a user pool and an API key configured, either credential is accepted: a bearer value shaped like a signed token is validated against the pool, anything else is compared to the API key. Set [`AUTHENTICATION_MODE`](operations_configuration.md#authentication-mode) to `cognito` or `api_key` to accept only one of them — the deployment then refuses to start if the other one is configured too, so a credential is never accepted by accident.
+
+### :material-key-multiple: Tenant API Keys { #tenant-api-keys }
+
+One deployment can serve several customers or teams, each holding an API key of its own — shaped `sk-std-<key id>-<secret>` — that is validated on every request and scoped to the models and endpoints its tenant is entitled to. Enable the method with [`TENANT_API_KEYS`](operations_configuration.md#tenant-api-keys); it needs the [shared DynamoDB table](operations_configuration.md#aws-dynamodb-table) and a [delivery prefix](operations_configuration.md#tenant-key-ssm-parameter-prefix). Clients send the key like any API key, in the `Authorization: Bearer <key>` or `X-API-Key` header. The deployment-wide API key and Cognito tokens keep working unchanged alongside it — enabling tenant keys changes nothing for existing credentials.
+
+#### Declaring tenants and receiving their keys
+
+A tenant is a record in the shared table: its name, its scopes, and a `disabled` flag. The [Terraform module](operations_getting_started.md#quick-start) declares one per entry of its `tenants` variable:
+
+```hcl
+tenants = {
+  "acme" = {
+    models_allow    = ["anthropic.*", "amazon.nova-lite-v1:0"]
+    endpoints_allow = ["/v1/chat/completions", "/v1/models"]
+  }
+  "globex" = {
+    models_deny = ["*opus*"]
+  }
+}
+```
+
+Scopes bound the models a tenant may invoke and the endpoints it may call; they do not partition stored objects, which stay deployment-wide ([the caveat below](#scopes)).
+
+**The key secret never enters Terraform state.** Terraform owns the tenant record only; the server notices a declared tenant that has no credential yet — at startup and once a minute — mints a 256-bit secret for it, stores only a salted hash in the table, and delivers the full key exactly once as an SSM `SecureString` parameter named `<prefix>/<key id>` (the module's `tenant_keys` output gives the exact name per tenant). Retrieve it, hand it to the tenant, then delete the parameter:
+
+```bash
+aws ssm get-parameter --name /my-deployment/tenant-keys/AbC123... \
+  --with-decryption --query Parameter.Value --output text
+```
+
+!!! abstract "Only a hash is ever stored"
+    The table holds a salted BLAKE2b-256 digest of the secret, compared in constant time on every request — the same in-memory protection the deployment API key gets. Neither the table, nor Terraform state, nor a backup of either can reconstruct a tenant's key; the only copy is the delivered parameter, which is yours to delete after delivery.
+
+!!! warning "The delivery prefix is a trust boundary in both directions"
+    The parameter is created once and never overwritten, which is what makes minting idempotent across instances — so **whoever creates it defines the secret**. A principal able to call `ssm:PutParameter` under the prefix can therefore pre-create `<prefix>/<key id>` for a tenant that does not exist yet and hold a valid key from the moment it is declared, exactly as read access there exposes the keys already delivered. Grant both actions on `<prefix>/*` to the deployment's task role and to the operators who collect the keys, and to nothing else.
+
+    Read access is wider than that grant while [`TENANT_KEY_SSM_KMS_KEY_ID`](operations_configuration.md#tenant-key-ssm-kms-key-id) is unset: the parameter is then encrypted with the AWS-managed `alias/aws/ssm` key, whose key policy lets **any principal of the account** decrypt through Parameter Store, so `ssm:GetParameter` on the path is the only permission an intruder needs. Point the setting at a key of your own and reading a delivered key also requires `kms:Decrypt` on it — the [Terraform module](operations_getting_started.md#quick-start) points it at the deployment's KMS key automatically.
+
+!!! info "Without the Terraform module"
+    Any tool that can write a DynamoDB item can declare a tenant: `pk` = `TENANT`, `sk` = `tenant#<key id>` (a key ID is 16 letters and digits of your choice, unique per tenant), attributes `name` (string), `schema` (number, `1`), optional `disabled` (boolean) and the four scope lists below as lists of strings. The server mints and delivers the key the same way.
+
+#### Scopes
+
+Each tenant record may carry four pattern lists, matched with `*` and `?` globs. A list that is absent restricts nothing; a list that is present and **empty allows nothing**; a deny match always wins over an allow match.
+
+| List | Matched against | A refused request answers |
+|---|---|---|
+| `models_allow` / `models_deny` | The **resolved** model ID, after aliases, wildcards and deprecation fallbacks — an alias cannot launder a denied model | The standard `404` `model_not_found`, indistinguishable from a model that does not exist |
+| `endpoints_allow` / `endpoints_deny` | The matched route's path template, e.g. `/v1/chat/completions` or `/v1/files/{file_id}` | The same detail-free `401 Unauthorized` as any refused credential |
+
+!!! tip "Deny lists match names, so prefer an allow list"
+    Model patterns are matched against the model ID the request resolves to. With [`AWS_BEDROCK_ALLOW_MARKETPLACE_ENDPOINT_ARN`](operations_configuration.md#bedrock-allow-marketplace-endpoint-arn) enabled, an endpoint addressed by its ARN keeps that ARN as its ID, which a name-based pattern such as `mistral.*` does not match. `models_allow` fails closed on it — no pattern matches, so the model is refused — while a deny-only tenant would reach it: add `arn:*` to `models_deny` where that opt-in is on.
+
+Both are enforced at choke points every request passes through — the authentication dependency for endpoints, the single model-resolution step for models — not per route, so a new endpoint or model route cannot bypass them. `GET /v1/models` is deliberately **not** filtered per tenant: the catalogue advertises what the deployment serves, and the invocation-time check is the authority. A Realtime client secret minted with a tenant key stays bound to that tenant: the session it opens carries the same scopes and stops resuming once the key is revoked or disabled.
+
+!!! warning "Scopes bound what a tenant may invoke, not what it may read"
+    **Stored objects carry no tenant ownership.** Files, vector stores, batches and their result files, conversations, stored responses, and the Anthropic files and message batches are all deployment-wide: neither list filters them, so a tenant allowed on `/v1/files` lists, downloads and deletes what every other tenant uploaded. The model and endpoint scopes bound what a key may *invoke* and *call*; they are not a data boundary.
+
+    Where tenants must not reach one another's data, deny the storing endpoints and keep the deployment stateless for them:
+
+    ```hcl
+    endpoints_deny = [
+      "*/v1/files*",
+      "*/v1/vector_stores*",
+      "*/v1/batches*",
+      "*/v1/messages/batches*",
+      "*/v1/conversations*",
+      "*/v1/responses/*",
+    ]
+    ```
+
+    The leading `*` covers the routes prefix each dialect is mounted under, such as [`ANTHROPIC_ROUTES_PREFIX`](operations_configuration.md#anthropic-routes-prefix). `/v1/responses` itself stays allowed so the Responses API keeps serving requests; a response the tenant asks to `store` is still written, only no longer readable by it. Mutually untrusted tenants that need any of these features want one deployment each — a separate bucket and table is the only isolation there is.
+
+#### Validation, caching and revocation
+
+Validation is a direct read of the tenant's two records, cached in each server instance for [`TENANT_KEY_CACHE_SECONDS`](operations_configuration.md#tenant-key-cache-seconds) — 60 seconds by default. That cache is the revocation window: **a key that is revoked, disabled or re-scoped keeps its previous decision for up to 60 seconds per instance**, and no longer. Revoke a key by removing its tenant from `tenants` (destroying the record), or suspend it by setting `disabled = true`. Unknown key IDs are negative-cached, bounded in size and time, so a flood of fabricated keys neither amplifies table reads nor grows memory.
+
+!!! warning "The table being unreachable fails closed"
+    When tenant keys are enabled but the DynamoDB table cannot be read, a tenant-shaped credential is refused with `503` — never accepted, and never turned into a `401` that would mislabel a valid key as wrong. The reason (the IAM action, the table) is written to the server log. Other credential kinds are unaffected.
+
+!!! tip "A tenant key and a user token together"
+    A request may carry both `X-API-Key: sk-std-...` (the tenant key) and `Authorization: Bearer <token>` (a Cognito user token): **both are then verified** — the tenant key authorizes and scopes the request, the token identifies the user for [per-user cost attribution](operations_cost_management.md#per-user-attribution). This is the one place tenant keys extend the header rules: for every other combination, `X-API-Key` keeps winning exactly as before. Without a user, the tenant's key ID is the identity the request is attributed to.
 
 ### :material-compass-outline: Authentication Discovery for Agents
 
