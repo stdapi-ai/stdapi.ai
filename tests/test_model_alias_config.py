@@ -99,16 +99,22 @@ def alias_overlay() -> Generator[None]:
     MODEL_ALIAS_OVERLAY_VAR.reset(token)
 
 
-def _settings(aliases: dict[str, Any]) -> _Settings:
+def _settings(aliases: dict[str, Any], **overrides: Any) -> _Settings:  # noqa: ANN401
     """Load the settings with *aliases* as ``MODEL_ALIASES`` would be parsed.
+
+    Mantle preferences are cleared unless a caller sets them: an alias guardrail
+    is refused alongside them, which would make every guardrail case here fail
+    for a reason that is not about aliases.
 
     Args:
         aliases: Raw alias map, in either supported form.
+        **overrides: Further settings to apply.
 
     Returns:
         The validated settings.
     """
-    return _Settings(model_aliases=aliases)
+    overrides.setdefault("aws_bedrock_mantle_preferred_models", [])
+    return _Settings(model_aliases=aliases, **overrides)
 
 
 def _chat_request(**fields: Any) -> ChatCompletionCreateParams:  # noqa: ANN401

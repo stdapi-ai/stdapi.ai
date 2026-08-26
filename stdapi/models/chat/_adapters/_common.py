@@ -33,12 +33,17 @@ class NoServerTools:
     as a stub ``toolSpec``, which Claude needs for Bedrock to accept the matching
     ``toolResult`` blocks in a multi-turn conversation.
 
+    Which backend serves the tool, and which settings would reach it, are the
+    operator's to act on and not the caller's (AGENTS.md, *Never Leak
+    Internals*): the caller reads that the model does not serve the tool here,
+    the server log carries the rest at ``WARNING``.
+
     Attributes:
-        alternative: How to reach a backend that does serve the tool, appended to
-            the refusal so the caller can act on it.
+        operator_detail: Which backend serves the tool and what to configure to
+            reach it, named for the operator's log alone.
     """
 
-    alternative: str
+    operator_detail: str
 
     def refuse(self, tool_type: str) -> NoReturn:
         """Refuse a server tool the model's backend does not serve.
@@ -49,9 +54,16 @@ class NoServerTools:
         Raises:
             ApiError: Always.
         """
+        # Imported here: stdapi.monitoring imports this package (import cycle).
+        from stdapi.monitoring import log_error_details  # noqa: PLC0415
+
+        log_error_details(
+            f"Server tool '{tool_type}' refused: {self.operator_detail}",
+            level="warning",
+        )
         msg = (
-            f"Server tool '{tool_type}' is not supported by this model. "
-            f"{self.alternative}"
+            f"Server tool '{tool_type}' is not supported by this model on this "
+            "server. Use a model that supports it, or contact the administrator."
         )
         raise ApiError(msg)
 

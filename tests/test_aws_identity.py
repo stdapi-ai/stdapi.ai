@@ -526,6 +526,57 @@ class TestRequestIdentity:
         assert not calls
 
 
+class TestIdentityOffTheSigningPath:
+    """The same requirement, for a transport botocore never signs.
+
+    Bedrock Mantle sends plain HTTPS from the server's own credentials, so the
+    signing hook above never runs on it. ``verify_user_role_identity`` is what
+    keeps the documented ``400`` from depending on which endpoint happens to
+    host the model; what it cannot restore is the role session itself, which is
+    why routing a dual-homed model there is refused at startup.
+
+    Ref: stdapi/aws.py:verify_user_role_identity
+         stdapi/aws_bedrock_mantle.py:refuse_unattributable_invocation
+    """
+
+    @pytest.mark.usefixtures("user_role", "request_log")
+    def test_a_request_without_identity_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The refusal is the one the signing hook gives, status and text alike."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_user_role_require_identity", True)
+
+        with pytest.raises(ApiError) as raised:
+            stdapi.aws.verify_user_role_identity()
+
+        assert raised.value.status == 400
+        assert "safety_identifier" in str(raised.value)
+
+    @pytest.mark.usefixtures("user_role")
+    def test_an_identified_request_passes(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """An end user the request names is all the requirement asks for."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_user_role_require_identity", True)
+        request_log["request_user_id"] = "alice"
+
+        stdapi.aws.verify_user_role_identity()
+
+    @pytest.mark.usefixtures("user_role")
+    def test_a_server_own_call_is_not_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Startup and background work have no end user to name, and are not blocked."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_user_role_require_identity", True)
+
+        stdapi.aws.verify_user_role_identity()
+
+    @pytest.mark.usefixtures("user_role", "request_log")
+    def test_the_requirement_off_lets_the_request_through(self) -> None:
+        """Without the requirement an unidentified request is served, as before."""
+        stdapi.aws.verify_user_role_identity()
+
+
 class TestSignedRequest:
     """The pooled client signs the invocation as the end user, not as the server.
 

@@ -677,25 +677,49 @@ The OpenAI GPT-5.x family answers `web_search` with the search tool built into
 Amazon Bedrock. The model decides when a question needs current information,
 runs one or more queries, and grounds its answer in what it finds.
 
-!!! warning "Amazon Bedrock Mantle only"
+!!! warning "Amazon Bedrock Mantle only — and a price change"
     Amazon Bedrock serves this tool on the Mantle endpoint alone; it is refused
-    on the `bedrock-runtime` endpoint. Models offered on both — the GPT-5.6
-    family among them — resolve to their runtime twin by default, which cannot
-    answer `web_search`: the request is **rejected with a `400`** naming both
-    ways to reach Mantle, rather than answered without a search. Send it to
-    Mantle explicitly, with the `x-stdapi-service` header below or by naming the
-    model in
-    [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration.md#bedrock-mantle-preferred-models).
-    Available in `us-east-1`, `us-east-2` and `us-west-2`, and billed per query.
+    on the `bedrock-runtime` endpoint. The GPT-5.6 family is offered on both, and
+    is served from Mantle by default so that `web_search` and `code_interpreter`
+    work with no configuration —
+    [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration.md#bedrock-mantle-preferred-models)
+    defaults to `openai.gpt-5.6` for that reason.
 
-    `code_interpreter` is refused the same way and for the same reason: no
-    OpenAI GPT server tool is served on `bedrock-runtime`.
+    That default is **a price change** for these models, because Mantle has no
+    cross-region inference profiles and so no Global routing discount: GPT-5.6
+    Sol, Terra and Luna cost **exactly 10% more per token** — input, output,
+    cached and long-context rates alike — than the classic endpoint charges
+    under its default Global routing; the per-million figures are in the
+    [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration.md#bedrock-mantle-preferred-models)
+    reference. Alongside it, Amazon Bedrock Guardrails cannot apply to these
+    models (configuring both is refused at startup),
+    [input token counting](#input-token-counting) answers `400` for them, and
+    their usage is billed and reported under Bedrock Mantle. Batch inference,
+    prompt caching and stored response IDs are unaffected.
+
+    Set `AWS_BEDROCK_MANTLE_PREFERRED_MODELS` to an empty value to serve the
+    family on `bedrock-runtime` instead, at the Global rate and under your
+    guardrail. A request then asking for `web_search` or `code_interpreter` is
+    **rejected with a `400`** rather than answered without a search. The
+    `x-stdapi-service: bedrock-mantle` header routes a single request back to
+    Mantle where
+    [`AWS_BEDROCK_MANTLE_SERVICE_HEADER`](operations_configuration.md#bedrock-mantle-service-header)
+    enables it — which a deployment configuring a guardrail cannot do, that
+    combination being refused at startup too.
+
+    A request authenticated with a
+    [tenant AWS credential](operations_authentication_security.md#tenant-aws-credentials)
+    is always served on `bedrock-runtime`, whatever the routing: Mantle runs on
+    the deployment's own account, which the tenant's credential cannot pay for.
+    These tools are refused with a `400` for such a request, and no setting or
+    header changes that.
+
+    Available in `us-east-1`, `us-east-2` and `us-west-2`, and billed per query.
 
 ```bash
 curl -X POST "$BASE/v1/responses" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
-  -H "x-stdapi-service: bedrock-mantle" \
   -d '{
     "model": "openai.gpt-5.6-luna",
     "input": "What are the most significant AWS launches announced this month?",
@@ -881,7 +905,7 @@ curl -X POST "$BASE/v1/responses/input_tokens" \
 ```
 
 !!! note "Limitations"
-    The `previous_response_id` and `conversation` parameters are not supported for token counting (they would change the count); `personality` (a token-counting-only schema field) and `reasoning.context` are accepted and ignored. Token counting is not available for models served by [Amazon Bedrock Mantle](features.md#bedrock-mantle-models) (the request is rejected with a `400` error).
+    The `previous_response_id` and `conversation` parameters are not supported for token counting (they would change the count); `personality` (a token-counting-only schema field) and `reasoning.context` are accepted and ignored. Token counting is not available for models served by [Amazon Bedrock Mantle](features.md#bedrock-mantle-models) (the request is rejected with a `400` error) — the **OpenAI GPT-5.6 family included**, since it is served from Mantle by default. Clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration.md#bedrock-mantle-preferred-models) brings the family back to the classic endpoint, where it counts tokens.
 
 ## Stored Responses
 

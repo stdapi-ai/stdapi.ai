@@ -25,6 +25,7 @@ from stdapi.aws_bedrock_mantle import (
     invoke,
     invoke_stream,
     mantle_request_headers,
+    refuse_unappliable_guardrail,
     response_web_search_queries,
     usage_from_chat_completion,
     usage_from_message,
@@ -204,10 +205,15 @@ class ChatModel(ChatModelBase[Any, Any]):
             Tuple of (serving region, parsed JSON response or SSE generator).
 
         Raises:
+            ApiError: When a guardrail applies and cannot be carried.
             MantleApiUnsupportedError: When the model rejects *api* (caller
                 demotes the binding and retries with another API).
             MantleError: On other upstream errors.
         """
+        # Here rather than in the transport: what a guardrail filters is
+        # generated content, and the transport also carries token counting,
+        # which generates none and is served with a guardrail configured.
+        refuse_unappliable_guardrail()
         headers = mantle_request_headers(api)
         regions = self._mantle_regions(region)
         # route_and_execute retries across regions only with the router on and

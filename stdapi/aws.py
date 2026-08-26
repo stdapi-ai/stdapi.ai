@@ -867,6 +867,38 @@ async def request_user_role_credentials() -> _UserRoleCredentials | None:
     return credentials
 
 
+def verify_user_role_identity() -> None:
+    """Refuse an invocation that names no end user, off the botocore signing path.
+
+    :func:`request_user_role_credentials` enforces the requirement from the
+    botocore signing hook, which a transport of its own -- Bedrock Mantle --
+    never reaches: it signs with the server's own credentials. The requirement
+    is therefore checked here, so the documented ``400`` does not depend on
+    which endpoint happens to serve the model. What it cannot restore is the
+    per-end-user role itself: an identified request still runs under the
+    server's identity there, which is why routing a dual-homed model to Mantle
+    alongside this setting is refused at startup.
+
+    Raises:
+        ApiError: The request identifies no end user where one is required.
+    """
+    if (
+        SETTINGS.aws_bedrock_user_role_arn is None
+        or not SETTINGS.aws_bedrock_user_role_require_identity
+    ):
+        return
+    # Imported here: stdapi.monitoring transitively imports this module.
+    from stdapi.monitoring import resolve_request_identity  # noqa: PLC0415
+
+    try:
+        identity = resolve_request_identity()
+    except LookupError:
+        # Outside any request: the server's own call, attributed to itself.
+        return
+    if not identity:
+        raise ApiError(_IDENTITY_REQUIRED_MESSAGE, status=400)
+
+
 def verify_bidi_user_role_policy(service: str) -> None:
     """Refuse a real-time model session no end user role can be attributed with.
 

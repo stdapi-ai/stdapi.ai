@@ -131,20 +131,25 @@ class TestServerToolParity:
             == "web_search"
         )
 
-    def test_a_model_whose_backend_serves_none_rejects(self) -> None:
-        """Both surfaces raise, with the alternative the model declared.
+    def test_a_model_whose_backend_serves_none_rejects(
+        self, request_log: dict[str, Any]
+    ) -> None:
+        """Both surfaces raise, and the operator detail goes to the log, not the caller.
 
         ``NoServerTools`` is what tells the two states of an empty map apart:
         the family that declared nothing keeps the stub above, and the model
         whose backend serves no server tool at all refuses instead of returning
-        a tool call nothing can answer (issue #186).
+        a tool call nothing can answer (issue #186). Which backend would serve
+        the tool is the operator's to act on, so it is logged at ``warning``
+        rather than answered.
 
         Ref: stdapi/models/chat/_adapters/_common.py:NoServerTools
+             AGENTS.md, "Never Leak Internals"
         """
         unserved = NoServerTools("Ask the other endpoint.")
-        expected = "is not supported by this model. Ask the other endpoint."
+        expected = "is not supported by this model on this server."
 
-        with pytest.raises(ApiError, match="Ask the other endpoint") as anthropic_exc:
+        with pytest.raises(ApiError) as anthropic_exc:
             _handle_system_tool(
                 WebSearchToolParam(name="web_search", type="web_search_20250305"),
                 [],
@@ -152,24 +157,35 @@ class TestServerToolParity:
             )
         assert anthropic_exc.value.status == 400
         assert expected in str(anthropic_exc.value)
+        assert "Ask the other endpoint" not in str(anthropic_exc.value)
 
-        with pytest.raises(ApiError, match="Ask the other endpoint") as responses_exc:
+        with pytest.raises(ApiError) as responses_exc:
             _resolve_integrated_tool_name(WebSearchTool(type="web_search"), unserved)
         assert responses_exc.value.status == 400
         assert expected in str(responses_exc.value)
+        assert "Ask the other endpoint" not in str(responses_exc.value)
+
+        assert request_log["level"] == "warning"
+        assert all(
+            "Ask the other endpoint" in str(detail)
+            for detail in request_log["error_detail"]
+        )
 
     def test_the_openai_gpt_models_declare_their_backend_serves_none(self) -> None:
-        """The refusal names both ways to reach the endpoint that does serve it.
+        """The operator detail names every way to reach the endpoint that serves it.
 
         AWS serves the OpenAI server tools on Bedrock Mantle alone, so the
-        message has to carry the way out rather than a bare "not supported".
+        operator's half of the refusal has to carry the way out -- including the
+        two deployments for which there is none.
 
         Ref: stdapi/models/chat/openai_gpt.py:ChatModel
         """
         unserved = GptChatModel.SERVER_TOOLS_UNSERVED
         assert unserved is not None
-        assert "x-stdapi-service: bedrock-mantle" in unserved.alternative
-        assert "AWS_BEDROCK_MANTLE_PREFERRED_MODELS" in unserved.alternative
+        assert "x-stdapi-service: bedrock-mantle" in unserved.operator_detail
+        assert "AWS_BEDROCK_MANTLE_PREFERRED_MODELS" in unserved.operator_detail
+        assert "Guardrails" in unserved.operator_detail
+        assert "AWS credential of its own" in unserved.operator_detail
 
     def test_a_model_declaring_other_server_tools_rejects(self) -> None:
         """Both surfaces raise when the model maps tools but not this one."""

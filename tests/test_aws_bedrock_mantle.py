@@ -38,6 +38,7 @@ from starlette.datastructures import Headers
 from stdapi import aws_bedrock_mantle
 from stdapi import models as stdapi_models
 from stdapi.api_errors import ApiError
+from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, GUARDRAIL_REQUEST_OVERRIDE_VAR
 from stdapi.aws_bedrock_mantle import (
     API_PATHS,
     MANTLE_PROJECT_VAR,
@@ -98,6 +99,9 @@ if TYPE_CHECKING:
     from aiohttp import ClientResponse
     from fastapi import Request
     from types_aiobotocore_bedrock.literals import RegionName
+    from types_aiobotocore_bedrock_runtime.type_defs import (
+        GuardrailStreamConfigurationTypeDef,
+    )
 
     from stdapi.aws_bedrock_mantle import SseEvent
 
@@ -337,6 +341,216 @@ class TestMantleUsageExtractors:
 def _error_body(message: str) -> str:
     """Build a Mantle JSON error body carrying *message*."""
     return dumps({"error": {"message": message}})
+
+
+class TestGuardrailOnMantle:
+    """A guardrail that cannot be carried refuses the call instead of vanishing.
+
+    Bedrock Mantle has no guardrail parameter, and nothing on that transport
+    reads ``GUARDRAIL_CONFIG_VAR``. Serving the request regardless would answer
+    a caller who asked to be guarded with an unguarded answer and no sign of
+    it, so both generation paths fail closed. What a guardrail filters is
+    generated content, so the refusal sits on those paths and not on the
+    transport, which also carries token counting.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html
+         stdapi/aws_bedrock_mantle.py:refuse_unappliable_guardrail
+         stdapi/models/chat/_mantle/_default.py:ChatModel._invoke_api
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_guardrail_context(self) -> Iterator[None]:
+        """Put both context variables back, so no later test inherits a guardrail.
+
+        A context variable set inside a test outlives it, and one left holding
+        a guardrail refuses every Mantle invocation the rest of the module
+        makes.
+
+        Yields:
+            Control to the test.
+        """
+        config = GUARDRAIL_CONFIG_VAR.set(None)  # type: ignore[arg-type]
+        override = GUARDRAIL_REQUEST_OVERRIDE_VAR.set(False)
+        try:
+            yield
+        finally:
+            GUARDRAIL_CONFIG_VAR.reset(config)
+            GUARDRAIL_REQUEST_OVERRIDE_VAR.reset(override)
+
+    @staticmethod
+    def _guardrail() -> GuardrailStreamConfigurationTypeDef:
+        """Return a guardrail configuration in the shape the context var holds."""
+        return {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
+
+    def test_no_guardrail_lets_the_call_through(self) -> None:
+        """The guard is inert on the ordinary path, which carries no guardrail."""
+        GUARDRAIL_CONFIG_VAR.set(None)  # type: ignore[arg-type]
+
+        aws_bedrock_mantle.refuse_unappliable_guardrail()
+
+    def test_a_request_selected_guardrail_is_refused(self) -> None:
+        """A caller naming a guardrail is told it cannot apply, not ignored."""
+        GUARDRAIL_CONFIG_VAR.set(self._guardrail())
+        GUARDRAIL_REQUEST_OVERRIDE_VAR.set(True)
+
+        with pytest.raises(ApiError, match="Amazon Bedrock Mantle") as raised:
+            aws_bedrock_mantle.refuse_unappliable_guardrail()
+
+        assert "drop the guardrail" in str(raised.value)
+
+    @pytest.mark.parametrize("stream", [False, True])
+    async def test_neither_generation_path_reaches_the_endpoint(
+        self, stream: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Neither generation path can be reached with a guardrail outstanding.
+
+        Asserted through the chat model rather than on the guard alone: the
+        defect this closes was the guard being absent from the request path,
+        which a direct call to it would not notice.
+        """
+        reached = False
+
+        async def _unreachable(*_args: object, **_kwargs: object) -> NoReturn:
+            nonlocal reached
+            reached = True
+            raise AssertionError
+
+        monkeypatch.setattr(mantle_default, "invoke", _unreachable)
+        monkeypatch.setattr(mantle_default, "invoke_stream", _unreachable)
+        GUARDRAIL_CONFIG_VAR.set(self._guardrail())
+        GUARDRAIL_REQUEST_OVERRIDE_VAR.set(True)
+
+        with pytest.raises(ApiError, match="drop the guardrail"):
+            await mantle_default.ChatModel("xai.grok-4")._invoke_api(  # noqa: SLF001
+                "chat_completions", {}, stream=stream
+            )
+
+        assert not reached, "the guardrail-less request was sent upstream anyway"
+
+    async def test_token_counting_is_served_under_a_guardrail(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Counting a request's tokens generates nothing a guardrail could filter.
+
+        The refusal belongs to the generation call sites, not to the transport,
+        which also carries the Anthropic ``count_tokens`` proxy: refusing there
+        would answer ``400`` for a count that bedrock-runtime's own CountTokens
+        serves unguarded too.
+        """
+        reached = False
+
+        async def _reached(*_args: object, **_kwargs: object) -> object:
+            nonlocal reached
+            reached = True
+            return object()
+
+        async def _counted(*_args: object, **_kwargs: object) -> dict[str, int]:
+            return {"input_tokens": 7}
+
+        monkeypatch.setattr(aws_bedrock_mantle, "_request_with_retry", _reached)
+        monkeypatch.setattr(aws_bedrock_mantle, "_read_json", _counted)
+        GUARDRAIL_CONFIG_VAR.set(self._guardrail())
+
+        result = await aws_bedrock_mantle.invoke(
+            "us-east-1", "/v1/messages/count_tokens", {}, single_region=True
+        )
+
+        assert result == {"input_tokens": 7}
+        assert reached
+
+    def test_a_configured_guardrail_is_refused(self) -> None:
+        """A deployment-wide guardrail is not silently skipped for a Mantle model.
+
+        The startup check refuses a guardrail combined with
+        ``aws_bedrock_mantle_preferred_models``, but a Mantle-only model in a
+        deployment that guards everything else reaches here instead.
+        """
+        GUARDRAIL_CONFIG_VAR.set(self._guardrail())
+        GUARDRAIL_REQUEST_OVERRIDE_VAR.set(False)
+
+        with pytest.raises(ApiError, match="this server is configured with"):
+            aws_bedrock_mantle.refuse_unappliable_guardrail()
+
+
+class TestUserRoleIdentityOnMantle:
+    """A required end user identity is enforced on Mantle's own transport too.
+
+    ``aws_bedrock_user_role_require_identity`` is enforced from the botocore
+    signing hook, which a Mantle request -- signed from the server's own
+    credentials over plain HTTPS -- never reaches. Without the check here the
+    same unidentified request is answered ``400`` or served, depending only on
+    which endpoint hosts the model.
+
+    Ref: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-api.html
+         stdapi/aws.py:request_user_role_credentials
+         stdapi/aws_bedrock_mantle.py:refuse_unattributable_invocation
+    """
+
+    @pytest.fixture
+    def _require_identity(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Require an end user identity for every model invocation."""
+        monkeypatch.setattr(
+            SETTINGS,
+            "aws_bedrock_user_role_arn",
+            "arn:aws:iam::123456789012:role/stdapi-ai-end-user",
+        )
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_user_role_require_identity", True)
+
+    @staticmethod
+    async def _invoke(entry_point: str, monkeypatch: pytest.MonkeyPatch) -> bool:
+        """Call *entry_point*, returning whether it reached the endpoint."""
+        reached = False
+
+        class _Response:
+            """Stand-in for the open upstream response, never read from."""
+
+            def close(self) -> None:
+                """Release nothing: no socket was opened."""
+
+        async def _reached(*_args: object, **_kwargs: object) -> _Response:
+            nonlocal reached
+            reached = True
+            return _Response()
+
+        async def _empty(*_args: object, **_kwargs: object) -> dict[str, int]:
+            return {}
+
+        monkeypatch.setattr(aws_bedrock_mantle, "_request_with_retry", _reached)
+        monkeypatch.setattr(aws_bedrock_mantle, "_read_json", _empty)
+        monkeypatch.setattr(aws_bedrock_mantle, "_iter_sse", lambda response: response)
+        await getattr(aws_bedrock_mantle, entry_point)(
+            "us-east-1", "/chat/completions", {}, single_region=True
+        )
+        return reached
+
+    @pytest.mark.parametrize("entry_point", ["invoke", "invoke_stream"])
+    @pytest.mark.usefixtures("_require_identity", "request_log")
+    async def test_an_unidentified_request_is_refused(
+        self, entry_point: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A request naming no end user is answered 400, not served unattributed."""
+        with pytest.raises(ApiError, match="identify the end user") as raised:
+            await self._invoke(entry_point, monkeypatch)
+
+        assert raised.value.status == 400
+
+    @pytest.mark.usefixtures("_require_identity")
+    async def test_an_identified_request_is_served(
+        self, request_log: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The identity the request declares is what the requirement asks for."""
+        request_log["request_user_id"] = "user-42"
+
+        assert await self._invoke("invoke", monkeypatch)
+
+    @pytest.mark.usefixtures("request_log")
+    async def test_the_requirement_off_serves_an_unidentified_request(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The guard is inert for the deployments that never asked for it."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_user_role_require_identity", False)
+
+        assert await self._invoke("invoke", monkeypatch)
 
 
 class TestMapError:
