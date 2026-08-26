@@ -5,18 +5,22 @@ Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
      stdapi/routes/openai_images_edits.py:edit_images
 """
 
+import base64
 import re
+from io import BytesIO
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
 from openai import BadRequestError, OpenAI
+from PIL import Image
 from pydantic import ValidationError
 
 from stdapi.api_errors import UnsupportedModelError
-from stdapi.models.image import ImageGenerationResponse
+from stdapi.models.image import ImageGenerationJobBase, ImageGenerationResponse
 from stdapi.routes import openai_images_edits
 from stdapi.types.openai_images import ImageEditParams
+from tests.conftest import smallest_image_size
 
 # Import validation helpers from generations tests
 from .test_openai_images_generations import (
@@ -39,6 +43,12 @@ _SIZE_PATTERN = re.compile(r"^\d+x\d+$")
 #: Model id used by tests that must fail at model resolution, before any AWS call.
 _PROBE_MODEL_ID = "probe-model-id"
 
+#: Edit model deriving its own matte, so a supplied mask is refused rather than used.
+_NO_MASK_MODEL = "stability.stable-image-remove-background-v1:0"
+
+#: Size :func:`smallest_image_size` returns for :data:`_NO_MASK_MODEL`.
+_NO_MASK_MODEL_SIZE = smallest_image_size(_NO_MASK_MODEL)
+
 
 class TestImagesEditsBasic:
     """Editing-specific behavior of /v1/images/edits: masks, image fields, streaming.
@@ -55,7 +65,12 @@ class TestImagesEditsBasic:
         "upstream counterpart"
     )
     def test_edit_image_with_mask(
-        self, openai_client: OpenAI, sample_image_file: bytes, sample_mask_file: bytes
+        self,
+        openai_client: OpenAI,
+        sample_image_file: bytes,
+        sample_mask_file: bytes,
+        image_edit_model: str,
+        image_edit_size: str,
     ) -> None:
         """An explicit mask is accepted and the edited image is returned as a URL.
 
@@ -63,8 +78,7 @@ class TestImagesEditsBasic:
         forwards it unchanged; Stability inpaint reads white pixels as maximum
         inpaint strength, i.e. its white centre square is the regenerated area.
         The mask counts as an input image in the usage breakdown, and ``size``
-        is measured on the produced image rather than echoing the requested
-        ``512x512``.
+        is checked for its ``WIDTHxHEIGHT`` shape only.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/stable-image-services.html
              stdapi/routes/_images_common.py:build_images_response
@@ -73,8 +87,8 @@ class TestImagesEditsBasic:
             image=sample_image_file,
             mask=sample_mask_file,
             prompt="A blue circle in the masked area",
-            model="stability.stable-image-inpaint-v1:0",
-            size="512x512",
+            model=image_edit_model,
+            size=image_edit_size,
             n=1,
         )
 
@@ -103,7 +117,12 @@ class TestImagesEditsBasic:
         "answers base64; the Stability inpaint model this pins is Bedrock-only"
     )
     def test_edit_image_b64_json_with_mask(
-        self, openai_client: OpenAI, sample_image_file: bytes, sample_mask_file: bytes
+        self,
+        openai_client: OpenAI,
+        sample_image_file: bytes,
+        sample_mask_file: bytes,
+        image_edit_model: str,
+        image_edit_size: str,
     ) -> None:
         """`response_format=b64_json` returns inline image data and no URL.
 
@@ -117,8 +136,8 @@ class TestImagesEditsBasic:
             image=sample_image_file,
             mask=sample_mask_file,
             prompt="A colorful pattern",
-            model="stability.stable-image-inpaint-v1:0",
-            size="512x512",
+            model=image_edit_model,
+            size=image_edit_size,
             n=1,
             response_format="b64_json",
         )
@@ -172,7 +191,11 @@ class TestImagesEditsBasic:
 
     @pytest.mark.gateway
     def test_invalid_mask_format(
-        self, openai_client: OpenAI, sample_image_file: bytes
+        self,
+        openai_client: OpenAI,
+        sample_image_file: bytes,
+        image_edit_model: str,
+        image_edit_size: str,
     ) -> None:
         """A mask that is not a decodable image fails the request with a 400.
 
@@ -193,8 +216,8 @@ class TestImagesEditsBasic:
                 image=sample_image_file,
                 mask=invalid_mask,
                 prompt="A test image",
-                model="stability.stable-image-inpaint-v1:0",
-                size="512x512",
+                model=image_edit_model,
+                size=image_edit_size,
             )
         validate_error_response(exc_info.value)
         assert exc_info.value.type == "invalid_request_error"
@@ -243,7 +266,11 @@ class TestImagesEditsBasic:
         assert "invalid-model-name" in error["message"]
 
     def test_image_array_notation_invalid_type(
-        self, openai_client: OpenAI, image_generation_size: str, use_official_api: bool
+        self,
+        openai_client: OpenAI,
+        image_edit_model: str,
+        image_edit_size: str,
+        use_official_api: bool,
     ) -> None:
         """A non-file value under ``image[]`` is a validation error on ``body.image[]``.
 
@@ -262,8 +289,8 @@ class TestImagesEditsBasic:
             f"{openai_client.base_url}images/edits",
             data={
                 "prompt": "test",
-                "model": "stability.stable-image-inpaint-v1:0",
-                "size": image_generation_size,
+                "model": image_edit_model,
+                "size": image_edit_size,
                 "image[]": "not_a_file",
             },
             headers={"Authorization": f"Bearer {openai_client.api_key}"},
@@ -305,7 +332,11 @@ class TestImagesEditsBasic:
 
     @pytest.mark.gateway
     def test_multiple_images_error(
-        self, openai_client: OpenAI, sample_image_file: bytes
+        self,
+        openai_client: OpenAI,
+        sample_image_file: bytes,
+        image_edit_model: str,
+        image_edit_size: str,
     ) -> None:
         """Two images sent to a single-image edit model are rejected.
 
@@ -321,15 +352,16 @@ class TestImagesEditsBasic:
             openai_client.images.edit(
                 image=[sample_image_file, sample_image_file],
                 prompt="Edit this image",
-                model="stability.stable-image-inpaint-v1:0",
-                size="512x512",
+                model=image_edit_model,
+                size=image_edit_size,
             )
 
         assert exc_info.value.type == "invalid_request_error"
         assert "Exactly one image must be provided." in str(exc_info.value)
 
     @pytest.mark.gateway(
-        "Amazon Nova Canvas is not available on the official OpenAI API"
+        "background removal derives its own matte and so refuses a mask; no "
+        "model on the official OpenAI edits endpoint behaves that way"
     )
     def test_mask_not_supported_error(
         self, openai_client: OpenAI, sample_image_file: bytes, sample_mask_file: bytes
@@ -347,8 +379,8 @@ class TestImagesEditsBasic:
                 image=sample_image_file,
                 mask=sample_mask_file,
                 prompt="Remove background",
-                model="stability.stable-image-remove-background-v1:0",
-                size="512x512",
+                model=_NO_MASK_MODEL,
+                size=_NO_MASK_MODEL_SIZE,
             )
 
         assert exc_info.value.type == "invalid_request_error"
@@ -395,7 +427,12 @@ class TestImagesEditsBasic:
         "events before the completion"
     )
     def test_edit_with_streaming(
-        self, openai_client: OpenAI, sample_image_file: bytes, sample_mask_file: bytes
+        self,
+        openai_client: OpenAI,
+        sample_image_file: bytes,
+        sample_mask_file: bytes,
+        image_edit_model: str,
+        image_edit_size: str,
     ) -> None:
         """Streaming an edit emits a single ``image_edit.completed`` SSE event.
 
@@ -414,8 +451,8 @@ class TestImagesEditsBasic:
             image=sample_image_file,
             mask=sample_mask_file,
             prompt="Add colorful elements",
-            model="stability.stable-image-inpaint-v1:0",
-            size="512x512",
+            model=image_edit_model,
+            size=image_edit_size,
             n=1,
             stream=True,
             partial_images=2,
@@ -434,7 +471,11 @@ class TestImagesEditsBasic:
         "depend on. OpenAI does accept the images[{file_id}] JSON body itself"
     )
     def test_edit_with_file_id(
-        self, openai_client: OpenAI, sample_image_file: bytes
+        self,
+        openai_client: OpenAI,
+        sample_image_file: bytes,
+        image_edit_model: str,
+        image_edit_size: str,
     ) -> None:
         """A Files API ``file_id`` reference in the JSON body resolves to the stored bytes.
 
@@ -453,11 +494,11 @@ class TestImagesEditsBasic:
             response = http_client.post(
                 f"{openai_client.base_url}images/edits",
                 json={
-                    "model": "stability.stable-image-inpaint-v1:0",
+                    "model": image_edit_model,
                     "prompt": "Make it darker",
                     "images": [{"file_id": uploaded.id}],
                     "response_format": "b64_json",
-                    "size": "512x512",
+                    "size": image_edit_size,
                     "n": 1,
                 },
                 headers={"Authorization": f"Bearer {openai_client.api_key}"},
@@ -1106,3 +1147,44 @@ class TestImagesEditsOutputEncodingParameters:
         error = response.json()["error"]
         assert error["type"] == "invalid_request_error"
         assert "output_compression" in error["message"]
+
+
+@pytest.mark.local
+class TestImagesEditsResponseSizeIsMeasured:
+    """The response ``size`` is read from the produced bytes, not the request.
+
+    ``test_edit_image_with_mask`` used to request a size deliberately different
+    from the source image so the two could not be confused by inspection, but
+    the fixture that now supplies both the request and the source resolves them
+    to the same value, leaving this property unobservable there. It is pinned
+    here instead, directly against the code that measures it.
+
+    Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._ensure_image_output_format
+         stdapi/routes/_images_common.py:build_images_response
+    """
+
+    async def test_width_and_height_come_from_the_decoded_answer(self) -> None:
+        """A job asking for 1024x1024 reports the 3x2 bytes it actually got back."""
+        produced = Image.new("RGB", (3, 2), (10, 20, 30))
+        buffer = BytesIO()
+        produced.save(buffer, format="PNG")
+        produced_b64 = base64.b64encode(buffer.getvalue()).decode()
+
+        job = ImageGenerationJobBase(
+            model=None,  # type: ignore[type-var]
+            prompt="prompt",
+            count=1,
+            width=1024,
+            height=1024,
+            quality=None,
+            style=None,
+            output_format=None,
+            output_compression=100,
+            extra_params={},
+        )
+
+        await job._ensure_image_output_format(  # noqa: SLF001
+            ImageGenerationResponse(image=produced_b64, index=0)
+        )
+
+        assert (job.width, job.height) == (3, 2)

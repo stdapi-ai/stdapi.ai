@@ -28,7 +28,7 @@ from json import JSONDecodeError, dumps, loads
 from os import environ, getenv
 from pathlib import Path
 from secrets import token_hex
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Literal, NamedTuple, cast, get_args
 
 import cohere
 import httpx
@@ -369,6 +369,16 @@ MODEL_MAPPINGS = {
         # params, and legacy on purpose: they are reachable nowhere else (#93).
         "image_generation_hd": "amazon.nova-canvas-v1:0",
         "image_generation_stream": "stability.stable-image-core-v1:1",
+        # Inpainting: the edit capability that takes an explicit mask. Not freely
+        # repointable: the mask polarity asserted in test_openai_images_edits.py
+        # and the single-event stream in test_edit_with_streaming are keyed to
+        # this family.
+        "image_edit": "stability.stable-image-inpaint-v1:0",
+        # The only non-legacy model implementing image-to-image variations (Nova
+        # Canvas and Titan do too, and reach end of life in 2026). Not freely
+        # repointable: the Stability extra parameters and the PNG fallback asserted
+        # in test_openai_images_variations.py are keyed to this family.
+        "image_variation": "stability.sd3-5-large-v1:0",
         # Luma is the only non-legacy video model (Nova Reel is LEGACY on AWS).
         "video_generation": "luma.ray-v2:0",
         "realtime": "amazon.nova-2-sonic-v1:0",
@@ -398,6 +408,11 @@ MODEL_MAPPINGS = {
         "image_generation": "gpt-image-1",
         "image_generation_hd": "gpt-image-1",
         "image_generation_stream": "gpt-image-1",
+        # Neither id is ever sent to OpenAI: every test using these is gateway- or
+        # local-marked, bar test_image_array_notation_invalid_type, which is
+        # refused on its content type before any field is read.
+        "image_edit": "gpt-image-1",
+        "image_variation": "gpt-image-1",
         "video_generation": "sora-2",  # Cheapest video model
         "realtime": "gpt-realtime-mini",  # Cheapest realtime model
     },
@@ -449,6 +464,9 @@ IMAGE_MODEL_SIZES: dict[str, str] = {
 
 #: Size used for a model absent from :data:`IMAGE_MODEL_SIZES`.
 _DEFAULT_IMAGE_SIZE = "1024x1024"
+
+#: The only sizes the OpenAI SDK types on ``images.create_variation``.
+type VariationSize = Literal["256x256", "512x512", "1024x1024"]
 
 #: Image models that always answer with base64 and reject ``response_format``.
 _B64_ONLY_IMAGE_MODELS = frozenset({"gpt-image-1"})
@@ -865,6 +883,18 @@ def image_generation_stream_model(models: dict[str, str]) -> str:
 
 
 @pytest.fixture(scope="session")
+def image_edit_model(models: dict[str, str]) -> str:
+    """Cheapest non-legacy image model editing a source image, with mask support."""
+    return models["image_edit"]
+
+
+@pytest.fixture(scope="session")
+def image_variation_model(models: dict[str, str]) -> str:
+    """Image model producing variations of a source image."""
+    return models["image_variation"]
+
+
+@pytest.fixture(scope="session")
 def image_generation_size(image_generation_model: str) -> str:
     """Cheapest size accepted by ``image_generation_model``."""
     return smallest_image_size(image_generation_model)
@@ -880,6 +910,40 @@ def image_generation_hd_size(image_generation_hd_model: str) -> str:
 def image_generation_stream_size(image_generation_stream_model: str) -> str:
     """Cheapest size accepted by ``image_generation_stream_model``."""
     return smallest_image_size(image_generation_stream_model)
+
+
+@pytest.fixture(scope="session")
+def image_edit_size(image_edit_model: str) -> str:
+    """Cheapest size accepted by ``image_edit_model``."""
+    return smallest_image_size(image_edit_model)
+
+
+def variation_size(model: str) -> VariationSize:
+    """Validate and return the cheapest size *model*'s variation route accepts.
+
+    Args:
+        model: Image model ID mapped to ``image_variation``.
+
+    Returns:
+        The size :func:`smallest_image_size` maps *model* to.
+
+    Raises:
+        AssertionError: If that size is not one of the three sizes
+            ``images.create_variation`` types.
+    """
+    size = smallest_image_size(model)
+    # VariationSize is a PEP 695 alias: get_args needs its underlying Literal.
+    assert size in get_args(VariationSize.__value__), (
+        f"{model} maps to {size}, which images.create_variation does not accept"
+    )
+    narrowed: VariationSize = size  # type: ignore[assignment]
+    return narrowed
+
+
+@pytest.fixture(scope="session")
+def image_variation_size(image_variation_model: str) -> VariationSize:
+    """Cheapest size accepted by ``image_variation_model``."""
+    return variation_size(image_variation_model)
 
 
 @pytest.fixture(scope="session")
