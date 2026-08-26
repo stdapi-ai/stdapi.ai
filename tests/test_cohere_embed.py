@@ -31,6 +31,7 @@ from stdapi.models.embedding import EmbeddingImageDescription, EmbeddingResponse
 from stdapi.models.embedding.cohere_embed import EmbeddingModel
 from stdapi.routes import cohere_embed, cohere_embed_v1
 from tests._helpers import make_model_details
+from tests.conftest import logged_usage_entries
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -2028,6 +2029,36 @@ class TestCohereEmbedIntegration:
         assert response.embeddings.float_ is not None
         (vector,) = response.embeddings.float_
         assert len(vector) > 0
+
+    @pytest.mark.local
+    def test_embed_v3_image_records_the_billed_image(
+        self,
+        cohere_client: cohere.ClientV2,
+        cohere_embed_multilingual_model: str,
+        sample_image_file_base64: str,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """An image embedded on Embed v3 is reported as one billed image.
+
+        Embed v3 meters images as their own billed unit and reports no token
+        count for them, so a request recording nothing would be attributed at
+        zero cost while AWS bills it.
+
+        Ref: https://aws.amazon.com/bedrock/pricing/
+             stdapi/models/embedding/cohere_embed.py:EmbeddingModel._record_invoke_usage
+        """
+        capfd.readouterr()
+        response = cohere_client.embed(
+            model=cohere_embed_multilingual_model,
+            input_type="image",
+            images=[sample_image_file_base64],
+            embedding_types=["float"],
+        )
+        assert response.embeddings.float_ is not None
+        (entry,) = logged_usage_entries(
+            capfd.readouterr().out, model=cohere_embed_multilingual_model
+        )
+        assert entry["input_images"] == 1
 
     @pytest.mark.slow
     @pytest.mark.xdist_group("moderations_guardrail")
