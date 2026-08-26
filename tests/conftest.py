@@ -58,7 +58,7 @@ finally:
 faulthandler.register(signal.SIGUSR1, all_threads=True)
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator, Iterator
+    from collections.abc import AsyncIterator, Callable, Generator, Iterator
     from typing import Any
 
     from pluggy import Result as _PluggyResult
@@ -557,6 +557,7 @@ _LIVE_FIXTURES = frozenset(
         "live_guardrail",
         "live_server",
         "openai_client",
+        "sandbox_dynamodb",
         "test_client",
     }
 )
@@ -1906,6 +1907,182 @@ def cohere_client_v1(
     return _build_cohere_client(
         cohere.Client, use_official_api, server_url, test_client, api_key
     )
+
+
+@pytest.fixture(scope="session")
+def moto_dynamodb_endpoint() -> Iterator[str]:
+    """Serve a local Amazon DynamoDB stand-in, on the loopback interface only.
+
+    Server mode rather than moto's patching decorators: those rewrite
+    ``botocore``'s own HTTP layer, which ``aiobotocore`` replaces, so the
+    gateway's real client is the one thing they cannot intercept. Against a
+    socket, the client under test is exactly the client that runs in
+    production.
+
+    Yields:
+        The stand-in's endpoint URL.
+
+    Ref: https://docs.getmoto.org/en/latest/docs/server_mode.html
+         stdapi/aws_dynamodb.py
+    """
+    from moto.server import ThreadedMotoServer  # noqa: PLC0415
+
+    # 127.0.0.1, never the default 0.0.0.0: a test double must not be reachable
+    # from outside the machine running the suite.
+    server = ThreadedMotoServer(ip_address="127.0.0.1", port=0, verbose=False)
+    server.start()
+    host, port = server.get_host_and_port()
+    try:
+        yield f"http://{host}:{port}"
+    finally:
+        server.stop()
+
+
+@pytest.fixture
+async def dynamodb_table(
+    moto_dynamodb_endpoint: str, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[str]:
+    """Bind ``stdapi.aws_dynamodb`` to a fresh table in the local stand-in.
+
+    The client is installed in the real connection pool and the table name in
+    the real settings, so the module under test resolves both exactly as it
+    does at runtime. The table is per test, which is what lets these run
+    concurrently without an ``xdist_group``.
+
+    Yields:
+        The table name.
+
+    Ref: stdapi/aws.py:get_client
+         stdapi/aws_dynamodb.py:verify_table
+    """
+    from stdapi.aws import _CLIENTS  # noqa: PLC0415
+    from stdapi.config import SETTINGS  # noqa: PLC0415
+
+    table = f"stdapi-test-{token_hex(8)}"
+    region = SETTINGS.aws_bedrock_regions[0]
+    session = get_session()
+    async with session.create_client(
+        "dynamodb",
+        region_name=region,
+        endpoint_url=moto_dynamodb_endpoint,
+        # The stand-in verifies no signature, but botocore refuses to sign
+        # without credentials, and the environment may legitimately have none.
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",  # noqa: S106 - a local stand-in, not a secret
+    ) as client:
+        await client.create_table(
+            TableName=table,
+            AttributeDefinitions=[
+                {"AttributeName": "pk", "AttributeType": "S"},
+                {"AttributeName": "sk", "AttributeType": "S"},
+            ],
+            KeySchema=[
+                {"AttributeName": "pk", "KeyType": "HASH"},
+                {"AttributeName": "sk", "KeyType": "RANGE"},
+            ],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        await client.update_time_to_live(
+            TableName=table,
+            TimeToLiveSpecification={"Enabled": True, "AttributeName": "expires_at"},
+        )
+        monkeypatch.setitem(_CLIENTS, "dynamodb", {region: client})
+        monkeypatch.setattr(SETTINGS, "aws_dynamodb_table", table)
+        yield table
+
+
+@pytest.fixture(scope="session")
+def sandbox_dynamodb_table() -> Iterator[str]:
+    """Create one throwaway DynamoDB table in the real service for the session.
+
+    The live counterpart of the ``dynamodb_table`` stand-in, carrying the key
+    schema and the time-to-live the deployment module gives the shared table.
+    Provisioned here rather than taken from a deployment, because depending on
+    one is what let this lane skip itself into never having run at all.
+
+    Created and deleted through a *synchronous* client: it outlives any one
+    test's event loop, and the table's lifecycle has no reason to be bound to
+    one. Only the per-test client below has to be.
+
+    Credentials that may not create a table skip the lane rather than fail it:
+    provisioning is this fixture's own requirement, not the behaviour any test
+    here is about.
+
+    Yields:
+        The table name.
+
+    Ref: terraform-aws-stdapi-ai/dynamodb.tf
+    """
+    from botocore.exceptions import ClientError, NoCredentialsError  # noqa: PLC0415
+    from botocore.session import get_session as get_sync_session  # noqa: PLC0415
+
+    from stdapi.aws_dynamodb import TABLE_REGION  # noqa: PLC0415
+
+    table = f"stdapi-test-{token_hex(8)}"
+    # Typed loosely: botocore builds every service client from one class, so
+    # the DynamoDB operations exist only at runtime.
+    client: Any = get_sync_session().create_client("dynamodb", region_name=TABLE_REGION)
+    try:
+        client.create_table(
+            TableName=table,
+            AttributeDefinitions=[
+                {"AttributeName": "pk", "AttributeType": "S"},
+                {"AttributeName": "sk", "AttributeType": "S"},
+            ],
+            KeySchema=[
+                {"AttributeName": "pk", "KeyType": "HASH"},
+                {"AttributeName": "sk", "KeyType": "RANGE"},
+            ],
+            BillingMode="PAY_PER_REQUEST",
+        )
+    except NoCredentialsError:
+        pytest.skip("No AWS credentials: cannot create a DynamoDB table")
+    except ClientError as error:
+        code = error.response.get("Error", {}).get("Code")
+        if code not in {
+            "AccessDenied",
+            "AccessDeniedException",
+            "UnrecognizedClientException",
+        }:
+            raise
+        pytest.skip(f"dynamodb:CreateTable is not allowed here ({code})")
+    try:
+        client.get_waiter("table_exists").wait(TableName=table)
+        client.update_time_to_live(
+            TableName=table,
+            TimeToLiveSpecification={"Enabled": True, "AttributeName": "expires_at"},
+        )
+        yield table
+    finally:
+        client.delete_table(TableName=table)
+
+
+@pytest.fixture
+async def sandbox_dynamodb(
+    sandbox_dynamodb_table: str, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[str]:
+    """Bind ``stdapi.aws_dynamodb`` to the session's table, on the test's loop.
+
+    The client is opened here rather than taken from the app's pool: the
+    lifespan builds that pool inside ``TestClient``'s portal, whose event loop
+    is not the one an async test runs on, and a client awaited from the wrong
+    loop fails every call.
+
+    Yields:
+        The table name.
+
+    Ref: stdapi/aws.py:get_client
+         stdapi/aws_dynamodb.py:TABLE_REGION
+    """
+    from stdapi.aws import _CLIENTS  # noqa: PLC0415
+    from stdapi.aws_dynamodb import TABLE_REGION  # noqa: PLC0415
+    from stdapi.config import SETTINGS  # noqa: PLC0415
+
+    session = get_session()
+    async with session.create_client("dynamodb", region_name=TABLE_REGION) as client:
+        monkeypatch.setitem(_CLIENTS, "dynamodb", {TABLE_REGION: client})
+        monkeypatch.setattr(SETTINGS, "aws_dynamodb_table", sandbox_dynamodb_table)
+        yield sandbox_dynamodb_table
 
 
 #: Failure-output substrings marking a model unavailable on the live backend.
