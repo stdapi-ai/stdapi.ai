@@ -10,7 +10,10 @@ class RerankRequest(BaseModelRequestWithExtra):
     """Request body for reranking documents against a query."""
 
     model: str = Field(
-        description="ID of the model to use.", min_length=1, max_length=255
+        description="ID of the model to use. Wildcard patterns are accepted and "
+        "select the most recent matching model.",
+        min_length=1,
+        max_length=255,
     )
     query: str = Field(description="The search query.", min_length=1)
     documents: list[str] = Field(
@@ -52,7 +55,10 @@ class RerankV1Request(BaseModelRequestWithExtra):
     """Request body for reranking documents against a query (Cohere v1 Rerank API)."""
 
     model: str = Field(
-        description="ID of the model to use.", min_length=1, max_length=255
+        description="ID of the model to use. Wildcard patterns are accepted and "
+        "select the most recent matching model.",
+        min_length=1,
+        max_length=255,
     )
     query: str = Field(description="The search query.", min_length=1)
     documents: list[str | JsonMapping] = Field(

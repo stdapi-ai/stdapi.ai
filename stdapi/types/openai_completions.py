@@ -64,7 +64,11 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     """Request body for the OpenAI completions API (``POST /v1/completions``)."""
 
     model: str = Field(
-        ..., min_length=1, max_length=255, description="ID of the model to use."
+        ...,
+        min_length=1,
+        max_length=255,
+        description="ID of the model to use. Wildcard patterns are accepted "
+        "and select the most recent matching model.",
     )
     prompt: InputFileUrl | str | list[InputFileUrl | str] = Field(
         ...,

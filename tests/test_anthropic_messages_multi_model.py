@@ -259,7 +259,7 @@ class TestMultiModelBasics:
         assert response.type == "message"
         assert response.role == "assistant"
         assert response.id.startswith("msg_"), f"Unexpected id: {response.id!r}"
-        assert response.model == model, "The requested model id must be echoed back"
+        assert response.model == model, "The serving model id must be reported back"
         assert len(response.content) >= 1
         assert response.stop_reason is not None
         assert response.stop_reason in _STOP_REASONS, (

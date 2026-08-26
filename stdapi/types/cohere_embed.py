@@ -86,7 +86,10 @@ class _EmbedRequestBase(BaseModelRequestWithExtra):
     _INPUT_FIELDS: ClassVar[str] = "`texts` or `images`"
 
     model: str = Field(
-        description="ID of the model to use.", min_length=1, max_length=255
+        description="ID of the model to use. Wildcard patterns are accepted and "
+        "select the most recent matching model.",
+        min_length=1,
+        max_length=255,
     )
     texts: list[str] | None = Field(
         default=None,

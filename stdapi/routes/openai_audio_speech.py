@@ -191,6 +191,7 @@ async def create_speech(
             request.model,
             input_modality="TEXT",
             output_modality="SPEECH",
+            route="openai_audio_speech",
             bedrock_only=False,
         )
     ).id

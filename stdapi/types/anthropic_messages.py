@@ -2427,7 +2427,12 @@ MessageStreamEvent = Annotated[
 class MessageCreateParams(BaseModelRequestWithExtra):
     """Create message request following the Messages API specification."""
 
-    model: str = Field(description="Model ID.")
+    model: str = Field(
+        min_length=1,
+        max_length=255,
+        description="Model ID. Wildcard patterns are accepted and select the "
+        "most recent matching model.",
+    )
     messages: list[MessageParam] = Field(
         description="Conversation turns, alternating `user`/`assistant` roles. "
         "Consecutive turns with the same role are combined. If the final message "
@@ -2664,7 +2669,12 @@ ThinkingConfigParam = Annotated[
 class MessageCountTokensParams(BaseModelRequestWithExtra):
     """Count tokens request for the Messages API."""
 
-    model: str = Field(description="Model ID.")
+    model: str = Field(
+        min_length=1,
+        max_length=255,
+        description="Model ID. Wildcard patterns are accepted and select the "
+        "most recent matching model.",
+    )
     messages: list[MessageParam] = Field(
         description="Conversation turns, alternating `user`/`assistant` roles. "
         "Consecutive turns with the same role are combined. If the final message "
