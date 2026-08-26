@@ -1904,6 +1904,96 @@ class _Settings(BaseSettings):
         ),
     )
 
+    cloudwatch_metrics_user_dimension: bool = Field(
+        default=False,
+        description=(
+            "If True, also publish the authenticated caller as a 'User' "
+            "dimension on the usage metrics, which is what lets the usage API "
+            "group by user_id.\n\n"
+            "Disabled by default because it is the one dimension whose "
+            "cardinality is the caller population rather than the operator's "
+            "own configuration: it stores one CloudWatch metric series per "
+            "user, model and metric name, each billed as a custom metric. "
+            "Requires cloudwatch_metrics and usage_api."
+        ),
+    )
+
+    cloudwatch_metrics_region: RegionName | None = Field(
+        default=None,
+        description=(
+            "AWS region the usage API reads the published metrics from. "
+            "Defaults to the region the server runs in, which is where its "
+            "logs are ingested and therefore where the metrics exist. Only "
+            "needs setting when the logs are shipped to another region."
+        ),
+    )
+
+    # Usage API settings
+    usage_api: bool = Field(
+        default=False,
+        description=(
+            "Enable the organization usage and costs endpoints "
+            "(/v1/organization/usage/*, /v1/organization/costs), served from "
+            "the metrics cloudwatch_metrics publishes.\n\n"
+            "Disabled by default for two reasons: the endpoints report "
+            "deployment-wide consumption and spend, and every query is billed "
+            "by Amazon CloudWatch per metric read (cloudwatch:GetMetricData is "
+            "excluded from the CloudWatch free tier). Enabling it also "
+            "publishes the usage metrics under additional dimensions, which "
+            "are billed as additional custom metric series. Requires "
+            "cloudwatch_metrics, without which the server refuses to start; "
+            "the costs endpoint also requires cost_tracking."
+        ),
+    )
+
+    usage_api_admin_scopes: Annotated[list[str], NoDecode] = Field(
+        default=[],
+        description=(
+            "OAuth 2.0 scopes an Amazon Cognito token must all carry to read "
+            "the organization usage and costs endpoints, as a comma-separated "
+            "list.\n\n"
+            "These endpoints report deployment-wide consumption, so a token "
+            "identifying an end user is refused unless it carries every scope "
+            "named here. When the list is empty no token is accepted at all "
+            "and only the deployment's own API key may read them.\n"
+            "Example: 'stdapi/usage.read'"
+        ),
+    )
+
+    usage_api_max_metrics: int = Field(
+        default=500,
+        ge=1,
+        le=500,
+        description=(
+            "Maximum number of metric series one usage API query may read. A "
+            "query matching more is refused rather than billed. 500 is also "
+            "the CloudWatch per-request maximum."
+        ),
+    )
+
+    usage_api_max_range_days: int = Field(
+        default=92,
+        ge=1,
+        le=455,
+        description=(
+            "Maximum span, in days, between start_time and end_time on a "
+            "usage API query. Bounds both the response size and the per-query "
+            "CloudWatch charge."
+        ),
+    )
+
+    usage_api_cache_ttl: int = Field(
+        default=60,
+        ge=0,
+        le=3600,
+        description=(
+            "Seconds an answered usage API query is reused for. A client "
+            "polling faster than the bucket width reads the cached answer "
+            "instead of paying for a query that cannot have changed. Set to 0 "
+            "to disable."
+        ),
+    )
+
     # Cost tracking settings
     cost_tracking: bool = Field(
         default=False,
@@ -2417,6 +2507,7 @@ class _Settings(BaseSettings):
         "aws_cognito_required_scopes",
         "oauth_authorization_servers",
         "oauth_scopes_supported",
+        "usage_api_admin_scopes",
         mode="before",
     )
     @classmethod
@@ -3199,6 +3290,20 @@ class _Settings(BaseSettings):
                 )
                 raise ValueError(msg)
 
+    def _validate_usage_api(self) -> None:
+        """Refuse a usage API that has no metrics to answer from.
+
+        Raises:
+            ValueError: If the usage API is enabled without cloudwatch_metrics.
+        """
+        if self.usage_api and not self.cloudwatch_metrics:
+            msg = (
+                "usage_api requires cloudwatch_metrics: the organization usage "
+                "endpoints are served from the metrics cloudwatch_metrics "
+                "publishes, so without it every query answers empty buckets."
+            )
+            raise ValueError(msg)
+
     def _validate_dynamodb(self) -> None:
         """Ensure the shared DynamoDB table is named completely or not at all.
 
@@ -3322,6 +3427,7 @@ class _Settings(BaseSettings):
         self._validate_unique_routes_prefixes()
         self._validate_vector_stores()
         self._validate_dynamodb()
+        self._validate_usage_api()
         self._validate_tenant_keys()
         if (
             self.aws_bedrock_guardrail_identifier

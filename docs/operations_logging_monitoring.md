@@ -156,6 +156,7 @@ Usage is reported as a nested `usage` list on `request` / `request_stream` event
 | `cost`                      | str | Exact cost as plain-decimal text (no exponent, no trailing zeros, e.g. `"0.000015"`)                   |
 | `currency`                  | str | ISO currency code for `cost`                                                                            |
 | `costs`                     | dict| Per-currency exact cost text, replacing `cost`/`currency` when dimensions span multiple currencies      |
+| `requests`                  | int | Number of billed backend invocations aggregated into this entry                                        |
 | `input_tokens`              | int | Real input token count (Converse, InvokeModel, embeddings)                                            |
 | `output_tokens`             | int | Real output token count (Converse, InvokeModel)                                                        |
 | `total_tokens`              | int | Real total tokens (Converse provides this directly)                                                    |
@@ -220,6 +221,7 @@ Each billed usage entry generates one EMF JSON line:
       "Namespace": "stdapi",
       "Dimensions": [["Model"]],
       "Metrics": [
+        {"Name": "Requests", "Unit": "Count"},
         {"Name": "InputTokens", "Unit": "Count"},
         {"Name": "OutputTokens", "Unit": "Count"}
       ]
@@ -227,6 +229,7 @@ Each billed usage entry generates one EMF JSON line:
   },
   "Model": "anthropic.claude-sonnet-5",
   "operation": "/v1/chat/completions",
+  "Requests": 1,
   "InputTokens": 1500,
   "OutputTokens": 450
 }
@@ -235,8 +238,25 @@ Each billed usage entry generates one EMF JSON line:
 ### Metric Details
 
 - **Single dimension**: `Model` — provides low cardinality for cost control. A second `[Model, Currency]` dimension set is added for the `Cost` metric — see [Cost Management](operations_cost_management.md#cost-tracking-real-time-aws-pricing) for why cost needs its own dimension set.
+- **`Requests`**: Emitted on every usage record — the number of billed backend invocations the record aggregates. It is what the usage API reports as `num_model_requests`.
 - **`operation`**: Included as a queryable field (not a dimension)
-- **Metric units**: `Count` for all token/image/character counts, `Seconds` for audio duration
+- **Metric units**: `Count` for all token/image/character counts and for `Requests`, `Seconds` for audio duration
+
+#### Dimension Sets Added by the Usage API { #usage-api-dimension-sets }
+
+With [`USAGE_API`](operations_configuration.md#usage-api) enabled, every metric above is published a second time under a `[Model, Operation]` dimension set, **alongside** the `Model` roll-up rather than in place of it — that per-endpoint breakdown is what the [organization usage endpoints](api_openai_organization_usage.md) read. Two more sets follow the caller:
+
+- Where the request carried a tenant API key, the quantities are also published under `[Model, Operation, ApiKey]`, and `Cost` additionally under `[Model, Currency, ApiKey]`.
+- With [`CLOUDWATCH_METRICS_USER_DIMENSION`](operations_configuration.md#cloudwatch-metrics-user-dimension) enabled, the quantities are also published under `[Model, Operation, User]`.
+
+`Operation` takes one of a fixed set of values, never a caller-supplied string:
+
+`chat.completions` · `completions` · `responses` · `messages` · `realtime` · `embeddings` · `rerank` · `moderations` · `audio.speech` · `audio.transcriptions` · `audio.translations` · `images.generations` · `images.edits` · `images.variations` · `videos` · `vector_stores.search`
+
+A route outside that set publishes no `Operation` dimension.
+
+!!! warning "Each dimension set is a metric series of its own"
+    Amazon CloudWatch stores — and charges for — every distinct combination of dimensions separately, so these sets are **additional custom metrics** on top of the `Model` roll-up, and reading them back is billed per metric as well. Budget for both before enabling the usage API: see [Usage API cost](operations_cost_management.md#usage-api-cost).
 
 !!! tip "Querying EMF metrics"
     Use CloudWatch Logs Insights to search EMF lines:

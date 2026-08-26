@@ -947,6 +947,33 @@ Required for [`COST_TRACKING`](operations_configuration.md#cost-tracking) (disab
 
 ---
 
+## :material-chart-timeline-variant: Usage API (Optional) { #usage-api-iam }
+
+**Environment Variables**: [`USAGE_API`](operations_configuration.md#usage-api)
+
+Required only when [`USAGE_API`](operations_configuration.md#usage-api) is enabled (disabled by default), which serves the [organization usage and costs endpoints](api_openai_organization_usage.md) by reading the Amazon CloudWatch metrics the deployment publishes. Without these permissions those endpoints cannot answer; nothing else in the deployment is affected.
+
+??? example "Usage API IAM Policy Statement"
+    ```json
+    {
+      "Sid": "UsageApiMetricRead",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:GetMetricData",
+        "cloudwatch:ListMetrics"
+      ],
+      "Resource": "*"
+    }
+    ```
+
+    !!! note "Why the resource is `*`"
+        CloudWatch metric actions do not support resource-level permissions: there is no metric ARN to name, so `cloudwatch:GetMetricData` and `cloudwatch:ListMetrics` can only be granted on `*`. The `cloudwatch:namespace` condition key is documented for `PutMetricData` and OTLP ingest, not for reads, so it cannot narrow these two either. See [Actions, resources, and condition keys for Amazon CloudWatch](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/permissions-reference-cw.html).
+
+!!! warning "`cloudwatch:GetMetricData` is billed per metric read"
+    It is also **excluded from the CloudWatch free tier**. Price the endpoints before you expose them — [Usage API Query Cost](operations_cost_management.md#usage-api-cost).
+
+---
+
 ## :material-account-cash: Per-User Cost Attribution (Optional) { #per-user-cost-attribution }
 
 **Environment Variables**: [`AWS_BEDROCK_USER_ROLE_ARN`](operations_configuration.md#aws-bedrock-user-role-arn)
@@ -1302,6 +1329,15 @@ Required if you configure API authentication. See the [Authentication](operation
             "pricing:GetProducts"
           ],
           "Resource": "*"
+        },
+        {
+          "Sid": "UsageApiMetricRead",
+          "Effect": "Allow",
+          "Action": [
+            "cloudwatch:GetMetricData",
+            "cloudwatch:ListMetrics"
+          ],
+          "Resource": "*"
         }
       ]
     }
@@ -1315,6 +1351,9 @@ Required if you configure API authentication. See the [Authentication](operation
 
     !!! note "Cost Tracking (Opt-In)"
         `PricingCatalog` is only needed when [`COST_TRACKING`](operations_configuration.md#cost-tracking) is set to `true`; remove it otherwise.
+
+    !!! note "Usage API (Opt-In)"
+        `UsageApiMetricRead` is only needed when [`USAGE_API`](operations_configuration.md#usage-api) is set to `true`; remove it otherwise. See [Usage API](#usage-api-iam) for why the resource cannot be narrowed, and [Usage API Query Cost](operations_cost_management.md#usage-api-cost) for what the reads are billed at.
 
 ---
 
@@ -1346,6 +1385,7 @@ Required if you configure API authentication. See the [Authentication](operation
 | **Comprehend Moderations**                      | `comprehend:DetectToxicContent`                                                                                                                            | Moderations API without a configured guardrail                              |
 | **Translation**                                 | `translate:TranslateText`<br>`translate:ListLanguages` (optional; validates the language pair before transcribing)                                          | `AWS_TRANSLATE_REGION`                                                       |
 | **Cost Tracking**                               | `pricing:GetProducts`                                                                                                                                      | `COST_TRACKING=true` (opt-in; `false` by default)                            |
+| **Usage API**                                   | `cloudwatch:GetMetricData`<br>`cloudwatch:ListMetrics` (on `*` — [CloudWatch metric actions take no resource ARN](#usage-api-iam)); `GetMetricData` is billed per metric read and is outside the free tier | `USAGE_API=true` (opt-in; `false` by default), with `CLOUDWATCH_METRICS=true` |
 | **Per-User Cost Attribution**                   | `sts:AssumeRole` and `sts:TagSession` on the end user role, matched by that role's trust policy; on the end user role itself, `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream` on every model ARN form the deployment allows, plus `bedrock:ApplyGuardrail` when a guardrail is configured and `s3:GetObject` (with `kms:Decrypt` via S3) on every bucket an invocation can reference by URI (see [Per-User Cost Attribution](#per-user-cost-attribution)) | `AWS_BEDROCK_USER_ROLE_ARN`                                                  |
 | **SSM Parameter Store**                         | `ssm:GetParameter`<br>`kms:Decrypt` (if encrypted)                                                                                                         | `API_KEY_SSM_PARAMETER`                                                      |
 | **Secrets Manager**                             | `secretsmanager:GetSecretValue`                                                                                                                            | `API_KEY_SECRETSMANAGER_SECRET`                                              |
