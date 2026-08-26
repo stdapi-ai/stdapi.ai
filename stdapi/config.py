@@ -108,6 +108,9 @@ SQS_QUEUE_URL_RE = re.compile(
 #: Amazon DynamoDB table name, as the service accepts it.
 _DYNAMODB_TABLE_RE = re.compile(r"^[A-Za-z0-9_.-]{3,255}$").match
 
+#: AWS Systems Manager parameter path prefix, hierarchical and fully qualified.
+_SSM_PARAMETER_PREFIX_RE = re.compile(r"^(?:/[A-Za-z0-9_.-]+)+$").match
+
 #: Built-in set of ``anthropic_beta`` flags known to be supported by AWS Bedrock.
 _ANTHROPIC_BETA_BEDROCK_FLAGS: frozenset[str] = frozenset(
     {
@@ -1398,6 +1401,53 @@ class _Settings(BaseSettings):
         description=(
             "Key name within the AWS Secrets Manager secret containing the API key. "
             "Used only with api_key_secretsmanager_secret. Defaults to 'api_key' if not specified."
+        ),
+    )
+
+    tenant_api_keys: bool = Field(
+        default=False,
+        description=(
+            "Accept per-tenant API keys ('sk-std-...'), validated against the "
+            "tenant records in the DynamoDB table named by aws_dynamodb_table "
+            "and scoped by each record's model and endpoint restrictions. The "
+            "server mints the secret of every declared tenant and delivers it "
+            "once through AWS Systems Manager Parameter Store, under "
+            "tenant_key_ssm_parameter_prefix; both settings are required.\n\n"
+            "The API key and Amazon Cognito settings keep working unchanged "
+            "alongside tenant keys.\n\n"
+            "Required IAM permissions: the aws_dynamodb_table set, plus "
+            "ssm:PutParameter and ssm:GetParameter on "
+            "'tenant_key_ssm_parameter_prefix/*'.\n\n"
+            "Disabled (default): tenant-shaped credentials are only compared "
+            "against the deployment API key, like any other value."
+        ),
+    )
+
+    tenant_key_cache_seconds: float = Field(
+        default=60.0,
+        ge=0.0,
+        description=(
+            "Seconds each server instance caches a tenant API key validation "
+            "before re-reading its records, trading table reads against "
+            "freshness. This is the revocation window: a key revoked, disabled "
+            "or re-scoped keeps its previous decision for up to this long per "
+            "instance. 0 disables the cache and reads the table on every "
+            "request.\n\n"
+            "Only used when tenant_api_keys is enabled. Defaults to 60."
+        ),
+    )
+
+    tenant_key_ssm_parameter_prefix: str | None = Field(
+        default=None,
+        description=(
+            "AWS Systems Manager Parameter Store prefix the minted tenant API "
+            "keys are delivered under, one 'SecureString' parameter named "
+            "'<prefix>/<key id>' per tenant. Retrieve each key once, hand it "
+            "to its tenant, then delete the parameter. Use a prefix private to "
+            "this deployment: any principal allowed to read under it can read "
+            "every tenant's key.\n\n"
+            "Required when tenant_api_keys is enabled.\n\n"
+            "Example: '/stdapi-ai/production/tenant-keys'"
         ),
     )
 
@@ -2934,10 +2984,11 @@ class _Settings(BaseSettings):
             or self.api_key_secretsmanager_secret
         )
         if self.authentication_mode == "api_key":
-            if not api_key_configured:
+            if not api_key_configured and not self.tenant_api_keys:
                 msg = (
                     'authentication_mode "api_key" requires an API key source '
-                    "(api_key, api_key_ssm_parameter or api_key_secretsmanager_secret)."
+                    "(api_key, api_key_ssm_parameter, api_key_secretsmanager_secret "
+                    "or tenant_api_keys)."
                 )
                 raise ValueError(msg)
             if self.aws_cognito_user_pool_id:
@@ -2954,6 +3005,12 @@ class _Settings(BaseSettings):
                 msg = (
                     'authentication_mode "cognito" ignores the configured API key '
                     'source. Use authentication_mode "any" to accept both.'
+                )
+                raise ValueError(msg)
+            if self.tenant_api_keys:
+                msg = (
+                    'authentication_mode "cognito" ignores tenant_api_keys, which '
+                    'is enabled. Use authentication_mode "any" to accept both.'
                 )
                 raise ValueError(msg)
 
@@ -3079,6 +3136,39 @@ class _Settings(BaseSettings):
             )
             raise ValueError(msg)
 
+    def _validate_tenant_keys(self) -> None:
+        """Ensure tenant API keys are configured completely or not at all.
+
+        Raises:
+            ValueError: If tenant keys are enabled without the table or the
+                delivery prefix, if the prefix is not a Parameter Store path,
+                or if the prefix is set without the feature.
+        """
+        if not self.tenant_api_keys:
+            if self.tenant_key_ssm_parameter_prefix:
+                msg = (
+                    "tenant_key_ssm_parameter_prefix requires tenant_api_keys: "
+                    "without the feature no key is ever minted there."
+                )
+                raise ValueError(msg)
+            return
+        if not self.aws_dynamodb_table:
+            msg = (
+                "tenant_api_keys requires aws_dynamodb_table: the tenant "
+                "records live in that table."
+            )
+            raise ValueError(msg)
+        prefix = (self.tenant_key_ssm_parameter_prefix or "").rstrip("/")
+        if not _SSM_PARAMETER_PREFIX_RE(prefix):
+            msg = (
+                "tenant_api_keys requires tenant_key_ssm_parameter_prefix, an "
+                "AWS Systems Manager Parameter Store path starting with '/' "
+                "and made of letters, digits, '_', '.' and '-' segments, "
+                "e.g. '/stdapi-ai/tenant-keys'."
+            )
+            raise ValueError(msg)
+        self.tenant_key_ssm_parameter_prefix = prefix
+
     @model_validator(mode="after")
     def _validate(self) -> Self:
         """Perform cross-field validation and apply configuration defaults.
@@ -3095,6 +3185,7 @@ class _Settings(BaseSettings):
         self._validate_unique_routes_prefixes()
         self._validate_vector_stores()
         self._validate_dynamodb()
+        self._validate_tenant_keys()
         if (
             self.aws_bedrock_guardrail_identifier
             and not self.aws_bedrock_guardrail_version

@@ -18,7 +18,7 @@ from secrets import token_bytes
 from sys import byteorder
 from time import time
 from traceback import format_exception
-from typing import TYPE_CHECKING, Any, Final, TypeIs
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, TypeIs
 from uuid import uuid4
 
 from pybase64 import urlsafe_b64decode, urlsafe_b64encode
@@ -27,7 +27,11 @@ from pydantic_core import from_json
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from stdapi.api_errors import ApiError
-from stdapi.auth import realtime_signing_key, verify_websocket_credentials
+from stdapi.auth import (
+    enforce_tenant_endpoint_scope,
+    realtime_signing_key,
+    verify_websocket_credentials,
+)
 from stdapi.aws_bedrock import (
     GuardrailInterventionError,
     apply_guardrail_to_text,
@@ -52,10 +56,13 @@ from stdapi.models.realtime import (
     get_realtime_model,
 )
 from stdapi.monitoring import (
+    PRINCIPAL,
+    TENANT,
     flush_usage_log_event,
     log_error_details,
     log_request_event,
 )
+from stdapi.tenant_keys import resume_tenant
 from stdapi.types.openai_realtime import (
     FORMAT_SAMPLE_RATES,
     PCM_SAMPLE_RATE,
@@ -338,11 +345,27 @@ def _signing_key() -> bytes:
 _RANDOM_SIGNING_KEY: bytes | None = None
 
 
+class ClientSecret(NamedTuple):
+    """What a verified ephemeral client secret carries.
+
+    Attributes:
+        session: The session configuration the secret opens.
+        tenant_key_id: Key ID of the tenant whose API key minted the secret,
+            binding the session to that tenant's scopes; None when the mint
+            was not tenant-authenticated.
+    """
+
+    session: SessionConfig
+    tenant_key_id: str | None
+
+
 def mint_client_secret(session: SessionConfig, ttl: int) -> tuple[str, int]:
     """Mint a signed, short-lived secret carrying *session*.
 
     Nothing is stored: the secret is the session configuration plus a signature,
-    so any instance can verify one minted by any other.
+    so any instance can verify one minted by any other. A mint authorized by a
+    tenant API key embeds the tenant's key ID, so the session it opens carries
+    the tenant's scopes rather than escaping them.
 
     Args:
         session: Session configuration the secret opens.
@@ -352,9 +375,13 @@ def mint_client_secret(session: SessionConfig, ttl: int) -> tuple[str, int]:
         The secret, and the Unix time in seconds after which it is refused.
     """
     expires_at = int(time()) + ttl
-    payload = to_json_bytes(
-        {"exp": expires_at, "session": session.model_dump(mode="json")}
-    )
+    claims: dict[str, Any] = {
+        "exp": expires_at,
+        "session": session.model_dump(mode="json"),
+    }
+    if (tenant := TENANT.get()) is not None:
+        claims["tenant"] = tenant.key_id
+    payload = to_json_bytes(claims)
     signature = digest(_signing_key(), payload, "sha256")
     return (
         f"{CLIENT_SECRET_PREFIX}{_urlsafe(payload)}.{_urlsafe(signature)}",
@@ -364,15 +391,15 @@ def mint_client_secret(session: SessionConfig, ttl: int) -> tuple[str, int]:
 
 def read_client_secret(  # noqa: PLR0911 - every branch is one way to be invalid
     value: str,
-) -> SessionConfig | None:
-    """Verify a client secret and return the session configuration it carries.
+) -> ClientSecret | None:
+    """Verify a client secret and return what it carries.
 
     Args:
         value: The credential the caller presented.
 
     Returns:
-        The session configuration, or None when *value* is not a valid,
-        unexpired secret this deployment minted.
+        The session configuration and the minting tenant's key ID, or None
+        when *value* is not a valid, unexpired secret this deployment minted.
     """
     if not value.startswith(CLIENT_SECRET_PREFIX):
         return None
@@ -392,7 +419,13 @@ def read_client_secret(  # noqa: PLR0911 - every branch is one way to be invalid
         return None
     if not isinstance(decoded, dict) or decoded.get("exp", 0) < time():
         return None
-    return _parse_session(decoded.get("session"))
+    tenant_key_id = decoded.get("tenant")
+    if tenant_key_id is not None and not isinstance(tenant_key_id, str):
+        return None
+    session = _parse_session(decoded.get("session"))
+    if session is None:
+        return None
+    return ClientSecret(session, tenant_key_id)
 
 
 def _parse_session(value: Any) -> SessionConfig | None:  # noqa: ANN401
@@ -1906,11 +1939,22 @@ async def _open_session(websocket: WebSocket, model: str | None) -> None:
             valid.
     """
     credential = websocket_credential(websocket)
-    config = read_client_secret(credential) if credential else None
-    minted = config is not None
-    if config is None:
-        await verify_websocket_credentials(credential)
+    secret = read_client_secret(credential) if credential else None
+    minted = secret is not None
+    config: SessionConfig
+    if secret is None:
+        await verify_websocket_credentials(credential, websocket.scope)
         config = RealtimeSessionConfig()
+    else:
+        config = secret.session
+        # Cleared per connection: a session must not inherit another's identity.
+        PRINCIPAL.set(None)
+        TENANT.set(None)
+        if secret.tenant_key_id is not None:
+            # The mint was tenant-authorized; the session keeps the tenant's
+            # scopes and drops with the key, so revocation reaches it too.
+            TENANT.set(await resume_tenant(secret.tenant_key_id))
+            enforce_tenant_endpoint_scope(websocket.scope)
     if _SHUTTING_DOWN:
         message = "The server is shutting down. Reconnect to start a new session."
         raise ApiError(message, status=503)

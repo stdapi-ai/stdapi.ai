@@ -325,15 +325,19 @@ class TestClientSecrets:
 
         assert value.startswith(CLIENT_SECRET_PREFIX)
         assert expires_at > 0
-        assert isinstance(read, RealtimeSessionConfig)
-        assert read.instructions == "Be brief."
-        assert read.model == "a.model"
+        assert read is not None
+        assert isinstance(read.session, RealtimeSessionConfig)
+        assert read.session.instructions == "Be brief."
+        assert read.session.model == "a.model"
+        assert read.tenant_key_id is None
 
     def test_a_transcription_session_survives_the_round_trip(self) -> None:
         """The two session shapes are told apart by their own ``type``."""
         value, _ = mint_client_secret(TranscriptionSessionConfig(), 600)
 
-        assert isinstance(read_client_secret(value), TranscriptionSessionConfig)
+        read = read_client_secret(value)
+        assert read is not None
+        assert isinstance(read.session, TranscriptionSessionConfig)
 
     def test_an_expired_secret_is_refused(self) -> None:
         """A secret past its expiry reads as no session at all."""

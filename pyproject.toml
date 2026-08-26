@@ -65,7 +65,7 @@ lint = [
     "mypy",
     "ruff",
     {include-group = "docs-gen"},
-    "types-aiobotocore[bedrock, bedrock-agent-runtime, bedrock-runtime, polly, comprehend, meteringmarketplace, pricing, s3, sts, transcribe, translate]>=3.8",
+    "types-aiobotocore[bedrock, bedrock-agent-runtime, bedrock-runtime, polly, comprehend, meteringmarketplace, pricing, s3, ssm, sts, transcribe, translate]>=3.8",
     "types-PyYAML",
 ]
 docs = [
