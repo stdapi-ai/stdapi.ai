@@ -177,6 +177,9 @@ Each tenant record may carry four pattern lists, matched with `*` and `?` globs.
 !!! tip "Deny lists match names, so prefer an allow list"
     Model patterns are matched against the model ID the request resolves to. With [`AWS_BEDROCK_ALLOW_MARKETPLACE_ENDPOINT_ARN`](operations_configuration.md#bedrock-allow-marketplace-endpoint-arn) enabled, an endpoint addressed by its ARN keeps that ARN as its ID, which a name-based pattern such as `mistral.*` does not match. `models_allow` fails closed on it — no pattern matches, so the model is refused — while a deny-only tenant would reach it: add `arn:*` to `models_deny` where that opt-in is on.
 
+!!! warning "A release that adds endpoints widens an endpoint deny list"
+    `endpoints_deny` is matched against the path templates the running version serves. Releases add routes — a new API dialect mounts a whole family of them at once, as `/api/*` did for the [Ollama API](api_ollama_chat.md) — and a deny list written against the previous version matches none of them, so a tenant scoped by denial silently gains them on upgrade. `endpoints_allow` fails closed on the same upgrade: a path it does not list stays refused. Prefer an allow list here too, and re-read the [API reference](api_overview.md) after an upgrade whenever you keep a deny list.
+
 Both are enforced at choke points every request passes through — the authentication dependency for endpoints, the single model-resolution step for models — not per route, so a new endpoint or model route cannot bypass them. `GET /v1/models` is deliberately **not** filtered per tenant: the catalogue advertises what the deployment serves, and the invocation-time check is the authority. A Realtime client secret minted with a tenant key stays bound to that tenant: the session it opens carries the same scopes and stops resuming once the key is revoked or disabled.
 
 !!! warning "Scopes bound what a tenant may invoke, not what it may read"

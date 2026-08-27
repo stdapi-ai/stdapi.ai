@@ -7,9 +7,11 @@ and driven over its own HTTP API, with no browser anywhere.
 Its value is not a new gateway route -- n8n and Haystack already reach every one of
 them -- but that the environment block below is the documentation's, verbatim. A
 setting the docs promise and the gateway no longer honours fails here, at the layer
-users actually configure. Five of the doc's six sections are exercised in one boot:
+users actually configure. All six of the doc's sections are exercised in one boot:
 
 - Core Connection -> ``/v1/chat/completions``;
+- Ollama Connection -> the ``/api/*`` dialect, driven through Open WebUI's own
+  Ollama proxy and admin surface;
 - Text to Speech and Speech to Text -> ``/v1/audio/speech`` fed straight back into
   ``/v1/audio/transcriptions``, so the round trip needs no sample file;
 - Image Generation -> ``/v1/images/generations``, decoded to a raster;
@@ -26,11 +28,14 @@ Ref: https://docs.openwebui.com/getting-started/env-configuration/
      docs/use_cases_openwebui.md
      stdapi/routes/cohere_rerank.py:rerank
      stdapi/routes/openai_chat_completions.py:create_chat_completion
+     stdapi/routes/ollama_chat.py:chat
      tests/agentic/_podman.py:start_service_container
 """
 
 from __future__ import annotations
 
+import re
+from json import dumps
 from secrets import token_hex
 from time import monotonic, sleep
 from typing import TYPE_CHECKING
@@ -72,6 +77,22 @@ _CHAT_MODEL = "amazon.nova-2-lite-v1:0"
 
 #: Second chat model: Claude replays its own reasoning under a signature.
 _CLAUDE_CHAT_MODEL = "anthropic.claude-haiku-4-5-20251001-v1:0"
+
+#: Namespace the Ollama connection's models are listed under.
+#:
+#: Both connection types are enabled at once here, and they serve the same
+#: catalogue, so without a prefix each model id would arrive twice and the merged
+#: list would keep whichever the merge saw last -- silently rerouting the Core
+#: Connection tests above through the Ollama one. ``prefix_id`` is Open WebUI's
+#: own answer to that, and ``docs/use_cases_openwebui.md`` prescribes it for
+#: exactly this configuration.
+_OLLAMA_PREFIX = "ollama"
+
+#: The chat model as the Ollama connection lists it, prefix included.
+_OLLAMA_CHAT_MODEL = f"{_OLLAMA_PREFIX}.{_CHAT_MODEL}"
+
+#: Shape of the API version Open WebUI refuses a connection without.
+_VERSION = re.compile(r"^\d+\.\d+\.\d+")
 
 #: Embedding model the corpus and every query are vectorised with.
 _EMBEDDING_MODEL = "cohere.embed-v4:0"
@@ -208,6 +229,16 @@ def _environment(server: AgenticServer, port: int) -> Mapping[str, str]:
         "OPENAI_API_BASE_URL": f"{base_url}/v1",
         "OPENAI_API_KEY": api_key,
         "TASK_MODEL_EXTERNAL": _CHAT_MODEL,
+        # -- Ollama Connection ------------------------------------------------
+        # The base URL carries no path suffix: Open WebUI appends /api/version,
+        # /api/tags and the rest itself. The key travels inside the per-connection
+        # configuration rather than in a variable of its own, because a local
+        # Ollama needs no credentials and the variable therefore does not exist.
+        "ENABLE_OLLAMA_API": "true",
+        "OLLAMA_BASE_URL": base_url,
+        "OLLAMA_API_CONFIGS": dumps(
+            {"0": {"key": api_key, "prefix_id": _OLLAMA_PREFIX}}
+        ),
         # -- RAG Embeddings ---------------------------------------------------
         "RAG_EMBEDDING_ENGINE": "openai",
         "RAG_OPENAI_API_BASE_URL": f"{base_url}/v1",
@@ -343,6 +374,30 @@ def _assert_routes(
         )
 
 
+def _assert_paths(server: AgenticServer, log_start: int, expected: set[str]) -> None:
+    """Assert each named route was reached, for a route that resolves no model.
+
+    ``/api/version``, ``/api/tags`` and ``/api/ps`` name no model, so
+    :func:`_assert_routes` has nothing to match them on -- and without a check
+    here a client answering one of them from its own cache would still pass.
+
+    Args:
+        server: Gateway the client was pointed at.
+        log_start: Log index captured before the exchange.
+        expected: Route paths that must appear in the log.
+
+    Ref: stdapi/monitoring.py:EventLog
+    """
+    if server.process is None:
+        return  # External server: its log is not observable here.
+    seen = {
+        str(entry.get("path") or "")
+        for entry in server.log_entries(log_start)
+        if entry.get("type") == "request"
+    }
+    assert expected <= seen, f"{sorted(expected - seen)} never reached the gateway"
+
+
 class TestOpenWebUIChat:
     """The Core Connection section of the integration document.
 
@@ -383,6 +438,161 @@ class TestOpenWebUIChat:
         content = response.json()["choices"][0]["message"]["content"]
         assert _CHAT_KEYWORD.lower() in content.lower(), content[:500]
         _assert_routes(agentic_server, log_start, {"/v1/chat/completions": model})
+
+
+class TestOpenWebUIOllamaConnection:
+    """The Ollama Connection section, driven through Open WebUI's own proxy.
+
+    Open WebUI is the only client in this lane that **gates on** ``/api/version``:
+    its connection check reads that route and refuses the whole connection when it
+    does not answer, so a wrong version breaks this application and nothing else
+    here would notice. It is also the only one whose admin surface reaches the
+    model-management verbs as a real application rather than as an SDK asserting
+    on an exception type.
+
+    Every route below is exercised through ``/ollama/...``, the proxy Open WebUI
+    mounts in front of the configured backend, so what is asserted is the app's own
+    handling of the gateway's answers and not a request this test composed.
+
+    Ref: https://docs.openwebui.com/getting-started/env-configuration/#ollama
+         docs/use_cases_openwebui.md
+         stdapi/routes/ollama_models.py
+    """
+
+    def test_connection_verification_reads_the_version(
+        self, open_webui: httpx.Client, agentic_server: AgenticServer
+    ) -> None:
+        """Open WebUI validates the connection by reading ``/api/version``.
+
+        This is the route's only gating consumer anywhere in the suite: the
+        handler behind it treats any non-200, or a body it cannot read a version
+        out of, as an unreachable backend and reports the connection as broken.
+
+        Ref: stdapi/routes/ollama_models.py:version
+        """
+        log_start = len(agentic_server.logs)
+        verified = open_webui.post(
+            "/ollama/verify",
+            json={"url": _gateway_url(agentic_server), "key": agentic_server.api_key},
+        )
+        assert verified.status_code == 200, verified.text[:500]
+        reported = verified.json()["version"]
+        assert _VERSION.match(reported), reported
+        _assert_paths(agentic_server, log_start, {"/api/version"})
+
+    def test_the_model_picker_is_built_from_the_tags_route(
+        self, open_webui: httpx.Client, agentic_server: AgenticServer
+    ) -> None:
+        """Every model the gateway advertises reaches the picker, under its prefix.
+
+        The connection's model list is built entirely from ``/api/tags``, so an
+        entry the client cannot parse is not a warning here -- it is a model the
+        user cannot select. The prefixed id is what proves the entry came from the
+        Ollama connection rather than from the Core one, which serves the same
+        catalogue over ``/v1/models``.
+
+        Ref: stdapi/routes/ollama_models.py:list_tags
+        """
+        log_start = len(agentic_server.logs)
+        tagged = open_webui.get("/ollama/api/tags")
+        assert tagged.status_code == 200, tagged.text[:500]
+        names = {model["model"] for model in tagged.json()["models"]}
+        assert _OLLAMA_CHAT_MODEL in names, sorted(names)[:20]
+        _assert_paths(agentic_server, log_start, {"/api/tags"})
+
+        listed = open_webui.get("/api/models")
+        assert listed.status_code == 200, listed.text[:500]
+        by_id = {model["id"]: model for model in listed.json()["data"]}
+        assert by_id[_OLLAMA_CHAT_MODEL]["owned_by"] == "ollama"
+        # The Core Connection still owns the unprefixed id, so neither connection
+        # has quietly taken over the other's models.
+        assert by_id[_CHAT_MODEL]["owned_by"] == "openai"
+
+    def test_chat_answers_through_the_ollama_connection(
+        self, open_webui: httpx.Client, agentic_server: AgenticServer
+    ) -> None:
+        """A chat sent to the Ollama connection comes back with the requested word.
+
+        Open WebUI strips the prefix, forwards the request to ``/api/chat``, and
+        re-emits the reply to its own front end, so a framing defect in the
+        gateway's NDJSON surfaces as a broken chat rather than as a parse error in
+        a test's own reader.
+
+        Ref: stdapi/routes/ollama_chat.py:chat
+        """
+        log_start = len(agentic_server.logs)
+        response = open_webui.post(
+            "/ollama/api/chat",
+            json={
+                "model": _OLLAMA_CHAT_MODEL,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"Reply with the single word: {_CHAT_KEYWORD}",
+                    }
+                ],
+                "stream": False,
+            },
+        )
+        assert response.status_code == 200, response.text[:500]
+        content = response.json()["message"]["content"]
+        assert _CHAT_KEYWORD.lower() in content.lower(), content[:500]
+        _assert_routes(agentic_server, log_start, {"/api/chat": _CHAT_MODEL})
+
+    def test_the_loaded_models_panel_renders_an_empty_backend(
+        self, open_webui: httpx.Client, agentic_server: AgenticServer
+    ) -> None:
+        """Nothing is resident, and the panel that shows what is renders it anyway.
+
+        A client polls this to offer an "unload" control; a backend that never
+        keeps a model in memory has to answer it with an empty list rather than
+        with an error, or the panel reports the connection as broken.
+
+        ``/api/show`` is deliberately not driven here: Open WebUI's proxy for that
+        route forwards the model id **with** the connection's ``prefix_id`` still
+        attached, so with two connections configured it can never name a model the
+        backend knows. That is an Open WebUI defect, not a gateway one -- the route
+        itself is covered by the reference client in ``test_ollama_sdk.py``.
+
+        Ref: stdapi/routes/ollama_models.py:ps
+        """
+        log_start = len(agentic_server.logs)
+        running = open_webui.get("/ollama/api/ps")
+        assert running.status_code == 200, running.text[:500]
+        assert running.json()["models"] == []
+        _assert_paths(agentic_server, log_start, {"/api/ps"})
+
+    def test_pull_is_accepted_and_delete_is_refused(
+        self, open_webui: httpx.Client, agentic_server: AgenticServer
+    ) -> None:
+        """The admin model manager can make a model available but cannot remove one.
+
+        Both halves are asserted together because only the pair proves the split:
+        a server that refused everything would fail the first, and one that
+        reported success for everything would fail the second by telling the admin
+        a model went away when it did not. The refusal has to reach the admin as
+        the gateway wrote it -- Open WebUI forwards the ``error`` field verbatim as
+        its own ``detail`` -- or the message names nothing they can act on.
+
+        Both verbs address the backend directly, by its own model name and (for the
+        delete) by connection index, which is what the admin panel does: they are
+        the operations an operator performs on one named backend rather than on a
+        model they picked out of the merged list.
+
+        Ref: stdapi/routes/ollama_model_management.py:pull
+             stdapi/routes/ollama_model_management.py:delete
+        """
+        log_start = len(agentic_server.logs)
+        pulled = open_webui.post("/ollama/api/pull", json={"model": _CHAT_MODEL})
+        assert pulled.status_code == 200, pulled.text[:500]
+        assert "success" in pulled.text, pulled.text[:500]
+
+        deleted = open_webui.request(
+            "DELETE", "/ollama/api/delete/0", json={"model": _CHAT_MODEL}
+        )
+        assert deleted.status_code == 400, deleted.text[:500]
+        assert "does not store models" in deleted.text, deleted.text[:500]
+        _assert_paths(agentic_server, log_start, {"/api/pull", "/api/delete"})
 
 
 class TestOpenWebUIAudio:

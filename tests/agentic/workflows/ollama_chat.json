@@ -1,0 +1,51 @@
+{
+  "id": "stdapi-test",
+  "name": "stdapi.ai ollama chat",
+  "active": false,
+  "settings": {},
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "3b1f0000-0000-4000-8000-000000000001",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {"promptType": "define", "text": "__PROMPT__"},
+      "id": "3b1f0000-0000-4000-8000-000000000002",
+      "name": "Chain",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "model": "__MODEL__",
+        "options": {
+          "temperature": 0,
+          "numPredict": 256,
+          "numCtx": 4096,
+          "keepAlive": "5m"
+        }
+      },
+      "id": "3b1f0000-0000-4000-8000-000000000003",
+      "name": "Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [220, 220],
+      "credentials": {
+        "ollamaApi": {"id": "stdapi-ollama", "name": "stdapi.ai ollama"}
+      }
+    }
+  ],
+  "connections": {
+    "Start": {"main": [[{"node": "Chain", "type": "main", "index": 0}]]},
+    "Model": {
+      "ai_languageModel": [
+        [{"node": "Chain", "type": "ai_languageModel", "index": 0}]
+      ]
+    }
+  }
+}

@@ -453,6 +453,9 @@ _ALL_MODELS_BATCH: set[str] = set()
 #: Model IDs known not to be batch-capable (search_models filter index)
 _ALL_MODELS_NON_BATCH: set[str] = set()
 
+#: Tag an Ollama client appends to name the current version of a model
+_LATEST_TAG: Final = ":latest"
+
 #: Characters that make a requested model a pattern naming a family
 _WILDCARD_CHARS: Final = ("*", "?")
 
@@ -1584,6 +1587,52 @@ def resolve_model_alias(model_id: str) -> str:
         Canonical model ID.
     """
     return MODEL_ALIASES.get(model_id, model_id)
+
+
+def _alias_overlay(model_id: str) -> AliasOverlay | None:
+    """Return the configuration the alias *model_id* names carries, if any.
+
+    An Ollama client tags a model name with ``:latest``, and the catalog
+    lookup falls back to the untagged name: the overlay follows the same
+    fallback, so an alias asked for as ``<alias>:latest`` is served with its
+    guardrail and parameters rather than as its bare target.
+
+    Args:
+        model_id: Model ID, alias or pattern, as the caller wrote it.
+
+    Returns:
+        The alias' overlay, or ``None`` when the name carries none.
+    """
+    if (overlay := MODEL_ALIAS_OVERLAYS.get(model_id)) is not None:
+        return overlay
+    if model_id.endswith(_LATEST_TAG) and model_id not in MODEL_ALIASES:
+        return MODEL_ALIAS_OVERLAYS.get(model_id.removesuffix(_LATEST_TAG))
+    return None
+
+
+def _lookup_with_latest_fallback(
+    lookup: Callable[[str], ModelDetails | None], model_id: str
+) -> tuple[ModelDetails | None, str]:
+    """Look *model_id* up, retrying once without a trailing ``:latest`` tag.
+
+    ``:latest`` is how an Ollama client names the current version of a model.
+    The retry is a fallback and never a pre-strip: a Bedrock model ID carries a
+    ``:<version>`` suffix of its own, so stripping before the exact lookup would
+    break every one of them.
+
+    Args:
+        lookup: Bound catalog lookup.
+        model_id: Model ID, alias or pattern, as resolved so far.
+
+    Returns:
+        The model and the ID it was found under, else ``(None, model_id)``.
+    """
+    if (model := lookup(model_id)) is not None or not model_id.endswith(_LATEST_TAG):
+        return model, model_id
+    untagged = resolve_model_alias(model_id.removesuffix(_LATEST_TAG))
+    if (model := lookup(untagged)) is not None:
+        return model, untagged
+    return None, model_id
 
 
 def is_model_wildcard(model_id: str) -> bool:
@@ -4358,7 +4407,7 @@ async def validate_model(
         AmbiguousModelError: If a pattern names several equally recent models.
     """
     if MODEL_ALIAS_OVERLAYS:
-        apply_alias_overlay(MODEL_ALIAS_OVERLAYS.get(model_id))
+        apply_alias_overlay(_alias_overlay(model_id))
     model_id = resolve_model_alias(model_id)
     original_id = model_id
     models = _MODELS if bedrock_only else _ALL_MODELS
@@ -4378,7 +4427,7 @@ async def validate_model(
         ) or await _validate_model_from_arn(model_id)
     else:
         async with _CACHE["access_lock"]:
-            model = lookup(model_id)
+            model, model_id = _lookup_with_latest_fallback(lookup, model_id)
 
     if model is None:
         # About to answer "no such model": the one case worth waiting for a
@@ -4386,7 +4435,7 @@ async def validate_model(
         if _refresh_due():
             await _refresh_bedrock_models(None)
         async with _CACHE["access_lock"]:
-            model = lookup(model_id)
+            model, model_id = _lookup_with_latest_fallback(lookup, model_id)
             if model is None:
                 fallback_model, model_id = _resolve_deprecated(models, model_id)
                 if SETTINGS.aws_bedrock_deprecated_model_fallback:

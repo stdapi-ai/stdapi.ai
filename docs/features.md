@@ -8,13 +8,13 @@ hide:
 
 # :material-check-all: Features — AI Gateway for Amazon Bedrock
 
-stdapi.ai is an **AI gateway purpose-built for AWS**. It brings full OpenAI, Anthropic, and Cohere API compatibility to Amazon Bedrock and AWS AI services — so the tools, SDKs, and applications your team already uses run against your own AWS account, from the moment they point at a new base URL.
+stdapi.ai is an **AI gateway purpose-built for AWS**. It brings full OpenAI, Anthropic, Cohere and Ollama API compatibility to Amazon Bedrock and AWS AI services — so the tools, SDKs, and applications your team already uses run against your own AWS account, from the moment they point at a new base URL.
 
 ---
 
 ## :material-sitemap: How It Works
 
-stdapi.ai translates OpenAI, Anthropic and Cohere API calls into native AWS requests. A tool or SDK that speaks one of the three protocols connects on the base URL alone — no plugins, no custom integrations.
+stdapi.ai translates OpenAI, Anthropic, Cohere and Ollama API calls into native AWS requests. A tool or SDK that speaks one of the four protocols connects on the base URL alone — no plugins, no custom integrations.
 
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true}} }%%
@@ -39,9 +39,9 @@ flowchart LR
 
 ## :material-api: API Compatibility
 
-### 80+ endpoints, all three protocols, every one on an AWS service
+### 90+ endpoints, four protocols, every one on an AWS service
 
-Not a chat proxy with a few extras: the OpenAI, Anthropic and Cohere surfaces are served in full, each endpoint backed by an AWS service running in your account.
+Not a chat proxy with a few extras: the OpenAI, Anthropic, Cohere and Ollama surfaces are served in full, each endpoint backed by an AWS service running in your account.
 
 | What your application calls it for                                                      | AWS service behind it                                            |
 |-----------------------------------------------------------------------------------------|------------------------------------------------------------------|
@@ -59,7 +59,7 @@ Not a chat proxy with a few extras: the OpenAI, Anthropic and Cohere surfaces ar
 | Files and multipart uploads                                                               | Amazon S3                                                        |
 | [Model discovery](api_search_models.md) and [pricing](api_model_pricing.md)                | Amazon Bedrock · AWS Price List                                  |
 
-Anthropic and Cohere routes live under `/anthropic` and `/cohere`, so all three protocols are served side by side without colliding on `/v1` — and either prefix can become the path your clients already send ([Anthropic](operations_configuration.md#anthropic-routes-prefix), [Cohere](operations_configuration.md#cohere-routes-prefix)).
+Anthropic and Cohere routes live under `/anthropic` and `/cohere`, so the protocols are served side by side without colliding on `/v1`, while the Ollama routes keep the `/api/*` paths their clients expect from a bare base URL — and every prefix can become the path your clients already send ([Anthropic](operations_configuration.md#anthropic-routes-prefix), [Cohere](operations_configuration.md#cohere-routes-prefix), [Ollama](operations_configuration.md#ollama-routes-prefix)).
 
 [:octicons-arrow-right-24: Every endpoint, with its parameters](api_overview.md)
 
@@ -561,9 +561,12 @@ Competitor capabilities were verified against official sources on 5 August 2026;
 | **OpenAI Realtime API**                     | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **Cohere Rerank API**                       | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **Cohere Embed API**                        | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
+| **Ollama API**                              | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> [^29] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **Own AI &amp; media APIs as MCP tools**    | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^20] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **Bedrock Full model catalog**              | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^1] | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^10] | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^2] |
 | **Unified Bedrock + Mantle catalog**        | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^15] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
+| **Bedrock Marketplace model endpoints**     | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^30] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> [^31] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> [^32] |
+| **Your own SageMaker AI endpoints**         | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^33] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> [^31] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> [^32] |
 | **Every model on every text API**           | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^16] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | **Multimodal inputs**                       | text · image · audio · video · docs |           text · image · docs           |              text · image               |              text · image               |
 | **Multi-region capacity combining**         | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> [^8] | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |

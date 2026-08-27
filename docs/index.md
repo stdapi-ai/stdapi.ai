@@ -1,7 +1,7 @@
 ---
-title: stdapi.ai - OpenAI, Anthropic & Cohere Compatible AI Gateway for Amazon Bedrock
-description: Run your favorite OpenAI, Anthropic, and Cohere-compatible apps on Amazon Bedrock. Access 100+ models including Claude, OpenAI GPT, xAI Grok, Amazon Nova for chat, images, video, audio, embeddings, and content moderation — in your own AWS account, at AWS rates with no markup. 14-day free trial on AWS Marketplace.
-keywords: OpenAI API gateway, Anthropic API gateway, Cohere API gateway, AWS Bedrock API, OpenAI compatible API, Anthropic compatible API, Cohere compatible API, AWS AI gateway, OpenAI AWS integration, Anthropic AWS integration, enterprise AI API, AWS Bedrock integration, OpenAI alternative, Anthropic alternative, multimodal AI API, multi-region AI gateway, video generation API, content moderation API, private AI deployment
+title: stdapi.ai - OpenAI, Anthropic, Cohere & Ollama Compatible AI Gateway for Amazon Bedrock
+description: Run your favorite OpenAI, Anthropic, Cohere and Ollama-compatible apps on Amazon Bedrock. Access 100+ models including Claude, OpenAI GPT, xAI Grok, Amazon Nova for chat, images, video, audio, embeddings, and content moderation — in your own AWS account, at AWS rates with no markup. 14-day free trial on AWS Marketplace.
+keywords: OpenAI API gateway, Anthropic API gateway, Cohere API gateway, Ollama API gateway, AWS Bedrock API, OpenAI compatible API, Anthropic compatible API, Cohere compatible API, Ollama compatible API, AWS AI gateway, OpenAI AWS integration, Anthropic AWS integration, Ollama AWS integration, enterprise AI API, AWS Bedrock integration, Amazon SageMaker AI gateway, SageMaker OpenAI compatible endpoint, OpenAI alternative, Anthropic alternative, multimodal AI API, multi-region AI gateway, video generation API, content moderation API, private AI deployment
 hide:
   - toc
   - navigation
@@ -90,13 +90,13 @@ Streaming responses can only retry before the stream opens, and asynchronous job
 
 ## One gateway, every modality you're already calling.
 
-Most gateways stop at chat completions. stdapi.ai covers text, retrieval, embeddings, images, video, speech, live voice, batch inference, moderation, reranking, and file storage across the OpenAI, Anthropic, and Cohere protocols — with conversations kept server-side and continued by id instead of resent.
+Most gateways stop at chat completions. stdapi.ai covers text, retrieval, embeddings, images, video, speech, live voice, batch inference, moderation, reranking, and file storage across the OpenAI, Anthropic, Cohere and Ollama protocols — with conversations kept server-side and continued by id instead of resent.
 
 <div class="panel-split" markdown>
 <div class="panel-visual" markdown>
 <div class="api-groups" markdown>
 
-- :material-message-text: <span class="chip">/v1/chat/completions</span> <span class="chip">/v1/responses</span> <span class="chip">/anthropic/v1/messages</span>
+- :material-message-text: <span class="chip">/v1/chat/completions</span> <span class="chip">/v1/responses</span> <span class="chip">/anthropic/v1/messages</span> <span class="chip">/api/chat</span>
 - :material-vector-link: <span class="chip">/v1/embeddings</span> <span class="chip">/v1/vector_stores</span> <span class="chip">/cohere/v2/rerank</span>
 - :material-image-outline: <span class="chip">/v1/images/*</span> <span class="chip">/v1/videos</span>
 - :material-waveform: <span class="chip">/v1/audio/speech</span> <span class="chip">/v1/audio/transcriptions</span> <span class="chip">WS /v1/realtime</span>
@@ -104,12 +104,18 @@ Most gateways stop at chat completions. stdapi.ai covers text, retrieval, embedd
 - :material-shield-check-outline: <span class="chip">/v1/moderations</span> <span class="chip">/v1/files</span>
 
 </div>
+<div class="model-logos">
+<img src="styles/logo_openai.svg" alt="OpenAI" title="OpenAI-compatible API" width="503" height="499" decoding="async" loading="lazy" />
+<img src="styles/logo_anthropic.svg" alt="Anthropic" title="Anthropic-compatible API" width="24" height="24" decoding="async" loading="lazy" />
+<img src="styles/logo_cohere.svg" alt="Cohere" title="Cohere-compatible API" width="78" height="78" decoding="async" loading="lazy" />
+<img src="styles/logo_ollama.svg" alt="Ollama" title="Ollama-compatible API" width="24" height="24" decoding="async" loading="lazy" />
+</div>
 <div class="panel-visual__caption">the parameters your SDK sends are honoured wherever AWS supports them — not just the common subset</div>
 </div>
 <div class="panel-stats" markdown>
 
-- <code>3</code> API protocols — OpenAI, Anthropic, and Cohere — from one deployment
-- <code>80+</code> endpoints — text, retrieval, images, video, audio, batch, moderation, files
+- <code>4</code> API protocols — OpenAI, Anthropic, Cohere and Ollama — from one deployment
+- <code>90+</code> endpoints — text, retrieval, images, video, audio, batch, moderation, files
 - <code>WS</code> live speech-to-speech on the OpenAI Realtime API — speech in, speech and a transcript out
 
 [:octicons-arrow-right-24: API overview](api_overview.md)
@@ -507,11 +513,11 @@ All four expose an OpenAI-compatible API in front of Amazon Bedrock — the cove
 |                                                                                             | stdapi.ai                | LiteLLM                     | Access Gateway              | Bedrock Mantle              |
 | ------------------------------------------------------------------------------------------- | ------------------------ | --------------------------- | --------------------------- | --------------------------- |
 | Full multi-modal API — images, video, audio, files                                            | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
-| OpenAI + Anthropic + Cohere protocols                                                         | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> |
+| OpenAI + Anthropic + Cohere + Ollama protocols                                                | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> |
 | Multi-region capacity — combine independent regional quotas                                   | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | Regional retry — throttling, region outages, retired models                                   | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | Zero-config model discovery — every region, Bedrock + Mantle                                  | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> |
-| AWS AI services &amp; advanced Bedrock features — Polly, Transcribe, guardrails, service tiers | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> |
+| AWS AI services &amp; advanced Bedrock features — Polly, Transcribe, SageMaker AI, guardrails, service tiers | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> |
 | Own AI &amp; media APIs exposed as MCP tools                                                  | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-p" aria-hidden="true">◐</span><span class="sr-only">partial</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | Multi-provider routing beyond AWS                                                             | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |
 | Spend limits enforced at request time                                                         | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-y" aria-hidden="true">✓</span><span class="sr-only">full</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> | <span class="m-n" aria-hidden="true">—</span><span class="sr-only">not available</span> |

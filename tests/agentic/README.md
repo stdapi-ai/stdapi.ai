@@ -2,8 +2,8 @@
 
 Real third-party clients — Claude Code, Codex, pi, OpenClaw, Hermes, Qwen Code,
 n8n, Haystack, Open WebUI, wyoming-openai, Docling Serve, LangChain, pydantic-ai,
-litellm, the OpenAI Agents SDK, LiveKit Agents, Pipecat, inspect-ai, Agno and
-LlamaIndex — driven
+litellm, the OpenAI Agents SDK, LiveKit Agents, Pipecat, inspect-ai, Agno,
+LlamaIndex and the official `ollama` client — driven
 end to end against a live stdapi.ai server. They are the only tests that
 exercise a client's own wire behaviour: its system prompt, tool definitions,
 multi-turn tool-call replays, SSE streaming and multipart uploads, all translated
@@ -17,9 +17,9 @@ by the gateway for a model that is usually not the vendor's own.
 | OpenClaw | all three | The wire format as a single flag: `--custom-compatibility openai \| openai-responses \| anthropic` |
 | Hermes | all three | Three `transport` values, and the only client choosing its own Anthropic cache TTL tier |
 | Qwen Code | `/v1/chat/completions` | The only agent binary replaying `reasoning_content` back, and the only client sending the `reasoning` object |
-| n8n | twelve routes | All three chat dialects, embeddings, audio ×3, files, images ×2, videos, legacy completions |
+| n8n | thirteen routes | All three chat dialects **and** the Ollama one, embeddings, audio ×3, files, images ×2, videos, legacy completions |
 | Haystack | `/cohere/v2/rerank` | The only client that reranks, chained onto embeddings and chat |
-| Open WebUI | chat, audio ×2, images, embeddings, rerank | The documented integration's own environment block, as a service |
+| Open WebUI | chat ×2 dialects, audio ×2, images, embeddings, rerank, Ollama model management | The documented integration's own environment block, as a service — and the only client that **gates** on `/api/version` |
 | wyoming-openai | audio ×2 | The only client streaming `/v1/audio/speech` and the only one calling it concurrently — and the only one reading a streamed transcription |
 | langchain-openai / langchain-anthropic | `/v1` chat + embeddings, `/anthropic` | Streaming, `bind_tools`, `with_structured_output`, and the embeddings token-array trap, in plain Python |
 | pydantic-ai | `/v1/chat/completions` | Proves a real multi-turn tool loop survives Claude's silent `reasoning_content` replay drop |
@@ -31,6 +31,7 @@ by the gateway for a model that is usually not the vendor's own.
 | inspect-ai | `/v1/files` + `/v1/batches`, `/anthropic/v1/messages/batches` | The only client that batches anything, and the only one reaching **both** batch surfaces |
 | Agno | `/v1/responses`, `/v1/files`, `/v1/vector_stores` | The only client that provisions a vector store for itself — the lane's proof of the store *write* path |
 | LlamaIndex | `/v1/responses` | A second independent reader of a `file_search_call` the gateway ran itself |
+| `ollama` (official Python client) | the whole `/api/*` dialect | The dialect's own reference implementation: its pydantic types *are* the assertion, and it is the only client with methods for `pull`/`delete`/`copy`/`create`/`push` |
 
 pi is parametrized over its three providers, so one failure isolates to one
 adapter: the binary, prompt, model and assertions are identical across the three,
@@ -272,11 +273,14 @@ across unrelated clients is resource exhaustion until proven otherwise.
 
 ## In-process clients
 
-Nine clients are Python libraries rather than binaries, so they run in the test
+Ten clients are Python libraries rather than binaries, so they run in the test
 process: `test_langchain.py`, `test_pydantic_ai.py`, `test_wyoming_audio.py`,
 `test_litellm.py`, `test_openai_agents.py`, `test_livekit.py`, `test_pipecat.py`,
-`test_agno.py` and `test_llama_index.py`. Their packages are listed in
-`requirements.txt` and layered over the project environment at run time:
+`test_agno.py`, `test_llama_index.py` and `test_ollama_sdk.py`. Their packages are
+listed in `requirements.txt` and layered over the project environment at run time
+— except `ollama`, which is a `test` group dependency in `pyproject.toml` because
+`tests/test_ollama_*.py` drive the same client against the in-process app, and a
+second resolution of it here would let the two lanes prove different versions:
 
 ```bash
 uv run --with-requirements tests/agentic/requirements.txt pytest tests/agentic --agentic
@@ -489,7 +493,7 @@ exported to the container *and* available to the template as `__KEY__` (that is
 how `__SIZE__`, `__SECONDS__` and `__PURPOSE__` arrive).
 
 Each run is `import:credentials` → `import:workflow` → `execute --id --rawOutput`
-against a database created from scratch inside `/work`. Four things bite:
+against a database created from scratch inside `/work`. Five things bite:
 
 - **`execute` truncates a large stdout.** Node writes to a pipe asynchronously and
   the command exits as soon as it has printed, which cut a 400 kB embeddings
@@ -508,6 +512,15 @@ against a database created from scratch inside `/work`. Four things bite:
 - **some operations hard-code their model.** Transcribe and Translate always send
   `whisper-1`, and Classify always sends `omni-moderation-latest`, so those tests
   pin the gateway's *aliases* rather than a model parameter.
+- **the Ollama Chat Model node needs a credential of its own.** `ollamaApi` carries
+  a `baseUrl` and an `apiKey`, and the node turns the key into an
+  `Authorization: Bearer` header before constructing `@langchain/ollama`'s
+  `ChatOllama` — the credential exists for a *proxied* Ollama, which is what this
+  gateway is. The base URL is the bare host: the node appends `/api/chat` itself,
+  and its own credential test appends `/api/tags`. `ollama_chat.json` pins the
+  node's whole option block, so `numCtx` and `keepAlive` — a local model server's
+  memory settings, meaningless here — are asserted as accepted-and-ignored from a
+  file rather than from a model's mood.
 
 ## The Haystack RAG pipeline
 
@@ -534,7 +547,7 @@ assertions. Three things bite:
 ## The Open WebUI service
 
 `test_open_webui.py` boots one container per module and talks to its REST API with
-plain `httpx`; there is no `AgenticTool` entry and no browser. Four things bite:
+plain `httpx`; there is no `AgenticTool` entry and no browser. Six things bite:
 
 - **its settings are `PersistentConfig`.** Open WebUI reads them from the
   environment on the *first* boot only and stores them in SQLite, so `DATA_DIR`
@@ -555,6 +568,19 @@ plain `httpx`; there is no `AgenticTool` entry and no browser. Four things bite:
   answers it is last on vectors and first after the rerank. `CHUNK_SIZE` is
   lowered so each paragraph of the uploaded document is its own chunk; the default
   would fold the file into one and leave the reranker nothing to order.
+- **both connection types are enabled, so the Ollama one needs a `prefix_id`.**
+  The two connections serve the same catalogue, and Open WebUI keys its merged
+  model map by id with the Ollama entries applied last — so without a prefix every
+  Core Connection test would silently reroute through `/api/chat`. The prefix is
+  what keeps the two observable apart, and `docs/use_cases_openwebui.md`
+  prescribes it for this configuration.
+- **that prefix is not stripped on every proxied route.** `/ollama/api/chat`
+  removes it before forwarding; `/ollama/api/show` does not, so with two
+  connections configured it can never name a model the backend knows. That is an
+  Open WebUI defect, so `/api/show` is covered by the reference client in
+  `test_ollama_sdk.py` instead. `pull` and `delete` address the backend directly,
+  by its own model name and by connection index, which is what the admin panel
+  does.
 
 ## The wyoming-openai proxy
 
@@ -614,7 +640,7 @@ the batch's size arrive as environment variables, and the run prints one JSON
 record and writes the same record to `/work/inspect_run.json`, which
 `_tools.py:inspect_record` reads back for the assertions. Which surface is used
 follows from the provider prefix on the model name alone, which is what lets one
-script cover both. Seven things bite:
+script cover both. Eight things bite:
 
 - **it cannot go in the client overlay, which is why it has an image group.**
   `inspect-ai` depends on `aioboto3`, and every `aioboto3` release pins
@@ -669,8 +695,8 @@ which is the same shape as the unit suite's `batches_api` fixture.
 ## The pure-Python HTTP clients
 
 `test_langchain.py`, `test_pydantic_ai.py`, `test_litellm.py`,
-`test_openai_agents.py`, `test_livekit.py`, `test_pipecat.py`, `test_agno.py` and
-`test_llama_index.py` drive their
+`test_openai_agents.py`, `test_livekit.py`, `test_pipecat.py`, `test_agno.py`,
+`test_llama_index.py` and `test_ollama_sdk.py` drive their
 libraries in-process against
 `agentic_server`, with no container at all: unlike
 every other module here, they are plain HTTP client libraries, not third-party
@@ -680,7 +706,7 @@ purely so the autouse model-identity check runs for free; its
 `build`/`parse`/`prepare_workdir` are never called, since none of them ever
 requests `agentic_image` or calls `run_agent`. Their packages come from the
 overlay, not from `uv.lock` — see [In-process clients](#in-process-clients).
-Seven things bite:
+Eight things bite:
 
 - **the shared podman skip still applies.** `_model_identity_check` checks for
   podman before resolving `agentic_server`, for every module in this directory —
@@ -734,6 +760,17 @@ Seven things bite:
   (`gpt-realtime-mini`, 2026-08-16) carries `"status_details": null` on
   **both** `response.created` and `response.done`. A field upstream always sends
   is a field a client is entitled to require.
+- **the `ollama` client has no `version()` method.** Its 0.6.x API covers chat,
+  generate, embed, the legacy embeddings route, tags, show, ps and all five
+  model-management verbs — but not `/api/version`, which `test_ollama_sdk.py`
+  therefore reaches by borrowing the client's own `httpx.Client` (`_client`, as
+  the unit lane's `ollama_http` fixture in `tests/conftest.py` does) rather than
+  building a second one. Open WebUI is the
+  client that actually *gates* on that route. Everything else in the module is
+  asserted by the library's own pydantic types: `modified_at` and `expires_at` are
+  `datetime`, `size` is a `ByteSize`, and `model_info` arrives through the
+  `modelinfo` field alias, so a wrong shape is a `ValidationError` rather than a
+  key nobody checked.
 - **openai-agents is the lane's first Realtime client.** `RealtimeRunner` is handed
   the WebSocket URL through `model_config["url"]`, because it otherwise dials
   `api.openai.com`, and its tracing is disabled at import so no run is exported to

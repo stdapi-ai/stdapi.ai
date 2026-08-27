@@ -91,6 +91,28 @@ Enables: Chat completions and Open WebUI background tasks (titles, summarization
 
 Use a fast, low-cost chat model for `TASK_MODEL_EXTERNAL`. Open WebUI calls `POST /v1/chat/completions` for chat and background tasks (see [Chat Completions API](api_openai_chat_completions.md)).
 
+#### :material-connection: Ollama Connection (alternative)
+
+Enables: The same chat completions, through Open WebUI's Ollama connection type instead of its OpenAI one.
+
+!!! example "Environment Variables"
+    ```bash
+    ENABLE_OLLAMA_API=true
+    OLLAMA_BASE_URL=https://YOUR_STDAPI_URL
+    OLLAMA_API_CONFIGS={"0":{"key":"YOUR_STDAPI_KEY"}}
+    ```
+
+The base URL carries no path suffix: Open WebUI appends `/api/tags` and `/api/chat` itself (see [Ollama Chat API](api_ollama_chat.md)). The key goes in `OLLAMA_API_CONFIGS` rather than a variable of its own, because a local Ollama needs no credentials.
+
+Both connection types can be enabled at once. They serve the same catalogue, so give the Ollama one a `prefix_id` — otherwise both connections offer the same model identifiers and the model picker keeps only one of them:
+
+!!! example "Environment Variables"
+    ```bash
+    OLLAMA_API_CONFIGS={"0":{"key":"YOUR_STDAPI_KEY","prefix_id":"ollama"}}
+    ```
+
+Models then appear as `ollama.amazon.nova-micro-v1:0`, and the unprefixed identifiers stay with the Core Connection. Prefer the Core Connection unless you specifically want the Ollama one; it is the connection the rest of this page's features build on.
+
 #### :material-database: RAG Embeddings
 
 Enables: Document ingestion and semantic search for RAG.
