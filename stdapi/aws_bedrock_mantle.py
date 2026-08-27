@@ -13,7 +13,7 @@ answer under ``/v1`` while newer Mantle-only models answer under
 """
 
 from asyncio import sleep
-from base64 import b32decode, b32encode, b64encode
+from base64 import b32decode, b32encode
 from binascii import Error as Base32Error
 from binascii import crc32
 from collections.abc import Mapping
@@ -26,23 +26,15 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
 from urllib.parse import urlsplit
 from weakref import finalize
 
-from aiohttp import (
-    ClientConnectorDNSError,
-    ClientSession,
-    ClientTimeout,
-    SocketTimeoutError,
-)
+from aiohttp import ClientConnectorDNSError, ClientSession, SocketTimeoutError
 from aiohttp import ClientError as AiohttpClientError
-from aiohttp.http_exceptions import HttpProcessingError
-from botocore.auth import SigV4QueryAuth
-from botocore.awsrequest import AWSRequest
-from botocore.credentials import Credentials
 from pydantic import ValidationError
 from pydantic_core import from_json
 
-from stdapi import server
 from stdapi.api_errors import ApiError
-from stdapi.config import AWS_SESSION, SETTINGS
+from stdapi.aws_http import TOKEN_TTL as _TOKEN_TTL
+from stdapi.aws_http import SseEvent, iter_sse, new_http_session, presigned_bearer_token
+from stdapi.config import SETTINGS
 from stdapi.utils import to_json_bytes, to_json_str
 
 if TYPE_CHECKING:
@@ -57,9 +49,6 @@ type Surface = Literal["/v1", "/openai/v1"]
 
 #: Mantle upstream API used to serve a request.
 type MantleApi = Literal["chat_completions", "responses", "messages"]
-
-#: Parsed server-sent event: (event name or None, raw data payload).
-type SseEvent = tuple[str | None, str]
 
 
 class UsageKwargs(TypedDict, total=False):
@@ -148,14 +137,11 @@ def mantle_request_headers(api: MantleApi) -> dict[str, str] | None:
 #: SigV4 service and host used to presign bearer tokens (shared with bedrock-runtime).
 _TOKEN_HOST = "bedrock.amazonaws.com"  # noqa: S105
 
+#: SigV4 signing name used to presign bearer tokens.
+_TOKEN_SERVICE = "bedrock"  # noqa: S105
+
 #: Bearer token prefix defined by the Bedrock API-key format.
 _TOKEN_PREFIX = "bedrock-api-key-"  # noqa: S105
-
-#: Presigned token validity in seconds (kept short; regeneration is local HMAC work).
-_TOKEN_EXPIRY = 3600
-
-#: Cached token refresh interval in seconds (below temporary-credential lifetimes).
-_TOKEN_TTL = 300
 
 #: Cached bearer tokens: region -> (token, monotonic expiry).
 _TOKENS: dict[str, tuple[str, float]] = {}
@@ -322,28 +308,13 @@ async def bearer_token(region: RegionName) -> str:
     """
     if (cached := _TOKENS.get(region)) and cached[1] > monotonic():
         return cached[0]
-    if (credentials := await AWS_SESSION.get_credentials()) is None:
-        msg = "No AWS credentials available to authenticate with Bedrock Mantle."
-        raise ApiError(msg, status=500)
-    frozen = await credentials.get_frozen_credentials()
-    if not (frozen.access_key and frozen.secret_key):  # pragma: no cover
-        msg = "No AWS credentials available to authenticate with Bedrock Mantle."
-        raise ApiError(msg, status=500)
-    request = AWSRequest(
-        method="POST",
-        url=f"https://{_TOKEN_HOST}/",
-        headers={"host": _TOKEN_HOST},
-        params={"Action": "CallWithBearerToken"},
-    )
-    SigV4QueryAuth(
-        Credentials(frozen.access_key, frozen.secret_key, frozen.token),
-        "bedrock",
+    token = await presigned_bearer_token(
         region,
-        expires=_TOKEN_EXPIRY,
-    ).add_auth(request)
-    token = _TOKEN_PREFIX + b64encode(
-        f"{str(request.url).removeprefix('https://')}&Version=1".encode()
-    ).decode("ascii")
+        host=_TOKEN_HOST,
+        service=_TOKEN_SERVICE,
+        prefix=_TOKEN_PREFIX,
+        feature="Bedrock Mantle",
+    )
     _TOKENS[region] = (token, monotonic() + _TOKEN_TTL)
     return token
 
@@ -364,18 +335,7 @@ async def mantle_http_session() -> AsyncGenerator[ClientSession]:
     if _SESSION is not None:
         yield _SESSION
         return
-    session = ClientSession(
-        headers=server.HTTP_CLIENT_HEADERS,
-        timeout=ClientTimeout(
-            total=None,
-            connect=SETTINGS.aws_connect_timeout,
-            sock_read=SETTINGS.ai_response_timeout,
-        ),
-        # Large SSE lines: a single event can carry the whole response JSON.
-        read_bufsize=2**22,
-        # Same proxy environment the AWS SDK already honours unconditionally.
-        trust_env=True,
-    )
+    session = new_http_session()
     _SESSION = session
     try:
         yield session
@@ -705,47 +665,19 @@ async def invoke_stream(
     return generator
 
 
-async def _iter_sse(response: ClientResponse) -> AsyncGenerator[SseEvent]:
-    """Yield parsed server-sent events from an open response.
+def _iter_sse(response: ClientResponse) -> AsyncGenerator[SseEvent]:
+    """Yield parsed server-sent events from an open Mantle response.
 
     Args:
         response: Open streaming HTTP response.
 
-    Yields:
-        ``(event name or None, raw data)`` tuples.
-
-    Raises:
-        MantleError: When the connection drops mid-stream.
+    Returns:
+        Async generator of ``(event name or None, raw data)`` tuples, raising
+        :class:`MantleError` when the connection drops mid-stream.
     """
-    event: str | None = None
-    data: list[str] = []
-    try:
-        async with response:
-            async for raw_line in response.content:
-                match raw_line.decode().rstrip("\r\n"):
-                    case "":
-                        if data and (joined := "\n".join(data)) != "[DONE]":
-                            yield event, joined
-                        event, data = None, []
-                    case line if line.startswith("data:"):
-                        data.append(line[5:].lstrip(" "))
-                    case line if line.startswith("event:"):
-                        event = line[6:].lstrip(" ")
-                    case _:
-                        pass  # Comments and unknown fields are ignored.
-        if data and (joined := "\n".join(data)) != "[DONE]":  # pragma: no cover
-            yield event, joined
-    except (
-        AiohttpClientError,
-        TimeoutError,
-        HttpProcessingError,
-        UnicodeDecodeError,
-    ) as error:
-        # HttpProcessingError covers LineTooLong, which aiohttp raises outside
-        # its ClientError hierarchy for oversized SSE lines; UnicodeDecodeError
-        # covers a non-UTF-8 line mid-stream.
-        msg = "The Bedrock Mantle response stream was interrupted."
-        raise MantleError(msg, status=502) from error
+    return iter_sse(
+        response, "The Bedrock Mantle response stream was interrupted.", MantleError
+    )
 
 
 #: Maximum pruning rounds when validating an upstream passthrough response.

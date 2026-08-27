@@ -56,7 +56,7 @@ from stdapi.aws_s3 import (
     track_temporary_s3_objects,
 )
 from stdapi.cleanup import drain_tasks
-from stdapi.config import SETTINGS, ModelAliasConfig
+from stdapi.config import SETTINGS, ModelAliasConfig, SageMakerEndpointConfig
 from stdapi.exceptions import ServerError
 from stdapi.input_file import (
     InlineMediaLimits,
@@ -321,12 +321,37 @@ MARKETPLACE_SERVICE = "AWS Bedrock Marketplace"
 #: Published Marketplace model endpoints, keyed by model ID (see stdapi.models.marketplace_endpoints).
 MARKETPLACE_ENDPOINT_MODELS: dict[str, ModelDetails] = {}
 
+#: Service label for models served by an Amazon SageMaker AI endpoint.
+SAGEMAKER_SERVICE = "Amazon SageMaker AI"
+
+#: Published SageMaker AI endpoints, keyed by model ID (see stdapi.models.sagemaker_endpoints).
+SAGEMAKER_ENDPOINT_MODELS: dict[str, ModelDetails] = {}
+
+#: Services whose models are served by an endpoint the operator runs: billed by the
+#: instance-hour, invoked by name rather than as a foundation model, and served by a
+#: generic implementation whatever their published model ID resembles.
+_ENDPOINT_SERVICES: Final[frozenset[str]] = frozenset(
+    {MARKETPLACE_SERVICE, SAGEMAKER_SERVICE}
+)
+
 #: Operations answered by the token counter, which no model endpoint can satisfy.
 # Not gated behind Capability.COUNT_TOKENS: the Anthropic counter is also served
 # through Bedrock Mantle's own counter, whose classes do not carry that flag.
 _TOKEN_COUNTING_OPERATIONS: Final[frozenset[str]] = frozenset(
     {"anthropic_message_count_tokens", "openai_response_input_tokens"}
 )
+
+
+def is_sagemaker_endpoint(model_id: str) -> bool:
+    """Whether a model is served by an Amazon SageMaker AI endpoint.
+
+    Args:
+        model_id: A published model ID.
+
+    Returns:
+        True for a model the operator declared in ``aws_sagemaker_endpoints``.
+    """
+    return model_id in SAGEMAKER_ENDPOINT_MODELS
 
 
 def is_marketplace_endpoint(model_id: str) -> bool:
@@ -347,7 +372,7 @@ def reject_unsupported_token_counting(model: ModelDetails) -> None:
     """Refuse token counting for a model the token counter cannot name.
 
     Amazon Bedrock's token counter takes a foundation model identifier, so a
-    model served by a Marketplace model endpoint can never satisfy it. The
+    model served by an endpoint the operator runs can never satisfy it. The
     gateway answers that itself: forwarding the backend's validation error
     would hand the caller something they cannot act on, for a route the model
     catalogue already does not advertise for these models.
@@ -356,9 +381,9 @@ def reject_unsupported_token_counting(model: ModelDetails) -> None:
         model: The model the request named, already resolved.
 
     Raises:
-        ApiError: When the model is served by a Marketplace model endpoint (400).
+        ApiError: When the model is served by a model endpoint (400).
     """
-    if model.service == MARKETPLACE_SERVICE:
+    if model.service in _ENDPOINT_SERVICES:
         msg = "Token counting is not supported for this model on this endpoint."
         raise ApiError(msg, status=400)
 
@@ -370,14 +395,13 @@ def usage_service(model_id: str) -> Service:
         model_id: The model the invocation billed.
 
     Returns:
-        ``Service.BEDROCK_MARKETPLACE`` for a Marketplace model endpoint, whose
-        quantities AWS publishes no per-token rate for, else ``Service.BEDROCK``.
+        ``Service.BEDROCK_MARKETPLACE`` for a Marketplace model endpoint and
+        ``Service.SAGEMAKER`` for a SageMaker AI one, whose quantities AWS
+        publishes no per-token rate for, else ``Service.BEDROCK``.
     """
-    return (
-        Service.BEDROCK_MARKETPLACE
-        if is_marketplace_endpoint(model_id)
-        else Service.BEDROCK
-    )
+    if is_marketplace_endpoint(model_id):
+        return Service.BEDROCK_MARKETPLACE
+    return Service.SAGEMAKER if is_sagemaker_endpoint(model_id) else Service.BEDROCK
 
 
 #: SPEECH-input model ID prefixes without Bedrock Converse support (bidirectional streaming only).
@@ -595,6 +619,11 @@ class ModelDetails(BaseModel):
     #: Per-region Marketplace model endpoint ARN, the identifier bedrock-runtime is
     #: called with. Excluded from the public response: it carries the account ID.
     marketplace_endpoints: dict[RegionName, str] | None = Field(
+        default=None, exclude=True
+    )
+    #: The SageMaker AI endpoint serving this model, as the operator declared it.
+    #: Excluded from the public response: it names their own infrastructure.
+    sagemaker_endpoint: SageMakerEndpointConfig | None = Field(
         default=None, exclude=True
     )
     #: Set when only ``aws_bedrock_marketplace_auto_subscribe`` admitted this model,
@@ -1936,9 +1965,9 @@ def _compute_model_capabilities(
     ):
         capability_flags |= Capability.STT | Capability.STT_TRANSLATE
     excluded_operations: frozenset[str] = frozenset()
-    if model.service == MARKETPLACE_SERVICE:
-        # A model endpoint is served by the generic Converse implementation
-        # whatever its listing name matches (see get_chat_model), so no
+    if model.service in _ENDPOINT_SERVICES:
+        # A model endpoint is served by a generic implementation whatever its
+        # published model ID matches (see get_chat_model), so no
         # capability-gated route applies to one, and it cannot be counted.
         capability_flags = Capability(0)
         excluded_operations = _TOKEN_COUNTING_OPERATIONS
@@ -2031,13 +2060,16 @@ def _pin_tenant_billable_service(
 ) -> tuple[ModelDetails, str]:
     """Steer a tenant-credentialed request onto the service its credential pays for.
 
-    Amazon Bedrock Mantle rides this deployment's own HTTP session and a
-    Marketplace endpoint is this deployment's own provisioned resource: a
-    tenant-signed request can pay for neither, so serving one there would land
-    the spend on the operator's bill. A Mantle-served model that also exists
-    on bedrock-runtime (the GPT-5.6 family by default) is pinned to its
-    runtime twin, where the tenant's credential signs and pays; a model with
-    no runtime home is refused with the reason.
+    Amazon Bedrock Mantle rides this deployment's own HTTP session, and a
+    Marketplace or SageMaker AI endpoint is this deployment's own provisioned
+    resource: a tenant-signed request can pay for none of them, so serving one
+    there would land the spend on the operator's bill. A Mantle-served model
+    that also exists on bedrock-runtime (the GPT-5.6 family by default) is
+    pinned to its runtime twin, where the tenant's credential signs and pays; a
+    model with no runtime home is refused with the reason. A reranking model
+    is refused too: its per-query-billed invocations run through a service the
+    tenant's credential never signs, so serving one would silently bill the
+    operator.
 
     Args:
         model: The resolved model.
@@ -2053,27 +2085,37 @@ def _pin_tenant_billable_service(
     """
     if tenant_aws_credential() is None:
         return model, model_id
+    if RERANKING_MODALITY in model.output_modalities:
+        raise _tenant_unavailable(model_id)
     if model.service == MANTLE_SERVICE:
         twin_id = runtime_twin(model.id)
         twin = _ALL_MODELS.get(twin_id) if twin_id else None
         if twin is not None:
             return twin, twin.id
-        msg = (
-            f"The model `{model_id}` is only served through Amazon Bedrock "
-            "Mantle, which runs on this deployment's own AWS account, so it "
-            "is not available for API keys that carry an AWS credential of "
-            "their own. Select a model served by the Amazon Bedrock runtime."
-        )
-        raise ApiError(msg)
-    if model.service == MARKETPLACE_SERVICE:
-        msg = (
-            f"The model `{model_id}` is served by an Amazon Bedrock "
-            "Marketplace endpoint of this deployment's own AWS account, so it "
-            "is not available for API keys that carry an AWS credential of "
-            "their own. Select a model served by the Amazon Bedrock runtime."
-        )
-        raise ApiError(msg)
+        raise _tenant_unavailable(model_id)
+    if model.service in _ENDPOINT_SERVICES:
+        raise _tenant_unavailable(model_id)
     return model, model_id
+
+
+def _tenant_unavailable(model_id: str) -> ApiError:
+    """Refuse a model the tenant's own credential cannot pay for.
+
+    Which service the model sits on, and whose account pays for it, stay out of
+    the answer (*Never Leak Internals*); the caller gets the model they named and
+    what to do about it, and the request log already records the rest.
+
+    Args:
+        model_id: The model the caller named.
+
+    Returns:
+        The error to raise.
+    """
+    msg = (
+        f"The model `{model_id}` is not available for API keys that carry an "
+        "AWS credential of their own. Select another model."
+    )
+    return ApiError(msg)
 
 
 #: Output modalities the Batch API serves: chat completions, and embeddings.
@@ -2722,7 +2764,10 @@ async def _collect_all_models(
 
     Marketplace model endpoints are discovered on the same ``bedrock``
     control-plane clients as the foundation models, so their listing runs after
-    the candidate collection rather than beside it.
+    the candidate collection rather than beside it. SageMaker AI endpoints are
+    not discovered at all -- the operator declares them -- but they merge in the
+    same place, which is what gets them into ``_MODELS`` and gives them the
+    refresh and locking of every other model for free.
 
     Args:
         failed_regions: Accumulator mapping unreachable regions to the error.
@@ -2759,6 +2804,13 @@ async def _collect_all_models(
             merge_marketplace_endpoint_models(
                 all_models, await collect_marketplace_endpoint_models(failed_regions)
             )
+        if SETTINGS.aws_sagemaker_endpoints:
+            # Imported here: the module imports this one for its catalogue types.
+            from stdapi.models.sagemaker_endpoints import (  # noqa: PLC0415
+                merge_sagemaker_endpoint_models,
+            )
+
+            merge_sagemaker_endpoint_models(all_models, failed_regions)
         if mantle_task is not None:
             _merge_mantle_models(all_models, await mantle_task)
     except BaseException:
@@ -3180,6 +3232,7 @@ def _catalog_payload(
         "models": _dump_models(all_models),
         "mantle": _dump_models(MANTLE_MODELS),
         "marketplace_endpoints": _dump_models(MARKETPLACE_ENDPOINT_MODELS),
+        "sagemaker_endpoints": _dump_models(SAGEMAKER_ENDPOINT_MODELS),
         "invalid_arn_mappings": mappings,
     }
 
@@ -3208,6 +3261,7 @@ def _restore_catalog(
         models = _load_models(payload, "models")
         mantle = _load_models(payload, "mantle")
         marketplace = _load_models(payload, "marketplace_endpoints")
+        sagemaker = _load_models(payload, "sagemaker_endpoints")
         invalid_arn_mappings = {
             model_id: str(detail)
             for model_id, detail in _section(payload, "invalid_arn_mappings").items()
@@ -3224,6 +3278,8 @@ def _restore_catalog(
     MANTLE_MODELS.update(mantle)
     MARKETPLACE_ENDPOINT_MODELS.clear()
     MARKETPLACE_ENDPOINT_MODELS.update(marketplace)
+    SAGEMAKER_ENDPOINT_MODELS.clear()
+    SAGEMAKER_ENDPOINT_MODELS.update(sagemaker)
     return models, invalid_arn_mappings
 
 
@@ -3296,11 +3352,15 @@ async def _trigger_price_catalog_refresh(
     Args:
         start_event: The event log passed to ``initialize_bedrock_models()``.
         new_model_ids: Model IDs discovered by this refresh that weren't
-            previously registered. Marketplace model endpoints are dropped:
-            AWS publishes no Price List row for them, so a reload could never
-            price one and would be retried for every one of them forever.
+            previously registered. Model endpoints are dropped: AWS publishes
+            no Price List row for them, so a reload could never price one and
+            would be retried for every one of them forever.
     """
-    new_model_ids = new_model_ids - MARKETPLACE_ENDPOINT_MODELS.keys()
+    new_model_ids = (
+        new_model_ids
+        - MARKETPLACE_ENDPOINT_MODELS.keys()
+        - SAGEMAKER_ENDPOINT_MODELS.keys()
+    )
     if new_model_ids and start_event is None:
         try:
             await refresh_price_catalog_for_new_models(new_model_ids)

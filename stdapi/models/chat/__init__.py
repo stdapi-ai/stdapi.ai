@@ -17,6 +17,7 @@ from stdapi.models import (
     get_model,
     is_mantle_served,
     is_marketplace_endpoint,
+    is_sagemaker_endpoint,
     load_model_plugins,
 )
 from stdapi.monitoring import REQUEST, tenant_aws_credential
@@ -193,10 +194,11 @@ def get_chat_model(model_id: str) -> ChatModelBase[Any, Any]:
     model resolves from the classic Converse registry.
 
     A Marketplace model endpoint always resolves to the generic Converse
-    implementation. A family class encodes what one *serverless* model does
-    differently, while an endpoint's own divergences are its container's, which
-    Amazon Bedrock has already mapped onto Converse -- so a family matched by
-    accident on the listing name would apply the wrong divergences.
+    implementation, and a SageMaker AI endpoint to the one class serving its
+    own transport. A family class encodes what one *serverless* model does
+    differently, while an endpoint's own divergences are its container's -- so
+    a family matched by accident on the endpoint's name would apply the wrong
+    divergences.
 
     Args:
         model_id: The provider model identifier (e.g., "amazon.nova-micro-v1:0").
@@ -207,6 +209,13 @@ def get_chat_model(model_id: str) -> ChatModelBase[Any, Any]:
     Raises:
         LookupError: If no registered chat model matches ``model_id``.
     """
+    if is_sagemaker_endpoint(model_id):
+        # Imported here: the module subclasses the Mantle chat model.
+        from stdapi.models.chat._sagemaker import (  # noqa: PLC0415
+            get_sagemaker_chat_model,
+        )
+
+        return get_sagemaker_chat_model(model_id)
     if serves_via_mantle(model_id):
         # Imported here: the _mantle package subclasses ChatModelBase.
         from stdapi.models.chat._mantle import get_mantle_chat_model  # noqa: PLC0415

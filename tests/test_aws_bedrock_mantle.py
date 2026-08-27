@@ -35,7 +35,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from sse_starlette import EventSourceResponse, ServerSentEvent
 from starlette.datastructures import Headers
 
-from stdapi import aws_bedrock_mantle
+from stdapi import aws_bedrock_mantle, aws_http
 from stdapi import models as stdapi_models
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, GUARDRAIL_REQUEST_OVERRIDE_VAR
@@ -103,7 +103,7 @@ if TYPE_CHECKING:
         GuardrailStreamConfigurationTypeDef,
     )
 
-    from stdapi.aws_bedrock_mantle import SseEvent
+    from stdapi.aws_http import SseEvent
 
 pytestmark = [pytest.mark.local, pytest.mark.usefixtures("request_log")]
 
@@ -3195,8 +3195,14 @@ class TestMantleDisabled:
         ``_collect_all_models`` is the seam that decides whether the Mantle
         discovery task is created at all; with the setting off, the collector
         must never be called.
+
+        The other backends the collector merges are turned off with it: a
+        checkout whose ``tests/.env`` declares a SageMaker AI endpoint would
+        otherwise see it in the catalogue and read that as Mantle discovery
+        having run.
         """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_enabled", False)
+        monkeypatch.setattr(SETTINGS, "aws_sagemaker_endpoints", {})
 
         async def fail_if_called(
             failed_regions: dict[str, str],  # noqa: ARG001
@@ -4579,7 +4585,7 @@ class TestBearerTokenMintingAndCaching:
         clock = [1_000.0]
         monkeypatch.setattr(aws_bedrock_mantle, "monotonic", lambda: clock[0])
         await aws_bedrock_mantle.bearer_token("us-east-1")
-        clock[0] += aws_bedrock_mantle._TOKEN_TTL + 1  # noqa: SLF001
+        clock[0] += aws_http.TOKEN_TTL + 1
         await aws_bedrock_mantle.bearer_token("us-east-1")
         assert mint_calls[0] == 2
 
@@ -4631,7 +4637,7 @@ class TestBearerTokenSurvivesCredentialRotation:
         assert self._access_key_in(before) == keys[0]
 
         keys[0] = keys[1]
-        clock[0] += aws_bedrock_mantle._TOKEN_TTL + 1  # noqa: SLF001
+        clock[0] += aws_http.TOKEN_TTL + 1
         after = await aws_bedrock_mantle.bearer_token("us-east-1")
         assert self._access_key_in(after) == keys[1], (
             "a token minted after rotation must carry the new credential"
@@ -4640,13 +4646,14 @@ class TestBearerTokenSurvivesCredentialRotation:
     def test_the_cache_expires_well_inside_a_credential_lifetime(self) -> None:
         """The cache TTL is far shorter than the signature's own validity.
 
-        The presigned URL claims ``_TOKEN_EXPIRY`` seconds of validity, but AWS
+        The presigned URL claims ``TOKEN_EXPIRY`` seconds of validity, but AWS
         rejects it as soon as the signing session credentials expire, whichever
         comes first. Re-minting on a much shorter clock is what keeps the cached
         token inside the credentials' remaining life.
+
+        Ref: stdapi/aws_http.py:TOKEN_TTL
         """
-        ttl = aws_bedrock_mantle._TOKEN_TTL  # noqa: SLF001
-        assert 0 < ttl <= aws_bedrock_mantle._TOKEN_EXPIRY / 4  # noqa: SLF001
+        assert 0 < aws_http.TOKEN_TTL <= aws_http.TOKEN_EXPIRY / 4
 
     async def test_each_region_keeps_its_own_token(
         self, monkeypatch: pytest.MonkeyPatch

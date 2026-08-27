@@ -24,6 +24,7 @@ from pydantic_core import to_json
 from stdapi import server
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock_mantle import mantle_http_session
+from stdapi.aws_sagemaker import sagemaker_http_session
 from stdapi.config import AWS_REGION, AWS_SESSION, SETTINGS
 
 if TYPE_CHECKING:
@@ -372,6 +373,10 @@ class AWSConnectionManager:
             if SETTINGS.aws_bedrock_mantle_enabled:
                 client_cms.append(
                     self._exit_stack.enter_async_context(mantle_http_session())
+                )
+            if SETTINGS.aws_sagemaker_endpoints:
+                client_cms.append(
+                    self._exit_stack.enter_async_context(sagemaker_http_session())
                 )
 
             results = await gather(*client_cms, return_exceptions=True)

@@ -12,6 +12,7 @@ from stdapi.models import (
     MANTLE_SERVICE,
     MARKETPLACE_SERVICE,
     MODEL_ALIAS_OVERLAYS,
+    SAGEMAKER_SERVICE,
     ModelDetails,
     get_all_models_details,
     get_all_models_details_and_modalities,
@@ -430,14 +431,17 @@ def _preferred_service(details: ModelDetails | None) -> Service:
         details: The model's registry entry, when known.
 
     Returns:
-        The service that serves the model. A Marketplace model endpoint has no
-        published rate at all, so the answer names it and resolves nothing.
+        The service that serves the model. A model endpoint, whether from the
+        Marketplace or from SageMaker AI, has no published rate at all, so the
+        answer names it and resolves nothing.
     """
     match details.service if details is not None else None:
         case s if s == MANTLE_SERVICE:
             return Service.BEDROCK_MANTLE
         case s if s == MARKETPLACE_SERVICE:
             return Service.BEDROCK_MARKETPLACE
+        case s if s == SAGEMAKER_SERVICE:
+            return Service.SAGEMAKER
         case _:
             return Service.BEDROCK
 
