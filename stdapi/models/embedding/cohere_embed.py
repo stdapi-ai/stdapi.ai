@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from stdapi.api_errors import ApiError
 from stdapi.input_file import InputFile, InputFileUrl
+from stdapi.models import usage_service
 from stdapi.models._cohere import COHERE_ALIAS_SUBSTITUTIONS, COHERE_EMBED_ALIAS_MATCHER
 from stdapi.models.embedding import (
     FUSED_INPUTS_UNSUPPORTED,
@@ -116,6 +117,8 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
     MATCHER = "cohere.embed-"
     ALIAS_MATCHER = COHERE_EMBED_ALIAS_MATCHER
     ALIAS_SUBSTITUTIONS = COHERE_ALIAS_SUBSTITUTIONS
+    #: Bedrock lists the v3 models as text-only, yet every version embeds and bills an image.
+    UNDECLARED_INPUT_MODALITIES = ("IMAGE",)
 
     #: Characters a v3 text input accepts; longer texts are rejected, never truncated.
     _V3_MAX_INPUT_CHARACTERS = 2048
@@ -188,7 +191,12 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         tier: ServiceTierTypeType | None = None,
         routing: Routing | None = None,
     ) -> None:
-        """Record invoke usage plus the images Embed v3 bills separately.
+        """Record invoke usage, including the images Embed v3 bills apart from tokens.
+
+        Both quantities are recorded in a single call so one Bedrock invocation
+        yields one usage record: the base and image quantities share the same
+        ``UsageKey``, and a second call under that key would double-count
+        ``requests``.
 
         Args:
             input_tokens: Number of input tokens consumed.
@@ -198,23 +206,18 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             tier: Service tier that served the call.
             routing: Serving profile of the call.
         """
-        super()._record_invoke_usage(
-            input_tokens,
-            output_tokens,
-            response,
-            region=region,
-            tier=tier,
-            routing=routing,
-        )
         # Later versions bill the image inside the token count; v3 meters it apart.
-        if self._is_v3 and (images := response.get("images")):
-            record_bedrock_usage(
-                self._model_id,
-                tier=tier,
-                region=region,
-                routing=routing,
-                input_images=len(images),
-            )
+        images = response.get("images") if self._is_v3 else None
+        record_bedrock_usage(
+            self._model_id,
+            service=usage_service(self._model_id),
+            tier=tier,
+            region=region,
+            routing=routing,
+            input_tokens=input_tokens or 0,
+            output_tokens=output_tokens or 0,
+            input_images=len(images) if images else None,
+        )
 
     async def _build_request(
         self,

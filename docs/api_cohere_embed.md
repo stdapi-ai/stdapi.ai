@@ -119,12 +119,12 @@ These are the model families served by this route, with the constraint each one 
 
 | Model                        | Model ID                       | Cohere Name                | Notes                                                              |
 |------------------------------|--------------------------------|----------------------------|--------------------------------------------------------------------|
-| Cohere Embed v4              | `cohere.embed-v4:0`            | `embed-v4.0`               | Several `images` per request; the only Cohere model accepting `texts` and `images` in the same request, and the only model of any family embedding several content parts into a single vector |
+| Cohere Embed v4              | `cohere.embed-v4:0`            | `embed-v4.0`               | Several `images` per request; the only Cohere model accepting `texts` and `images` in the same request, and the only model accepting fused `inputs` entries |
 | Cohere Embed Multilingual v3 | `cohere.embed-multilingual-v3` | `embed-multilingual-v3.0`  | `texts` or `images` in a request, not both; one image per request  |
 | Cohere Embed English v3      | `cohere.embed-english-v3`      | `embed-english-v3.0`       | `texts` or `images` in a request, not both; one image per request  |
 
-!!! note "Embed v3 Takes Images Even Though It Is Listed As Text-Only"
-    The [Models](models.md) page and [`/search_models`](api_search_models.md) report the input modalities each model publishes on Amazon Bedrock, and the two Embed v3 models publish `TEXT` alone — so neither is returned by an `input_modalities=IMAGE` filter. That list is a best-effort hint, never a gate: both models accept one image per request on this route, embed it, and are [billed](#billing) for it. Cohere Embed v4 publishes `IMAGE` and appears in the filter as expected.
+!!! note "Every Cohere Embed Model Is Discoverable As An Image Model"
+    Amazon Bedrock publishes the two Embed v3 models as text-only, yet both embed an image and are [billed](#billing) for it. The [Models](models.md) page and [`/search_models`](api_search_models.md) correct that, so all three Cohere Embed models are returned by an `input_modalities=IMAGE` filter. The modality list stays a best-effort hint rather than a gate: what a model accepts is decided by the request, not by the filter.
 
 !!! tip "Cohere's Own Model Names Resolve As They Stand"
     Each Cohere model is published under the name [Cohere's API](https://docs.cohere.com/docs/models) uses as well as its Bedrock ID, derived from the ID rather than curated by hand, so an application already calling Cohere changes only its base URL. Both forms reach the same model; a Cohere model Bedrock does not serve (e.g. `embed-english-light-v3.0`) returns `404` until you map it with [`MODEL_ALIASES`](operations_configuration.md#model-aliases).
@@ -142,7 +142,7 @@ These are the model families served by this route, with the constraint each one 
 
 | Model                        | Model ID                          | Notes                                    |
 |------------------------------|-----------------------------------|--------------------------------------------|
-| TwelveLabs Marengo Embed 3.0 | `twelvelabs.marengo-embed-3-0-v1:0` | `output_dimension` is rejected with a 400 |
+| TwelveLabs Marengo Embed 3.0 | `twelvelabs.marengo-embed-3-0-v1:0` | `output_dimension` is rejected with a 400; one text plus one image in the same request embeds into a single fused vector |
 | TwelveLabs Marengo Embed 2.7 | `twelvelabs.marengo-embed-2-7-v1:0` | `output_dimension` is rejected with a 400 |
 
 ## Multimodal Inputs
@@ -232,7 +232,7 @@ The legacy `/v1/embed` endpoint is also available for older Cohere SDKs (`cohere
 |----------------------------|:---------------------------------------:|---------------------------------------------------------------------------------|
 | Default response shape     |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Legacy `embeddings_floats`: a plain list of float vectors                      |
 | `embedding_types`          |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Any value switches to the `embeddings_by_type` shape; same type support as the v2 endpoint |
-| `input_type`               |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Optional — forwarded to Cohere models when provided; the backend defaults to `search_document` otherwise |
+| `input_type`               |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Optional — forwarded to Cohere models when provided; the backend defaults to `search_document` otherwise. On Embed v3, an all-image request always overrides it to `image` |
 | `meta.api_version.version` |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Reported as `"1"`                                                              |
 
 </div>
