@@ -24,6 +24,7 @@ from pydantic_core import to_json
 from stdapi import server
 from stdapi.api_errors import ApiError, TenantCredentialError
 from stdapi.aws_bedrock_mantle import mantle_http_session
+from stdapi.aws_sagemaker import sagemaker_http_session
 from stdapi.config import AWS_REGION, AWS_SESSION, SETTINGS
 
 if TYPE_CHECKING:
@@ -372,6 +373,10 @@ class AWSConnectionManager:
             if SETTINGS.aws_bedrock_mantle_enabled:
                 client_cms.append(
                     self._exit_stack.enter_async_context(mantle_http_session())
+                )
+            if SETTINGS.aws_sagemaker_endpoints:
+                client_cms.append(
+                    self._exit_stack.enter_async_context(sagemaker_http_session())
                 )
 
             results = await gather(*client_cms, return_exceptions=True)
@@ -882,13 +887,15 @@ def verify_user_role_identity() -> None:
     """Refuse an invocation that names no end user, off the botocore signing path.
 
     :func:`request_user_role_credentials` enforces the requirement from the
-    botocore signing hook, which a transport of its own -- Bedrock Mantle --
-    never reaches: it signs with the server's own credentials. The requirement
-    is therefore checked here, so the documented ``400`` does not depend on
-    which endpoint happens to serve the model. What it cannot restore is the
-    per-end-user role itself: an identified request still runs under the
-    server's identity there, which is why routing a dual-homed model to Mantle
-    alongside this setting is refused at startup.
+    botocore signing hook, which the transports of their own -- Bedrock Mantle,
+    and an Amazon SageMaker AI endpoint -- never reach: they sign with the
+    server's own credentials. The requirement is therefore checked here, so the
+    documented ``400`` does not depend on which endpoint happens to serve the
+    model. What it cannot restore is the per-end-user role itself: an
+    identified request still runs under the server's identity there, which is
+    why routing a dual-homed model to Mantle alongside this setting is refused
+    at startup. A SageMaker AI endpoint has no such alternative to fall back
+    to, so it is served under the server's identity instead.
 
     Raises:
         ApiError: The request identifies no end user where one is required.

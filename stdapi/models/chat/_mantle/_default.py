@@ -56,7 +56,8 @@ if TYPE_CHECKING:
 
     from types_aiobotocore_bedrock.literals import RegionName
 
-    from stdapi.aws_bedrock_mantle import MantleApi, SseEvent, Surface
+    from stdapi.aws_bedrock_mantle import MantleApi, Surface
+    from stdapi.aws_http import SseEvent
     from stdapi.types.anthropic_messages import MessageCreateParams
     from stdapi.types.openai import ResponseModeration
     from stdapi.types.openai_chat_completions import (

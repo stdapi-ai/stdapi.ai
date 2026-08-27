@@ -78,15 +78,17 @@ class Service(StrEnum):
     bedrock-mantle usage are recorded and priced independently.
 
     ``BEDROCK_MARKETPLACE`` covers models served from a Marketplace model
-    endpoint. AWS bills those by the instance-hour and publishes no per-token
-    rate for them, so the member exists to record quantities under a key that
-    resolves no price rather than to price anything -- see
+    endpoint, and ``SAGEMAKER`` models served from a SageMaker AI endpoint.
+    AWS bills both by the instance-hour and publishes no per-token rate for
+    them, so the members exist to record quantities under a key that resolves
+    no price rather than to price anything -- see
     :data:`stdapi.usage.UNPRICED_SERVICES`.
     """
 
     BEDROCK = "bedrock-runtime"
     BEDROCK_MANTLE = "bedrock-mantle"
     BEDROCK_MARKETPLACE = "bedrock-marketplace"
+    SAGEMAKER = "sagemaker"
     POLLY = "polly"
     TRANSCRIBE = "transcribe"
     TRANSLATE = "translate"

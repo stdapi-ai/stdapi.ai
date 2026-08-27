@@ -35,7 +35,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from sse_starlette import EventSourceResponse, ServerSentEvent
 from starlette.datastructures import Headers
 
-from stdapi import aws_bedrock_mantle
+from stdapi import aws_bedrock_mantle, aws_http
 from stdapi import models as stdapi_models
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, GUARDRAIL_REQUEST_OVERRIDE_VAR
@@ -103,7 +103,7 @@ if TYPE_CHECKING:
         GuardrailStreamConfigurationTypeDef,
     )
 
-    from stdapi.aws_bedrock_mantle import SseEvent
+    from stdapi.aws_http import SseEvent
 
 pytestmark = [pytest.mark.local, pytest.mark.usefixtures("request_log")]
 
@@ -389,14 +389,19 @@ class TestGuardrailOnMantle:
         aws_bedrock_mantle.refuse_unappliable_guardrail()
 
     def test_a_request_selected_guardrail_is_refused(self) -> None:
-        """A caller naming a guardrail is told it cannot apply, not ignored."""
+        """A caller naming a guardrail is told it cannot apply, not ignored.
+
+        The message names no transport: the same refusal answers a SageMaker AI
+        endpoint, and which backend hosts a model is not the caller's business.
+        """
         GUARDRAIL_CONFIG_VAR.set(self._guardrail())
         GUARDRAIL_REQUEST_OVERRIDE_VAR.set(True)
 
-        with pytest.raises(ApiError, match="Amazon Bedrock Mantle") as raised:
+        with pytest.raises(ApiError, match="cannot be applied to this model") as raised:
             aws_bedrock_mantle.refuse_unappliable_guardrail()
 
         assert "drop the guardrail" in str(raised.value)
+        assert "Mantle" not in str(raised.value)
 
     @pytest.mark.parametrize("stream", [False, True])
     async def test_neither_generation_path_reaches_the_endpoint(
@@ -3311,8 +3316,14 @@ class TestMantleDisabled:
         ``_collect_all_models`` is the seam that decides whether the Mantle
         discovery task is created at all; with the setting off, the collector
         must never be called.
+
+        The other backends the collector merges are turned off with it: a
+        checkout whose ``tests/.env`` declares a SageMaker AI endpoint would
+        otherwise see it in the catalogue and read that as Mantle discovery
+        having run.
         """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_enabled", False)
+        monkeypatch.setattr(SETTINGS, "aws_sagemaker_endpoints", {})
 
         async def fail_if_called(
             failed_regions: dict[str, str],  # noqa: ARG001
@@ -4695,7 +4706,7 @@ class TestBearerTokenMintingAndCaching:
         clock = [1_000.0]
         monkeypatch.setattr(aws_bedrock_mantle, "monotonic", lambda: clock[0])
         await aws_bedrock_mantle.bearer_token("us-east-1")
-        clock[0] += aws_bedrock_mantle._TOKEN_TTL + 1  # noqa: SLF001
+        clock[0] += aws_http.TOKEN_TTL + 1
         await aws_bedrock_mantle.bearer_token("us-east-1")
         assert mint_calls[0] == 2
 
@@ -4747,7 +4758,7 @@ class TestBearerTokenSurvivesCredentialRotation:
         assert self._access_key_in(before) == keys[0]
 
         keys[0] = keys[1]
-        clock[0] += aws_bedrock_mantle._TOKEN_TTL + 1  # noqa: SLF001
+        clock[0] += aws_http.TOKEN_TTL + 1
         after = await aws_bedrock_mantle.bearer_token("us-east-1")
         assert self._access_key_in(after) == keys[1], (
             "a token minted after rotation must carry the new credential"
@@ -4756,13 +4767,14 @@ class TestBearerTokenSurvivesCredentialRotation:
     def test_the_cache_expires_well_inside_a_credential_lifetime(self) -> None:
         """The cache TTL is far shorter than the signature's own validity.
 
-        The presigned URL claims ``_TOKEN_EXPIRY`` seconds of validity, but AWS
+        The presigned URL claims ``TOKEN_EXPIRY`` seconds of validity, but AWS
         rejects it as soon as the signing session credentials expire, whichever
         comes first. Re-minting on a much shorter clock is what keeps the cached
         token inside the credentials' remaining life.
+
+        Ref: stdapi/aws_http.py:TOKEN_TTL
         """
-        ttl = aws_bedrock_mantle._TOKEN_TTL  # noqa: SLF001
-        assert 0 < ttl <= aws_bedrock_mantle._TOKEN_EXPIRY / 4  # noqa: SLF001
+        assert 0 < aws_http.TOKEN_TTL <= aws_http.TOKEN_EXPIRY / 4
 
     async def test_each_region_keeps_its_own_token(
         self, monkeypatch: pytest.MonkeyPatch
@@ -5391,7 +5403,7 @@ class TestGuardrailMantleStartupWarning:
         """A non-zero Mantle-served model count under guardrails warns at startup."""
         start_event = self._start_event()
         stdapi_models._warn_bedrock_refresh_issues(  # noqa: SLF001
-            start_event, {}, {}, {}, {}, set(), mantle_guardrail_models=3
+            start_event, {}, {}, {}, {}, set(), unguarded_models=3
         )
         warnings = start_event.get("server_warnings", [])
         assert any(
@@ -5399,11 +5411,11 @@ class TestGuardrailMantleStartupWarning:
         )
         assert start_event["level"] == "warning"
 
-    async def test_no_mantle_guardrail_models_no_warning(self) -> None:
+    async def test_no_unguarded_models_no_warning(self) -> None:
         """A zero count adds no guardrail-related warning."""
         start_event = self._start_event()
         stdapi_models._warn_bedrock_refresh_issues(  # noqa: SLF001
-            start_event, {}, {}, {}, {}, set(), mantle_guardrail_models=0
+            start_event, {}, {}, {}, {}, set(), unguarded_models=0
         )
         assert "server_warnings" not in start_event
 

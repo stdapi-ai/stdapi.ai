@@ -53,6 +53,8 @@ from stdapi.config import AWS_SESSION, SETTINGS, ModelAliasConfig, _Settings
 from stdapi.models import (
     MANTLE_SERVICE,
     MARKETPLACE_SERVICE,
+    RERANKING_MODALITY,
+    SAGEMAKER_SERVICE,
     ModelDetails,
     route_and_execute,
 )
@@ -851,16 +853,53 @@ class TestBillableServicePins:
         """A Marketplace endpoint is the operator's provisioned resource."""
         endpoint = self._details("listed.model", MARKETPLACE_SERVICE)
 
-        with pytest.raises(ApiError, match="Marketplace"):
+        with pytest.raises(ApiError, match=re.escape("listed.model")):
             stdapi.models._pin_tenant_billable_service(endpoint, endpoint.id)  # noqa: SLF001
 
-    def test_without_a_credential_nothing_is_pinned(self) -> None:
-        """A plain request serves Mantle models exactly as before."""
-        mantle = self._details("openai.gpt-5.6", MANTLE_SERVICE)
+    def test_a_sagemaker_endpoint_is_refused(self, tenant_signing: Tenant) -> None:
+        """A SageMaker AI endpoint is the operator's provisioned resource too.
 
-        assert stdapi.models._pin_tenant_billable_service(  # noqa: SLF001
-            mantle, mantle.id
-        ) == (mantle, mantle.id)
+        Its bill is instance-hours on the deployment's own account, and the
+        request is signed with the deployment's own role, so a tenant
+        credential can pay for none of it.
+
+        Ref: stdapi/models/__init__.py:_pin_tenant_billable_service
+        """
+        endpoint = self._details("my-model", SAGEMAKER_SERVICE)
+
+        with pytest.raises(ApiError, match=re.escape("my-model")) as excinfo:
+            stdapi.models._pin_tenant_billable_service(endpoint, endpoint.id)  # noqa: SLF001
+
+        assert "not available" in str(excinfo.value)
+
+    def test_a_reranking_model_is_refused(self, tenant_signing: Tenant) -> None:
+        """A reranking model bills per query on a service the credential never signs.
+
+        Serving it would land the spend on the operator's bill, silently:
+        the caller-driven leak this pin exists to refuse.
+        """
+        rerank = self._details(
+            "cohere.rerank-v3-5:0", "AWS Bedrock Runtime", RERANKING_MODALITY
+        )
+
+        with pytest.raises(
+            ApiError, match=re.escape("cohere.rerank-v3-5:0")
+        ) as excinfo:
+            stdapi.models._pin_tenant_billable_service(rerank, rerank.id)  # noqa: SLF001
+
+        assert "not available" in str(excinfo.value)
+
+    def test_without_a_credential_nothing_is_pinned(self) -> None:
+        """A plain request serves Mantle and reranking models exactly as before."""
+        for details in (
+            self._details("openai.gpt-5.6", MANTLE_SERVICE),
+            self._details(
+                "cohere.rerank-v3-5:0", "AWS Bedrock Runtime", RERANKING_MODALITY
+            ),
+        ):
+            assert stdapi.models._pin_tenant_billable_service(  # noqa: SLF001
+                details, details.id
+            ) == (details, details.id)
 
 
 class TestServiceRefusals:

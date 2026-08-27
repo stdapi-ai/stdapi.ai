@@ -56,7 +56,7 @@ from stdapi.aws_s3 import (
     track_temporary_s3_objects,
 )
 from stdapi.cleanup import drain_tasks
-from stdapi.config import SETTINGS, ModelAliasConfig
+from stdapi.config import SETTINGS, ModelAliasConfig, SageMakerEndpointConfig
 from stdapi.exceptions import ServerError
 from stdapi.input_file import (
     InlineMediaLimits,
@@ -321,12 +321,44 @@ MARKETPLACE_SERVICE = "AWS Bedrock Marketplace"
 #: Published Marketplace model endpoints, keyed by model ID (see stdapi.models.marketplace_endpoints).
 MARKETPLACE_ENDPOINT_MODELS: dict[str, ModelDetails] = {}
 
+#: Service label for models served by an Amazon SageMaker AI endpoint.
+SAGEMAKER_SERVICE = "Amazon SageMaker AI"
+
+#: Published SageMaker AI endpoints, keyed by model ID (see stdapi.models.sagemaker_endpoints).
+SAGEMAKER_ENDPOINT_MODELS: dict[str, ModelDetails] = {}
+
+#: Services whose models are served by an endpoint the operator runs: billed by the
+#: instance-hour, invoked by name rather than as a foundation model, and served by a
+#: generic implementation whatever their published model ID resembles.
+_ENDPOINT_SERVICES: Final[frozenset[str]] = frozenset(
+    {MARKETPLACE_SERVICE, SAGEMAKER_SERVICE}
+)
+
+#: Services whose transport carries no guardrail: an OpenAI-compatible HTTP route with
+#: no ``guardrailConfig``. Marketplace is not one of them -- its endpoints are invoked
+#: through Converse, which applies a guardrail like any foundation model.
+_UNAPPLIABLE_GUARDRAIL_SERVICES: Final[frozenset[str]] = frozenset(
+    {MANTLE_SERVICE, SAGEMAKER_SERVICE}
+)
+
 #: Operations answered by the token counter, which no model endpoint can satisfy.
 # Not gated behind Capability.COUNT_TOKENS: the Anthropic counter is also served
 # through Bedrock Mantle's own counter, whose classes do not carry that flag.
 _TOKEN_COUNTING_OPERATIONS: Final[frozenset[str]] = frozenset(
     {"anthropic_message_count_tokens", "openai_response_input_tokens"}
 )
+
+
+def is_sagemaker_endpoint(model_id: str) -> bool:
+    """Whether a model is served by an Amazon SageMaker AI endpoint.
+
+    Args:
+        model_id: A published model ID.
+
+    Returns:
+        True for a model the operator declared in ``aws_sagemaker_endpoints``.
+    """
+    return model_id in SAGEMAKER_ENDPOINT_MODELS
 
 
 def is_marketplace_endpoint(model_id: str) -> bool:
@@ -347,7 +379,7 @@ def reject_unsupported_token_counting(model: ModelDetails) -> None:
     """Refuse token counting for a model the token counter cannot name.
 
     Amazon Bedrock's token counter takes a foundation model identifier, so a
-    model served by a Marketplace model endpoint can never satisfy it. The
+    model served by an endpoint the operator runs can never satisfy it. The
     gateway answers that itself: forwarding the backend's validation error
     would hand the caller something they cannot act on, for a route the model
     catalogue already does not advertise for these models.
@@ -356,9 +388,9 @@ def reject_unsupported_token_counting(model: ModelDetails) -> None:
         model: The model the request named, already resolved.
 
     Raises:
-        ApiError: When the model is served by a Marketplace model endpoint (400).
+        ApiError: When the model is served by a model endpoint (400).
     """
-    if model.service == MARKETPLACE_SERVICE:
+    if model.service in _ENDPOINT_SERVICES:
         msg = "Token counting is not supported for this model on this endpoint."
         raise ApiError(msg, status=400)
 
@@ -370,14 +402,13 @@ def usage_service(model_id: str) -> Service:
         model_id: The model the invocation billed.
 
     Returns:
-        ``Service.BEDROCK_MARKETPLACE`` for a Marketplace model endpoint, whose
-        quantities AWS publishes no per-token rate for, else ``Service.BEDROCK``.
+        ``Service.BEDROCK_MARKETPLACE`` for a Marketplace model endpoint and
+        ``Service.SAGEMAKER`` for a SageMaker AI one, whose quantities AWS
+        publishes no per-token rate for, else ``Service.BEDROCK``.
     """
-    return (
-        Service.BEDROCK_MARKETPLACE
-        if is_marketplace_endpoint(model_id)
-        else Service.BEDROCK
-    )
+    if is_marketplace_endpoint(model_id):
+        return Service.BEDROCK_MARKETPLACE
+    return Service.SAGEMAKER if is_sagemaker_endpoint(model_id) else Service.BEDROCK
 
 
 #: SPEECH-input model ID prefixes without Bedrock Converse support (bidirectional streaming only).
@@ -595,6 +626,11 @@ class ModelDetails(BaseModel):
     #: Per-region Marketplace model endpoint ARN, the identifier bedrock-runtime is
     #: called with. Excluded from the public response: it carries the account ID.
     marketplace_endpoints: dict[RegionName, str] | None = Field(
+        default=None, exclude=True
+    )
+    #: The SageMaker AI endpoint serving this model, as the operator declared it.
+    #: Excluded from the public response: it names their own infrastructure.
+    sagemaker_endpoint: SageMakerEndpointConfig | None = Field(
         default=None, exclude=True
     )
     #: Set when only ``aws_bedrock_marketplace_auto_subscribe`` admitted this model,
@@ -1957,9 +1993,9 @@ def _compute_model_capabilities(
     ):
         capability_flags |= Capability.STT | Capability.STT_TRANSLATE
     excluded_operations: frozenset[str] = frozenset()
-    if model.service == MARKETPLACE_SERVICE:
-        # A model endpoint is served by the generic Converse implementation
-        # whatever its listing name matches (see get_chat_model), so no
+    if model.service in _ENDPOINT_SERVICES:
+        # A model endpoint is served by a generic implementation whatever its
+        # published model ID matches (see get_chat_model), so no
         # capability-gated route applies to one, and it cannot be counted.
         capability_flags = Capability(0)
         excluded_operations = _TOKEN_COUNTING_OPERATIONS
@@ -2052,13 +2088,16 @@ def _pin_tenant_billable_service(
 ) -> tuple[ModelDetails, str]:
     """Steer a tenant-credentialed request onto the service its credential pays for.
 
-    Amazon Bedrock Mantle rides this deployment's own HTTP session and a
-    Marketplace endpoint is this deployment's own provisioned resource: a
-    tenant-signed request can pay for neither, so serving one there would land
-    the spend on the operator's bill. A Mantle-served model that also exists
-    on bedrock-runtime (the GPT-5.6 family by default) is pinned to its
-    runtime twin, where the tenant's credential signs and pays; a model with
-    no runtime home is refused with the reason.
+    Amazon Bedrock Mantle rides this deployment's own HTTP session, and a
+    Marketplace or SageMaker AI endpoint is this deployment's own provisioned
+    resource: a tenant-signed request can pay for none of them, so serving one
+    there would land the spend on the operator's bill. A Mantle-served model
+    that also exists on bedrock-runtime (the GPT-5.6 family by default) is
+    pinned to its runtime twin, where the tenant's credential signs and pays; a
+    model with no runtime home is refused with the reason. A reranking model
+    is refused too: its per-query-billed invocations run through a service the
+    tenant's credential never signs, so serving one would silently bill the
+    operator.
 
     Args:
         model: The resolved model.
@@ -2074,27 +2113,37 @@ def _pin_tenant_billable_service(
     """
     if tenant_aws_credential() is None:
         return model, model_id
+    if RERANKING_MODALITY in model.output_modalities:
+        raise _tenant_unavailable(model_id)
     if model.service == MANTLE_SERVICE:
         twin_id = runtime_twin(model.id)
         twin = _ALL_MODELS.get(twin_id) if twin_id else None
         if twin is not None:
             return twin, twin.id
-        msg = (
-            f"The model `{model_id}` is only served through Amazon Bedrock "
-            "Mantle, which runs on this deployment's own AWS account, so it "
-            "is not available for API keys that carry an AWS credential of "
-            "their own. Select a model served by the Amazon Bedrock runtime."
-        )
-        raise ApiError(msg)
-    if model.service == MARKETPLACE_SERVICE:
-        msg = (
-            f"The model `{model_id}` is served by an Amazon Bedrock "
-            "Marketplace endpoint of this deployment's own AWS account, so it "
-            "is not available for API keys that carry an AWS credential of "
-            "their own. Select a model served by the Amazon Bedrock runtime."
-        )
-        raise ApiError(msg)
+        raise _tenant_unavailable(model_id)
+    if model.service in _ENDPOINT_SERVICES:
+        raise _tenant_unavailable(model_id)
     return model, model_id
+
+
+def _tenant_unavailable(model_id: str) -> ApiError:
+    """Refuse a model the tenant's own credential cannot pay for.
+
+    Which service the model sits on, and whose account pays for it, stay out of
+    the answer (*Never Leak Internals*); the caller gets the model they named and
+    what to do about it, and the request log already records the rest.
+
+    Args:
+        model_id: The model the caller named.
+
+    Returns:
+        The error to raise.
+    """
+    msg = (
+        f"The model `{model_id}` is not available for API keys that carry an "
+        "AWS credential of their own. Select another model."
+    )
+    return ApiError(msg)
 
 
 #: Output modalities the Batch API serves: chat completions, and embeddings.
@@ -2746,7 +2795,10 @@ async def _collect_all_models(
 
     Marketplace model endpoints are discovered on the same ``bedrock``
     control-plane clients as the foundation models, so their listing runs after
-    the candidate collection rather than beside it.
+    the candidate collection rather than beside it. SageMaker AI endpoints are
+    not discovered at all -- the operator declares them -- but they merge in the
+    same place, which is what gets them into ``_MODELS`` and gives them the
+    refresh and locking of every other model for free.
 
     Args:
         failed_regions: Accumulator mapping unreachable regions to the error.
@@ -2785,6 +2837,17 @@ async def _collect_all_models(
             )
         if mantle_task is not None:
             _merge_mantle_models(all_models, await mantle_task)
+        if SETTINGS.aws_sagemaker_endpoints:
+            # Imported here: the module imports this one for its catalogue types.
+            from stdapi.models.sagemaker_endpoints import (  # noqa: PLC0415
+                merge_sagemaker_endpoint_models,
+            )
+
+            # After the Mantle merge: a declared ID colliding with a Mantle
+            # model is reported and ignored like any other, where merging first
+            # would let the Mantle entry take the catalogue slot of an endpoint
+            # that still serves the requests.
+            merge_sagemaker_endpoint_models(all_models, failed_regions)
     except BaseException:
         if mantle_task is not None:
             mantle_task.cancel()
@@ -3012,9 +3075,13 @@ async def _refresh_bedrock_models(start_event: EventLog | None) -> bool:
                 return False
             all_models, invalid_arn_mappings, collected_at = collected
 
-            mantle_guardrail_aliases = _mantle_guardrail_aliases(all_models)
-            mantle_guardrail_models = (
-                sum(1 for m in all_models.values() if m.service == MANTLE_SERVICE)
+            guardrail_aliases = _unappliable_guardrail_aliases(all_models)
+            unguarded_models = (
+                sum(
+                    1
+                    for m in all_models.values()
+                    if m.service in _UNAPPLIABLE_GUARDRAIL_SERVICES
+                )
                 if SETTINGS.aws_bedrock_guardrail_identifier
                 else 0
             )
@@ -3037,10 +3104,10 @@ async def _refresh_bedrock_models(start_event: EventLog | None) -> bool:
         else:
             invalid_arn_mappings = {}
             unmatched_restrict_keys = set()
-            mantle_guardrail_models = 0
-            mantle_guardrail_aliases = []
-    if mantle_guardrail_aliases:
-        _reject_mantle_guardrail_aliases(mantle_guardrail_aliases, start_event)
+            unguarded_models = 0
+            guardrail_aliases = []
+    if guardrail_aliases:
+        _reject_unappliable_guardrail_aliases(guardrail_aliases, start_event)
     _warn_bedrock_refresh_issues(
         start_event,
         failed_regions,
@@ -3048,7 +3115,7 @@ async def _refresh_bedrock_models(start_event: EventLog | None) -> bool:
         unavailable_models,
         invalid_arn_mappings,
         unmatched_restrict_keys,
-        mantle_guardrail_models,
+        unguarded_models,
     )
     await _trigger_price_catalog_refresh(start_event, new_model_ids)
     return updated
@@ -3214,6 +3281,7 @@ def _catalog_payload(
         "models": _dump_models(all_models),
         "mantle": _dump_models(MANTLE_MODELS),
         "marketplace_endpoints": _dump_models(MARKETPLACE_ENDPOINT_MODELS),
+        "sagemaker_endpoints": _dump_models(SAGEMAKER_ENDPOINT_MODELS),
         "invalid_arn_mappings": mappings,
     }
 
@@ -3242,6 +3310,7 @@ def _restore_catalog(
         models = _load_models(payload, "models")
         mantle = _load_models(payload, "mantle")
         marketplace = _load_models(payload, "marketplace_endpoints")
+        sagemaker = _load_models(payload, "sagemaker_endpoints")
         invalid_arn_mappings = {
             model_id: str(detail)
             for model_id, detail in _section(payload, "invalid_arn_mappings").items()
@@ -3258,6 +3327,8 @@ def _restore_catalog(
     MANTLE_MODELS.update(mantle)
     MARKETPLACE_ENDPOINT_MODELS.clear()
     MARKETPLACE_ENDPOINT_MODELS.update(marketplace)
+    SAGEMAKER_ENDPOINT_MODELS.clear()
+    SAGEMAKER_ENDPOINT_MODELS.update(sagemaker)
     return models, invalid_arn_mappings
 
 
@@ -3330,11 +3401,15 @@ async def _trigger_price_catalog_refresh(
     Args:
         start_event: The event log passed to ``initialize_bedrock_models()``.
         new_model_ids: Model IDs discovered by this refresh that weren't
-            previously registered. Marketplace model endpoints are dropped:
-            AWS publishes no Price List row for them, so a reload could never
-            price one and would be retried for every one of them forever.
+            previously registered. Model endpoints are dropped: AWS publishes
+            no Price List row for them, so a reload could never price one and
+            would be retried for every one of them forever.
     """
-    new_model_ids = new_model_ids - MARKETPLACE_ENDPOINT_MODELS.keys()
+    new_model_ids = (
+        new_model_ids
+        - MARKETPLACE_ENDPOINT_MODELS.keys()
+        - SAGEMAKER_ENDPOINT_MODELS.keys()
+    )
     if new_model_ids and start_event is None:
         try:
             await refresh_price_catalog_for_new_models(new_model_ids)
@@ -3346,12 +3421,13 @@ async def _trigger_price_catalog_refresh(
                 )
 
 
-def _mantle_guardrail_aliases(all_models: dict[str, ModelDetails]) -> list[str]:
+def _unappliable_guardrail_aliases(all_models: dict[str, ModelDetails]) -> list[str]:
     """Return the guardrail-bearing aliases whose target model cannot apply it.
 
-    Amazon Bedrock Guardrails are a bedrock-runtime feature, so a Mantle-served
-    model silently ignores one. Unlike the server-wide guardrail, an alias names
-    exactly one model, so the mismatch is decidable.
+    Amazon Bedrock Guardrails are a bedrock-runtime feature, so a model served
+    over an OpenAI-compatible transport -- Bedrock Mantle, or a SageMaker AI
+    endpoint -- silently ignores one. Unlike the server-wide guardrail, an alias
+    names exactly one model, so the mismatch is decidable.
 
     Args:
         all_models: All available models keyed by model ID.
@@ -3365,19 +3441,19 @@ def _mantle_guardrail_aliases(all_models: dict[str, ModelDetails]) -> list[str]:
         if isinstance(target, ModelAliasConfig)
         and target.guardrail_identifier
         and (model := all_models.get(target.model)) is not None
-        and model.service == MANTLE_SERVICE
+        and model.service in _UNAPPLIABLE_GUARDRAIL_SERVICES
     )
 
 
-def _reject_mantle_guardrail_aliases(
+def _reject_unappliable_guardrail_aliases(
     aliases: list[str], start_event: EventLog | None
 ) -> None:
     """Fail startup when an alias guardrail targets a model that cannot apply it.
 
     Serving unfiltered content while the operator believes a guardrail applies
     is not an acceptable default, so this is fatal at startup. A later refresh
-    that turns a model Mantle-served only warns: the deployment is already
-    running, and stopping it would be a worse outcome than reporting it.
+    that moves a model onto such a transport only warns: the deployment is
+    already running, and stopping it would be a worse outcome than reporting it.
 
     Args:
         aliases: Offending alias names.
@@ -3389,9 +3465,10 @@ def _reject_mantle_guardrail_aliases(
     detail = (
         f"Amazon Bedrock Guardrails configured by the model aliases "
         f"{', '.join(aliases)} cannot apply to their target model, which is "
-        "served by Bedrock Mantle. Point the alias at another model, or, if "
-        "the model is also available on the classic endpoint, remove it from "
-        "AWS_BEDROCK_MANTLE_PREFERRED_MODELS."
+        "served by Bedrock Mantle or an Amazon SageMaker AI endpoint, neither "
+        "of which carries a guardrail. Point the alias at a model served "
+        "through Amazon Bedrock, or, if the model is also available on the "
+        "classic endpoint, remove it from AWS_BEDROCK_MANTLE_PREFERRED_MODELS."
     )
     if start_event is None:
         if REQUEST_LOG.get(None) is not None:
@@ -3407,7 +3484,7 @@ def _warn_bedrock_refresh_issues(
     unavailable_models: dict[str, dict[str, list[str]]],
     invalid_arn_mappings: dict[str, str],
     unmatched_restrict_keys: set[str],
-    mantle_guardrail_models: int = 0,
+    unguarded_models: int = 0,
 ) -> None:
     """Record warnings for Bedrock model availability/configuration issues.
 
@@ -3423,8 +3500,8 @@ def _warn_bedrock_refresh_issues(
         invalid_arn_mappings: Model IDs mapped to ARN-mapping error messages.
         unmatched_restrict_keys: ``aws_bedrock_model_region_restrict`` keys that
             did not match any available model.
-        mantle_guardrail_models: Mantle-served models exposed while Amazon
-            Bedrock Guardrails are configured (guardrails do not apply to them).
+        unguarded_models: Models exposed on a transport carrying no guardrail
+            while Amazon Bedrock Guardrails are configured.
     """
     if start_event is None:
         if failed_regions and REQUEST_LOG.get(None) is not None:
@@ -3467,12 +3544,14 @@ def _warn_bedrock_refresh_issues(
             f"for: {', '.join(sorted(unmatched_restrict_keys))}. Check for unknown "
             "model IDs/prefixes or models not available in the configured regions.",
         )
-    if mantle_guardrail_models:
+    if unguarded_models:
         add_server_warning(
             start_event,
-            "Amazon Bedrock Guardrails do not apply to Bedrock Mantle-served "
-            f"models ({mantle_guardrail_models} models affected); set "
-            "AWS_BEDROCK_MANTLE_ENABLED=false to disable them.",
+            "Amazon Bedrock Guardrails do not apply to models served by Bedrock "
+            "Mantle or by an Amazon SageMaker AI endpoint "
+            f"({unguarded_models} models affected), whose requests are refused "
+            "while a guardrail is configured; set AWS_BEDROCK_MANTLE_ENABLED=false "
+            "and clear AWS_SAGEMAKER_ENDPOINTS to remove them from the catalogue.",
         )
 
 

@@ -314,6 +314,25 @@ Deploy a model from the **Amazon Bedrock Marketplace** catalog onto a managed en
 
 [:octicons-arrow-right-24: Marketplace Model Endpoints Configuration](operations_configuration.md#bedrock-marketplace-endpoints-enabled)
 
+### :material-server: SageMaker AI Endpoints { #sagemaker-endpoints }
+
+Run your own model — a fine-tune, an open-weight release, anything the [SageMaker AI vLLM or SGLang containers](https://docs.aws.amazon.com/sagemaker/latest/dg/realtime-endpoints-openai-compatible.html) can serve — on an **Amazon SageMaker AI** endpoint in your account, and stdapi.ai serves it beside the rest: same `/v1/models` listing, same chat completions, responses and messages APIs, no client-side change.
+
+- **Named, never deployed** — You [name the endpoints](operations_configuration.md#aws-sagemaker-endpoints) you want served, with the model ID your clients should ask for. The gateway invokes them and nothing else: it never creates, updates, scales or deletes an endpoint, because that is capacity you pay for and infrastructure you own
+- **A cold start your callers never see** — An endpoint scaled to zero has no capacity to answer with, and the request itself is what makes AWS provision an instance again. stdapi.ai holds the connection and retries until the model answers, so the caller gets a slow first request rather than an error. Concurrent callers share one wait
+- **Every AWS partition** — SageMaker AI endpoints exist in the commercial, GovCloud, China and European Sovereign Cloud partitions alike, which makes this the way to serve a chat model where no other backend reaches
+
+!!! warning "These endpoints bill by the hour, not by the token"
+    A SageMaker AI endpoint is charged by the instance-hour for as long as it has instances running, whether or not anything calls it. stdapi.ai reports the tokens it served and **no cost**, because AWS publishes no per-token rate for them — your bill is instance-hours. An endpoint configured to [scale to zero](https://docs.aws.amazon.com/sagemaker/latest/dg/endpoint-auto-scaling-zero-instances.html) costs nothing while idle, at the price of that first slow request. See [SageMaker AI endpoint costs](operations_cost_management.md#sagemaker-endpoints-cost).
+
+!!! note "What the container decides"
+    The endpoint's container decides what the model can do: tool calling needs a tool-call parser configured on it, reasoning content needs a reasoning parser, and image input needs a model and a container that accept image content parts. The gateway publishes what you declare and forwards what you send; it cannot add a capability the container does not serve. Token counting is not available for these models — that route answers `400`.
+
+!!! warning "Guardrails do not apply"
+    A container serves the OpenAI Chat Completions API and carries no `guardrailConfig`, so an Amazon Bedrock Guardrail cannot filter what these models answer. A request that reaches one while a guardrail is configured is [refused with a `400`](operations_configuration.md#aws-sagemaker-endpoints) rather than served unfiltered, and a guardrail-bearing model alias naming one of them stops the server at startup.
+
+[:octicons-arrow-right-24: SageMaker AI Endpoints Configuration](operations_configuration.md#aws-sagemaker-endpoints)
+
 ### Amazon S3 as the file layer
 
 S3 backs the whole API surface, not just file storage, which buys three things a file API bolted onto a database cannot:
@@ -534,7 +553,7 @@ Model documentation describes what a model is supposed to accept. What it actual
 
 All four solutions below expose an OpenAI-compatible API in front of Amazon Bedrock. The comparison focuses on the AWS deployment context — LiteLLM is evaluated with AWS services as the backend provider (Bedrock, Polly, Transcribe), not as a multi-cloud proxy. Bedrock Access Gateway is the official AWS-maintained open-source sample. Bedrock Mantle is AWS's own managed OpenAI-compatible endpoint, requiring no self-hosting — and stdapi.ai can also front it as an additional backend, serving Mantle-only models through the gateway (see [Bedrock Mantle Models](#bedrock-mantle-models)).
 
-Competitor capabilities were verified against official sources on 5 August 2026; the batch inference, vector store, file search and per-end-user billing rows were verified on 21 August 2026; the image, audio and video rows were re-verified on 24 August 2026. stdapi.ai is AWS-only: if you need multi-cloud routing or spend limits enforced at request time, LiteLLM is the better fit.
+Competitor capabilities were verified against official sources on 5 August 2026; the batch inference, vector store, file search and per-end-user billing rows were verified on 21 August 2026; the image, audio and video rows were re-verified on 24 August 2026; the Ollama, Marketplace endpoint, SageMaker AI, tenant key and Administration API rows were verified on 27 August 2026. stdapi.ai is AWS-only: if you need multi-cloud routing or spend limits enforced at request time, LiteLLM is the better fit.
 
 !!! note "Cost attribution is not a spend limit"
     Bedrock's native attribution — IAM principal, application inference profiles, projects and workspaces — reports [aggregated billed cost to Cost Explorer and CUR 2.0 at per-usage-type-per-day granularity](https://docs.aws.amazon.com/bedrock/latest/userguide/cost-management.html), not as a per-request row. That is reporting, not enforcement: it cannot block a request that would exceed a budget. stdapi.ai's per-request cost figures are likewise an estimate for visibility. Enforcing a hard limit requires a gateway layer in front of inference — the approach AWS itself takes in its [Generative AI Gateway Solution](https://aws.amazon.com/solutions/), which uses LiteLLM.
@@ -643,3 +662,11 @@ Competitor capabilities were verified against official sources on 5 August 2026;
 [^26]: Application inference profiles put billed dollars in [Cost Explorer and CUR 2.0](https://docs.aws.amazon.com/bedrock/latest/userguide/cost-management.html), but per application rather than per end user — the gateway does not map a caller to a profile
 [^27]: [IAM principal attribution, Projects and Workspaces](https://docs.aws.amazon.com/bedrock/latest/userguide/cost-management.html) put billed dollars in Cost Explorer and CUR 2.0 — per identity or per project rather than per end user, and behind a shared gateway every caller arrives as the same identity
 [^28]: [`/images/edits` lists AWS Bedrock (Stability) among its providers](https://docs.litellm.ai/docs/image_edits), so Stability's editing operations are reachable on Bedrock. It does not extend to the other Bedrock image models: the [Bedrock provider page](https://docs.litellm.ai/docs/providers/bedrock) lists `/images/generations` but not `/images/edits` among its supported OpenAI endpoints, and Amazon Nova Canvas and Titan are documented for [generation](https://docs.litellm.ai/docs/providers/bedrock_image_gen) only
+[^29]: LiteLLM integrates [Ollama as one of the backends it calls](https://docs.litellm.ai/docs/providers/ollama). Its proxy does not serve Ollama's own `/api/*` routes, so an Ollama-native client cannot point at it
+[^30]: Reachable by declaring the endpoint's ARN as a model entry (`bedrock/<provider_route>/<arn>`) in the [Bedrock provider configuration](https://docs.litellm.ai/docs/providers/bedrock): one entry per endpoint, and no discovery of what is deployed
+[^31]: The model list is discovered from Bedrock's foundation models and inference profiles only. The [project's README](https://github.com/aws-samples/bedrock-access-gateway) documents Marketplace, custom-model and provisioned-throughput ARNs as unsupported, and states there is no plan to support SageMaker models
+[^32]: A model deployed to a Marketplace or SageMaker AI endpoint is invoked through Bedrock's own Converse and InvokeModel APIs, and is absent from [Mantle's API compatibility matrix](https://docs.aws.amazon.com/bedrock/latest/userguide/models-api-compatibility.html)
+[^33]: Each endpoint is declared in `model_list` through the [`sagemaker_chat` provider](https://docs.litellm.ai/docs/providers/aws_sagemaker). Endpoints are not discovered, and nothing is documented for an endpoint scaled to zero
+[^34]: A single API key is read from AWS Secrets Manager, Parameter Store or the environment at start-up, so there is no per-caller key to scope
+[^35]: [Bedrock API keys](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html) are restricted by an IAM policy on the identity behind the key rather than by a model or endpoint scope carried on the key itself
+[^36]: The same data is served by [LiteLLM's own `/spend/*` routes](https://docs.litellm.ai/docs/proxy/cost_tracking), reported per key, user and team in a different wire format, so a dashboard written against OpenAI's Administration API does not read it

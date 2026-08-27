@@ -141,6 +141,36 @@ Required only if you want stdapi.ai to publish and serve the Amazon Bedrock Mark
 
 ---
 
+## :material-server: SageMaker AI Endpoints (Optional) { #sagemaker-endpoints-iam }
+
+**Environment Variables**: [`AWS_SAGEMAKER_ENDPOINTS`](operations_configuration.md#aws-sagemaker-endpoints)
+
+Required only if you name Amazon SageMaker AI endpoints for stdapi.ai to serve. The server only invokes the endpoints you named — it never creates, updates, scales or deletes one, so it is granted no action that does.
+
+??? example "SageMaker AI Endpoints IAM Policy Statements"
+    ```json
+    {
+      "Sid": "SageMakerBearerToken",
+      "Effect": "Allow",
+      "Action": "sagemaker:CallWithBearerToken",
+      "Resource": "*"
+    },
+    {
+      "Sid": "SageMakerEndpointInvoke",
+      "Effect": "Allow",
+      "Action": "sagemaker:InvokeEndpoint",
+      "Resource": [
+        "arn:aws:sagemaker:<region>:<account-id>:endpoint/<endpoint-name>"
+      ]
+    }
+    ```
+
+    The OpenAI-compatible route authenticates with a short-term API key the server derives locally from its own credentials, which is what `sagemaker:CallWithBearerToken` authorizes; the action supports no resource-level scope, hence `Resource: "*"`. That key carries the same authority as the role, so **`sagemaker:InvokeEndpoint` is what bounds it** — list the endpoint ARNs you actually serve rather than `*`, and a leaked key can still reach nothing else.
+
+    See [OpenAI-compatible endpoints](https://docs.aws.amazon.com/sagemaker/latest/dg/realtime-endpoints-openai-compatible.html).
+
+---
+
 ## :material-storefront: AWS Marketplace Metering (AWS Marketplace Image Only) { #aws-marketplace-metering }
 
 **Environment Variables**: none (always active on the AWS Marketplace image)
@@ -1366,6 +1396,7 @@ Required if you configure API authentication. See the [Authentication](operation
 | **Bedrock Models (Discovery)**                  | `bedrock:ListFoundationModels`<br>`bedrock:GetFoundationModelAvailability`<br>`bedrock:ListProvisionedModelThroughputs`<br>`bedrock:ListInferenceProfiles` | Always required                                                              |
 | **Bedrock Marketplace Auto-Subscribe**          | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions`                                                                                         | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default)                      |
 | **Bedrock Marketplace Model Endpoints**         | `bedrock:ListMarketplaceModelEndpoints`<br>`bedrock:GetMarketplaceModelEndpoint`<br>`sagemaker:InvokeEndpoint`<br>`sagemaker:InvokeEndpointWithResponseStream` (on `arn:aws:sagemaker:*:*:endpoint/*`, conditioned on `aws:CalledViaLast: bedrock.amazonaws.com`) | `AWS_BEDROCK_MARKETPLACE_ENDPOINTS_ENABLED=true` |
+| **SageMaker AI Endpoints**                      | `sagemaker:CallWithBearerToken` (on `*`, no resource-level support)<br>`sagemaker:InvokeEndpoint` (on the endpoint ARNs you serve)                          | `AWS_SAGEMAKER_ENDPOINTS` configured                                         |
 | **AWS Marketplace Metering**                    | `aws-marketplace:RegisterUsage`                                                                                                                             | AWS Marketplace image only (always active); not required for the community image |
 | **Bedrock Inference Profiles & Prompt Routers** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`<br>`bedrock:GetPrompt` and `bedrock:RenderPrompt` (on `arn:aws:bedrock:*:*:prompt/*`) for Prompt Management prompts | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
 | **Bedrock Guardrails & Moderations**            | `bedrock:ApplyGuardrail`                                                                                                                                   | `AWS_BEDROCK_GUARDRAIL_IDENTIFIER`                                           |

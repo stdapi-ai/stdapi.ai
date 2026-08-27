@@ -22,13 +22,13 @@ Three kinds of record live under ``pk=MODELCACHE#<fingerprint>``:
   mid-sweep costs one lease period rather than wedging the fleet.
 
 The **fingerprint** is what keeps two servers from consuming each other's list:
-it covers the server version, the AWS account and every ``aws_bedrock*``
-setting -- deliberately every one of them, rather than the subset discovery
-reads today, because being too broad only costs a refresh while being too
-narrow serves one deployment's catalogue to another. A server that does not
-recognise the fingerprint simply finds no cache. The record *layout* is carried
-by the table's own schema attribute instead, so a newer build's records are
-skipped rather than misread.
+it covers the server version, the AWS account and every ``aws_bedrock*`` and
+``aws_sagemaker*`` setting -- deliberately every one of them, rather than the
+subset discovery reads today, because being too broad only costs a refresh
+while being too narrow serves one deployment's catalogue to another. A server
+that does not recognise the fingerprint simply finds no cache. The record
+*layout* is carried by the table's own schema attribute instead, so a newer
+build's records are skipped rather than misread.
 
 Nothing here is allowed to fail a request. Every table error becomes an
 operator warning and a ``None``/``False`` answer, and the caller falls back to
@@ -113,8 +113,8 @@ _MAX_CLOCK_SKEW_SECONDS: Final = 5
 #: Hexadecimal characters kept from the fingerprint digest.
 _FINGERPRINT_LENGTH: Final = 32
 
-#: Prefix of every setting that shapes what a discovery sweep returns.
-_SHAPING_PREFIX: Final = "aws_bedrock"
+#: Prefixes of every setting that shapes what a discovery sweep returns.
+_SHAPING_PREFIXES: Final = ("aws_bedrock", "aws_sagemaker")
 
 #: Warnings already reported, so a failing table does not flood the log.
 _REPORTED: Final[set[str]] = set()
@@ -152,7 +152,7 @@ def fingerprint() -> str:
     shaping = {
         name: getattr(SETTINGS, name)
         for name in type(SETTINGS).model_fields
-        if name.startswith(_SHAPING_PREFIX)
+        if name.startswith(_SHAPING_PREFIXES)
     }
     digest = sha256(
         to_json_bytes([SERVER_VERSION, AWS_ENVIRONMENT.get("account_id", ""), shaping])
