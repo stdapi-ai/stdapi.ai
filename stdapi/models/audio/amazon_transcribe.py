@@ -82,7 +82,7 @@ from stdapi.utils import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator
+    from collections.abc import AsyncGenerator, Generator, Sequence
 
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_transcribe.client import TranscribeServiceClient
@@ -181,6 +181,8 @@ class TranscribeJobAudioSegment(TypedDict):
     end_time: str
     transcript: str
     speaker_label: NotRequired[str]
+    # Ids of the entries of the job's own ``items`` list this segment gathers.
+    items: NotRequired[list[int]]
 
 
 class TranscribeJobTranscript(TypedDict):
@@ -823,6 +825,12 @@ def _format_diarized_json_response(
 ) -> TranscriptionDiarized:
     """Format transcription response as diarized JSON with speaker segments.
 
+    Segments are cut out of the transcript by the same helper ``_job_transcript``
+    uses for a job-served stream, so a job-served request cannot word a segment
+    differently whether or not it streams. A live session streams instead, and
+    cuts its segments with a different helper (``_speaker_runs``) over
+    different data, so that path is not covered by this guarantee.
+
     Args:
         transcript_data: Parsed transcription results from AWS Transcribe
         text: Processed transcript text content
@@ -838,16 +846,16 @@ def _format_diarized_json_response(
             duration=duration,
             segments=[
                 TranscriptionDiarizedSegment(
-                    id=f"seg_{segment['id']}",
-                    start=float(segment["start_time"]),
-                    end=float(segment["end_time"]),
+                    id=part.id or f"seg_{segment['id']}",
+                    start=part.start,
+                    end=part.end,
                     speaker=speakers.setdefault(
                         segment["speaker_label"], _speaker_label(len(speakers))
                     ),
-                    text=segment["transcript"],
+                    text=part.text,
                     type="transcript.text.segment",
                 )
-                for segment in transcript_data["audio_segments"]
+                for segment, part in _job_segments(transcript_data, text)
             ],
             task="transcribe",
             text=text,
@@ -1187,6 +1195,8 @@ class _TranscriptPart:
         end: End of the stretch, in seconds.
         lead: The transcript's own text between this stretch and the one before
             it, None when no transcript text spans the gap.
+        id: The job's own segment id this part was cut out of, None for a
+            live-session part, which the caller numbers itself.
     """
 
     text: str
@@ -1194,6 +1204,7 @@ class _TranscriptPart:
     start: float = 0.0
     end: float = 0.0
     lead: str | None = None
+    id: str | None = None
 
 
 def _spaced_items(items: list[Item], transcript: str) -> Generator[tuple[Item, str]]:
@@ -1264,21 +1275,108 @@ def _speaker_runs(items: list[Item], transcript: str) -> Generator[_TranscriptPa
             out of so they keep its spacing.
 
     Yields:
-        One part per speaker run, in order, empty ones dropped.
+        One part per speaker run, in order, including any with no text; the
+        caller filters those out.
     """
     run: list[tuple[Item, str]] = []
     speaker: str | None = None
+    owned = False
     continues = False
     for item, text in _spaced_items(items, transcript):
         spoken = item.type != ItemType.PUNCTUATION
-        if spoken and speaker is not None and item.speaker != speaker:
+        if spoken and owned and item.speaker != speaker:
             yield _speaker_run(run, speaker, continues=continues)
-            run, speaker, continues = [], None, True
-        if spoken and speaker is None:
-            speaker = item.speaker
+            run, speaker, owned, continues = [], None, False, True
+        if spoken and not owned:
+            speaker, owned = item.speaker, True
         run.append((item, text))
     if run:
         yield _speaker_run(run, speaker, continues=continues)
+
+
+def _segment_span(
+    transcript: str,
+    position: int,
+    segment: TranscribeJobAudioSegment,
+    items: Sequence[TranscribeJobItem],
+) -> tuple[int, int]:
+    """Locate one audio segment inside the transcript it was cut out of.
+
+    A finished job gathers words into segments and names the ids of the items
+    each one holds, so a segment is placed by looking its items' contents up in
+    the transcript, in order. A segment naming no item is looked up by its own
+    transcript instead.
+
+    Args:
+        transcript: The job's own transcript of the whole recording.
+        position: Offset the lookup starts at, past the preceding segment.
+        segment: The audio segment to place.
+        items: The job's items, in the order their ids index them.
+
+    Returns:
+        The segment's (start, end) offsets, or (-1, -1) when the transcript
+        restates none of it.
+    """
+    contents = [
+        alternatives[0]["content"]
+        for index in segment.get("items") or ()
+        if index < len(items) and (alternatives := items[index].get("alternatives"))
+    ]
+    start = end = -1
+    for content in contents or [segment["transcript"]]:
+        found = transcript.find(content, position) if content else -1
+        if found < 0:
+            continue
+        if start < 0:
+            start = found
+        position = end = found + len(content)
+    return start, end
+
+
+def _job_segments(
+    transcript_data: TranscribeJobData, transcript: str | None = None
+) -> Generator[tuple[TranscribeJobAudioSegment, _TranscriptPart]]:
+    """Pair every audio segment of a finished job with the part it makes up.
+
+    Words are attributed one by one, but only the transcript knows how they are
+    written down -- a language that separates its words with spaces and one
+    that writes them together are told apart by nothing else -- so each part is
+    cut out of the transcript rather than re-joined with an assumed separator.
+
+    Args:
+        transcript_data: Parsed transcription results from AWS Transcribe.
+        transcript: The job's already-computed transcript; recomputed from
+            ``transcript_data`` when the caller has not got one already.
+
+    Yields:
+        Each audio segment, in order, and the part it makes up.
+    """
+    if transcript is None:
+        transcript = _get_transcript_text(transcript_data)
+    items = transcript_data.get("items") or ()
+    position = 0
+    for segment in transcript_data.get("audio_segments") or ():
+        text = segment["transcript"]
+        # A silent segment spans no transcript text, so it takes no separator
+        # either; only a spoken one the transcript does not spell out falls
+        # back to a space.
+        lead: str | None = None if text else ""
+        start, end = _segment_span(transcript, position, segment, items)
+        if start >= 0:
+            lead = transcript[position:start]
+            text = transcript[start:end]
+            position = end
+        yield (
+            segment,
+            _TranscriptPart(
+                text=text,
+                speaker=segment.get("speaker_label"),
+                start=float(segment["start_time"]),
+                end=float(segment["end_time"]),
+                lead=lead,
+                id=f"seg_{segment['id']}",
+            ),
+        )
 
 
 class _StreamedTranscript:
@@ -1758,14 +1856,15 @@ class AudioModel(AudioModelBase[None, None]):
                 lead = " " if part.lead is None else part.lead
                 delta = f"{lead}{part.text}" if full_text_parts else part.text
                 full_text_parts.append(delta)
+                segment_id = part.id if part.id is not None else f"seg_{segments}"
                 yield TranscriptionTextDeltaEvent(
                     delta=delta,
                     type="transcript.text.delta",
-                    segment_id=f"seg_{segments}" if speaker is not None else None,
+                    segment_id=segment_id if speaker is not None else None,
                 )
                 if speaker is not None:
                     yield TranscriptionTextSegmentEvent(
-                        id=f"seg_{segments}",
+                        id=segment_id,
                         start=part.start,
                         end=part.end,
                         speaker=speakers.setdefault(
@@ -1891,16 +1990,16 @@ class AudioModel(AudioModelBase[None, None]):
         record_transcribe_usage(
             _get_audio_duration(transcript_data), region=_SERVED_REGION.get()
         )
+        segmented = False
         if response_format == "diarized_json":
-            for segment in transcript_data.get("audio_segments") or ():
-                if segment["transcript"]:
-                    yield _TranscriptPart(
-                        text=segment["transcript"],
-                        speaker=segment.get("speaker_label"),
-                        start=float(segment["start_time"]),
-                        end=float(segment["end_time"]),
-                    )
+            for _, part in _job_segments(transcript_data):
+                segmented = True
+                yield part
+        if segmented:
             return
+        # A job that reported no audio segment still transcribed something, and
+        # the unstreamed answer says so, so the stream reads its transcript out
+        # rather than ending on an empty one.
         for transcript in transcript_data["transcripts"]:
             yield _TranscriptPart(text=transcript["transcript"])
 

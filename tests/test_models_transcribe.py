@@ -59,6 +59,7 @@ from stdapi.models.audio.amazon_transcribe import (
 )
 from stdapi.monitoring import REQUEST_ID, REQUEST_LOG
 from stdapi.types.openai_audio import (
+    TranscriptionDiarized,
     TranscriptionStreamEvent,
     TranscriptionTextDeltaEvent,
     TranscriptionTextDoneEvent,
@@ -1962,7 +1963,7 @@ class TestLiveTranscriptionStream:
         the streamed transcript differ from the non-streamed one for the same
         audio.
 
-        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/diarization-streaming.html
+        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/diarization.html
              stdapi/models/audio/amazon_transcribe.py:_speaker_run
         """
         _fake_live_session(
@@ -2093,7 +2094,7 @@ class TestLiveTranscriptionStream:
         ``segment_id`` and gets no segment event: the concatenated deltas, not
         the segments, are what makes the complete transcript.
 
-        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/diarization-streaming.html
+        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/diarization.html
              stdapi/models/audio/amazon_transcribe.py:_StreamedTranscript.remainder
         """
         _fake_live_session(
@@ -2297,6 +2298,678 @@ class TestLiveTranscriptionStream:
 
         _, done = _split_stream(collected)
         assert done.text == "from the job"
+
+
+#: A finished job's language, words and per-speaker attribution.
+_JOB_DIARIZATION_CASES = [
+    ("en-US", "Hello there", (("Hello", "spk_0"), ("there", "spk_1"))),
+    (
+        "ja-JP",
+        "こんにちはさようなら",
+        (("こんにちは", "spk_0"), ("さようなら", "spk_1")),
+    ),
+]
+
+
+def _diarized_job_data(
+    language_code: str, transcript: str, words: tuple[tuple[str, str], ...]
+) -> dict[str, Any]:
+    """Build a finished diarized job result for a per-speaker word sequence.
+
+    Every word becomes one item and one audio segment naming that item's id,
+    exactly as a job with speaker partitioning reports them.
+
+    Args:
+        language_code: The job's reported language code.
+        transcript: The job's own transcript of the whole recording.
+        words: Each spoken word, and the speaker it was attributed to.
+
+    Returns:
+        The parsed job results.
+    """
+    return {
+        "transcripts": [{"transcript": transcript}],
+        "items": [
+            {
+                "id": index,
+                "type": "pronunciation",
+                "alternatives": [{"confidence": "1.0", "content": word}],
+                "start_time": str(float(index)),
+                "end_time": str(float(index + 1)),
+            }
+            for index, (word, _) in enumerate(words)
+        ],
+        "audio_segments": [
+            {
+                "id": index,
+                "transcript": word,
+                "start_time": str(float(index)),
+                "end_time": str(float(index + 1)),
+                "speaker_label": speaker,
+                "items": [index],
+            }
+            for index, (word, speaker) in enumerate(words)
+        ],
+        "language_code": language_code,
+    }
+
+
+class TestJobDiarizationSpacing:
+    """A diarized transcript served from a job keeps the recording's own spacing.
+
+    A job attributes each word to a speaker and gathers the words into audio
+    segments, but only the job's own transcript knows how those segments are
+    written down: re-joining them with an assumed space makes the transcript of
+    a language that separates nothing come back different from the recording it
+    transcribed.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/dg/diarization-output-batch.html
+         stdapi/models/audio/amazon_transcribe.py:AudioModel._job_transcript
+    """
+
+    @pytest.mark.parametrize(
+        ("language_code", "transcript", "words"),
+        _JOB_DIARIZATION_CASES,
+        ids=["spaced", "unspaced"],
+    )
+    async def test_the_deltas_of_a_job_rebuild_its_own_transcript(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        language_code: str,
+        transcript: str,
+        words: tuple[tuple[str, str], ...],
+    ) -> None:
+        """Streaming a job's segments reproduces the transcript the job reported.
+
+        Japanese separates nothing, so a hard-coded separator between two
+        segments would make the streamed transcript differ from the recording.
+        The segment metadata -- not just its text -- must also agree with the
+        non-streamed response for the same job (see the sibling test below).
+        """
+        monkeypatch.setattr(SETTINGS, "aws_transcribe_stream_languages", [])
+        job_data = _diarized_job_data(language_code, transcript, words)
+
+        async def _fake_transcribe(
+            _self: AudioModel, *_args: object, **_kwargs: object
+        ) -> dict[str, Any]:
+            return job_data
+
+        monkeypatch.setattr(AudioModel, "_transcribe", _fake_transcribe)
+        monkeypatch.setattr(
+            amazon_transcribe, "record_transcribe_usage", lambda *_a, **_k: 15
+        )
+
+        collected = [
+            event
+            async for event in AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt_stream(
+                _FakeAudioContent(),  # type: ignore[arg-type]
+                "diarized_json",
+                logprobs=False,
+            )
+        ]
+
+        deltas = [
+            event
+            for event in collected
+            if isinstance(event, TranscriptionTextDeltaEvent)
+        ]
+        segments = [
+            event
+            for event in collected
+            if isinstance(event, TranscriptionTextSegmentEvent)
+        ]
+        done = collected[-1]
+        assert isinstance(done, TranscriptionTextDoneEvent)
+        assert [segment.text for segment in segments] == [word for word, _ in words]
+        assert [segment.speaker for segment in segments] == ["A", "B"]
+        assert [(segment.start, segment.end) for segment in segments] == [
+            (0.0, 1.0),
+            (1.0, 2.0),
+        ]
+        assert "".join(event.delta for event in deltas) == transcript
+        assert done.text == transcript
+
+    @pytest.mark.parametrize(
+        ("language_code", "transcript", "words"),
+        _JOB_DIARIZATION_CASES,
+        ids=["spaced", "unspaced"],
+    )
+    @pytest.mark.usefixtures("request_log")
+    def test_the_non_streamed_segments_carry_the_same_text(
+        self, language_code: str, transcript: str, words: tuple[tuple[str, str], ...]
+    ) -> None:
+        """The same job answers ``diarized_json`` identically without ``stream``.
+
+        The two paths serve the same request, and which one a caller gets
+        depends on the deployment, so a segment may not read differently
+        between them.
+
+        Ref: stdapi/models/audio/amazon_transcribe.py:_format_diarized_json_response
+        """
+        response = amazon_transcribe._format_diarized_json_response(  # noqa: SLF001
+            _diarized_job_data(language_code, transcript, words),  # type: ignore[arg-type]
+            transcript,
+            float(len(words)),
+            UsageDuration(type="duration", seconds=15),
+        )
+
+        assert response.text == transcript
+        assert [segment.text for segment in response.segments] == [
+            word for word, _ in words
+        ]
+        assert [segment.speaker for segment in response.segments] == ["A", "B"]
+
+
+class TestDiarizedStreamAgreesWithNonStreamedSegmentIds:
+    """An empty-transcript segment must not desync the two diarized paths.
+
+    ``_job_transcript`` used to drop a segment with no transcript text before
+    it reached the stream, while the non-streamed response kept it -- which
+    shifted every later segment's id and the order speaker letters get
+    assigned in, contradicting the invariant that the two paths agree.
+
+    Ref: stdapi/models/audio/amazon_transcribe.py:_format_diarized_json_response
+         stdapi/models/audio/amazon_transcribe.py:AudioModel._job_transcript
+    """
+
+    async def test_a_silent_segment_keeps_the_same_ids_and_speaker_letters(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """The streamed segment ids and speaker letters match the non-streamed ones."""
+        monkeypatch.setattr(SETTINGS, "aws_transcribe_stream_languages", [])
+        job_data: dict[str, Any] = {
+            "transcripts": [{"transcript": "Hi"}],
+            "items": [
+                {
+                    "id": 0,
+                    "type": "pronunciation",
+                    "alternatives": [{"confidence": "1.0", "content": "Hi"}],
+                    "start_time": "1.0",
+                    "end_time": "1.5",
+                }
+            ],
+            "audio_segments": [
+                {
+                    "id": 0,
+                    "transcript": "",
+                    "start_time": "0.0",
+                    "end_time": "1.0",
+                    "speaker_label": "spk_1",
+                },
+                {
+                    "id": 1,
+                    "transcript": "Hi",
+                    "start_time": "1.0",
+                    "end_time": "1.5",
+                    "speaker_label": "spk_0",
+                    "items": [0],
+                },
+            ],
+            "language_code": "en-US",
+        }
+
+        async def _fake_transcribe(
+            _self: AudioModel, *_args: object, **_kwargs: object
+        ) -> dict[str, Any]:
+            return job_data
+
+        monkeypatch.setattr(AudioModel, "_transcribe", _fake_transcribe)
+        monkeypatch.setattr(
+            amazon_transcribe, "record_transcribe_usage", lambda *_a, **_k: 15
+        )
+
+        collected = [
+            event
+            async for event in AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt_stream(
+                _FakeAudioContent(),  # type: ignore[arg-type]
+                "diarized_json",
+                logprobs=False,
+            )
+        ]
+        stream_segments = [
+            event
+            for event in collected
+            if isinstance(event, TranscriptionTextSegmentEvent)
+        ]
+
+        response = amazon_transcribe._format_diarized_json_response(  # noqa: SLF001
+            job_data,  # type: ignore[arg-type]
+            "Hi",
+            1.5,
+            UsageDuration(type="duration", seconds=15),
+        )
+
+        assert [segment.id for segment in stream_segments] == [
+            segment.id for segment in response.segments
+        ]
+        assert [segment.speaker for segment in stream_segments] == [
+            segment.speaker for segment in response.segments
+        ]
+
+    @pytest.mark.parametrize("silent_at", [0, 1, 2])
+    async def test_a_silent_segment_adds_no_text_wherever_it_sits(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        request_log: dict[str, Any],
+        silent_at: int,
+    ) -> None:
+        """The deltas rebuild the job's own transcript, spacing included.
+
+        A segment carrying no transcript text spans nothing in the transcript,
+        so it must contribute neither text nor separator; only its first
+        position is exempt from the separator a delta otherwise carries, which
+        is why every position is checked.
+
+        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/diarization-output-batch.html
+             stdapi/models/audio/amazon_transcribe.py:_job_segments
+        """
+        monkeypatch.setattr(SETTINGS, "aws_transcribe_stream_languages", [])
+        transcript = "Hi there"
+        spoken: list[dict[str, Any]] = [
+            {
+                "transcript": "Hi",
+                "start_time": "1.0",
+                "end_time": "1.5",
+                "speaker_label": "spk_0",
+                "items": [0],
+            },
+            {
+                "transcript": "there",
+                "start_time": "1.5",
+                "end_time": "2.0",
+                "speaker_label": "spk_1",
+                "items": [1],
+            },
+        ]
+        segments = [
+            *spoken[:silent_at],
+            {
+                "transcript": "",
+                "start_time": "0.0",
+                "end_time": "1.0",
+                "speaker_label": "spk_0",
+            },
+            *spoken[silent_at:],
+        ]
+        for index, segment in enumerate(segments):
+            segment["id"] = index
+        job_data: dict[str, Any] = {
+            "transcripts": [{"transcript": transcript}],
+            "items": [
+                {
+                    "id": 0,
+                    "type": "pronunciation",
+                    "alternatives": [{"confidence": "1.0", "content": "Hi"}],
+                    "start_time": "1.0",
+                    "end_time": "1.5",
+                },
+                {
+                    "id": 1,
+                    "type": "pronunciation",
+                    "alternatives": [{"confidence": "1.0", "content": "there"}],
+                    "start_time": "1.5",
+                    "end_time": "2.0",
+                },
+            ],
+            "audio_segments": segments,
+            "language_code": "en-US",
+        }
+
+        async def _fake_transcribe(
+            _self: AudioModel, *_args: object, **_kwargs: object
+        ) -> dict[str, Any]:
+            return job_data
+
+        monkeypatch.setattr(AudioModel, "_transcribe", _fake_transcribe)
+        monkeypatch.setattr(
+            amazon_transcribe, "record_transcribe_usage", lambda *_a, **_k: 15
+        )
+
+        collected = [
+            event
+            async for event in AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt_stream(
+                _FakeAudioContent(),  # type: ignore[arg-type]
+                "diarized_json",
+                logprobs=False,
+            )
+        ]
+        deltas = [
+            event.delta
+            for event in collected
+            if isinstance(event, TranscriptionTextDeltaEvent)
+        ]
+        done = next(
+            event
+            for event in collected
+            if isinstance(event, TranscriptionTextDoneEvent)
+        )
+
+        response = amazon_transcribe._format_diarized_json_response(  # noqa: SLF001
+            job_data,  # type: ignore[arg-type]
+            transcript,
+            2.0,
+            UsageDuration(type="duration", seconds=15),
+        )
+
+        assert "".join(deltas) == done.text == transcript == response.text
+
+
+class TestDiarizedStreamWithoutAudioSegments:
+    """A job reporting no audio segment still streams the transcript it produced.
+
+    ``audio_segments`` is optional on a job's results, and the unstreamed
+    diarized answer to such a payload is the full transcript with no segments,
+    so the stream must read the same text out rather than end on an empty one.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/dg/diarization-output-batch.html
+         stdapi/models/audio/amazon_transcribe.py:AudioModel._job_transcript
+    """
+
+    async def test_the_stream_falls_back_to_the_job_transcript(
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
+    ) -> None:
+        """The done event carries the same text the unstreamed request answers."""
+        monkeypatch.setattr(SETTINGS, "aws_transcribe_stream_languages", [])
+        transcript = "hello there"
+        job_data: dict[str, Any] = {
+            "transcripts": [{"transcript": transcript}],
+            "items": [],
+            "audio_segments": [],
+            "language_code": "en-US",
+        }
+
+        async def _fake_transcribe(
+            _self: AudioModel, *_args: object, **_kwargs: object
+        ) -> dict[str, Any]:
+            return job_data
+
+        monkeypatch.setattr(AudioModel, "_transcribe", _fake_transcribe)
+        monkeypatch.setattr(
+            amazon_transcribe, "record_transcribe_usage", lambda *_a, **_k: 15
+        )
+        model = AudioModel(AWS_TRANSCRIBE_MODEL_ID)
+
+        collected = [
+            event
+            async for event in model.stt_stream(
+                _FakeAudioContent(),  # type: ignore[arg-type]
+                "diarized_json",
+                logprobs=False,
+            )
+        ]
+        unstreamed = await model.stt(
+            _FakeAudioContent(),  # type: ignore[arg-type]
+            "diarized_json",
+            logprobs=False,
+        )
+
+        deltas = [
+            event.delta
+            for event in collected
+            if isinstance(event, TranscriptionTextDeltaEvent)
+        ]
+        done = next(
+            event
+            for event in collected
+            if isinstance(event, TranscriptionTextDoneEvent)
+        )
+        assert "".join(deltas) == done.text == transcript
+        assert isinstance(unstreamed, TranscriptionDiarized)
+        assert unstreamed.text == done.text
+        assert not [
+            event
+            for event in collected
+            if isinstance(event, TranscriptionTextSegmentEvent)
+        ]
+
+
+class TestSegmentSpanMultipleItems:
+    """_segment_span/_job_segments: a segment naming several items keeps its whole span.
+
+    A finished job's audio segments routinely gather many item ids, not one --
+    AWS's own diarization example gathers eight items into one turn and four
+    into the next -- so the accumulation loop must keep extending the span
+    across every one of them instead of settling for the first.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/dg/diarization-output-batch.html
+         stdapi/models/audio/amazon_transcribe.py:_segment_span
+    """
+
+    def test_a_segment_spanning_several_items_keeps_its_full_text(self) -> None:
+        """Two multi-word segments are each cut out whole, not truncated to one item."""
+        words = ["I've", "been", "on", "hold", "for", "an", "hour", "."]
+        more_words = ["Sorry", "about", "that", "."]
+        transcript = "I've been on hold for an hour. Sorry about that."
+        items = [
+            {
+                "id": index,
+                "type": "punctuation" if word == "." else "pronunciation",
+                "alternatives": [{"confidence": "1.0", "content": word}],
+                "start_time": str(float(index)),
+                "end_time": str(float(index + 1)),
+            }
+            for index, word in enumerate(words + more_words)
+        ]
+        transcript_data: dict[str, Any] = {
+            "transcripts": [{"transcript": transcript}],
+            "items": items,
+            "audio_segments": [
+                {
+                    "id": 0,
+                    "transcript": "I've been on hold for an hour.",
+                    "start_time": "0.0",
+                    "end_time": str(float(len(words))),
+                    "speaker_label": "spk_0",
+                    "items": list(range(len(words))),
+                },
+                {
+                    "id": 1,
+                    "transcript": "Sorry about that.",
+                    "start_time": str(float(len(words))),
+                    "end_time": str(float(len(words) + len(more_words))),
+                    "speaker_label": "spk_1",
+                    "items": list(range(len(words), len(words) + len(more_words))),
+                },
+            ],
+        }
+
+        parts = [
+            part
+            for _, part in amazon_transcribe._job_segments(  # noqa: SLF001
+                transcript_data  # type: ignore[arg-type]
+            )
+        ]
+
+        assert [part.text for part in parts] == [
+            "I've been on hold for an hour.",
+            "Sorry about that.",
+        ]
+        assert parts[1].lead == " "
+
+
+class TestSpeakerRunsAttribution:
+    """_speaker_runs: an unattributed word may not be silently claimed by the next speaker.
+
+    Amazon Transcribe can finalize a result with a spoken item left
+    unattributed (``Item.speaker`` is ``None``); the run that word opens must
+    close the moment an attributed word follows, rather than becoming that
+    word's speaker retroactively.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/dg/diarization.html
+         stdapi/models/audio/amazon_transcribe.py:_speaker_runs
+    """
+
+    def test_an_unattributed_word_is_not_claimed_by_the_next_speaker(self) -> None:
+        """An unattributed opening word gets its own run, not the next speaker's."""
+        items = [
+            Item(
+                content="Yeah",
+                type=ItemType.PRONUNCIATION,
+                speaker=None,
+                start_time=0.0,
+                end_time=0.5,
+            ),
+            Item(
+                content="I",
+                type=ItemType.PRONUNCIATION,
+                speaker="1",
+                start_time=0.5,
+                end_time=0.8,
+            ),
+            Item(
+                content="agree",
+                type=ItemType.PRONUNCIATION,
+                speaker="1",
+                start_time=0.8,
+                end_time=1.2,
+            ),
+        ]
+
+        runs = list(
+            amazon_transcribe._speaker_runs(items, "Yeah I agree")  # noqa: SLF001
+        )
+
+        assert [(run.speaker, run.text) for run in runs] == [
+            (None, "Yeah"),
+            ("1", "I agree"),
+        ]
+
+
+class TestJobSegmentsSharedTranscript:
+    """_job_segments: a caller's own transcript is reused, not recomputed.
+
+    ``_format_diarized_json_response`` already computed (and guardrailed) the
+    job's transcript once; passing it through means segments are cut out of
+    that exact string, not a second join-and-strip of the raw transcript.
+
+    Ref: stdapi/models/audio/amazon_transcribe.py:_job_segments
+    """
+
+    def test_a_given_transcript_is_used_over_a_recomputed_one(self) -> None:
+        """The passed-in transcript, not a recomputed one, is what is searched."""
+        transcript_data: dict[str, Any] = {
+            "transcripts": [{"transcript": "Hello world"}],
+            "items": [
+                {
+                    "id": 0,
+                    "type": "pronunciation",
+                    "alternatives": [{"confidence": "1.0", "content": "world"}],
+                    "start_time": "0.5",
+                    "end_time": "1.0",
+                }
+            ],
+            "audio_segments": [
+                {
+                    "id": 0,
+                    "transcript": "world",
+                    "start_time": "0.5",
+                    "end_time": "1.0",
+                    "speaker_label": "spk_0",
+                    "items": [0],
+                }
+            ],
+        }
+
+        _, part = next(
+            amazon_transcribe._job_segments(  # noqa: SLF001
+                transcript_data,  # type: ignore[arg-type]
+                "prefix Hello world",
+            )
+        )
+
+        assert part.lead == "prefix Hello "
+
+
+class TestDiarizationSpacingFallbacks:
+    """The spacing helpers' fallback branches.
+
+    Taken when the transcript does not restate an item's or a segment's
+    content verbatim.
+
+    Ref: stdapi/models/audio/amazon_transcribe.py:_spaced_items
+         stdapi/models/audio/amazon_transcribe.py:_segment_span
+         stdapi/models/audio/amazon_transcribe.py:_job_segments
+    """
+
+    def test_spaced_items_falls_back_to_a_synthetic_space(self) -> None:
+        """A word the transcript does not restate gets a synthetic separator instead.
+
+        The opening word gets none (there is nothing before it), a later word
+        gets one, and punctuation never does.
+        """
+        items = [
+            Item(
+                content="Hey", type=ItemType.PRONUNCIATION, start_time=0.0, end_time=0.3
+            ),
+            Item(
+                content="you", type=ItemType.PRONUNCIATION, start_time=0.3, end_time=0.6
+            ),
+            Item(content="!", type=ItemType.PUNCTUATION, start_time=0.6, end_time=0.6),
+        ]
+
+        result = list(
+            amazon_transcribe._spaced_items(  # noqa: SLF001
+                items, "nothing matches here"
+            )
+        )
+
+        assert [text for _, text in result] == ["Hey", " you", "!"]
+
+    def test_segment_span_skips_a_content_the_transcript_does_not_restate(self) -> None:
+        """A single unmatched item does not stop the surrounding ones from being found."""
+        transcript = "Hello there"
+        items: list[dict[str, Any]] = [
+            {"alternatives": [{"content": "Hello"}]},
+            {"alternatives": [{"content": "missing"}]},
+            {"alternatives": [{"content": "there"}]},
+        ]
+        segment: dict[str, Any] = {
+            "transcript": "Hello missing there",
+            "items": [0, 1, 2],
+        }
+
+        start, end = amazon_transcribe._segment_span(  # noqa: SLF001
+            transcript,
+            0,
+            segment,  # type: ignore[arg-type]
+            items,  # type: ignore[arg-type]
+        )
+
+        assert (start, end) == (0, len(transcript))
+
+    def test_job_segments_falls_back_to_the_segments_own_transcript(self) -> None:
+        """A segment none of whose items can be located keeps its own reported text."""
+        transcript_data: dict[str, Any] = {
+            "transcripts": [{"transcript": "Something else entirely"}],
+            "items": [
+                {
+                    "id": 0,
+                    "type": "pronunciation",
+                    "alternatives": [{"confidence": "1.0", "content": "unmatched"}],
+                    "start_time": "0.0",
+                    "end_time": "1.0",
+                }
+            ],
+            "audio_segments": [
+                {
+                    "id": 0,
+                    "transcript": "unmatched word",
+                    "start_time": "0.0",
+                    "end_time": "1.0",
+                    "speaker_label": "spk_0",
+                    "items": [0],
+                }
+            ],
+        }
+
+        _, part = next(
+            amazon_transcribe._job_segments(  # noqa: SLF001
+                transcript_data  # type: ignore[arg-type]
+            )
+        )
+
+        assert part.text == "unmatched word"
+        assert part.lead is None
 
 
 class TestLiveTranscriptionAliases:
