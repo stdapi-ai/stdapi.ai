@@ -10,7 +10,7 @@ from asyncio import run
 from base64 import b64decode, b64encode
 from os import getenv
 from struct import unpack
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from unittest.mock import AsyncMock
 
 import httpx
@@ -1817,6 +1817,47 @@ class TestCohereEmbedIntegration:
         assert image.height > 0
         assert image.format
         assert "png" in image.format.lower(), "the submitted data URI is a PNG"
+
+    @pytest.mark.parametrize("input_type", ["image", "search_document"])
+    def test_several_images_embed_one_vector_each(
+        self,
+        cohere_client: cohere.ClientV2,
+        cohere_embed_v4_model: str,
+        sample_image_file_base64: str,
+        input_type: Literal["image", "search_document"],
+    ) -> None:
+        """Embed v4 answers an image batch with one vector per image, on either input type.
+
+        `image` is the Embed v3-era value for an image batch and
+        `search_document` the one Embed v4 documents; the endpoint forwards
+        whichever is sent, and neither folds the batch into a single vector.
+        `billed_units.images` echoes the submitted image count
+        (`request.count_images()`), not what usage recording billed, so the
+        assertion below checks the response shape rather than attribution.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v4.html
+             https://docs.cohere.com/reference/embed
+        """
+        response = cohere_client.embed(
+            model=cohere_embed_v4_model,
+            input_type=input_type,
+            images=[sample_image_file_base64] * 2,
+            embedding_types=["float"],
+        )
+        assert response.embeddings.float_ is not None
+        assert len(response.embeddings.float_) == 2, "one vector per submitted image"
+        for vector in response.embeddings.float_:
+            assert len(vector) in _COHERE_V4_DIMENSIONS
+        assert response.meta is not None
+        assert response.meta.billed_units is not None
+        assert response.meta.billed_units.images == 2, (
+            "each submitted image is billed separately"
+        )
+        assert response.images is not None
+        assert len(response.images) == 2, "one metadata entry per embedded image"
+        for image in response.images:
+            assert image.width > 0
+            assert image.height > 0
 
     def test_embed_fused_text_and_image(
         self,
