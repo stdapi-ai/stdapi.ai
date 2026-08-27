@@ -1925,6 +1925,49 @@ async def marketplace_endpoint_arn() -> str:
     )
 
 
+class SageMakerSandboxEndpoint(NamedTuple):
+    """The Amazon SageMaker AI endpoint the end-to-end lane serves from.
+
+    Names, never ARNs: this repository is public and an ARN carries the account
+    ID, while the transport builds its URL from the name and the Region anyway.
+    """
+
+    endpoint: str
+    region: str
+    inference_component: str
+
+
+@pytest.fixture(scope="session")
+def sagemaker_sandbox_endpoint() -> SageMakerSandboxEndpoint:
+    """The SageMaker AI endpoint to serve a model from, or skip.
+
+    The endpoint is defined in ``terraform-sandbox`` in its scale-to-zero shape,
+    so it costs nothing while idle, and it is named by ``TEST_SAGEMAKER_ENDPOINT``,
+    ``TEST_SAGEMAKER_REGION`` and ``TEST_SAGEMAKER_INFERENCE_COMPONENT`` in
+    ``tests/.env`` -- never a committed file. A checkout without one skips
+    rather than fails: no test can bring a GPU endpoint up for itself.
+
+    Returns:
+        The endpoint, its Region and its inference component.
+    """
+    endpoint = getenv("TEST_SAGEMAKER_ENDPOINT", "")
+    if not endpoint:
+        pytest.skip(
+            "Serving a SageMaker AI endpoint needs a deployed endpoint "
+            "(tests/.env sets no TEST_SAGEMAKER_ENDPOINT)"
+        )
+    region = getenv("TEST_SAGEMAKER_REGION", "")
+    if not region:
+        pytest.skip(
+            "tests/.env sets TEST_SAGEMAKER_ENDPOINT but no TEST_SAGEMAKER_REGION"
+        )
+    return SageMakerSandboxEndpoint(
+        endpoint=endpoint,
+        region=region,
+        inference_component=getenv("TEST_SAGEMAKER_INFERENCE_COMPONENT", ""),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Anthropic API fixtures (shared across Anthropic test modules)
 # ---------------------------------------------------------------------------

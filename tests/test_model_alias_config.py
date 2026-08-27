@@ -35,8 +35,10 @@ from stdapi.config import SETTINGS, ModelAliasConfig, _Settings
 from stdapi.exceptions import ServerError
 from stdapi.models import (
     MANTLE_SERVICE,
+    MARKETPLACE_SERVICE,
     MODEL_ALIAS_OVERLAYS,
     MODEL_ALIASES,
+    SAGEMAKER_SERVICE,
     ModelDetails,
 )
 from stdapi.models.chat._adapters import _openai_common
@@ -915,13 +917,14 @@ class TestMantleServedModels:
     """What an alias can and cannot configure on a Bedrock Mantle-served model.
 
     Mantle requests go to an OpenAI-compatible endpoint rather than the Bedrock
-    Converse/InvokeModel APIs. Amazon Bedrock Guardrails cannot be attached to
-    them, and that is fatal at startup. The service tier is not applied there
-    either -- the request's own value is forwarded as sent -- but that is silent,
-    the way an alias' ``metadata`` and ``extra_params`` already are.
+    Converse/InvokeModel APIs, as do the SageMaker AI endpoints served by the
+    same chat model. Amazon Bedrock Guardrails cannot be attached to either, and
+    that is fatal at startup. The service tier is not applied there either --
+    the request's own value is forwarded as sent -- but that is silent, the way
+    an alias' ``metadata`` and ``extra_params`` already are.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
-         stdapi/models/__init__.py:_mantle_guardrail_aliases
+         stdapi/models/__init__.py:_unappliable_guardrail_aliases
          stdapi/models/chat/_mantle/_convert.py:chat_completions_payload
     """
 
@@ -947,27 +950,15 @@ class TestMantleServedModels:
             details.service = service
         return {_TARGET: details}
 
-    def test_a_guardrail_alias_on_a_mantle_model_is_detected(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("service", [MANTLE_SERVICE, SAGEMAKER_SERVICE])
+    def test_a_guardrail_alias_on_an_unguarded_transport_is_detected(
+        self, monkeypatch: pytest.MonkeyPatch, service: str
     ) -> None:
-        """An alias guardrail pointing at a Mantle-served model is reported."""
-        monkeypatch.setattr(
-            SETTINGS,
-            "model_aliases",
-            {
-                _ALIAS: ModelAliasConfig(
-                    model=_TARGET, guardrail_identifier="gr-1", guardrail_version="1"
-                )
-            },
-        )
-        assert models._mantle_guardrail_aliases(  # noqa: SLF001
-            self._catalog(MANTLE_SERVICE)
-        ) == [_ALIAS]
+        """An alias guardrail pointing at either OpenAI-compatible transport is reported.
 
-    def test_a_guardrail_alias_on_a_runtime_model_is_fine(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The same alias on a bedrock-runtime model raises nothing."""
+        A SageMaker AI endpoint is served by the Mantle chat model with its
+        transport replaced, and its container carries no guardrail either.
+        """
         monkeypatch.setattr(
             SETTINGS,
             "model_aliases",
@@ -977,7 +968,29 @@ class TestMantleServedModels:
                 )
             },
         )
-        assert models._mantle_guardrail_aliases(self._catalog(None)) == []  # noqa: SLF001
+        assert models._unappliable_guardrail_aliases(self._catalog(service)) == [  # noqa: SLF001
+            _ALIAS
+        ]
+
+    @pytest.mark.parametrize("service", [None, MARKETPLACE_SERVICE])
+    def test_a_guardrail_alias_on_a_converse_model_is_fine(
+        self, monkeypatch: pytest.MonkeyPatch, service: str | None
+    ) -> None:
+        """The same alias raises nothing where Converse carries the guardrail.
+
+        A Marketplace model endpoint is invoked through Converse like any
+        foundation model, so a guardrail applies to it.
+        """
+        monkeypatch.setattr(
+            SETTINGS,
+            "model_aliases",
+            {
+                _ALIAS: ModelAliasConfig(
+                    model=_TARGET, guardrail_identifier="gr-1", guardrail_version="1"
+                )
+            },
+        )
+        assert models._unappliable_guardrail_aliases(self._catalog(service)) == []  # noqa: SLF001
 
     def test_a_tier_only_alias_on_a_mantle_model_is_fine(
         self, monkeypatch: pytest.MonkeyPatch
@@ -989,7 +1002,7 @@ class TestMantleServedModels:
             {_ALIAS: ModelAliasConfig(model=_TARGET, service_tier="flex")},
         )
         assert (
-            models._mantle_guardrail_aliases(  # noqa: SLF001
+            models._unappliable_guardrail_aliases(  # noqa: SLF001
                 self._catalog(MANTLE_SERVICE)
             )
             == []
@@ -998,7 +1011,7 @@ class TestMantleServedModels:
     def test_startup_fails_naming_the_alias(self) -> None:
         """Startup stops rather than serve unfiltered content under a guardrail name."""
         with pytest.raises(ServerError, match=_ALIAS) as error:
-            models._reject_mantle_guardrail_aliases([_ALIAS], _start_event())  # noqa: SLF001
+            models._reject_unappliable_guardrail_aliases([_ALIAS], _start_event())  # noqa: SLF001
         assert "Bedrock Mantle" in str(error.value)
 
     def test_a_later_refresh_only_warns(self, request_log: dict[str, Any]) -> None:
@@ -1007,7 +1020,7 @@ class TestMantleServedModels:
         The mismatch is still reported: the request log is raised to a warning
         naming the offending alias.
         """
-        models._reject_mantle_guardrail_aliases([_ALIAS], None)  # noqa: SLF001
+        models._reject_unappliable_guardrail_aliases([_ALIAS], None)  # noqa: SLF001
         assert request_log["level"] == "warning"
         assert any(_ALIAS in str(detail) for detail in request_log["error_detail"])
 

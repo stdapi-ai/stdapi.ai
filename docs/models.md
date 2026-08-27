@@ -18,8 +18,9 @@ All of them answer on **one endpoint under one API key**, through the
 
 This list is what a deployment serves out of the box. A deployment can also
 serve models of its own: any [Amazon Bedrock Marketplace model
-endpoint](features.md#bedrock-marketplace-endpoints) you have deployed in your
-account joins the same catalogue, on the same APIs.
+endpoint](features.md#bedrock-marketplace-endpoints) or [Amazon SageMaker AI
+endpoint](features.md#sagemaker-endpoints) you run in your account joins the
+same catalogue, on the same APIs.
 
 <link rel="stylesheet" href="../styles/models-table.min.css">
 <link rel="preload" href="catalog.json" as="fetch" crossorigin>

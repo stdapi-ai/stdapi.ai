@@ -270,6 +270,61 @@ class ModelAliasConfig(BaseModel):
         return self
 
 
+class SageMakerEndpointConfig(BaseModel):
+    """An Amazon SageMaker AI endpoint published as a chat model.
+
+    An endpoint is named rather than discovered: only the operator knows which
+    of their endpoints runs a container serving the OpenAI Chat Completions
+    API, and what the model behind it should be called.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    endpoint: str = Field(
+        description=(
+            "Name of the Amazon SageMaker AI endpoint serving this model. The "
+            "name, never the ARN: the ARN carries your AWS account ID.\n\n"
+            "Example: 'my-endpoint'"
+        )
+    )
+    region: RegionName = Field(
+        description=(
+            "AWS Region the endpoint lives in. An endpoint answers only in its "
+            "own Region and has no cross-Region form.\n\n"
+            "Example: 'us-east-1'"
+        )
+    )
+    inference_component: str = Field(
+        default="",
+        description=(
+            "Name of the inference component hosting the model on the "
+            "endpoint, for an endpoint that hosts components. Required for "
+            "scale-to-zero endpoints, which are always component-hosted.\n\n"
+            "Example: 'my-inference-component'"
+        ),
+    )
+    name: str = Field(
+        default="",
+        description=(
+            "Display name published for this model. Defaults to the model ID.\n\n"
+            "Example: 'Qwen3 1.7B'"
+        ),
+    )
+    provider: str = Field(
+        default="Amazon SageMaker AI",
+        description=("Provider published for this model.\n\nExample: 'Qwen'"),
+    )
+    input_modalities: list[str] = Field(
+        default=["TEXT"],
+        description=(
+            "Input modalities published for this model, advertised so a client "
+            "can discover them. 'IMAGE' additionally requires a container and a "
+            "model that accept image content parts.\n\n"
+            "Example: ['TEXT', 'IMAGE']"
+        ),
+    )
+
+
 def _model_alias_kind(value: object) -> str:
     """Select the alias form a configured value uses.
 
@@ -879,6 +934,61 @@ class _Settings(BaseSettings):
             "This is a cost-bearing setting: a caller who can name any endpoint ARN can direct "
             "traffic at instances the account is already paying for.\n\n"
             "Example ARN: arn:aws:sagemaker:us-east-1:123456789012:endpoint/my-endpoint"
+        ),
+    )
+
+    aws_sagemaker_endpoints: dict[str, SageMakerEndpointConfig] = Field(
+        default={},
+        description=(
+            "Amazon SageMaker AI endpoints published as chat models, keyed by the model ID "
+            "clients name them with. Each entry gives the endpoint name, its AWS Region and, "
+            "for a component-hosted endpoint, the inference component name.\n\n"
+            "The endpoint's container must serve the OpenAI Chat Completions API, which the "
+            "SageMaker AI vLLM and SGLang containers do. The server only invokes the endpoints "
+            "you name; it never creates, updates, scales or deletes one.\n\n"
+            "An endpoint runs on dedicated instances and is billed by the instance-hour rather "
+            "than by the token, so the tokens it serves are reported without a cost. See "
+            "[OpenAI-compatible endpoints]"
+            "(https://docs.aws.amazon.com/sagemaker/latest/dg/realtime-endpoints-openai-compatible.html).\n\n"
+            "Required IAM permissions:\n"
+            "- sagemaker:CallWithBearerToken (on '*': it takes no resource)\n"
+            "- sagemaker:InvokeEndpoint (on the endpoint ARNs)\n\n"
+            "Example: {\n"
+            '  "my-model": {\n'
+            '    "endpoint": "my-endpoint",\n'
+            '    "region": "us-east-1",\n'
+            '    "inference_component": "my-inference-component"\n'
+            "  }\n"
+            "}"
+        ),
+    )
+
+    aws_sagemaker_warmup_timeout: int = Field(
+        default=600,
+        ge=0,
+        description=(
+            "Seconds a request may wait for an Amazon SageMaker AI endpoint that has scaled to "
+            "zero to provision capacity again. The request that finds the endpoint cold is what "
+            "makes SageMaker AI scale it back up, so the server holds the connection and retries "
+            "instead of failing: the caller sees a slow first request rather than an error, and "
+            "concurrent callers share one wait.\n\n"
+            "The default of 600 seconds covers a scale-from-zero comfortably, including the few "
+            "minutes the CloudWatch alarm takes to trigger the scaling policy. It cannot exceed "
+            "ai_response_timeout.\n\n"
+            "Set to 0 to disable the wait and fail immediately, for a deployment that would "
+            "rather answer than hold a connection.\n\n"
+            "Example: 600 (default), 0 (fail immediately)"
+        ),
+    )
+
+    aws_sagemaker_endpoint_url: str | None = Field(
+        default=None,
+        description=(
+            "Override for the Amazon SageMaker AI runtime endpoint URL, with '{region}' "
+            "substituted per Region. Only needed to reach the runtime through a VPC endpoint or "
+            "an inspection proxy; the correct host for every AWS partition is resolved "
+            "automatically otherwise.\n\n"
+            "Example: 'https://vpce-0123-abcd.runtime.sagemaker.{region}.vpce.amazonaws.com'"
         ),
     )
 
@@ -3021,6 +3131,43 @@ class _Settings(BaseSettings):
             raise ValueError(msg) from error
         return value
 
+    @field_validator("aws_sagemaker_endpoint_url")
+    @classmethod
+    def _validate_sagemaker_endpoint_url(cls, value: str | None) -> str | None:
+        """Validate the Amazon SageMaker AI runtime endpoint URL template.
+
+        A bad "{region}" placeholder would otherwise only surface as a
+        per-request formatting error, and a non-HTTPS scheme would silently
+        disable transport encryption toward the endpoint.
+
+        Args:
+            value: Endpoint URL template, or None to resolve the default.
+
+        Returns:
+            The validated template.
+
+        Raises:
+            ValueError: If the value does not use "https://" or its
+                "{region}" placeholder is malformed.
+        """
+        if value is None:
+            return value
+        if not value.startswith("https://"):
+            msg = (
+                f'Invalid aws_sagemaker_endpoint_url "{value}": must use the '
+                '"https://" scheme.'
+            )
+            raise ValueError(msg)
+        try:
+            value.format(region="us-east-1")
+        except (KeyError, IndexError, ValueError) as error:
+            msg = (
+                f'Invalid aws_sagemaker_endpoint_url "{value}": malformed '
+                '"{region}" placeholder.'
+            )
+            raise ValueError(msg) from error
+        return value
+
     @field_validator("oauth_resource_identifier")
     @classmethod
     def _validate_oauth_resource_identifier(cls, value: str | None) -> str | None:
@@ -3276,6 +3423,25 @@ class _Settings(BaseSettings):
                 f"aws_bedrock_marketplace_endpoint_regions names {unserved}, which "
                 "aws_bedrock_regions does not: a model endpoint is only reachable in "
                 "its own region. Add them to aws_bedrock_regions, or remove them."
+            )
+            raise ValueError(msg)
+
+    def _validate_sagemaker_warmup_timeout(self) -> None:
+        """Ensure a scale-from-zero wait fits inside the response budget.
+
+        The wait happens before the model starts answering, so a budget longer
+        than ``ai_response_timeout`` promises a caller more time than the
+        deployment is allowed to hold the connection for.
+
+        Raises:
+            ValueError: If the warm-up budget exceeds ai_response_timeout.
+        """
+        if self.aws_sagemaker_warmup_timeout > self.ai_response_timeout:
+            msg = (
+                f"aws_sagemaker_warmup_timeout ({self.aws_sagemaker_warmup_timeout}s) "
+                f"exceeds ai_response_timeout ({self.ai_response_timeout}s): a "
+                "request cannot wait longer for a model than it is allowed to take. "
+                "Lower the warm-up budget, or raise the response timeout."
             )
             raise ValueError(msg)
 
@@ -3546,6 +3712,8 @@ class _Settings(BaseSettings):
             raise ValueError(msg)
 
         self._validate_marketplace_endpoint_regions()
+
+        self._validate_sagemaker_warmup_timeout()
 
         # An alias guardrail is operator configuration: no override gate, no Mantle.
         alias_guardrail = any(

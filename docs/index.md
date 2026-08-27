@@ -205,7 +205,7 @@ This exposes the gateway's own AI and media APIs over MCP; it is not an aggregat
 
 ## 100+ models — including OpenAI GPT and Anthropic Claude.
 
-Bedrock, Bedrock Mantle, Polly, Transcribe and Comprehend all surface as models in one catalog, detected automatically at startup. On a shared endpoint they interchange by name — swapping a Polly voice for a Bedrock speech model is a one-word change, and nothing needs writing or maintaining as AWS adds and retires models. All four text APIs work with every discovered model, and retired model IDs can redirect to their supported successor instead of failing.
+Bedrock, Bedrock Mantle, Polly, Transcribe and Comprehend all surface as models in one catalog, detected automatically at startup, along with the Bedrock Marketplace models you have deployed. The Amazon SageMaker AI endpoints you run join the same catalog under the model names you pick. On a shared endpoint they interchange by name — swapping a Polly voice for a Bedrock speech model is a one-word change, and nothing needs writing or maintaining as AWS adds and retires models. All four text APIs work with every discovered model, and retired model IDs can redirect to their supported successor instead of failing.
 
 <div class="panel-split" markdown>
 <div class="panel-visual">
@@ -238,6 +238,7 @@ Bedrock, Bedrock Mantle, Polly, Transcribe and Comprehend all surface as models 
 - <code>0</code> configuration — one catalog spanning Bedrock, Mantle, Polly, Transcribe and Comprehend
 - <code>100+</code> models across 20+ providers in a typical multi-region catalog
 - <code>4</code> text APIs on every model — passthrough or converted automatically
+- <code>own</code> models in the same catalog — Amazon SageMaker AI endpoints you run, and Bedrock Marketplace models you have deployed
 
 [:octicons-arrow-right-24: Browse every model, price and score](models.md)
 
@@ -271,6 +272,7 @@ Built for AWS, not around it — Bedrock-native capabilities are exposed through
 </div>
 <div class="model-logos">
 <img src="styles/logo_amazon_bedrock.svg" alt="Amazon Bedrock" title="Amazon Bedrock" width="80" height="80" decoding="async" loading="lazy" />
+<img src="styles/logo_amazon_sagemaker.svg" alt="Amazon SageMaker AI" title="Amazon SageMaker AI" width="80" height="80" decoding="async" loading="lazy" />
 <img src="styles/logo_amazon_polly.svg" alt="Amazon Polly" title="Amazon Polly" width="80" height="80" decoding="async" loading="lazy" />
 <img src="styles/logo_amazon_transcribe.svg" alt="Amazon Transcribe" title="Amazon Transcribe" width="80" height="80" decoding="async" loading="lazy" />
 <img src="styles/logo_amazon_translate.svg" alt="Amazon Translate" title="Amazon Translate" width="80" height="80" decoding="async" loading="lazy" />
@@ -282,7 +284,7 @@ Built for AWS, not around it — Bedrock-native capabilities are exposed through
 </div>
 <div class="panel-stats" markdown>
 
-- <code>5</code> AWS AI services unified — Bedrock, Polly, Transcribe, Translate, Comprehend
+- <code>6</code> AWS AI services unified — Bedrock, SageMaker AI, Polly, Transcribe, Translate, Comprehend
 - <code>s3://</code> direct S3 inputs in chat, images, and embeddings — generated media lands back in your bucket
 - <code>IAM</code> least-privilege reference policies documented per feature
 
@@ -393,6 +395,10 @@ Prefer hands-off? A [managed deployment service](https://aws.amazon.com/marketpl
     <div class="logo-item" title="Qwen">
       <img src="styles/logo_qwen.svg" alt="Qwen logo" width="153" height="151" decoding="async" />
       <span>Qwen</span>
+    </div>
+    <div class="logo-item" title="Amazon SageMaker AI">
+      <img src="styles/logo_amazon_sagemaker.svg" alt="Amazon SageMaker AI logo" width="80" height="80" decoding="async" />
+      <span>Amazon SageMaker AI</span>
     </div>
     <div class="logo-item" title="OpenAI GPT">
       <img src="styles/logo_openai.svg" alt="OpenAI logo" width="503" height="499" decoding="async" />

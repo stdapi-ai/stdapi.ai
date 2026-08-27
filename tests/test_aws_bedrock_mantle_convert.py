@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
     from types_aiobotocore_bedrock.literals import RegionName
 
-    from stdapi.aws_bedrock_mantle import SseEvent
+    from stdapi.aws_http import SseEvent
 
 pytestmark = pytest.mark.local
 

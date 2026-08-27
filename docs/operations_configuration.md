@@ -232,6 +232,9 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_BEDROCK_MARKETPLACE_ENDPOINTS_ENABLED`](#bedrock-marketplace-endpoints-enabled)             | `false` | Publish Amazon Bedrock Marketplace model endpoints deployed in this account as chat models           |
 | [`AWS_BEDROCK_MARKETPLACE_ENDPOINT_REGIONS`](#bedrock-marketplace-endpoint-regions)                | All `AWS_BEDROCK_REGIONS` | Regions searched for Marketplace model endpoints; each must also be in `AWS_BEDROCK_REGIONS`  |
 | [`AWS_BEDROCK_ALLOW_MARKETPLACE_ENDPOINT_ARN`](#bedrock-allow-marketplace-endpoint-arn)           | `false` | Allow users to pass a Marketplace model endpoint ARN directly as a model ID                         |
+| [`AWS_SAGEMAKER_ENDPOINTS`](#aws-sagemaker-endpoints)                                             | `{}`    | Amazon SageMaker AI endpoints published as chat models, keyed by model ID                           |
+| [`AWS_SAGEMAKER_WARMUP_TIMEOUT`](#aws-sagemaker-warmup-timeout)                                   | `600`   | Seconds a request waits for a SageMaker AI endpoint scaled to zero to come back up (`0` disables)    |
+| [`AWS_SAGEMAKER_ENDPOINT_URL`](#aws-sagemaker-endpoint-url)                                       | Resolved | Override for the SageMaker AI runtime endpoint URL (VPC endpoint or proxy)                          |
 | [`AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN`](#bedrock-allow-cross-region-profile-arn) | `false` | Allow users to pass cross-region inference profile ARNs directly as model IDs                       |
 | [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](#bedrock-allow-application-profile-arn)   | `false` | Allow users to pass application inference profile ARNs directly as model IDs                        |
 | [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](#bedrock-allow-prompt-router-arn)                         | `false` | Allow users to pass prompt router ARNs directly as model IDs                                        |
@@ -1798,6 +1801,104 @@ export AWS_BEDROCK_MARKETPLACE_ENDPOINT_REGIONS=eu-west-1,us-east-1
 
 # Enable Marketplace model endpoint ARN support
 export AWS_BEDROCK_ALLOW_MARKETPLACE_ENDPOINT_ARN=true
+```
+
+#### `AWS_SAGEMAKER_ENDPOINTS` { #aws-sagemaker-endpoints }
+
+:octicons-package-24: **Purpose**
+:   Publish Amazon SageMaker AI endpoints you run as chat models
+
+:octicons-code-24: **Format**
+:   JSON object, mapping the model ID clients name to that endpoint's declaration
+
+:octicons-gear-24: **Default**
+:   Empty — no SageMaker AI endpoint is served
+
+:octicons-workflow-24: **Behavior**
+:   Each entry publishes one endpoint in the model list and serves it on the chat completions, responses and messages APIs. The server only invokes the endpoints you name: it never creates, updates, scales or deletes one. Fields per entry:
+
+    | Field | Required | Meaning |
+    |---|---|---|
+    | `endpoint` | yes | Endpoint name — the name, never the ARN |
+    | `region` | yes | AWS Region the endpoint lives in |
+    | `inference_component` | for component-hosted endpoints | Inference component name; required for a scale-to-zero endpoint, which is always component-hosted |
+    | `name` | no | Display name in the model list (defaults to the model ID) |
+    | `provider` | no | Provider in the model list (defaults to `Amazon SageMaker AI`) |
+    | `input_modalities` | no | Input modalities to advertise, `["TEXT"]` by default; add `IMAGE` only when the model and its container accept image content parts |
+
+:octicons-lock-24: **IAM Permissions Required**
+:   `sagemaker:CallWithBearerToken`, `sagemaker:InvokeEndpoint` — see [SageMaker AI Endpoints IAM](operations_iam_permissions.md#sagemaker-endpoints-iam)
+
+```bash
+# Publish one endpoint as the model ID "my-qwen3"
+export AWS_SAGEMAKER_ENDPOINTS='{
+  "my-qwen3": {
+    "endpoint": "my-endpoint",
+    "region": "us-east-1",
+    "inference_component": "my-inference-component",
+    "name": "Qwen3 1.7B",
+    "provider": "Qwen"
+  }
+}'
+```
+
+!!! warning "Paid, Hourly-Billed Infrastructure"
+    A SageMaker AI endpoint is billed by the instance-hour for as long as it has instances running, whether or not it is called. Usage is reported with token counts and **no cost**, because AWS publishes no per-token rate for this path. See [SageMaker AI endpoint cost](operations_cost_management.md#sagemaker-endpoints-cost).
+
+!!! info "The Container Must Serve the OpenAI Chat Completions API"
+    Only a container that serves `/openai/v1/chat/completions` can answer here, which the SageMaker AI [vLLM and SGLang containers](https://docs.aws.amazon.com/sagemaker/latest/dg/realtime-endpoints-openai-compatible.html) do. What the container is configured for is what the model can do: tool calling needs a tool-call parser, reasoning content needs a reasoning parser. Token counting ([`/v1/responses/input_tokens`](api_openai_responses.md#input-token-counting) and `/anthropic/v1/messages/count_tokens`) is not available for these models and answers `400`; neither route is listed for them in [`search_models`](api_search_models.md).
+
+!!! info "A Declared Model ID the Catalogue Already Publishes Is Ignored"
+    An entry whose model ID matches a model already in the catalogue — a Bedrock foundation model, a Marketplace or Mantle model alike — is skipped, and the reason is reported in the startup log. Replacing a serverless model — available in every Region you serve, free at rest — with one endpoint in one Region would otherwise be a silent downgrade. Give the endpoint a model ID of its own.
+
+!!! danger "Guardrails Do Not Apply to an Endpoint"
+    An inference container serves the OpenAI Chat Completions API and has no `guardrailConfig` to carry, so an [Amazon Bedrock Guardrail](#aws-bedrock-guardrail-identifier) cannot filter what one of these models answers. Rather than serve such a request unfiltered, the gateway refuses it with a `400`: a request reaching one of these models while a guardrail is configured — deployment-wide, [per request](#per-request-guardrail-configuration), or from a [model alias](#model-aliases-configuration) — is answered with an error, never with an unguarded `200`. An alias carrying a guardrail and naming one of these models is decidable ahead of time and **stops the server at startup**; a deployment-wide guardrail warns instead, naming how many models it cannot reach, since these endpoints have no classic Bedrock home to fall back to.
+
+!!! info "An Endpoint Invocation Runs Under the Server's Own Role"
+    The endpoint is called with a bearer token presigned from the server's credentials, so [per-user cost attribution](#aws-bedrock-user-role-arn) cannot apply here: an invocation never runs under the per-end-user role, and the `aws:PrincipalTag` conditions written on that role are never evaluated. [`AWS_BEDROCK_USER_ROLE_REQUIRE_IDENTITY`](#aws-bedrock-user-role-require-identity) still holds — a request reaching one of these models while identifying no end user is answered `400`, not served unattributed. What the invocation costs is an instance-hour on an endpoint you own, and it is billed to your account either way.
+
+#### `AWS_SAGEMAKER_WARMUP_TIMEOUT` { #aws-sagemaker-warmup-timeout }
+
+:octicons-package-24: **Purpose**
+:   How long a request may wait for a SageMaker AI endpoint that has scaled to zero to provision capacity again
+
+:octicons-database-24: **Type**
+:   Integer (seconds)
+
+:octicons-gear-24: **Default**
+:   `600`
+
+:octicons-workflow-24: **Behavior**
+:   An endpoint [scaled to zero](https://docs.aws.amazon.com/sagemaker/latest/dg/endpoint-auto-scaling-zero-instances.html) has no capacity to answer with, and the request that finds it cold is what makes AWS provision an instance again. Rather than surfacing that as an error, the server holds the connection and retries until the endpoint answers or this budget runs out; concurrent callers to the same endpoint share one wait. When the budget runs out the caller gets a `503` telling them to retry, and the real cause is logged for you. Set to `0` to disable the wait and answer that same `503` immediately — a retriable status, because a cold endpoint is a transient condition. It cannot exceed [`AI_RESPONSE_TIMEOUT`](#ai-response-timeout), or the server refuses to start
+
+```bash
+# Wait up to 10 minutes for a cold endpoint (default)
+# No environment variable needed
+
+# Fail immediately instead of waiting
+export AWS_SAGEMAKER_WARMUP_TIMEOUT=0
+```
+
+!!! tip "The Wait Happens Before Anything Is Sent Back"
+    Because the retry finishes before the model's first byte, a streaming request pays a longer time to first byte and nothing else: no partial stream, and a real HTTP status if the endpoint never comes up. Make sure any load balancer or proxy in front of the deployment tolerates that much silence — the [stdapi.ai Terraform module](https://registry.terraform.io/modules/stdapi-ai/stdapi-ai/aws/latest) defaults its idle timeout to an hour.
+
+#### `AWS_SAGEMAKER_ENDPOINT_URL` { #aws-sagemaker-endpoint-url }
+
+:octicons-package-24: **Purpose**
+:   Override the Amazon SageMaker AI runtime endpoint URL
+
+:octicons-code-24: **Format**
+:   HTTPS URL template, with `{region}` substituted per Region
+
+:octicons-gear-24: **Default**
+:   Resolved automatically, per AWS partition
+
+:octicons-workflow-24: **Behavior**
+:   Only needed to reach the runtime through a VPC endpoint or an inspection proxy. Must use `https://`, and the `{region}` placeholder must be well formed, or the server refuses to start
+
+```bash
+# Reach SageMaker AI through an interface VPC endpoint
+export AWS_SAGEMAKER_ENDPOINT_URL='https://vpce-0123-abcd.runtime.sagemaker.{region}.vpce.amazonaws.com'
 ```
 
 !!! danger "Cost-Bearing Setting"
@@ -4422,8 +4523,10 @@ export AWS_BEDROCK_USER_ROLE_TAG_KEY=end-user
 export AWS_BEDROCK_USER_ROLE_REQUIRE_IDENTITY=true
 ```
 
-!!! warning "Bedrock Mantle Cannot Assume the Per-User Role"
-    A [Bedrock Mantle](#bedrock-mantle-enabled) request is signed with the server's own credentials, so a model served there never runs under the per-end-user role and the `aws:PrincipalTag` conditions written on that role are never evaluated. The `400` still holds — a Mantle request identifying no end user is refused the same way — but the access policy does not, so routing a dual-homed model there with a non-empty [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](#bedrock-mantle-preferred-models), which is the default, **stops the server at startup**. Clear that setting to keep both. Mantle-only models, which have no classic endpoint to fall back to, remain served under the server's own role.
+!!! warning "Two Backends Cannot Assume the Per-User Role"
+    A [Bedrock Mantle](#bedrock-mantle-enabled) request and an [Amazon SageMaker AI endpoint](#aws-sagemaker-endpoints) invocation are signed with the server's own credentials, so a model served there never runs under the per-end-user role and the `aws:PrincipalTag` conditions written on that role are never evaluated. The `400` still holds on both — a request identifying no end user is refused the same way, whichever backend serves the model — but the access policy does not.
+
+    For Mantle that is decidable ahead of time, so routing a dual-homed model there with a non-empty [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](#bedrock-mantle-preferred-models), which is the default, **stops the server at startup**; clear that setting to keep both. Mantle-only models and SageMaker AI endpoints have no classic endpoint to fall back to — nothing is refused at startup for them, and an identified request is served under the server's own role.
 
 ---
 
