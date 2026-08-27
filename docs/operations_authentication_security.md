@@ -374,7 +374,7 @@ When no authentication method is configured, stdapi.ai will:
 stdapi.ai includes built-in security mechanisms that are active regardless of the authentication method chosen.
 
 !!! abstract "Hardened Container Image"
-    The container images provided via the AWS Marketplace are security-hardened with a minimal base containing no unnecessary system tools or packages. The Terraform module further enforces a **read-only root filesystem** and **drops all Linux capabilities** from the ECS task definition, reducing the attack surface to the minimum required for operation.
+    The AWS Marketplace image is built on a security-hardened minimal base: **no shell**, **no package manager**, no unnecessary system tools, and a distribution rebuilt continuously to keep its known-vulnerability count at or near zero. The community image is built on a standard Debian base — the same application, the same non-root user, a larger base with the system tools a general-purpose distribution ships. Both run as an unprivileged user, and the Terraform module further enforces a **read-only root filesystem** and **drops all Linux capabilities** from the ECS task definition, reducing the attack surface to the minimum required for operation.
 
     [:octicons-arrow-right-24: Subscribe on AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)
 
@@ -386,7 +386,7 @@ stdapi.ai's distribution model eliminates this attack surface entirely:
 
 - **Container-only distribution** — stdapi.ai is never distributed as a pip package or PyPI dependency. There is no `pip install stdapi.ai`, no transitive dependency chain to compromise, and no package registry to hijack. The only distribution channels are the AWS Marketplace ECR registry (commercial) and GHCR (community image).
 - **AWS Marketplace security validation** — the commercial container image is scanned and validated by AWS before being made available in the Marketplace. The image you deploy is exactly the image AWS validated — nothing can be inserted between validation and deployment.
-- **Minimal base image** — the container has no shell, no package manager, and no unnecessary system tools. There is no mechanism to install additional packages or execute arbitrary commands at runtime.
+- **Minimal base image (commercial)** — the Marketplace container has no shell, no package manager, and no unnecessary system tools. There is no mechanism to install additional packages or execute arbitrary commands at runtime. The community image uses a standard Debian base and keeps those tools.
 - **Immutable deployment** — the container image is pulled once at task start and run as-is. There are no runtime `pip install`, `apt install`, or dependency resolution steps that could fetch and execute untrusted code.
 - **Read-only root filesystem** — when deployed via the Terraform module, the ECS task definition enforces a read-only root filesystem, preventing any modification to the container files at runtime.
 - **Temporary credentials with least privilege** — CI/CD pipelines that build and publish the container image use short-lived, role-scoped credentials with only the permissions required for that specific job. No long-lived access keys are used in the build or release process. Jobs that do not require AWS access — such as linters and security scanners — run on isolated runners with no AWS credentials at all, limiting the blast radius of any compromised job.

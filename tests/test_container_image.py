@@ -1,18 +1,20 @@
 """Tests running against the container images the project ships.
 
-The runtime images build a minimal ffmpeg (``--disable-everything`` plus
-component whitelists), so a codec the server needs can be missing from an image
-while every developer machine, with its full distribution ffmpeg, stays green.
-These tests close that gap: they build each configured image and then require
-its ffmpeg to actually perform every transcode the application can ask for, with
-the argument vector production uses. The expectations are derived from the
-application's own tables, never transcribed from a Dockerfile, so a format added
-to the server fails here until the image can serve it.
+An image may build a minimal ffmpeg (``--disable-everything`` plus component
+whitelists) to keep it small, so a codec the server needs can be missing from
+such an image while every developer machine, with its full distribution ffmpeg,
+stays green. These tests close that gap regardless of how an image's ffmpeg was
+built: they build each configured image and then require its ffmpeg to actually
+perform every transcode the application can ask for, with the argument vector
+production uses. The expectations are derived from the application's own
+tables, never transcribed from a Dockerfile, so a format added to the server
+fails here until the image can serve it.
 
-The same images also rewrite the application itself: ``botocore/data`` is pruned
-to the services the server uses, every ``.py`` is deleted once ``compileall -b``
-has produced the ``.pyc`` beside it, most ``.dist-info`` content is stripped, and
-the final stage is a filesystem the builder's own smoke checks never saw. The
+An image may also rewrite the application itself: ``botocore/data`` may be
+pruned to the services the server uses, every ``.py`` may be deleted once
+``compileall -b`` has produced the ``.pyc`` beside it, and most ``.dist-info``
+content may be stripped — in every case the final stage is a filesystem the
+builder's own smoke checks never saw. The
 runtime contracts that survive only if all of that was right — the application
 importing at all, every AWS client still constructing, libmagic and its database
 answering, the timezone database, the kept metadata, the licence texts the
@@ -43,7 +45,7 @@ import ast
 import asyncio
 import json
 import math
-import shlex
+import re
 import shutil
 import struct
 import subprocess
@@ -101,7 +103,7 @@ _HOST_ROOT_PREFIX = "/run/host"
 #: Engine commands run outside this process's mount namespace, which resolve host paths.
 _HOST_SIDE_ENGINE_MARKERS = ("flatpak-spawn", "--remote")
 
-#: Seconds allowed for one image build; the whole ffmpeg is compiled from source.
+#: Seconds allowed for one image build; one of them compiles the whole ffmpeg.
 _BUILD_TIMEOUT = 3600
 
 #: Seconds allowed for any short-lived engine command.
@@ -224,6 +226,21 @@ _IMPORT_PROGRAM = "import stdapi.main; print(len(stdapi.main.app.routes))"
 
 #: In-image program reporting the effective user id the image runs its command as.
 _EUID_PROGRAM = "import os; print(os.geteuid())"
+
+#: In-image program reporting whether the running uid can traverse the home directory.
+_HOME_TRAVERSAL_PROGRAM = """
+import os
+
+try:
+    os.listdir("/home/nonroot")
+except PermissionError as error:
+    print(f"denied: {error}")
+else:
+    print("ok")
+"""
+
+#: A uid:gid distinct from the image's own 65532, standing in for a host account.
+_FOREIGN_UID_GID = "1000:1000"
 
 #: In-image program constructing one client per service named after the region.
 _CLIENT_PROGRAM = """
@@ -361,15 +378,6 @@ from zoneinfo import ZoneInfo, available_timezones
 print(json.dumps({"key": ZoneInfo(sys.argv[1]).key, "available": len(available_timezones())}))
 """
 
-#: In-image program resolving each executable named on its command line against PATH.
-_WHICH_PROGRAM = """
-import json
-import sys
-from shutil import which
-
-print(json.dumps({name: which(name) or "" for name in sys.argv[1:]}))
-"""
-
 #: In-image program answering the probe's ``/health`` request and running the probe.
 _STUB_SERVER_PROGRAM = """
 import json
@@ -425,13 +433,15 @@ print("__REQUEST__" + json.dumps(record))
 #: In-image program checking every licence file each distribution's METADATA declares.
 _LICENSE_PROGRAM = """
 import json
-from importlib.util import find_spec
+import sys
 from pathlib import Path
 
-root = Path(next(iter(find_spec("stdapi").submodule_search_locations))).parent
+# Every directory the interpreter imports from: an image may install its
+# dependencies beside the application or into an environment of their own.
+roots = dict.fromkeys(Path(entry or ".").resolve() for entry in sys.path)
 declared = {}
 missing = []
-for info in sorted(root.glob("*.dist-info")):
+for info in sorted(info for root in roots for info in root.glob("*.dist-info")):
     metadata = info / "METADATA"
     if not metadata.is_file():
         missing.append(info.name + "/METADATA")
@@ -947,9 +957,9 @@ def _image_config(image: str) -> dict[str, object]:
 def _image_interpreter(image: str) -> str:
     """Return the Python command the image itself runs the server with.
 
-    The two images disagree: one declares only a command starting with the
-    interpreter, the other an entrypoint that is the interpreter, so the binary
-    is read from whichever the image sets instead of being assumed.
+    The binary is read from whichever of the two an image sets, rather than
+    assumed: an image may declare the interpreter as its entrypoint, or only a
+    command starting with it.
 
     Args:
         image: Container image tag.
@@ -1059,25 +1069,6 @@ def _history_healthcheck(image: str) -> tuple[str, ...]:
     return ()
 
 
-def _healthcheck_binaries(test: Sequence[str]) -> tuple[str, ...]:
-    """Return the executables the declared healthcheck vector needs.
-
-    Args:
-        test: The healthcheck ``Test`` vector, without its ``NONE`` form.
-
-    Returns:
-        Every binary the engine must find in the image to run the probe.
-    """
-    kind, *rest = test
-    if kind == "CMD-SHELL":
-        # The engine runs the string through a shell, which must exist too.
-        return (_HEALTHCHECK_SHELL, *shlex.split(rest[0])[:1]) if rest else ()
-    if kind == "CMD":
-        return tuple(rest[:1])
-    # The legacy form is the command itself, with no keyword in front.
-    return (kind,)
-
-
 def _healthcheck_argv(test: Sequence[str]) -> list[str]:
     """Return the declared healthcheck vector as the argument list to execute.
 
@@ -1145,8 +1136,8 @@ def _healthcheck_probe(image: str, trusted_hosts: Sequence[str]) -> dict[str, ob
             "--rm",
             "--network=none",
             *environment,
-            # Driven by the image's own interpreter: the runtime images ship
-            # Python, and the hardened one ships no shell at all.
+            # Driven by the image's own interpreter: every runtime image ships
+            # Python, and one of them ships no shell at all.
             "--entrypoint",
             probe[0],
             image,
@@ -1404,19 +1395,37 @@ def _wait_for_health(container: str, port: int) -> None:
 
 
 @pytest.fixture(scope="session", params=list(_DOCKERFILES), ids=list(_DOCKERFILES))
-def image(request: pytest.FixtureRequest) -> str:
-    """Build the image under test, or return the prebuilt tag configured for it.
+def image_label(request: pytest.FixtureRequest) -> str:
+    """Label of the image under test, as declared in ``STDAPI_CONTAINER_DOCKERFILES``.
 
-    Building compiles ffmpeg from source, so ``STDAPI_CONTAINER_IMAGE_<LABEL>``
-    short-circuits it with an already-built tag while iterating.
+    Carries the parametrisation the ``image`` fixture builds from, so a test
+    whose expectation legitimately differs between the two images can say which
+    one it is looking at.
 
     Args:
         request: Fixture request carrying the image label.
 
     Returns:
+        The label of the image to test.
+    """
+    return str(request.param)
+
+
+@pytest.fixture(scope="session")
+def image(image_label: str) -> str:
+    """Build the image under test, or return the prebuilt tag configured for it.
+
+    Building an image may compile ffmpeg from source, so
+    ``STDAPI_CONTAINER_IMAGE_<LABEL>`` short-circuits it with an already-built
+    tag while iterating.
+
+    Args:
+        image_label: Label of the image to build.
+
+    Returns:
         The image tag to test.
     """
-    label = str(request.param)
+    label = image_label
     prebuilt = environ.get(f"STDAPI_CONTAINER_IMAGE_{label.upper()}")
     if prebuilt:
         return prebuilt
@@ -1574,6 +1583,81 @@ class TestTranscodeFallbackContract:
         _assert_signature("flac", output)
 
 
+class TestUvBootstrap:
+    """The builder stage's own package installer must itself be verifiable.
+
+    ``uv`` enforces the lock file's hashes for every dependency it installs,
+    but that guarantee is only as strong as ``uv`` itself: an unpinned
+    ``pip install uv`` trusts whatever PyPI serves at build time, with no
+    version and no hash to check it against. Reading the Dockerfile source is
+    the right level for this property -- it is about how the build fetches
+    its own tooling, not about anything the built image runs.
+
+    Ref: Dockerfile
+    """
+
+    def test_uv_is_copied_from_a_digest_pinned_image(self) -> None:
+        """The community Dockerfile pins ``uv`` to a ``@sha256`` digest, not PyPI."""
+        dockerfile = _DOCKERFILES.get("community")
+        if dockerfile is None:
+            pytest.skip("no 'community' entry in STDAPI_CONTAINER_DOCKERFILES")
+        text = dockerfile.read_text()
+
+        assert "pip install" not in text.replace("uv pip install", ""), (
+            "the Dockerfile still installs a tool with plain pip, bypassing "
+            "the hash verification uv itself enforces for everything else"
+        )
+        assert re.search(
+            r"COPY --from=ghcr\.io/astral-sh/uv:[^\s@]+@sha256:[0-9a-f]{64} /uv ", text
+        ), (
+            "uv is no longer bootstrapped from a digest-pinned "
+            "ghcr.io/astral-sh/uv image; whatever replaced it must still be "
+            "cryptographically verifiable, not an unpinned download"
+        )
+
+
+class TestDocumentedCredentialMountWarnsAboutRoot:
+    """The documented ``--user "$(id -u):$(id -g)"`` recipe must warn about ``sudo``.
+
+    On a host with no ``docker`` group -- the common case for a quick
+    evaluation on a fresh VM -- a reader without Podman/Docker access runs
+    the documented command under ``sudo``. There, ``$(id -u):$(id -g)``
+    expands to ``0:0``, silently overriding the image's ``USER nonroot`` and
+    running the gateway as root with the caller's own ``/root`` mounted in --
+    exactly what ``test_the_image_does_not_run_as_root`` exists to catch when
+    the image itself is at fault, but which no test can catch when a reader
+    launches it that way from documentation that never says not to.
+
+    Ref: README.md
+         docs/operations_getting_started_local.md
+         docs/operations_troubleshooting.md
+    """
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            Path(REPO_ROOT, "README.md"),
+            Path(REPO_ROOT, "docs/operations_getting_started_local.md"),
+            Path(REPO_ROOT, "docs/operations_troubleshooting.md"),
+        ],
+        ids=lambda path: path.name,
+    )
+    def test_the_user_flag_recipe_is_paired_with_a_root_warning(
+        self, path: Path
+    ) -> None:
+        """Every doc naming the ``--user`` recipe also warns against ``sudo``."""
+        text = path.read_text()
+
+        assert '--user "$(id -u):$(id -g)"' in text, (
+            f"{path} no longer documents the '--user' recipe this test guards"
+        )
+        assert "sudo" in text, (
+            f"{path} documents '--user \"$(id -u):$(id -g)\"' with no warning "
+            "that running it under sudo expands to uid 0, silently overriding "
+            "the image's non-root user"
+        )
+
+
 class TestFinalImageRuntime:
     """The final image still provides everything the build stripped out of it.
 
@@ -1608,7 +1692,7 @@ class TestFinalImageRuntime:
     ) -> None:
         """Every service the application names still has its ``botocore/data``.
 
-        The image keeps the service data of an allowlist and deletes the rest,
+        An image may keep the service data of an allowlist and delete the rest,
         which is only safe while the allowlist covers what the server uses. The
         names come from the server's own source, so a service it starts calling
         fails here — with ``UnknownServiceError`` — until the image ships its
@@ -1659,32 +1743,39 @@ class TestFinalImageRuntime:
         assert document == _TEXT_MIME_TYPE, f"text was sniffed as '{document}'"
         assert MIME_TYPES_TO_DOCUMENT_TYPE[document.partition("/")[2]] == "txt"
 
-    def test_the_application_ships_only_compiled_modules(self, image: str) -> None:
-        """The application directory holds ``.pyc`` files and no source at all.
+    def test_the_application_ships_one_importable_form_per_module(
+        self, image: str
+    ) -> None:
+        """The application directory holds sources or bytecode, never both.
 
-        ``compileall -b`` writes each module's bytecode beside it instead of
-        into a ``__pycache__`` directory, and the sources are then deleted; a
-        stale ``.py``, a leftover cache directory or a missing ``.pyc`` all mean
-        the layout the image is meant to ship was not produced.
+        An image ships the package either as written or byte-compiled beside
+        itself by ``compileall -b``, with the sources then deleted. A tree
+        holding both means that rewrite stopped half-way, leaving bytecode the
+        interpreter ignores and a size the image was not meant to have, and a
+        ``__pycache__`` directory means caches were baked in at build time —
+        into a filesystem the server runs read-only and cannot refresh.
 
         Ref: https://docs.python.org/3/library/compileall.html
              stdapi/main.py:app
         """
         layout = json.loads(_image_python(image, _LAYOUT_PROGRAM))
 
-        assert layout["sources"] == [], (
-            f"source files remain under {layout['root']}: {layout['sources'][:10]}"
+        assert layout["sources"] or layout["compiled"], (
+            f"no importable module was found under {layout['root']}"
+        )
+        assert not (layout["sources"] and layout["compiled"]), (
+            f"{layout['root']} holds both sources and bytecode: "
+            f"{layout['sources'][:10]}"
         )
         assert layout["caches"] == [], (
             f"'__pycache__' directories remain under {layout['root']}: "
             f"{layout['caches'][:10]}"
         )
-        assert layout["compiled"] > 0, f"no bytecode was found under {layout['root']}"
 
     def test_the_documentation_icon_ships_in_the_image(self, image: str) -> None:
         """The icon the documentation pages are branded with is package data.
 
-        The build copies the application tree and then deletes every ``.py``
+        The build copies the application tree and may then delete every ``.py``
         file in it, so anything else the package carries has to survive that
         rewrite: an icon missing here is a ``/docs`` page with a broken image
         and no way to fetch the original, which is the whole point of serving
@@ -1746,7 +1837,7 @@ class TestFinalImageRuntime:
     def test_the_distribution_metadata_still_resolves(self, image: str) -> None:
         """Every distribution the runtime queries still reports a version.
 
-        The build empties each ``.dist-info`` down to its ``METADATA`` file, so
+        A build may empty each ``.dist-info`` down to its ``METADATA`` file, so
         a package asking for its own version at runtime — ``fastapi_mcp`` does,
         for ``mcp`` — depends on that file surviving intact.
 
@@ -1779,8 +1870,8 @@ class TestFinalImageRuntime:
     def test_the_image_does_not_run_as_root(self, image: str) -> None:
         """The image runs its command as an unprivileged user.
 
-        The two images use different accounts, so only the property that matters
-        is asserted: whatever the server runs as, it is not root.
+        Only the property that matters is asserted, never a particular account:
+        whatever the server runs as, it is not root.
 
         Ref: https://docs.docker.com/reference/dockerfile/#user
              Dockerfile
@@ -1789,30 +1880,55 @@ class TestFinalImageRuntime:
 
         assert euid != 0, "the image runs its command as root"
 
-    def test_the_declared_healthcheck_is_executable(self, image: str) -> None:
-        """An image declaring a healthcheck ships the binaries it invokes.
+    def test_the_home_directory_is_traversable_only_where_that_is_documented(
+        self, image: str, image_label: str
+    ) -> None:
+        """A foreign uid reaches the home directory of the image whose docs promise it.
 
-        The probe is a shell command naming a tool the base image happens to
-        provide, which nothing else in the image needs; a base change that drops
-        it makes every container report unhealthy forever, and only here. Images
-        declaring no healthcheck — their orchestrator probes ``/health`` itself
-        — are skipped.
+        README.md, the local-development guide and the troubleshooting page
+        document ``--user "$(id -u):$(id -g)" -e HOME=/home/nonroot -v
+        ~/.aws:/home/nonroot/.aws`` for the community image, so a foreign uid
+        can read the caller's own AWS credentials; a home directory it cannot
+        traverse breaks that recipe before botocore reads anything under it.
+        The Marketplace image keeps its base image's private home: it is
+        deployed as its own user and documents no foreign-uid recipe, so
+        opening it would loosen the more hardened of the two for a convenience
+        it does not offer. The divergence is asserted rather than skipped, so
+        neither image can drift into the other's posture unnoticed.
 
-        Ref: https://docs.docker.com/reference/dockerfile/#healthcheck
-             stdapi/routes/core_root.py:health_check
+        Ref: https://docs.docker.com/reference/dockerfile/#user
+             Dockerfile
         """
-        test = _image_healthcheck(image)
-        if not test:
-            pytest.skip("the image declares no healthcheck")
-        binaries = _healthcheck_binaries(test)
-        assert binaries, f"no executable could be read from the healthcheck {test}"
-
-        resolved = json.loads(_image_python(image, _WHICH_PROGRAM, *binaries))
-
-        missing = sorted(name for name, path in resolved.items() if not path)
-        assert not missing, (
-            f"the healthcheck {test} needs {missing}, which the image does not ship"
+        result = _engine_run(
+            [
+                "run",
+                "--rm",
+                "--network=none",
+                "--user",
+                _FOREIGN_UID_GID,
+                "--entrypoint",
+                _image_interpreter(image),
+                image,
+                "-c",
+                _HOME_TRAVERSAL_PROGRAM,
+            ]
         )
+        output = result.stdout.decode(errors="replace")
+        assert result.returncode == 0, (
+            f"uid {_FOREIGN_UID_GID} could not run in the image:\n"
+            f"{output}\n{_tail(result.stderr)}"
+        )
+        if image_label == "community":
+            assert output.strip() == "ok", (
+                f"uid {_FOREIGN_UID_GID} cannot traverse '/home/nonroot', so the "
+                f"documented credential mount cannot work: {output.strip()}"
+            )
+        else:
+            assert output.strip() != "ok", (
+                f"the '{image_label}' image now lets uid {_FOREIGN_UID_GID} traverse "
+                "'/home/nonroot'; it documents no foreign-uid recipe, so either the "
+                "hardening regressed or the docs gained one this test does not know about"
+            )
 
     @pytest.mark.parametrize(
         "trusted_hosts", _TRUSTED_HOSTS_CASES.values(), ids=_TRUSTED_HOSTS_CASES
@@ -1855,7 +1971,7 @@ class TestFinalImageRuntime:
     def test_every_licence_file_the_packages_declare_ships(self, image: str) -> None:
         """Each distribution keeps the licence files its own METADATA declares.
 
-        The image strips every ``.dist-info`` down to what it needs, and
+        An image may strip every ``.dist-info`` down to what it needs, and
         publishing it is a binary redistribution: the Apache-2.0, BSD and MIT
         terms of those packages all require their licence text and notices to
         travel along. The expectation is each package's own ``License-File``
@@ -1886,9 +2002,10 @@ class TestFinalImageRuntime:
         """The application's own licence and ffmpeg's travel with the binaries.
 
         The image is published as a whole: the served application under its
-        edition's licence, and the ffmpeg it builds from source under the LGPL.
-        Both texts must be in the image, and readable by the unprivileged user
-        it runs as.
+        edition's licence, and the ffmpeg it ships under whichever licence
+        applies to the build it uses — LGPL for one built from source, GPL for
+        the distribution's own package. Both texts must be in the image, and
+        readable by the unprivileged user it runs as.
 
         Ref: https://www.gnu.org/licenses/agpl-3.0.html
              https://www.ffmpeg.org/legal.html

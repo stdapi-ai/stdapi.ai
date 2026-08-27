@@ -23,11 +23,24 @@ Run stdapi.ai locally for development, testing, and evaluation using the free co
 
 ```bash
 docker run --rm -p 8000:8000 \
+  --user "$(id -u):$(id -g)" -e HOME=/home/nonroot \
   -v ~/.aws:/home/nonroot/.aws:ro \
   -e AWS_BEDROCK_REGIONS=us-east-1,us-west-2 \
   -e ENABLE_DOCS=true \
   ghcr.io/stdapi-ai/stdapi.ai-community:latest
 ```
+
+!!! info "Why `--user`"
+    The image runs as the unprivileged user `nonroot` (uid/gid **65532**). Your
+    `~/.aws` files are owned by your own account and are usually readable by it
+    alone, so the container is told to run as you instead. Skip both flags if you
+    pass credentials as environment variables, as below — nothing else in the
+    image needs your identity.
+
+    **Never run this command with `sudo`.** `$(id -u):$(id -g)` is evaluated on
+    the host: under `sudo` it resolves to `0:0`, and the container silently runs
+    as root instead of `nonroot`. If your host has no `docker` group and you
+    would otherwise need `sudo`, use the environment-variable form below instead.
 
 **With environment variables instead:**
 
@@ -43,20 +56,20 @@ docker run --rm -p 8000:8000 \
 
 ??? info "Podman on Fedora/RHEL with SELinux"
 
-    Add the `:z` SELinux label and `--userns=keep-id`:
+    Add the `:z` SELinux label and `--userns=keep-id:uid=65532,gid=65532`:
 
     ```bash
     podman run --rm -p 8000:8000 \
-      --userns=keep-id \
+      --userns=keep-id:uid=65532,gid=65532 \
       -v ~/.aws:/home/nonroot/.aws:ro,z \
       -e AWS_BEDROCK_REGIONS=us-east-1,us-west-2 \
       -e ENABLE_DOCS=true \
       ghcr.io/stdapi-ai/stdapi.ai-community:latest
     ```
 
-    The `:z` flag relabels files for container access. Use `:Z` if multiple containers share the volume. `--userns=keep-id` maps your host user ID to the container user.
+    The `:z` flag relabels files for container access. Use `:Z` if multiple containers share the volume. `--userns=keep-id:uid=65532,gid=65532` makes your host account appear inside the container as the user the image runs as, so your `~/.aws` files stay readable; use it instead of the `--user` and `HOME` flags above, not alongside them.
 
-    See also [Troubleshooting → Podman volume mount fails on Fedora/RHEL with SELinux](operations_troubleshooting.md#terraform-deployment) if you hit this after the fact.
+    See also [Troubleshooting → Podman volume mount fails on Fedora/RHEL with SELinux](operations_troubleshooting.md#local-docker-podman) if you hit this after the fact.
 
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true}} }%%

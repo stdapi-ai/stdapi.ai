@@ -256,8 +256,8 @@ Your commercial license activates automatically upon deployment.
 
     The image carries the licence and notice files of everything it redistributes, so a legal or compliance review can be done against the artifact itself:
 
-    - **Python dependencies** — each package keeps its `LICENSE`/`NOTICE`/`COPYING`/`AUTHORS` files (and its `METADATA` and SBOM) inside its own `.dist-info` directory under `/opt/app`.
-    - **FFmpeg** — `/usr/share/licenses/ffmpeg/`, alongside a package entry in the APK inventory so image scanners inventory it like any other installed package.
+    - **Python dependencies** — each package keeps its `LICENSE`/`NOTICE`/`COPYING`/`AUTHORS` files (and its `METADATA` and SBOM) inside its own `.dist-info` directory: under `/opt/venv` on the community image, which installs the packages untouched, and under `/opt/app` on the Marketplace image, whose build strips those directories down to exactly these files.
+    - **FFmpeg** — `/usr/share/licenses/ffmpeg/`, alongside an entry in the image's package inventory so scanners inventory it like any other installed package. The community image ships Debian's FFmpeg package under its own copyright file; the Marketplace image builds an audio-only FFmpeg from source with no GPL component enabled, which keeps it under the LGPL-2.1-or-later.
     - **Swagger UI** (Apache-2.0) — `/usr/share/licenses/swagger-ui-dist/`, holding its `LICENSE`, its `NOTICE` and the bundled-dependency notice its script carries.
     - **ReDoc** (MIT) — `/usr/share/licenses/redoc/`, holding its `LICENSE` and the bundled-dependency notice its script carries.
     - **stdapi.ai** — `/usr/share/licenses/stdapi.ai/`, holding `LICENSE-AGPL` on the community image.
