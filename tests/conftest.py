@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Literal, NamedTuple, cast, get_args
 
 import cohere
 import httpx
+import ollama
 import pytest
 from aiobotocore.session import get_session
 from anthropic import Anthropic, AnthropicBedrock
@@ -545,6 +546,8 @@ _LIVE_SERVER_STOP_TIMEOUT = 30.0
 _DEFAULT_RERUNS = 2
 #: Seconds between two attempts, long enough for a written cache entry to be visible.
 _DEFAULT_RERUN_DELAY = 3.0
+#: Seconds a request to a deployed gateway may take before it counts as a failure.
+_LIVE_TIMEOUT = 300.0
 #: Root fixtures reaching a live service; a test whose closure holds one cannot run offline.
 _LIVE_FIXTURES = frozenset(
     {
@@ -557,6 +560,7 @@ _LIVE_FIXTURES = frozenset(
         "indexing_job_queue",
         "live_guardrail",
         "live_server",
+        "ollama_client",
         "openai_client",
         "sandbox_dynamodb",
         "test_client",
@@ -1223,6 +1227,144 @@ def openai_client(
     return OpenAI(
         base_url=f"{server_url}/v1", max_retries=0, organization=_OPENAI_ORGANIZATION
     )
+
+
+#: Base URL of Ollama Cloud, the endpoint the official client targets by default.
+OLLAMA_CLOUD_HOST = "https://ollama.com"
+
+#: Per-capability model names for the Ollama dialect, per target.
+#:
+#: The Ollama Cloud entries name models its free cloud tier serves, listed at
+#: https://docs.ollama.com/cloud; the tier rotates, so a rotation is a one-line
+#: change here and nowhere else. The smallest model able to prove each behaviour
+#: is chosen, since every cloud call counts against the account's weekly limit.
+#: An empty value means the target serves no model with that capability.
+OLLAMA_MODEL_MAPPINGS: dict[str, dict[str, str]] = {
+    "local": {
+        "chat": "amazon.nova-micro-v1:0",
+        "chat_vision": "amazon.nova-lite-v1:0",
+        "chat_reasoning": "anthropic.claude-haiku-4-5-20251001-v1:0",
+        # Bedrock ``outputConfig`` is rejected by Nova: keep the cheapest Claude.
+        "chat_json_output": "anthropic.claude-haiku-4-5-20251001-v1:0",
+        "embedding": "amazon.titan-embed-text-v2:0",
+    },
+    "ollama": {
+        "chat": "gpt-oss:20b",
+        # The smallest free cloud model whose ``capabilities`` include ``vision``.
+        "chat_vision": "gemma4:31b",
+        "chat_reasoning": "gpt-oss:20b",
+        # Unused on this target: no free cloud model honours a JSON schema in
+        # ``format`` -- gpt-oss, nemotron and gemma were each measured answering
+        # prose -- so the structured-output test is gateway-only.
+        "chat_json_output": "gpt-oss:20b",
+        # Ollama Cloud hosts no embedding model at all: all 18 models it
+        # publishes advertise ``completion``, and /api/embed answers 401 to a
+        # cloud API key whichever of them is named.
+        "embedding": "",
+    },
+}
+
+
+@pytest.fixture(scope="session")
+def ollama_client(
+    use_official_api: bool,
+    server_url: str | None,
+    test_client: TestClient | None,
+    api_key: str,
+) -> Iterator[ollama.Client]:
+    """Official Ollama client bound to the selected target.
+
+    ``ollama.Client`` builds its own ``httpx.Client`` and exposes no injection
+    point for another one, so the in-process lane hands it the session
+    ``TestClient``'s ASGI transport instead: the app lifespan, and the shared
+    AWS client pool bound to the loop it was built on, stay the session's.
+    Passing the ``TestClient`` itself would mean writing the client's own
+    ``Content-Type`` onto a client every other test module shares -- and it is
+    the transport, not the client object, that the ``httpx2`` alias at the top
+    of this file makes compatible with what ``ollama`` was built against.
+
+    Yields:
+        The client, already carrying credentials for its target.
+    """
+    if test_client is not None:
+        yield ollama.Client(
+            host=str(test_client.base_url),
+            headers={"Authorization": f"Bearer {api_key}"},
+            # The only handle on the portal-backed transport starlette builds.
+            transport=test_client._transport,  # noqa: SLF001
+        )
+        return
+    if use_official_api:
+        key = getenv("OLLAMA_API_KEY", "")
+        if not key:
+            pytest.skip("tests/.env.use-official-api sets no OLLAMA_API_KEY")
+        host, headers = OLLAMA_CLOUD_HOST, {"Authorization": f"Bearer {key}"}
+    elif server_url:
+        host, headers = server_url, {"Authorization": f"Bearer {api_key}"}
+    else:
+        pytest.skip("Requires a gateway serving the Ollama routes")
+    with ollama.Client(host=host, headers=headers, timeout=_LIVE_TIMEOUT) as client:
+        yield client
+
+
+@pytest.fixture(scope="session")
+def ollama_http(ollama_client: ollama.Client) -> httpx.Client:
+    """Raw HTTP client on the same target, for what the official client cannot send.
+
+    ``HEAD`` probes, the legacy ``name`` field of ``/api/show`` and the media
+    type of a stream have no expression in the client's API; borrowing its own
+    transport keeps them pointed at the same target with the same credentials.
+
+    Returns:
+        The HTTP client underlying *ollama_client*.
+    """
+    return cast("httpx.Client", ollama_client._client)  # noqa: SLF001
+
+
+@pytest.fixture(scope="session")
+def ollama_models(use_official_api: bool) -> dict[str, str]:
+    """Per-capability model names for the selected target."""
+    return OLLAMA_MODEL_MAPPINGS["ollama" if use_official_api else "local"]
+
+
+@pytest.fixture(scope="session")
+def ollama_chat_model(ollama_models: dict[str, str]) -> str:
+    """Cheapest model serving the chat and generate endpoints."""
+    return ollama_models["chat"]
+
+
+@pytest.fixture(scope="session")
+def ollama_vision_model(ollama_models: dict[str, str]) -> str:
+    """Cheapest model accepting the images a message carries."""
+    return ollama_models["chat_vision"]
+
+
+@pytest.fixture(scope="session")
+def ollama_reasoning_model(ollama_models: dict[str, str]) -> str:
+    """Cheapest model returning a thinking trace when ``think`` is set."""
+    return ollama_models["chat_reasoning"]
+
+
+@pytest.fixture(scope="session")
+def ollama_json_output_model(ollama_models: dict[str, str]) -> str:
+    """Cheapest model whose backend accepts a JSON schema in ``format``."""
+    return ollama_models["chat_json_output"]
+
+
+@pytest.fixture(scope="session")
+def ollama_embedding_model(ollama_models: dict[str, str]) -> str:
+    """Cheapest embedding model, or skip when the target serves none.
+
+    Ollama Cloud is such a target: it hosts no embedding model at all, so the
+    skip is a fact about the vendor rather than a gap in this suite.
+    """
+    model = ollama_models["embedding"]
+    if not model:
+        pytest.skip(
+            "The selected target serves no embedding model (Ollama Cloud hosts "
+            "none: all 18 models it publishes advertise 'completion' only)"
+        )
+    return model
 
 
 @pytest.fixture(scope="session")

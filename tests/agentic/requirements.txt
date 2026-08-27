@@ -41,6 +41,13 @@ agno
 # tool calls back as its own blocks. The package pulls llama-index-core with it.
 llama-index-llms-openai
 
+# `ollama` is deliberately NOT here either, and tests/agentic/test_ollama_sdk.py
+# imports it all the same: it is already a `test` group dependency in
+# pyproject.toml, because tests/test_ollama_*.py drive the same official client
+# against the in-process app. Repeating it here would layer a second resolution of
+# the same library over the one the gateway's own suite uses, and the two lanes
+# would stop agreeing about which client version they proved.
+
 # inspect-ai is deliberately NOT here, and tests/agentic/test_inspect_ai.py drives
 # it in a container instead. It depends on aioboto3, whose every release pins
 # aiobotocore to a 2.x version, which pins botocore below this project's

@@ -84,6 +84,11 @@ nav:
           - Cohere Compatible:
             - Rerank: api_cohere_rerank.md
             - Embed: api_cohere_embed.md
+          - Ollama Compatible:
+            - Generate: api_ollama_generate.md
+            - Chat: api_ollama_chat.md
+            - Embed: api_ollama_embed.md
+            - Models: api_ollama_models.md
           - Native Extensions:
             - Search Models: api_search_models.md
             - Model Pricing: api_model_pricing.md
