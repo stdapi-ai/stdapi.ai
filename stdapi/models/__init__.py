@@ -771,6 +771,9 @@ class ModelBase[RequestT, ResponseT]:
     #: Whether InvokeModel natively accepts the guardrail configuration kwargs.
     NATIVE_GUARDRAIL_SUPPORTED: ClassVar[bool] = True
 
+    #: Input modalities the model serves but its Bedrock listing does not declare.
+    UNDECLARED_INPUT_MODALITIES: ClassVar[tuple[str, ...]] = ()
+
     @classmethod
     def get_supported_operations(cls) -> Capability:
         """Return capability flags for route-based model matching.
@@ -1900,6 +1903,33 @@ def _advertised_output_modalities(
     return output_modalities
 
 
+def _advertised_input_modalities(
+    model_id: str, input_modalities: list[str]
+) -> list[str]:
+    """Return the input modalities to advertise for a Bedrock model.
+
+    A model class listing ``UNDECLARED_INPUT_MODALITIES`` serves inputs its
+    Bedrock listing omits, and the gateway bills for them, so they are
+    advertised alongside the declared ones.
+
+    Args:
+        model_id: Bedrock model identifier.
+        input_modalities: Input modalities from the Bedrock listing.
+
+    Returns:
+        Input modalities to advertise.
+    """
+    model_class = _find_model_class(model_id)
+    if model_class is None:
+        return input_modalities
+    undeclared = [
+        modality
+        for modality in model_class.UNDECLARED_INPUT_MODALITIES
+        if modality not in input_modalities
+    ]
+    return [*input_modalities, *undeclared] if undeclared else input_modalities
+
+
 def _compute_model_capabilities(
     model_id: str, model: ModelDetails
 ) -> tuple[list[str], list[str]]:
@@ -2393,7 +2423,10 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
                 name=model["modelName"],
                 provider=model["providerName"],
                 regions=[region],
-                input_modalities=model["inputModalities"],  # type: ignore[arg-type]
+                input_modalities=_advertised_input_modalities(
+                    model["modelId"],
+                    model["inputModalities"],  # type: ignore[arg-type]
+                ),
                 output_modalities=_advertised_output_modalities(
                     model["modelId"],
                     model["outputModalities"],  # type: ignore[arg-type]
