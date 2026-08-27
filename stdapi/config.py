@@ -11,6 +11,7 @@ Key Components:
 
 import re
 from datetime import datetime
+from importlib.util import find_spec
 from os import environ
 from typing import TYPE_CHECKING, Annotated, Literal, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
@@ -1366,6 +1367,69 @@ class _Settings(BaseSettings):
             "the upstream behavior; disable it in a multi-tenant deployment "
             "where the secret is the only thing constraining an untrusted "
             "client."
+        ),
+    )
+
+    realtime_webrtc_enabled: bool = Field(
+        default=False,
+        description=(
+            "Serve WebRTC calls on 'POST /v1/realtime/calls' of the Realtime "
+            "API, terminating the media path (ICE, DTLS-SRTP, Opus) in this "
+            "process. Requires the 'webrtc' optional dependencies (aiortc) and "
+            "a deployment whose instance is directly reachable over UDP: "
+            "behind an HTTP-only load balancer the SDP exchange succeeds but "
+            "the call carries no audio. Defaults to False, in which case the "
+            "endpoint answers 404 and only the WebSocket transport is served."
+        ),
+    )
+
+    realtime_webrtc_stun_server: str | None = Field(
+        default=None,
+        description=(
+            "STUN server the gateway queries to discover its public address, "
+            "advertised to WebRTC callers as an ICE server-reflexive "
+            "candidate, e.g. 'stun:stun.l.google.com:19302'. Required when "
+            "the gateway sits behind 1:1 NAT, such as an ECS task whose "
+            "elastic network interface maps a public IP. When unset, only "
+            "the host's own addresses are advertised."
+        ),
+    )
+
+    realtime_webrtc_turn_server: str | None = Field(
+        default=None,
+        description=(
+            "TURN server the gateway relays call media through, e.g. "
+            "'turn:turn.example.com:3478?transport=udp', for deployments "
+            "with no inbound UDP path of their own. The relay is "
+            "operator-run (for example coturn); AWS offers no managed TURN. "
+            "Requires realtime_webrtc_turn_username and "
+            "realtime_webrtc_turn_password. When unset, callers on "
+            "UDP-blocking networks cannot establish media."
+        ),
+    )
+
+    realtime_webrtc_turn_username: str | None = Field(
+        default=None,
+        description="Long-term credential username of realtime_webrtc_turn_server.",
+    )
+
+    realtime_webrtc_turn_password: SecretStr | None = Field(
+        default=None,
+        description="Long-term credential password of realtime_webrtc_turn_server.",
+    )
+
+    realtime_webrtc_allow_private_candidates: bool = Field(
+        default=False,
+        description=(
+            "Accept the ICE candidates a WebRTC caller offers on addresses "
+            "that are not globally routable: private, shared, loopback and "
+            "link-local ones. They are dropped by default, and an offer left "
+            "with no candidate at all is refused, so a caller cannot make the "
+            "gateway send STUN probes to addresses inside its own network. "
+            "Enable it only where callers legitimately share that network, "
+            "such as a same-VPC or on-premises deployment. Hostname and mDNS "
+            "('.local') candidates are dropped either way: resolving one is "
+            "itself a lookup on the deployment's network."
         ),
     )
 
@@ -3324,6 +3388,49 @@ class _Settings(BaseSettings):
             )
             raise ValueError(msg)
 
+    def _validate_realtime_webrtc(self) -> None:
+        """Ensure the WebRTC call transport is configured completely or not at all.
+
+        Raises:
+            ValueError: If the feature is enabled without its optional
+                dependencies installed, if a TURN server is named without its
+                credentials, or if any media setting is set without the
+                feature.
+        """
+        turn_settings = (
+            self.realtime_webrtc_turn_server,
+            self.realtime_webrtc_turn_username,
+            self.realtime_webrtc_turn_password,
+        )
+        if not self.realtime_webrtc_enabled:
+            if (
+                any(turn_settings)
+                or self.realtime_webrtc_stun_server
+                or self.realtime_webrtc_allow_private_candidates
+            ):
+                msg = (
+                    "realtime_webrtc_stun_server, realtime_webrtc_turn_* and "
+                    "realtime_webrtc_allow_private_candidates require "
+                    "realtime_webrtc_enabled: without the feature no WebRTC "
+                    "call ever reaches them."
+                )
+                raise ValueError(msg)
+            return
+        if find_spec("aiortc") is None:
+            msg = (
+                "realtime_webrtc_enabled requires the 'webrtc' optional "
+                "dependencies: install the server as 'stdapi[webrtc]' "
+                "(glibc only; aiortc publishes no musl wheels)."
+            )
+            raise ValueError(msg)
+        if any(turn_settings) and not all(turn_settings):
+            msg = (
+                "realtime_webrtc_turn_server, realtime_webrtc_turn_username "
+                "and realtime_webrtc_turn_password are required together to "
+                "relay WebRTC calls through a TURN server."
+            )
+            raise ValueError(msg)
+
     def _validate_tenant_keys(self) -> None:
         """Ensure tenant API keys are configured completely or not at all.
 
@@ -3424,6 +3531,7 @@ class _Settings(BaseSettings):
         self._validate_vector_stores()
         self._validate_dynamodb()
         self._validate_tenant_keys()
+        self._validate_realtime_webrtc()
         if (
             self.aws_bedrock_guardrail_identifier
             and not self.aws_bedrock_guardrail_version

@@ -34,7 +34,7 @@ RUN uv venv "${VIRTUAL_ENV}"
 # exported file carries the lock file's hashes, which the install verifies.
 COPY pyproject.toml uv.lock ./
 RUN uv export --quiet --frozen --no-dev --no-emit-project \
-        --extra granian --extra opentelemetry --extra mcp \
+        --extra granian --extra opentelemetry --extra mcp --extra webrtc \
         --format requirements.txt --output-file requirements.txt && \
     uv pip install --quiet --requirement requirements.txt && \
     rm requirements.txt

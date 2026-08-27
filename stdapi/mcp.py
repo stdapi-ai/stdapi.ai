@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from json import JSONDecodeError
 from logging import ERROR, Handler, LogRecord, getLogger
 from traceback import format_exception
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import fastapi_mcp.server  # type: ignore[import-untyped]
 from fastapi import Depends
@@ -34,6 +34,17 @@ if TYPE_CHECKING:
 
     from fastapi import FastAPI
     from mcp.types import Tool
+
+#: WebRTC call operations, excluded: an MCP agent has no peer connection to hold.
+_REALTIME_CALL_OPERATIONS: Final = frozenset(
+    {
+        "openai_realtime_call_create",
+        "openai_realtime_call_hangup",
+        "openai_realtime_call_accept",
+        "openai_realtime_call_reject",
+        "openai_realtime_call_refer",
+    }
+)
 
 #: Marker fastapi_mcp always prepends to the auto-generated response/example block.
 _RESPONSES_MARKER = "\n\n### Responses:"
@@ -433,7 +444,9 @@ def _operation_filters() -> tuple[list[str] | None, list[str] | None]:
     excluded = set(SETTINGS.mcp_exclude_tools or ())
     if (included := SETTINGS.mcp_include_tools) is not None:
         return [op for op in included if op not in excluded], None
-    return None, sorted(MCP_EXCLUDED_OPERATIONS | excluded) or None
+    return None, sorted(
+        MCP_EXCLUDED_OPERATIONS | _REALTIME_CALL_OPERATIONS | excluded
+    ) or None
 
 
 def mount_mcp(app: FastAPI) -> None:

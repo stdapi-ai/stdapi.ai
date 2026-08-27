@@ -118,10 +118,29 @@ _DRAINED_REGISTRIES: Final = (
     "cleanups",
     "stream_closes",
     "realtime_readers",
+    "realtime_calls",
     "file_indexing",
     "indexing_jobs",
     "model_refresh",
 )
+
+
+async def _drain_realtime_calls(timeout: float) -> int:  # noqa: ASYNC109 -- shared drain contract
+    """Await the WebRTC call tasks still ending after shutdown closed them.
+
+    Args:
+        timeout: Seconds allowed before the unfinished tasks are cancelled.
+
+    Returns:
+        Number of tasks that had not finished at the deadline, 0 when the
+        feature is disabled and its optional dependencies never imported.
+    """
+    if not SETTINGS.realtime_webrtc_enabled:
+        return 0
+    # Imported lazily: the webrtc extra is only present when the setting proved it.
+    from stdapi.realtime_webrtc import drain_realtime_calls  # noqa: PLC0415
+
+    return await drain_realtime_calls(timeout)
 
 
 async def drain_background_tasks() -> dict[str, int]:
@@ -149,6 +168,7 @@ async def drain_background_tasks() -> dict[str, int]:
                 drain_cleanups(timeout),
                 drain_stream_closes(timeout),
                 drain_session_stops(timeout),
+                _drain_realtime_calls(timeout),
                 drain_indexing(timeout),
                 drain_indexing_jobs(timeout),
                 drain_model_refresh(timeout),

@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from stdapi.config import AWS_SESSION, SETTINGS, _Settings
 
@@ -1069,3 +1069,61 @@ class TestVectorStoreIndexingQueue:
                     "https://sqs.us-east-1.amazonaws.com/123456789012/indexing"
                 ),
             )
+
+
+def test_realtime_webrtc_disabled_by_default() -> None:
+    """The WebRTC transport is off unless the operator turns it on."""
+    assert SETTINGS.realtime_webrtc_enabled is False
+
+
+def test_realtime_webrtc_ice_settings_require_the_feature() -> None:
+    """STUN or TURN settings without the feature are refused at startup."""
+    with pytest.raises(ValidationError, match="require realtime_webrtc_enabled"):
+        _Settings(realtime_webrtc_stun_server="stun:stun.example.com:3478")
+
+
+def test_realtime_webrtc_private_candidates_are_refused_by_default() -> None:
+    """A caller cannot aim the gateway's ICE checks inside its own network."""
+    assert SETTINGS.realtime_webrtc_allow_private_candidates is False
+
+
+def test_realtime_webrtc_private_candidates_require_the_feature() -> None:
+    """The escape hatch without the transport is a configuration mistake."""
+    with pytest.raises(ValidationError, match="require realtime_webrtc_enabled"):
+        _Settings(realtime_webrtc_allow_private_candidates=True)
+
+
+def test_realtime_webrtc_turn_requires_full_credentials() -> None:
+    """A TURN server without both credentials is refused at startup."""
+    with pytest.raises(ValidationError, match="required together"):
+        _Settings(
+            realtime_webrtc_enabled=True,
+            realtime_webrtc_turn_server="turn:turn.example.com:3478",
+        )
+
+
+def test_realtime_webrtc_full_configuration_is_accepted() -> None:
+    """The complete media configuration passes startup validation."""
+    settings = _Settings(
+        realtime_webrtc_enabled=True,
+        realtime_webrtc_stun_server="stun:stun.example.com:3478",
+        realtime_webrtc_turn_server="turn:turn.example.com:3478?transport=udp",
+        realtime_webrtc_turn_username="user",
+        realtime_webrtc_turn_password=SecretStr("secret"),
+    )
+    assert settings.realtime_webrtc_enabled is True
+
+
+def test_realtime_webrtc_refuses_to_start_without_aiortc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Enabling the feature without the webrtc extra fails at startup.
+
+    A deployment that cannot serve the media path must say so when it starts,
+    not when the first caller posts an offer.
+    """
+    import stdapi.config  # noqa: PLC0415
+
+    monkeypatch.setattr(stdapi.config, "find_spec", lambda _name: None)
+    with pytest.raises(ValidationError, match=r"webrtc.*optional"):
+        _Settings(realtime_webrtc_enabled=True)

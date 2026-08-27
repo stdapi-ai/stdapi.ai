@@ -383,6 +383,12 @@ Publishing where tokens come from lets an AI agent authenticate itself — see [
 | [`IMAGE_GENERATION_MODEL`](#image-generation-model)                 | None                    | Default Bedrock image model ID used when the `image_generation` Responses API tool is invoked |
 | [`REALTIME_CLIENT_SECRET_KEY`](#realtime-client-secret-key)         | None                    | Secret the Realtime API's ephemeral client secrets are signed with; derived from the API key when unset |
 | [`REALTIME_ALLOW_SESSION_OVERRIDE`](#realtime-allow-session-override) | `true`                 | Allow a client holding an ephemeral client secret to override the session configuration it carries |
+| [`REALTIME_WEBRTC_ENABLED`](#realtime-webrtc-enabled)               | `false`                 | Serve WebRTC calls on `POST /v1/realtime/calls`, terminating the media path in-process |
+| [`REALTIME_WEBRTC_STUN_SERVER`](#realtime-webrtc-stun-server)       | None                    | STUN server the gateway uses to discover and advertise its public address to WebRTC callers |
+| [`REALTIME_WEBRTC_TURN_SERVER`](#realtime-webrtc-turn-server)       | None                    | Operator-run TURN relay advertised to WebRTC callers on UDP-blocking networks |
+| [`REALTIME_WEBRTC_TURN_USERNAME`](#realtime-webrtc-turn-server)     | None                    | Long-term credential username of the TURN relay |
+| [`REALTIME_WEBRTC_TURN_PASSWORD`](#realtime-webrtc-turn-server)     | None                    | Long-term credential password of the TURN relay |
+| [`REALTIME_WEBRTC_ALLOW_PRIVATE_CANDIDATES`](#realtime-webrtc-allow-private-candidates) | `false` | Accept the ICE candidates a caller offers on addresses that are not globally routable |
 
 ### :material-file-document: API Documentation { #summary-api-documentation }
 
@@ -4621,6 +4627,88 @@ export REALTIME_CLIENT_SECRET_KEY=a-value-shared-by-every-instance
 
 ```bash
 export REALTIME_ALLOW_SESSION_OVERRIDE=false
+```
+
+---
+
+#### `REALTIME_WEBRTC_ENABLED` { #realtime-webrtc-enabled }
+
+:octicons-package-24: **Purpose**
+:   Serve WebRTC calls on [`POST /v1/realtime/calls`](api_openai_realtime.md#webrtc-calls), terminating the media path — ICE, DTLS-SRTP, Opus — in the server process
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false` — the endpoint answers `404` and only the WebSocket transport is served
+
+:octicons-workflow-24: **Behavior**
+:   Enabling it requires the `webrtc` optional dependencies (`stdapi[webrtc]`, shipped in the container images; glibc only — aiortc publishes no musl wheels) and the server refuses to start without them. It also requires a network path the default deployment does not have: WebRTC media is UDP on ephemeral ports, negotiated directly to the instance that answered the SDP offer, which no HTTP(S) load balancer can carry. See [the deployment section](operations_deploy_advanced.md#webrtc-and-sip-need-their-own-ingress) for what the Terraform module's media mode provisions, and [the transport documentation](api_openai_realtime.md#webrtc-calls) for the call-control and duration limits that come with it.
+
+```bash
+export REALTIME_WEBRTC_ENABLED=true
+```
+
+---
+
+#### `REALTIME_WEBRTC_STUN_SERVER` { #realtime-webrtc-stun-server }
+
+:octicons-package-24: **Purpose**
+:   STUN server the gateway queries to discover its public address, which is then advertised to WebRTC callers as an ICE candidate
+
+:octicons-database-24: **Type**
+:   String — a STUN URI, e.g. `stun:stun.l.google.com:19302`
+
+:octicons-gear-24: **Default**
+:   None — only the host's own addresses are advertised
+
+:octicons-workflow-24: **Behavior**
+:   Required whenever the server sits behind 1:1 NAT, which is exactly the shape of an ECS task with a public IP: the task sees only its private address, so without STUN the SDP answer advertises addresses no caller can reach — the exchange succeeds and the call carries no audio. Any public STUN server works; the queried server learns nothing but the deployment's public address.
+
+```bash
+export REALTIME_WEBRTC_STUN_SERVER="stun:stun.l.google.com:19302"
+```
+
+---
+
+#### `REALTIME_WEBRTC_TURN_SERVER` { #realtime-webrtc-turn-server }
+
+:octicons-package-24: **Purpose**
+:   TURN relay advertised to WebRTC callers, carrying the media of callers whose networks block UDP to arbitrary ports
+
+:octicons-database-24: **Type**
+:   String — a TURN URI, e.g. `turn:turn.example.com:3478?transport=udp`, with `REALTIME_WEBRTC_TURN_USERNAME` and `REALTIME_WEBRTC_TURN_PASSWORD` carrying its long-term credentials (all three together, or none)
+
+:octicons-gear-24: **Default**
+:   None — callers on UDP-blocking networks cannot establish media
+
+:octicons-workflow-24: **Behavior**
+:   The relay is yours to run — [coturn](https://github.com/coturn/coturn) is the usual choice — because AWS offers no managed TURN service. It needs its own public address and its own always-on capacity, which is part of why a [media framework in front](api_openai_realtime.md#transports) remains the recommended shape for demanding audiences.
+
+```bash
+export REALTIME_WEBRTC_TURN_SERVER="turn:turn.example.com:3478?transport=udp"
+export REALTIME_WEBRTC_TURN_USERNAME="stdapi"
+export REALTIME_WEBRTC_TURN_PASSWORD="..."
+```
+
+---
+
+#### `REALTIME_WEBRTC_ALLOW_PRIVATE_CANDIDATES` { #realtime-webrtc-allow-private-candidates }
+
+:octicons-package-24: **Purpose**
+:   Accept the ICE candidates a WebRTC caller offers on addresses that are not globally routable — private (RFC 1918), shared (RFC 6598), loopback and link-local ones
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false` — those candidates are dropped from the offer, and an offer left with no candidate at all is refused with `invalid_offer`
+
+:octicons-workflow-24: **Behavior**
+:   An SDP offer names the addresses the server sends its ICE connectivity checks to, and the caller posting it holds nothing more than an [ephemeral client secret](api_openai_realtime.md#ephemeral-client-secrets). Screening the offer is what keeps an untrusted caller from aiming those UDP probes at addresses inside the deployment's own VPC. Enable this only where callers legitimately share that network — a same-VPC service, an on-premises deployment, a LAN — and the exchange otherwise succeeds with no media path. Hostname and mDNS (`.local`) candidates are dropped either way, whatever this is set to: resolving one is itself a lookup on the deployment's network, and a browser that offers only mDNS candidates cannot establish media with this gateway regardless.
+
+```bash
+export REALTIME_WEBRTC_ALLOW_PRIVATE_CANDIDATES=true
 ```
 
 ---

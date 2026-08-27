@@ -65,6 +65,8 @@ stdapi.ai provides multiple resources for exploring and testing the API—choose
 |                   | `POST /v1/audio/translations`     | Speech-to-English translation                                               | [Translations →](api_openai_audio_translations.md)     |
 | **🎙️ Realtime**   | `POST /v1/realtime/client_secrets` | Mint a short-lived client secret carrying a session configuration          | [Realtime →](api_openai_realtime.md)                   |
 |                   | `WS /v1/realtime`                 | Live, bidirectional speech-to-speech session                                | [Realtime →](api_openai_realtime.md)                   |
+|                   | `POST /v1/realtime/calls`         | WebRTC call from an SDP offer, gateway-terminated media (opt-in)            | [Realtime →](api_openai_realtime.md#webrtc-calls)      |
+|                   | `POST /v1/realtime/calls/{call_id}/hangup` | End an active WebRTC call                                          | [Realtime →](api_openai_realtime.md#webrtc-calls)      |
 | **🧠 Embeddings** | `POST /v1/embeddings`             | Vector embeddings for semantic search                                       | [Embeddings →](api_openai_embeddings.md)               |
 | **🛡️ Moderations** | `POST /v1/moderations`           | Content safety classification via Bedrock Guardrails or Amazon Comprehend   | [Moderations →](api_openai_moderations.md)             |
 | **📋 Models**     | `GET /v1/models`                  | List available models                                                       | [Models →](api_openai_models.md)                       |

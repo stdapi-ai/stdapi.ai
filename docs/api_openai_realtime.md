@@ -32,11 +32,13 @@ Hold a live, bidirectional speech-to-speech conversation over a single WebSocket
 |-------------------------------|--------|-------------------------------------------------------------------|------------------|-------------------------------|
 | `/v1/realtime/client_secrets` | `POST` | Mint a short-lived, signed client secret carrying a session configuration | Amazon Bedrock  | `openai_realtime_client_secret` |
 | `/v1/realtime?model=<id>`     | `WS`   | Open a live, bidirectional speech-to-speech session                | Amazon Bedrock  | Not applicable — a persistent connection |
+| `/v1/realtime/calls`          | `POST` | Trade a WebRTC SDP offer for an SDP answer, opening a call the gateway terminates — [opt-in](#webrtc-calls) | Amazon Bedrock  | Not applicable — negotiates a media connection |
+| `/v1/realtime/calls/{call_id}/hangup` | `POST` | End an active WebRTC call                                  | Amazon Bedrock  | Not applicable — controls a media connection |
 
-!!! info "WebSocket only — no WebRTC and no SIP"
-    `POST /v1/realtime/calls`, which upstream uses to negotiate a WebRTC peer connection or to accept a SIP call, is **not available** and answers `404`. Every session runs over the WebSocket above — a browser's included.
+!!! info "WebSocket always — WebRTC opt-in, SIP never"
+    Every deployment serves the WebSocket. `POST /v1/realtime/calls` answers WebRTC offers only when the operator enables [`REALTIME_WEBRTC_ENABLED`](operations_configuration.md#realtime-webrtc-enabled) — it needs a UDP media path the default deployment does not have — and answers `404` otherwise. Inbound SIP is never terminated here: the SIP-only verbs (`accept`, `reject`, `refer`) answer a clean `400` naming what serves telephony instead.
 
-    [Transports](#transports) covers the whole picture: how a browser connects, and how to put WebRTC or a phone line in front of this deployment today.
+    [Transports](#transports) covers the whole picture: how a browser connects, what enabling WebRTC entails, and how to put a media framework or a phone line in front of this deployment.
 
 ## Feature Compatibility
 
@@ -76,7 +78,7 @@ Hold a live, bidirectional speech-to-speech conversation over a single WebSocket
 | `error`                                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Non-fatal for a rejected event; terminal (closes the socket) for a fatal one |
 | `rate_limits.updated`                          | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Not emitted                                                          |
 | `input_audio_buffer.timeout_triggered`         | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Not emitted — it reports an `idle_timeout_ms` that is not available   |
-| `output_audio_buffer.started` / `.stopped`     | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Not emitted — they belong to the WebRTC and SIP [transports](#transports), which this API does not serve |
+| `output_audio_buffer.started` / `.stopped`     | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Not emitted, on the WebRTC [transport](#webrtc-calls) either |
 | **Audio Formats**                             |                                          |                                                                     |
 | `audio/pcm`                                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Default — 24 kHz, 16-bit, mono, little-endian                       |
 | `audio/pcmu`, `audio/pcma`                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | G.711 at 8 kHz, for telephony interoperability                      |
@@ -91,7 +93,8 @@ Hold a live, bidirectional speech-to-speech conversation over a single WebSocket
 | OpenAI voice names                             |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `marin`, `sage`, `shimmer`, `verse` — each served by the model's own nearest voice, so the timbre is not the upstream one |
 | Any other voice name                           | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Passed through to the model as given, so a model voice can be named directly |
 | **Not Available**                             |                                          |                                                                     |
-| `POST /v1/realtime/calls` (WebRTC, SIP)        | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Answers `404`; sessions run over the WebSocket only — see [Transports](#transports) for the browser and telephony route |
+| `POST /v1/realtime/calls` (WebRTC)             | :material-minus-circle:{ .partial role="img" aria-label="Partial" } | [Opt-in](#webrtc-calls): served when `REALTIME_WEBRTC_ENABLED` is set and the deployment has a UDP media path; answers `404` otherwise |
+| SIP (`accept`, `reject`, `refer` call verbs)   | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Inbound SIP is not terminated by the gateway, permanently — the verbs answer `400`; see [Transports](#transports) for the telephony route |
 | `tools`, `tool_choice`, `parallel_tool_calls`  | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored — the session calls no tools                    |
 | `prompt` (prompt templates)                    | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored                                                 |
 | `reasoning`, `tracing`, `truncation`           | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and ignored                                                 |
@@ -228,7 +231,7 @@ curl -X POST "$BASE/v1/realtime/client_secrets" \
 
 ## Transports
 
-Upstream offers a realtime session over three transports — WebSocket, WebRTC and SIP. **This API serves the WebSocket, and only the WebSocket.** `POST /v1/realtime/calls`, the endpoint upstream uses to trade an SDP offer for a WebRTC peer connection or to accept an inbound SIP call, has no route here and answers `404`; it is planned for a later release.
+Upstream offers a realtime session over three transports — WebSocket, WebRTC and SIP. **This API always serves the WebSocket; WebRTC is an operator opt-in; SIP is never terminated here.** `POST /v1/realtime/calls` trades an SDP offer for an answer once [`REALTIME_WEBRTC_ENABLED`](operations_configuration.md#realtime-webrtc-enabled) is set — see [WebRTC calls terminated by the gateway](#webrtc-calls) for what that transport delivers and what it demands of the deployment — and answers `404` otherwise.
 
 ### A browser connects to that same WebSocket
 
@@ -236,9 +239,27 @@ There is no separate browser transport to be missing. The page opens `wss://<hos
 
 What the page owns in exchange is the media. Capturing the microphone, resampling it to the session's input format and playing back the `response.output_audio.delta` chunks are its own work, because a WebSocket carries the audio bytes handed to it and nothing else: no jitter buffer, no packet-loss concealment, no echo cancellation. On a good network that is unremarkable; on a lossy one it is audible, and it is the reason to reach for a media stack rather than write one.
 
+### WebRTC calls terminated by the gateway { #webrtc-calls }
+
+With [`REALTIME_WEBRTC_ENABLED`](operations_configuration.md#realtime-webrtc-enabled) set — and the `webrtc` optional dependencies installed, which the container images ship — the gateway terminates the whole WebRTC media path itself: ICE, DTLS-SRTP and Opus. A browser (or any WebRTC client) posts its SDP offer and connects directly, with nothing in between:
+
+- **`POST /v1/realtime/calls`** accepts the offer as a raw `application/sdp` body — with `?model=<id>` on the query string, exactly as upstream's browser flow — or as `multipart/form-data` with an `sdp` field and an optional `session` JSON field. Either encoding authenticates with an [ephemeral client secret](#ephemeral-client-secrets) or the deployment's credentials; a secret whose session is [locked](#ephemeral-client-secrets) refuses a `session` field. A JSON body is refused with `unsupported_content_type`, which is what the upstream endpoint answers too. The response is `201` with the SDP answer as its body and the call's identifier in the `Location` header (`/v1/realtime/calls/rtc_...`).
+- **Audio rides the media tracks** as Opus, both directions — no base64, no `response.output_audio.delta` events. **Events ride a data channel** the client opens under the label `oai-events`, in exactly the WebSocket vocabulary: `session.created` arrives on it once the channel opens, `session.update`, `response.create` and the rest work unchanged. The session's audio formats are fixed by the media negotiation, so a `session.update` changing them is refused with an `error`.
+- **Playback is the gateway's, so barge-in is too.** The model generates speech faster than it is played, and on a call the unplayed tail sits in the gateway rather than in your player. A caller who starts speaking over it — `input_audio_buffer.speech_started` — stops hearing it immediately, and the drop is reported as `output_audio_buffer.cleared`, as it is upstream. An answer ended by `response.cancel` or interrupted mid-generation stops the same way.
+- **`POST /v1/realtime/calls/{call_id}/hangup`** ends the call; the SDP answer's `Location` header is where the identifier comes from.
+- **A sideband WebSocket** — `WS /v1/realtime?call_id=<id>`, API credentials only, never an ephemeral secret — observes the call's server events and may send client events into its session, mirroring upstream's monitoring channel.
+- **Call control follows the credential that opened the call.** A call opened under a [tenant API key](operations_authentication_security.md) can be ended or observed only with that tenant's key or the deployment's own credentials; any other caller is answered the same `404` as an unknown call.
+
+!!! warning "What a WebRTC call demands of the deployment"
+    - **A UDP path to the exact instance that answered.** ICE negotiates ephemeral UDP ports directly to the server process; an HTTP(S) load balancer cannot carry them. The [Terraform module's WebRTC media mode](operations_deploy_advanced.md#webrtc-and-sip-need-their-own-ingress) provisions the public task IP and UDP ingress this needs, off by default. Behind 1:1 NAT, set [`REALTIME_WEBRTC_STUN_SERVER`](operations_configuration.md#realtime-webrtc-stun-server) so the gateway advertises its public address; for callers on UDP-blocking networks, run a TURN relay (for example coturn) and set [`REALTIME_WEBRTC_TURN_SERVER`](operations_configuration.md#realtime-webrtc-turn-server) — AWS offers no managed TURN.
+    - **The caller must offer a publicly routable candidate.** An SDP offer names the addresses the gateway sends its ICE checks to, so candidates on addresses that are not globally routable — private, loopback, link-local — are dropped, and an offer left with none is refused with `invalid_offer`. Hostname and mDNS (`.local`) candidates are always dropped. For callers that legitimately share the deployment's network, set [`REALTIME_WEBRTC_ALLOW_PRIVATE_CANDIDATES`](operations_configuration.md#realtime-webrtc-allow-private-candidates).
+    - **One instance, or routed call control.** A call lives in the memory of the instance that answered its offer. `hangup` and the sideband WebSocket answer `404` on any other instance; run a single instance, or route call-control requests to the answering instance yourself.
+    - **The 8-minute session cap applies to calls too.** Amazon Nova Sonic ends a session at 480 seconds, so a call hard-stops at 8 minutes with the connection torn down — a real limit for the phone-length conversations WebRTC invites.
+    - **Scale-in, deployments and Spot interruption end live calls.** The media path cannot drain: an instance that stops mid-call drops it.
+
 ### Put WebRTC or a phone line in front of the gateway
 
-The route to a browser peer connection or a phone call does not run through `POST /v1/realtime/calls`. The two frameworks most voice agents are already built on — **LiveKit Agents** and **Pipecat** — terminate WebRTC themselves (and SIP, through their telephony transports), and reach the model over exactly the WebSocket this API serves. The caller speaks WebRTC or SIP to the framework; the framework speaks this API. Pointing one at this deployment asks no more of it than the rest of this gateway does: the base URL, the deployment's API key, and the model name only where the name differs.
+The route to a browser peer connection or a phone call does not have to run through `POST /v1/realtime/calls`, and for SIP it never does. The two frameworks most voice agents are already built on — **LiveKit Agents** and **Pipecat** — terminate WebRTC themselves (and SIP, through their telephony transports), and reach the model over exactly the WebSocket this API serves. The caller speaks WebRTC or SIP to the framework; the framework speaks this API. Pointing one at this deployment asks no more of it than the rest of this gateway does: the base URL, the deployment's API key, and the model name only where the name differs.
 
 **LiveKit Agents** takes an HTTP base URL and derives the WebSocket from it, exactly as the official SDK does:
 
@@ -280,11 +301,11 @@ On a telephony leg, set the session's audio formats to `audio/pcmu` or `audio/pc
 
 An HTTP request that returns an SDP answer is the small, visible part of WebRTC. The rest is a media transport in its own right: a UDP path negotiated separately from the HTTPS connection, carrying encrypted RTP, with its own address discovery, NAT traversal and congestion control. Serving it means **terminating that media path**, not routing one more request — and the two are not the same thing to build, nor the same thing to put an ingress in front of. SIP has the same shape under different names: signalling on one connection, audio on another.
 
-That is also why a framework is the shorter path rather than a stopgap. LiveKit and Pipecat already own a media stack, already run wherever your users are, and already speak this API on the other side. If you do intend to run a media terminator of your own, [WebRTC and SIP need their own ingress](operations_deploy_advanced.md#webrtc-and-sip-need-their-own-ingress) covers what that costs a deployment.
+That is also why a framework remains the shorter path for anything the [gateway-terminated transport](#webrtc-calls) does not cover — telephony, more than one instance, calls past 8 minutes, hostile networks without your own TURN. LiveKit and Pipecat already own a media stack, already run wherever your users are, and already speak this API on the other side. [WebRTC and SIP need their own ingress](operations_deploy_advanced.md#webrtc-and-sip-need-their-own-ingress) covers what terminating media costs a deployment, whichever process does it.
 
 ## Session Lifecycle and Limits
 
-- **Duration cap** — a session lasts at most **8 minutes**. When it is reached, the server closes the connection with WebSocket close code `1000` and reason `session_expired`; reconnect to continue the conversation.
+- **Duration cap** — a session lasts at most **8 minutes**. When it is reached, the server closes the connection with WebSocket close code `1000` and reason `session_expired`; reconnect to continue the conversation. A [WebRTC call](#webrtc-calls) is under the same cap: at 8 minutes its session ends and the peer connection is torn down.
 - **Conversation ended by the model side** — when the model ends the conversation itself, the connection closes with close code `1000` and reason `session_ended`. Normal, and reconnecting starts a new session.
 - **Server shutdown** — a session still open when the deployment shuts down is closed with close code `1001` and reason `server_shutdown`.
 - **Fatal errors** — a fatal error sends a terminal `error` event, then closes the connection with close code `3000`, whose reason is `<error type>.<error code>` (e.g. `invalid_request_error.model_not_found`).
