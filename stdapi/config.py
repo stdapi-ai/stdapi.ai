@@ -1337,6 +1337,10 @@ class _Settings(BaseSettings):
         default="/cohere", description="Cohere API compatible routes prefix"
     )
 
+    ollama_routes_prefix: str = Field(
+        default="/ollama", description="Ollama API compatible routes prefix"
+    )
+
     realtime_client_secret_key: SecretStr | None = Field(
         default=None,
         description=(
@@ -2747,13 +2751,14 @@ class _Settings(BaseSettings):
             raise ValueError(msg)
         return value
 
-    @field_validator("openai_routes_prefix")
+    @field_validator("openai_routes_prefix", "ollama_routes_prefix")
     @classmethod
-    def _validate_openai_routes_prefix(cls, value: str) -> str:
-        """Validate the OpenAI routes prefix, allowing the empty (root-mounted) default.
+    def _validate_optional_routes_prefix(cls, value: str, info: ValidationInfo) -> str:
+        """Validate a routes prefix that may be empty (root-mounted).
 
         Args:
-            value: OpenAI routes prefix.
+            value: Routes prefix value.
+            info: Validation info, used to identify the field being validated.
 
         Returns:
             The validated prefix.
@@ -2761,7 +2766,7 @@ class _Settings(BaseSettings):
         Raises:
             ValueError: If the value is non-empty and does not match the required format.
         """
-        return cls._check_routes_prefix("openai_routes_prefix", value, allow_empty=True)
+        return cls._check_routes_prefix(str(info.field_name), value, allow_empty=True)
 
     @field_validator("anthropic_routes_prefix", "cohere_routes_prefix")
     @classmethod
@@ -3178,6 +3183,7 @@ class _Settings(BaseSettings):
             ("openai_routes_prefix", self.openai_routes_prefix),
             ("anthropic_routes_prefix", self.anthropic_routes_prefix),
             ("cohere_routes_prefix", self.cohere_routes_prefix),
+            ("ollama_routes_prefix", self.ollama_routes_prefix),
         ):
             if not prefix:
                 continue

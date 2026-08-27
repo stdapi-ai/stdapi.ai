@@ -424,6 +424,68 @@ n8n calls the `/anthropic/v1/files` endpoints (see [Anthropic Files API](api_ant
 
 The Anthropic node's **Prompt** resource (`Generate Prompt`, `Improve Prompt`, `Templatize Prompt`) calls Anthropic's experimental prompt tools endpoints, which are not part of the Amazon Bedrock API surface and are not available through stdapi.ai. Use a `Message a Model` node with prompt-engineering instructions instead.
 
+---
+
+#### ![Ollama](styles/logo_ollama.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Ollama Nodes
+
+##### :material-key: Set Up Your Credentials
+
+!!! example "Creating Your stdapi.ai Ollama Credential"
+    **In your n8n interface:**
+
+    1. Navigate to **Credentials** menu
+    2. Click **Create Credential**
+    3. Search and select **"Ollama"** in the credential list
+    4. Configure the following fields:
+        ```
+        Base URL: https://YOUR_STDAPI_URL/ollama
+        API Key:  YOUR_STDAPI_KEY
+        ```
+
+!!! tip "Ollama Base URL"
+    By default, all Ollama-compatible routes are prefixed with `/ollama`, so the Base URL must end with `/ollama`. You can customize this prefix using the `OLLAMA_ROUTES_PREFIX` configuration variable documented in [Operations Configuration](operations_configuration.md#ollama-routes-prefix). The **API Key** field is optional in n8n's own Ollama credential — it exists for an authenticated proxy sitting in front of a real Ollama server, which is exactly what stdapi.ai is here, and n8n sends it as an `Authorization: Bearer` header.
+
+##### :material-cog-outline: Configure Nodes
+
+For each node, first select the credentials you previously created in the node parameters. Then, select the model you want to use. The model can be selected directly in the `Model` parameter for all supported nodes.
+
+##### :material-chat-outline: Chat Completions
+
+Enables: Text generation and conversational AI in workflows.
+
+!!! example "Supported Node"
+    **`Ollama Chat Model`** (`n8n-nodes-langchain.lmChatOllama`)
+
+    - Model can be selected directly in the `Model` parameter
+    - Sub-node for AI Agent and chain nodes
+
+    n8n calls `POST /ollama/api/chat` (see [Ollama Chat API](api_ollama_chat.md)).
+
+##### :material-text-box-outline: Legacy Completions
+
+Enables: raw prompt completion in LangChain-based chains, as an alternative to the chat-based node above.
+
+!!! example "Supported Node"
+    **`Ollama Model`** (`n8n-nodes-langchain.lmOllama`)
+
+    - Sub-node feeding a Basic LLM Chain or similar LangChain node — distinct from the **`Ollama Chat Model`** sub-node above
+    - Model can be selected directly in the `Model` parameter
+    - No tool-calling support — n8n's own documentation states it won't work with the AI Agent node; use **`Ollama Chat Model`** for agentic workflows
+
+    n8n calls `POST /ollama/api/generate` (see [Ollama Generate API](api_ollama_generate.md)).
+
+##### :material-database: Embeddings
+
+Enables: Vector embeddings for semantic search and RAG workflows.
+
+!!! example "Supported Node"
+    **`Embeddings Ollama`**
+
+    - Model can be selected directly in the `Model` parameter
+    - Reaches the same Amazon Bedrock embedding models as the **Embeddings OpenAI** node described [above](#embeddings) — use whichever credential the rest of the workflow already carries
+
+    n8n calls `POST /ollama/api/embed` (see [Ollama Embed API](api_ollama_embed.md)).
+
 ### :material-alert-outline: Known Issues { #known-limitations }
 
 n8n's Cohere sub-nodes—**Cohere Reranker** (used by vector store nodes for hybrid search) and **Embeddings Cohere**—cannot be pointed at stdapi.ai. Their shared `cohereApi` credential exposes only an API key: its base URL is a hidden field pinned to Cohere's own endpoint, and both nodes build their client from the API key and the model alone, so that URL never reaches the request anyway.

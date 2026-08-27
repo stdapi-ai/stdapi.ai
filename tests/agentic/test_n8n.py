@@ -9,11 +9,14 @@ gateway. That makes it a second, independent client on the three conversational
 routes: pi reaches them through one synthetic provider extension, while the OpenAI
 Chat node, the OpenAI Responses node and the Anthropic node below are exactly what
 a real n8n user drags onto a canvas, each with its own request shape and its own
-parsing of the reply. One npm package therefore reaches twelve routes that had no
+parsing of the reply. One npm package therefore reaches fifteen routes that had no
 end-to-end coverage from a real client:
 
 - ``/v1/chat/completions``, ``/v1/responses`` and ``/anthropic/v1/messages``, each
   through the node a real workflow would use, on a Claude and a non-Claude model;
+- ``/api/chat``, ``/api/generate`` and ``/api/embed`` through the Ollama Chat
+  Model, Ollama Model and Embeddings Ollama nodes, the only clients in this lane
+  that reach the Ollama dialect from JavaScript rather than from Python;
 - ``/v1/embeddings`` through a vector store that inserts *and* queries;
 - ``/v1/audio/speech``, ``/v1/audio/transcriptions`` and ``/v1/audio/translations``;
 - ``/v1/files`` upload, list and delete;
@@ -54,6 +57,9 @@ from ._tools import (
     N8N_IMAGES_GENERATIONS,
     N8N_MESSAGES,
     N8N_MODERATIONS,
+    N8N_OLLAMA_CHAT,
+    N8N_OLLAMA_EMBEDDINGS,
+    N8N_OLLAMA_GENERATE,
     N8N_RESPONSES,
     N8N_RUN_OUTPUT,
     N8N_SPEECH,
@@ -694,6 +700,210 @@ class TestAnthropicMessages:
             _gateway_calls(agentic_server, log_start),
             "/anthropic/v1/messages",
             model_config.model,
+        )
+
+
+class TestOllamaChat:
+    """n8n's Ollama Chat Model node, the lane's only JavaScript Ollama client.
+
+    Every other client on the ``/api/*`` dialect is the official Python library.
+    This node builds ``@langchain/ollama``'s ``ChatOllama``, which speaks to the
+    same routes through the ``ollama`` **npm** package -- a second, independent
+    implementation of the wire format, reading our replies with a different
+    parser, in a different language.
+
+    Its credential is also the only one in the lane that carries a bearer token
+    for this dialect: the node reads ``apiKey`` off the ``ollamaApi`` credential
+    and turns it into an ``Authorization: Bearer`` header, which is what makes a
+    proxied Ollama -- this gateway -- reachable at all.
+
+    Ref: https://docs.n8n.io/integrations/builtin/cluster-nodes/sub-nodes/n8n-nodes-langchain.lmchatollama/
+         https://docs.ollama.com/api/chat
+         stdapi/routes/ollama_chat.py:chat
+    """
+
+    @pytest.fixture
+    def agentic_tool(self) -> AgenticTool:
+        """The n8n entry under test; read by the autouse model-identity fixture."""
+        return N8N_OLLAMA_CHAT
+
+    @pytest.mark.parametrize("model_config", _CHAT_MODEL_CONFIGS)
+    def test_completes_a_chat_prompt(
+        self,
+        request: pytest.FixtureRequest,
+        agentic_tool: AgenticTool,
+        model_config: ModelConfig,
+        agentic_server: AgenticServer,
+        agentic_image: str,
+        agentic_workdir: Path,
+    ) -> None:
+        """The chain's answer round-trips through ``POST /api/chat``.
+
+        The committed workflow pins the node's whole option block --
+        ``temperature``, ``numPredict``, ``numCtx`` and ``keepAlive`` -- so what
+        the gateway receives is a real client's full request rather than the
+        minimum a test would have written. ``numCtx`` and ``keepAlive`` describe a
+        local model server's memory and have no meaning here, and are accepted and
+        ignored; a gateway that rejected them would refuse every request this node
+        makes, since the node sends them from its defaults.
+
+        Ref: stdapi/types/ollama.py:ChatRequest
+             stdapi/models/chat/_adapters/_ollama.py:_apply_options
+        """
+        log_start = len(agentic_server.logs)
+        result = run_agent(
+            tool=agentic_tool,
+            server=agentic_server,
+            image=agentic_image,
+            config=model_config,
+            prompt=_CAPITAL_PROMPT,
+            workdir=agentic_workdir,
+            test_name=request.node.originalname or request.node.name,
+        )
+        log_metrics(agentic_tool, result, model_config, "test_completes_a_chat_prompt")
+        assert_result(result, config=model_config, contains="tokyo", min_steps=2)
+
+        entry = n8n_node_items(_record(agentic_workdir), "Chain")[0]
+        assert "tokyo" in str(entry["text"]).lower()
+
+        _assert_called(
+            _gateway_calls(agentic_server, log_start), "/api/chat", model_config.model
+        )
+
+
+class TestOllamaModel:
+    """n8n's Ollama Model node, the legacy completion counterpart to Ollama Chat.
+
+    Unlike ``ChatOllama``, ``@langchain/ollama``'s ``Ollama`` class -- the one
+    this node builds -- calls the client's ``generate()`` method rather than its
+    ``chat()`` method, which is what reaches this route instead of ``/api/chat``.
+    The node also carries no tool support, so it feeds a Basic LLM Chain rather
+    than an AI Agent; wiring it to an AI Agent would fail for reasons the gateway
+    has no part in.
+
+    Ref: https://docs.n8n.io/integrations/builtin/cluster-nodes/sub-nodes/n8n-nodes-langchain.lmollama/
+         https://docs.ollama.com/api/generate
+         stdapi/routes/ollama_generate.py:generate
+    """
+
+    @pytest.fixture
+    def agentic_tool(self) -> AgenticTool:
+        """The n8n entry under test; read by the autouse model-identity fixture."""
+        return N8N_OLLAMA_GENERATE
+
+    @pytest.mark.parametrize("model_config", _CHAT_MODEL_CONFIGS)
+    def test_completes_a_prompt(
+        self,
+        request: pytest.FixtureRequest,
+        agentic_tool: AgenticTool,
+        model_config: ModelConfig,
+        agentic_server: AgenticServer,
+        agentic_image: str,
+        agentic_workdir: Path,
+    ) -> None:
+        """The chain's answer round-trips through ``POST /api/generate``.
+
+        The Basic LLM Chain node reports its output under the same ``text``
+        field regardless of which language model feeds it, so this is the same
+        shape :class:`TestOllamaChat` reads back -- the difference is entirely
+        in which route the sub-node underneath it called.
+
+        Ref: stdapi/types/ollama.py:GenerateRequest
+        """
+        log_start = len(agentic_server.logs)
+        result = run_agent(
+            tool=agentic_tool,
+            server=agentic_server,
+            image=agentic_image,
+            config=model_config,
+            prompt=_CAPITAL_PROMPT,
+            workdir=agentic_workdir,
+            test_name=request.node.originalname or request.node.name,
+        )
+        log_metrics(agentic_tool, result, model_config, "test_completes_a_prompt")
+        assert_result(result, config=model_config, contains="tokyo", min_steps=2)
+
+        entry = n8n_node_items(_record(agentic_workdir), "Chain")[0]
+        assert "tokyo" in str(entry["text"]).lower()
+
+        _assert_called(
+            _gateway_calls(agentic_server, log_start),
+            "/api/generate",
+            model_config.model,
+        )
+
+
+class TestOllamaEmbeddings:
+    """n8n's Embeddings Ollama node, the Ollama-dialect twin of Embeddings OpenAI.
+
+    ``@langchain/ollama``'s ``OllamaEmbeddings`` -- the class this node builds --
+    calls the client's ``embed()`` method, which reaches Ollama's modern batch
+    endpoint rather than the deprecated singular ``/api/embeddings``. The node
+    reaches the same Bedrock embedding models as the OpenAI-dialect node, so this
+    test is the same semantic-search proof as :class:`TestEmbeddings`, run
+    through the other credential.
+
+    Ref: https://docs.n8n.io/integrations/builtin/cluster-nodes/sub-nodes/n8n-nodes-langchain.embeddingsollama/
+         https://docs.ollama.com/api/embed
+         stdapi/routes/ollama_embed.py:embed
+    """
+
+    @pytest.fixture
+    def agentic_tool(self) -> AgenticTool:
+        """The n8n entry under test; read by the autouse model-identity fixture."""
+        return N8N_OLLAMA_EMBEDDINGS
+
+    @pytest.mark.parametrize(
+        "model_config",
+        [
+            pytest.param(
+                ModelConfig(model="amazon.titan-embed-text-v2:0", timeout=_TIMEOUT),
+                id="titan-embed-text-v2",
+            )
+        ],
+    )
+    def test_semantic_search_ranks_the_planted_document_first(
+        self,
+        request: pytest.FixtureRequest,
+        agentic_tool: AgenticTool,
+        model_config: ModelConfig,
+        agentic_server: AgenticServer,
+        agentic_image: str,
+        agentic_workdir: Path,
+    ) -> None:
+        """The document naming the planted token outranks five unrelated ones.
+
+        Ref: stdapi/types/ollama.py:EmbedResponse
+        """
+        log_start = len(agentic_server.logs)
+        result = run_agent(
+            tool=agentic_tool,
+            server=agentic_server,
+            image=agentic_image,
+            config=model_config,
+            prompt="Which component keeps its timing with a quartz crystal?",
+            workdir=agentic_workdir,
+            test_name=request.node.originalname or request.node.name,
+        )
+        log_metrics(
+            agentic_tool,
+            result,
+            model_config,
+            "test_semantic_search_ranks_the_planted_document_first",
+        )
+        assert_result(result, config=model_config, contains="score", min_steps=6)
+
+        ranked = n8n_node_items(_record(agentic_workdir), "Query")
+        assert len(ranked) == 3, f"expected the top 3 documents, got {len(ranked)}"
+        best = ranked[0]["document"]
+        assert isinstance(best, dict)
+        assert _PLANTED_PHRASE in str(best["pageContent"])
+        scores = [float(item["score"]) for item in ranked]  # type: ignore[arg-type]
+        assert scores == sorted(scores, reverse=True), f"unranked results: {scores}"
+        assert scores[0] > scores[-1], "every document scored identically"
+
+        _assert_called(
+            _gateway_calls(agentic_server, log_start), "/api/embed", model_config.model
         )
 
 

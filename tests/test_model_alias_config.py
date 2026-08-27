@@ -686,6 +686,44 @@ class TestAliasResolution:
         await models.validate_model(_TARGET)
         assert resolve_service_tier(_TARGET, None) == "flex"
 
+    @pytest.mark.usefixtures("catalog", "request_log", "alias_overlay")
+    async def test_a_latest_tagged_alias_still_installs_its_overlay(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An alias asked for as ``<alias>:latest`` is served with its own guardrail.
+
+        An Ollama client names the current version of a model with a
+        ``:latest`` tag, and the catalog lookup falls back to the untagged
+        name, so the alias resolves and is served. Its configuration has to
+        follow the same fallback: looked up on the tagged name alone it finds
+        nothing, and the target is then served with neither the alias'
+        guardrail nor its parameters, silently.
+
+        Ref: https://docs.ollama.com/api/chat
+             stdapi/models/__init__.py:_alias_overlay
+        """
+        monkeypatch.setitem(
+            MODEL_ALIAS_OVERLAYS,
+            _ALIAS,
+            build_alias_overlay(
+                _ALIAS,
+                ModelAliasConfig(
+                    model=_TARGET,
+                    service_tier="flex",
+                    guardrail_identifier="gr-alias",
+                    guardrail_version="1",
+                ),
+            ),
+        )
+        guardrail = GUARDRAIL_CONFIG_VAR.set(None)  # type: ignore[arg-type]
+        try:
+            model = await models.validate_model(f"{_ALIAS}:latest")
+            assert model.id == _TARGET
+            assert resolve_service_tier(_TARGET, None) == "flex"
+            assert GUARDRAIL_CONFIG_VAR.get()["guardrailIdentifier"] == "gr-alias"
+        finally:
+            GUARDRAIL_CONFIG_VAR.reset(guardrail)
+
     def test_populate_builds_overlays_for_configured_aliases(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

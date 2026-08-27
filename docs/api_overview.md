@@ -1,12 +1,12 @@
 ---
-title: API Overview - OpenAI, Anthropic & Cohere Compatible Amazon Bedrock API
-description: Complete API documentation for the stdapi.ai OpenAI-, Anthropic-, and Cohere-compatible gateway. Access Amazon Bedrock models, chat completions, messages, embeddings, image generation, and audio APIs with SDK compatibility.
-keywords: OpenAI API documentation, Anthropic API documentation, AWS Bedrock API reference, OpenAI SDK compatibility, Anthropic SDK compatibility, chat completions API, responses API, messages API, embeddings API, image generation API, audio API AWS, OpenAI compatible endpoints, Anthropic compatible endpoints
+title: API Overview - OpenAI, Anthropic, Cohere & Ollama Compatible Amazon Bedrock API
+description: Complete API documentation for the stdapi.ai OpenAI-, Anthropic-, Cohere- and Ollama-compatible gateway. Access Amazon Bedrock models, chat completions, messages, embeddings, image generation, and audio APIs with SDK compatibility.
+keywords: OpenAI API documentation, Anthropic API documentation, Ollama API documentation, AWS Bedrock API reference, OpenAI SDK compatibility, Anthropic SDK compatibility, chat completions API, responses API, messages API, embeddings API, image generation API, audio API AWS, OpenAI compatible endpoints, Anthropic compatible endpoints
 ---
 
 # :material-api: API Overview
 
-stdapi.ai provides OpenAI-, Anthropic-, and Cohere-compatible APIs backed by Amazon Bedrock and AWS AI services. Any application that works with OpenAI, Anthropic, or Cohere works with stdapi.ai by simply changing the API endpoint.
+stdapi.ai provides OpenAI-, Anthropic-, Cohere- and Ollama-compatible APIs backed by Amazon Bedrock and AWS AI services. Any application that works with OpenAI, Anthropic, Cohere or Ollama works with stdapi.ai by simply changing the API endpoint.
 
 !!! tip "One catalog, discovered automatically"
     Amazon Bedrock, Bedrock Mantle, Amazon Polly, Amazon Transcribe and Amazon Comprehend all surface as **models in a single catalog**. stdapi.ai discovers them from your AWS account at startup — there is no model list to declare or maintain, and a model AWS adds appears without a configuration change. They are interchangeable by name on a shared endpoint: [`GET /v1/models`](api_openai_models.md) lists them together, [`GET /search_models`](api_search_models.md) filters them by capability, and the endpoint routes to whichever AWS service backs the model you named — `POST /v1/audio/transcriptions` reaches Amazon Transcribe or a Bedrock audio model, and `POST /v1/moderations` reaches Bedrock Guardrails or Amazon Comprehend, from the same request, and the [Models](models.md) page shows the whole catalogue with prices and scores.
@@ -112,9 +112,27 @@ stdapi.ai provides multiple resources for exploring and testing the API—choose
 | **🧠 Embeddings** | `POST /cohere/v2/embed`  | Vector embeddings for semantic search           | [Embed →](api_cohere_embed.md)    |
 |                   | `POST /cohere/v1/embed`  | Legacy v1 embed for older SDKs and tools        | [Embed →](api_cohere_embed.md#cohere-v1-embed-api-legacy) |
 
+### ![Ollama](styles/logo_ollama.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Ollama-Compatible API
+
+| Category          | Endpoint              | Capability                                                   | Documentation                             |
+|-------------------|-----------------------|--------------------------------------------------------------|-------------------------------------------|
+| **💬 Chat**       | `POST /api/chat`      | Conversational responses with tools, images and thinking      | [Chat →](api_ollama_chat.md)              |
+| **✍️ Generate**   | `POST /api/generate`  | A response for a single prompt                                | [Generate →](api_ollama_generate.md)      |
+| **🧠 Embeddings** | `POST /api/embed`     | Vector embeddings for one or several inputs                   | [Embed →](api_ollama_embed.md)            |
+|                   | `POST /api/embeddings`| Legacy single-prompt embedding for older clients              | [Embed →](api_ollama_embed.md)            |
+| **📋 Models**     | `GET /api/tags`       | List the models this deployment serves                        | [Models →](api_ollama_models.md)          |
+|                   | `POST /api/show`      | A model's details and capabilities                            | [Models →](api_ollama_models.md)          |
+|                   | `GET /api/ps`         | Models loaded in memory — always empty, nothing is resident   | [Models →](api_ollama_models.md)          |
+|                   | `GET /api/version`    | The Ollama API version this deployment is compatible with     | [Models →](api_ollama_models.md)          |
+|                   | `POST /api/pull`      | Confirm a model is available for use                          | [Models →](api_ollama_models.md)          |
+
+Responses stream as newline-delimited JSON, the transport Ollama clients expect. The model management verbs that write to a local model store — `create`, `copy`, `push` and `delete` — are refused with `403`, since this deployment stores no models of its own.
+
 ## :material-tools: MCP (Model Context Protocol)
 
-When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, stdapi.ai exposes all its endpoints as MCP tools. OpenAI-, Anthropic-, and Cohere-compatible tool names follow the pattern `provider_action`; the native extension tools use their bare names (`search_models`, `model_pricing`).
+When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, stdapi.ai exposes its endpoints as MCP tools. OpenAI-, Anthropic-, Cohere-, and Ollama-compatible tool names follow the pattern `provider_action`; the native extension tools use their bare names (`search_models`, `model_pricing`).
+
+Four Ollama operations are the exception: `ollama_create`, `ollama_copy`, `ollama_push` and `ollama_delete` always refuse, since this deployment stores no models, so a tool schema for a call that can never succeed would only mislead an agent. Name one in `MCP_INCLUDE_TOOLS` to publish it anyway.
 
 !!! tip "JSON body support for file and audio tools"
     MCP tools send JSON bodies — they cannot construct `multipart/form-data`. All file upload, audio, and upload-part tools therefore accept the file or audio content as a base64 string, data URI (`data:<mime>;base64,<data>`), HTTPS URL, or S3 URI in the `file` / `data` field instead of a binary attachment — as do the video generation tool's `input_reference` image, the moderation tool's `image_url` input, and the `openai_image_edit`/`openai_image_variation` tools' image inputs (also accepting a bare string in any of these forms, plus a Files API file ID). The full multipart upload workflow (`openai_upload` → `openai_upload_part` → `openai_upload_complete`) is fully MCP-compatible this way.
@@ -213,6 +231,16 @@ When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, s
 | `cohere_rerank_v1`               | `POST /cohere/v1/rerank`                    |
 | `cohere_embed`                   | `POST /cohere/v2/embed`                     |
 | `cohere_embed_v1`                | `POST /cohere/v1/embed`                     |
+| **Ollama Tools**                 |                                             |
+| `ollama_chat`                    | `POST /api/chat`                            |
+| `ollama_generate`                | `POST /api/generate`                        |
+| `ollama_embed`                   | `POST /api/embed`                           |
+| `ollama_embeddings`              | `POST /api/embeddings`                      |
+| `ollama_tags`                    | `GET /api/tags`                             |
+| `ollama_show`                    | `POST /api/show`                            |
+| `ollama_ps`                      | `GET /api/ps`                               |
+| `ollama_version`                 | `GET /api/version`                          |
+| `ollama_pull`                    | `POST /api/pull`                            |
 | **Native Extension Tools**       |                                             |
 | `search_models`                  | `GET /search_models`                        |
 | `model_pricing`                  | `GET /model_pricing`                        |
@@ -225,7 +253,7 @@ When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, s
 
 ## :material-connection: Using stdapi.ai
 
-stdapi.ai speaks the OpenAI, Anthropic, and Cohere APIs unchanged. Any application built on one of them—chatbots, coding assistants, automation tools, custom scripts—runs against stdapi.ai once you point it at your deployment's base URL and give it that deployment's API key. The model name usually stays as it is, and changes only where it differs.
+stdapi.ai speaks the OpenAI, Anthropic, Cohere and Ollama APIs unchanged. Any application built on one of them—chatbots, coding assistants, automation tools, custom scripts—runs against stdapi.ai once you point it at your deployment's base URL and give it that deployment's API key. The model name usually stays as it is, and changes only where it differs.
 
 That is because the Anthropic, OpenAI and Cohere models Bedrock serves are also published under the names their providers use, derived mechanically from the Bedrock identifier rather than curated by hand: `anthropic.claude-opus-5` answers to `claude-opus-5`, `openai.gpt-5.6-sol` to `gpt-5.6-sol`, `openai.gpt-oss-120b-1:0` to `gpt-oss-120b`, `cohere.embed-english-v3` to `embed-english-v3.0`, `cohere.rerank-v3-5:0` to `rerank-v3.5`. A client already asking for one of those names needs no model change at all. Where a name *does* differ — a model from another provider, or one named for a provider this deployment does not serve — [`MODEL_ALIASES`](operations_configuration.md#model-aliases) publishes a served model under the name your application already sends.
 
@@ -262,6 +290,16 @@ Anthropic names resolving on their own makes the base URL the only change for mo
 3. **Check the model name against what this deployment serves** — Cohere's own names for the models Bedrock offers (e.g., `embed-english-v3.0`, `embed-v4.0`, `rerank-v3.5`) resolve as they stand, as do Bedrock model IDs (e.g., `cohere.rerank-v3-5:0`, `cohere.embed-v4:0`) and any configured alias. A Cohere model Bedrock does not serve, such as `embed-english-light-v3.0`, returns `404` until you [alias](operations_configuration.md#model-aliases) it onto one it does
 
 That's it: your Cohere rerank and embed integrations are otherwise unchanged.
+
+### ![Ollama](styles/logo_ollama.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Using the Ollama-Compatible API
+
+**To connect your Ollama application:**
+
+1. **Replace the Ollama host** (`http://localhost:11434`) with your stdapi.ai deployment URL + `/ollama` (e.g., `https://your-endpoint.com/ollama`) — mainstream Ollama clients accept a path in their configured host, so the `/api/*` endpoints keep working unchanged
+2. **Send the deployment's API key** as a Bearer token in the `Authorization` header; a local Ollama needs no credentials, so this is the one setting an existing client may not already have
+3. **Pick a model from `GET /api/tags`** — the names a model was pulled under locally (`llama3.2:3b`) are not served here, and `/api/tags` is where a client discovers what is, the same way it does against Ollama itself
+
+Everything else is unchanged: the same request bodies, the same newline-delimited JSON streams, the same response fields.
 
 ## :material-arrow-right: Next Steps
 

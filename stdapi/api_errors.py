@@ -64,6 +64,19 @@ class TenantCredentialError(ApiError):
     disclosed = True
 
 
+class NoModelStoreError(ApiError):
+    """A refusal of an operation that would have to change a model store.
+
+    The request is well-formed and the server simply will not perform it, so it
+    is a ``403`` rather than a ``400``. The message is fixed and names nothing
+    of this deployment, so it is sent as written instead of reaching the client
+    as the bare word "Forbidden", which would say nothing about why.
+    """
+
+    status = 403
+    disclosed = True
+
+
 class UnsupportedModelError(ApiError):
     """Requested model does not exist or is not accessible."""
 

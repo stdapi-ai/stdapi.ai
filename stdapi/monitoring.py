@@ -36,7 +36,13 @@ from stdapi.usage import (
     total_costs_by_currency,
     usage_log_entries,
 )
-from stdapi.utils import hide_security_details, stdout_write, to_json_str, webuuid
+from stdapi.utils import (
+    hide_security_details,
+    stdout_write,
+    to_json_bytes,
+    to_json_str,
+    webuuid,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator, Iterable, Mapping
@@ -1127,6 +1133,64 @@ async def log_request_sse_stream_event(
             ),
             event="error",
         )
+
+
+def _ndjson_error_line(status: int, message: str) -> bytes:
+    """Render a mid-stream failure as the stream's terminal NDJSON line.
+
+    Args:
+        status: HTTP status the failure would have had before the headers went out.
+        message: Client-safe error message.
+
+    Returns:
+        One provider-formatted JSON object, newline-terminated.
+    """
+    return to_json_bytes(format_http_error(REQUEST.get(), status, message)[0]) + b"\n"
+
+
+async def guard_ndjson_stream_errors(
+    stream: AsyncGenerator[JsonMappingOrList],
+) -> AsyncGenerator[bytes]:
+    """Serialize a stream as NDJSON and error-guard it for ``StreamingResponse``.
+
+    Once the response headers are sent, an exception escaping the generator can
+    no longer become an HTTP error response, so it is logged and turned into a
+    terminal ``{"error": ...}`` line, leaving the client with an explanation
+    instead of a truncated stream.
+
+    The wrapped stream carries its own "request_stream" log entry and usage
+    recording (:func:`log_request_sse_stream_event` for a model stream, nothing
+    to record for a synthetic one), so this wrapper only owns the transport and
+    the terminal error line.
+
+    Args:
+        stream: Objects to emit, one JSON object per line.
+
+    Yields:
+        UTF-8 JSON lines, followed by a terminal error line on failure.
+    """
+    try:
+        async for chunk in stream:
+            yield to_json_bytes(chunk) + b"\n"
+    except SseHandledStreamError as exc:
+        # The stream already emitted its own error line; log only.
+        log_error_details(exc.args[0], status=exc.status, level=exc.level)
+    except ApiError as exc:
+        log_error_details(exc.args[0], status=exc.status)
+        yield _ndjson_error_line(
+            exc.status,
+            hide_security_details(exc.status, exc.args[0], disclosed=exc.disclosed),
+        )
+    except (ClientError, HTTPClientError, BotocoreConnectionError) as exc:
+        detail = _stream_backend_error(exc)
+        if isinstance(detail, ApiError):
+            log_error_details(detail.args[0], status=detail.status)
+            yield _ndjson_error_line(detail.status, detail.args[0])
+            return
+        yield _ndjson_error_line(*detail)
+    except Exception as exc:  # noqa: BLE001
+        log_error_details("\n".join(format_exception(exc)), level="critical")
+        yield _ndjson_error_line(500, "Internal Server Error")
 
 
 def resolve_request_identity() -> str | None:

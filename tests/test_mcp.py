@@ -557,6 +557,43 @@ class TestMCPIntegration:
         )
         assert text == compact
 
+    def test_ollama_operations_are_published_except_the_refused_verbs(
+        self, local_test_client: TestClient, api_key: str, mcp_session_id: str
+    ) -> None:
+        """The nine Ollama operations that can succeed are published by default.
+
+        Only the four that always refuse -- create, copy, push, delete -- are
+        withheld: this deployment stores no models, so a tool schema for a
+        call that can never succeed would only mislead an agent. Ollama is no
+        longer treated differently from the Anthropic and Cohere dialects.
+
+        Ref: stdapi/api_providers/ollama.py:MCP_ALWAYS_REFUSED_OPERATIONS
+        """
+        response = _mcp_post(
+            local_test_client,
+            api_key,
+            "tools/list",
+            {},
+            request_id=50,
+            session_id=mcp_session_id,
+        )
+        assert response.status_code == 200
+        names = {tool["name"] for tool in response.json()["result"]["tools"]}
+        published = {
+            "ollama_chat",
+            "ollama_generate",
+            "ollama_embed",
+            "ollama_embeddings",
+            "ollama_tags",
+            "ollama_show",
+            "ollama_ps",
+            "ollama_version",
+            "ollama_pull",
+        }
+        refused = {"ollama_create", "ollama_copy", "ollama_push", "ollama_delete"}
+        assert published <= names
+        assert refused.isdisjoint(names)
+
 
 def _mcp_only_app(*, stateless: bool) -> FastAPI:
     """Build a throwaway app exposing one tool over the streamable-HTTP transport.

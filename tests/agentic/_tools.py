@@ -36,6 +36,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from stdapi.config import SETTINGS
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
@@ -840,6 +842,9 @@ _N8N_CREDENTIAL_ID = "stdapi-openai"
 #: Credential id the Anthropic Messages template's node references.
 _N8N_ANTHROPIC_CREDENTIAL_ID = "stdapi-anthropic"
 
+#: Credential id the Ollama Chat Model template's node references.
+_N8N_OLLAMA_CREDENTIAL_ID = "stdapi-ollama"
+
 #: Only directory the workflows' file nodes may read or write.
 #:
 #: n8n restricts file access to ``~/.n8n-files`` by default and answers "Access to
@@ -941,6 +946,20 @@ def _n8n_prepare(surface: str) -> Callable[[Invocation], None]:
                         "data": {
                             "apiKey": invocation.api_key,
                             "url": f"http://127.0.0.1:{invocation.port}/anthropic",
+                        },
+                    },
+                    {
+                        "id": _N8N_OLLAMA_CREDENTIAL_ID,
+                        "name": "stdapi.ai ollama",
+                        "type": "ollamaApi",
+                        # The Ollama node appends /api/chat to this base URL, and
+                        # turns the key into an Authorization: Bearer header --
+                        # the credential exists for a proxied Ollama, which is
+                        # exactly what this gateway is.
+                        "data": {
+                            "apiKey": invocation.api_key,
+                            "baseUrl": f"http://127.0.0.1:{invocation.port}"
+                            f"{SETTINGS.ollama_routes_prefix}",
                         },
                     },
                 ]
@@ -1878,6 +1897,20 @@ N8N_RESPONSES = _n8n_tool("responses")
 
 N8N_MESSAGES = _n8n_tool("messages", route="/anthropic")
 
+# The lane's only client on the JavaScript implementation of the Ollama dialect:
+# the node builds `@langchain/ollama`'s ChatOllama, which speaks to /api/chat
+# through the `ollama` npm package.
+N8N_OLLAMA_CHAT = _n8n_tool("ollama_chat", route="/api")
+
+# The Ollama Model node builds `@langchain/ollama`'s Ollama class, which calls
+# generate() rather than chat() and so carries no tools: it feeds a Basic LLM
+# Chain, not an AI Agent.
+N8N_OLLAMA_GENERATE = _n8n_tool("ollama_generate", route="/api")
+
+# The Embeddings Ollama node builds `@langchain/ollama`'s OllamaEmbeddings,
+# whose embed() reaches /api/embed rather than the deprecated /api/embeddings.
+N8N_OLLAMA_EMBEDDINGS = _n8n_tool("ollama_embeddings", route="/api")
+
 N8N_SPEECH = _n8n_tool("speech")
 
 N8N_TRANSCRIPTIONS = _n8n_tool("transcriptions")
@@ -2100,6 +2133,9 @@ AGENTIC_TOOLS: tuple[AgenticTool, ...] = (
     N8N_CHAT_COMPLETIONS,
     N8N_RESPONSES,
     N8N_MESSAGES,
+    N8N_OLLAMA_CHAT,
+    N8N_OLLAMA_GENERATE,
+    N8N_OLLAMA_EMBEDDINGS,
     N8N_SPEECH,
     N8N_TRANSCRIPTIONS,
     N8N_TRANSLATIONS,

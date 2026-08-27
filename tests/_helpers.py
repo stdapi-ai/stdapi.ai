@@ -72,6 +72,20 @@ def decoded_png(b64_json: str | None) -> bytes:
     return data
 
 
+def ollama_route(suffix: str) -> str:
+    """Build an Ollama route path from the live ``ollama_routes_prefix`` setting.
+
+    Args:
+        suffix: The route's fixed part, e.g. ``"/api/chat"``.
+
+    Returns:
+        *suffix* prefixed with the configured Ollama routes prefix.
+    """
+    from stdapi.config import SETTINGS  # noqa: PLC0415
+
+    return f"{SETTINGS.ollama_routes_prefix}{suffix}"
+
+
 def strip_code_fence(text: str) -> str:
     """Strip a wrapping Markdown code fence (e.g. ` ```json `) from model output.
 

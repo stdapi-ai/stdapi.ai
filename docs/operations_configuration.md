@@ -290,6 +290,7 @@ Publishing where tokens come from lets an AI agent authenticate itself — see [
 | [`OPENAI_ROUTES_PREFIX`](#openai-routes-prefix)       | None (root)  | Base path prefix for OpenAI-compatible API routes    |
 | [`ANTHROPIC_ROUTES_PREFIX`](#anthropic-routes-prefix) | `/anthropic` | Base path prefix for Anthropic-compatible API routes |
 | [`COHERE_ROUTES_PREFIX`](#cohere-routes-prefix)       | `/cohere`    | Base path prefix for Cohere-compatible API routes    |
+| [`OLLAMA_ROUTES_PREFIX`](#ollama-routes-prefix)       | `/ollama`    | Base path prefix for Ollama-compatible API routes    |
 
 ### :material-chart-line: Logging { #summary-logging }
 
@@ -2684,6 +2685,32 @@ export COHERE_ROUTES_PREFIX=/cohere
     With the default prefix `/cohere`, endpoints are available at:
 
     - `/cohere/v2/rerank`
+
+#### `OLLAMA_ROUTES_PREFIX` { #ollama-routes-prefix }
+
+:octicons-package-24: **Purpose**
+:   Base path prefix for Ollama-compatible API routes
+
+:octicons-gear-24: **Default**
+:   `/ollama`
+
+:octicons-alert-24: **Requirement**
+:   Empty, or a path starting with `/` with no trailing slash, using only alphanumeric characters and `. _ ~ -` per segment
+
+:octicons-workflow-24: **Effect**
+:   All Ollama-compatible endpoints will be mounted under this prefix
+
+```bash
+export OLLAMA_ROUTES_PREFIX=/ollama
+```
+
+!!! example "Example Endpoints"
+    With the default prefix `/ollama`, endpoints are available at:
+
+    - `/ollama/api/chat`
+    - `/ollama/api/tags`
+
+    Each API dialect this server speaks gets its own prefix by default — `/anthropic`, `/cohere`, and now `/ollama` — so the four cannot collide on the same path. This does not break Ollama clients: the official `ollama-python` and `ollama-js` clients both accept a path in their configured host, and tools built on them (Open WebUI, LlamaIndex) carry it through unchanged. Set this to an empty value to mount at the root instead, for a drop-in swap with a stock Ollama host.
 
 ---
 
