@@ -19,11 +19,13 @@ Ref: https://developers.openai.com/api/docs/guides/batch.md
 """
 
 import contextlib
+from base64 import b32hexencode
+from binascii import crc32
 from datetime import UTC, datetime
 from itertools import count
 from json import dumps, loads
 from math import sqrt
-from time import monotonic, sleep
+from time import monotonic, sleep, time
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
@@ -153,6 +155,34 @@ class TestOpenAIBatchValidation:
         assert isinstance(error, dict)
         assert "same model" in error["message"]
 
+    def test_mixed_models_are_refused_before_any_line_is_translated(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A mixed-model file is refused before a single line is translated.
+
+        Translating a line can mean a remote fetch for the content it carries,
+        so a file that will be refused anyway must not pay for translating any
+        of its lines — the model names are compared first instead.
+
+        Ref: stdapi/batches.py:prepare_openai_requests
+        """
+        _batches.install(monkeypatch)
+        translated: list[Any] = []
+        original = batches._prepare_all  # noqa: SLF001
+
+        async def _tracked(items: Any, prepare: Any) -> Any:  # noqa: ANN401
+            translated.extend(items)
+            return await original(items, prepare)
+
+        monkeypatch.setattr(batches, "_prepare_all", _tracked)
+        lines = chat_lines(100) + chat_lines(
+            100, model="amazon.nova-lite-v1:0", prefix="other"
+        )
+        file_id = _batches.install_input_file(monkeypatch, lines)
+        body = _create(app_client, file_id)
+        assert body["http_status"] == 400
+        assert not translated
+
     def test_two_names_of_one_model_are_one_model(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -206,6 +236,46 @@ class TestOpenAIBatchValidation:
         assert body["http_status"] == 200
         assert resolutions.count(pattern) == 1
         assert [job["modelId"] for job in bedrock.created] == [_ALIAS_TARGET]
+
+    def test_a_refused_model_costs_one_wave_of_resolutions(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A file whose model is refused resolves one bounded wave, not every name.
+
+        A file may name one model per request, and resolving an ARN calls the
+        backend under a process-wide lock: starting every name at once would
+        leave the ones a refused file had already scheduled running long after
+        the client read its 400, with the deployment's other requests queued
+        behind them. The names are resolved in the same waves the translation
+        uses, and the first refusal cancels the rest of its wave.
+
+        Ref: stdapi/batches.py:_resolve_distinct
+        """
+        from stdapi.api_errors import ApiError  # noqa: PLC0415
+        from tests._helpers import make_model_details  # noqa: PLC0415
+
+        _batches.install(monkeypatch)
+        refused = "amazon.nova-000"
+        started: list[str] = []
+
+        async def _validate_model(model_id: str, *_args: object, **_kw: object) -> Any:  # noqa: ANN401
+            started.append(model_id)
+            if model_id == refused:
+                msg = f"The model `{model_id}` is refused."
+                raise ApiError(msg)
+            return make_model_details(model_id)
+
+        monkeypatch.setattr(batches, "validate_model", _validate_model)
+        names = [f"amazon.nova-{index:03d}" for index in range(200)]
+        lines = [
+            line
+            for index, name in enumerate(names)
+            for line in chat_lines(1, model=name, prefix=f"m{index}")
+        ]
+        file_id = _batches.install_input_file(monkeypatch, lines)
+        body = _create(app_client, file_id)
+        assert body["http_status"] == 400
+        assert len(started) <= batches._BUILD_CONCURRENCY < len(names)  # noqa: SLF001
 
     def test_batch_reports_the_model_that_runs_it(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -1394,34 +1464,293 @@ class TestOpenAIBatchLifecycle:
         body = app_client.get("/v1/batches?limit=10").json()
         assert [item["id"] for item in body["data"]] == [batch_id]
 
-    def test_a_recent_batch_is_dropped_past_the_scan_page_budget(
+    def test_the_newest_batch_is_listed_past_a_hundred_thousand_records(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Past the page budget the window is taken from the oldest records.
+        """The listing window is the newest records however many are stored.
 
-        The scan walks storage oldest first and gives up after a fixed number
-        of pages, so once more records are stored than those pages cover, the
-        trailing window it keeps is the newest of the records it *reached* —
-        not the newest stored. The budget is lowered here rather than seeding
-        the hundreds of thousands of records the shipped one takes. This is the
-        limitation the API documentation states; it fails when the scan learns
-        to seek the tail, which is the point at which that text comes out.
+        Storage lists keys ascending, so a scan that walks forward from the
+        start of the bucket holds the newest records only while the whole
+        bucket fits in the budget it walks with: past that the window is taken
+        from the *oldest* records and the recent batches a client is listing
+        for are the ones missing. More records than any such walk covers are
+        seeded here — a year of them, each stored under the key its creation
+        instant gives it, as the server stores its own — so the batch created
+        last is reached only by a scan that seeks the end of the key space.
 
         Ref: https://stdapi.ai/api_openai_batches/#listing-order
              stdapi/batches.py:_scan_bucket
         """
-        from stdapi.config import SETTINGS  # noqa: PLC0415
-
         s3, _ = _batches.install(monkeypatch)
-        monkeypatch.setattr(batches, "_LIST_SCAN_PAGES", 1)
-        for index in range(1000):
-            key = f"{SETTINGS.aws_s3_batches_prefix}{index:032x}"
-            s3.objects[_batches.BUCKET, key] = b"{}"
+        fingerprint = crc32(_batches.BUCKET.encode()).to_bytes(4, "big")
+        stored, year_ms = 101_000, 365 * 24 * 3600 * 1000
+        # Stored an hour back so the batch created below is the newest record.
+        newest_ms = int(time() * 1000) - 3_600_000
+        for index in range(stored):
+            created_ms = newest_ms - (stored - index) * (year_ms // stored)
+            payload = (
+                b32hexencode(
+                    created_ms.to_bytes(6, "big")
+                    + index.to_bytes(10, "big")
+                    + fingerprint
+                )
+                .lower()
+                .decode()
+            )
+            s3.objects[_batches.BUCKET, batches.batch_s3_key(payload)] = b"{}"
         file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
         batch_id = _create(app_client, file_id)["id"]
 
         body = app_client.get("/v1/batches?limit=10").json()
-        assert batch_id not in [item["id"] for item in body["data"]]
+        assert [item["id"] for item in body["data"]] == [batch_id]
+
+    def test_the_newest_batch_is_listed_when_records_crowd_one_hour(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A scan reaches the newest batch when records crowd the instant it probes.
+
+        The scan seeks the end of the key space by probing an instant and
+        moving it, so records packed densely enough that a probe cannot walk
+        past them are what makes it move the instant forward instead of back.
+        Enough are seeded inside one hour for the first probed instant to leave
+        more behind it than one probe walks, which is the path a bucket with a
+        steady flow of batches takes on every listing.
+
+        A year of history sits behind the crowded hour so that the seek phase
+        (finding an instant complete-probeable at all) and the bisect phase
+        (narrowing onto the crowded hour) both have to run: a scan that only
+        pages forward from the start of the bucket, as before this feature,
+        never reaches the crowded hour and cannot find the newest record
+        either, so this seeds what would make that reversion fail too.
+
+        Ref: stdapi/batches.py:_scan_bucket
+        """
+        s3, _ = _batches.install(monkeypatch)
+        fingerprint = crc32(_batches.BUCKET.encode()).to_bytes(4, "big")
+        year_stored, year_ms = 101_000, 365 * 24 * 3600 * 1000
+        hour_stored, hour_ms = 5_000, 3600 * 1000
+        newest_ms = int(time() * 1000) - 1_000
+        # The year of history ends an hour before "now", where the crowded
+        # hour begins, so the two layers do not overlap in key order.
+        year_newest_ms = newest_ms - hour_ms
+        for index in range(year_stored):
+            created_ms = year_newest_ms - (year_stored - index) * (
+                year_ms // year_stored
+            )
+            payload = (
+                b32hexencode(
+                    created_ms.to_bytes(6, "big")
+                    + index.to_bytes(10, "big")
+                    + fingerprint
+                )
+                .lower()
+                .decode()
+            )
+            s3.objects[_batches.BUCKET, batches.batch_s3_key(payload)] = b"{}"
+        for index in range(hour_stored):
+            created_ms = newest_ms - (hour_stored - index) * (hour_ms // hour_stored)
+            payload = (
+                b32hexencode(
+                    created_ms.to_bytes(6, "big")
+                    + (year_stored + index).to_bytes(10, "big")
+                    + fingerprint
+                )
+                .lower()
+                .decode()
+            )
+            s3.objects[_batches.BUCKET, batches.batch_s3_key(payload)] = b"{}"
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        batch_id = _create(app_client, file_id)["id"]
+
+        body = app_client.get("/v1/batches?limit=10").json()
+        assert [item["id"] for item in body["data"]] == [batch_id]
+
+    def test_a_listing_keeps_seeking_while_its_request_budget_is_unspent(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A scan widens its window while probes still complete and budget remains.
+
+        A probe that reaches the end of the listing is already a correct tail,
+        so settling for the first one that holds a few hundred records — while
+        most of the 20-request budget sits unspent — shrinks the window well
+        below the "up to 1,000 most recent batch records" the API documents. A
+        marker is placed deep enough into a week of history that only a scan
+        spending its idle budget on a wider probe reaches it.
+
+        Ref: https://stdapi.ai/api_openai_batches/#listing-window
+             stdapi/batches.py:_scan_bucket
+        """
+        s3, _ = _batches.install(monkeypatch)
+        fingerprint = crc32(_batches.BUCKET.encode()).to_bytes(4, "big")
+        stored, week_ms = 5_000, 7 * 24 * 3600 * 1000
+        newest_ms = int(time() * 1000) - 1_000
+        # Deep enough that a scan settling near the 200-record floor misses it,
+        # but shallow enough that a scan spending its full budget reaches it.
+        marker_depth = 700
+        marker_ms = 0
+        for index in range(stored):
+            created_ms = newest_ms - (stored - index) * (week_ms // stored)
+            if stored - index == marker_depth:
+                marker_ms = created_ms
+                continue
+            payload = (
+                b32hexencode(
+                    created_ms.to_bytes(6, "big")
+                    + index.to_bytes(10, "big")
+                    + fingerprint
+                )
+                .lower()
+                .decode()
+            )
+            s3.objects[_batches.BUCKET, batches.batch_s3_key(payload)] = b"{}"
+        assert marker_ms
+
+        # A real batch, created at the marker's instant, so it carries a real
+        # job the listing can settle rather than a hand-written record.
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        with monkeypatch.context() as clock:
+            clock.setattr(
+                "stdapi.files._core.uuid7",
+                lambda: UUID(bytes=marker_ms.to_bytes(6, "big") + bytes(10)),
+            )
+            marker_id = _create(app_client, file_id)["id"]
+
+        body = app_client.get("/v1/batches?limit=10").json()
+        assert marker_id in [item["id"] for item in body["data"]]
+
+    def test_a_batchs_own_objects_stay_rolled_up_under_the_scans_budget(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The scan reads batch records, not every object a batch owns.
+
+        A real batch stores its input, its job output and its manifest under
+        its own key prefix, so listing without a delimiter would count every
+        one of those objects against the same 1,000-key pages the scan reads —
+        shrinking the window a batch's own data has nothing to do with. Ten
+        objects are seeded per record here, matching a batch's real layout
+        closely enough that the newest record is only reached because the
+        scan rolls each batch's data up into its own listing entry.
+
+        Ref: stdapi/batches.py:_walk_tail
+        """
+        s3, _ = _batches.install(monkeypatch)
+        fingerprint = crc32(_batches.BUCKET.encode()).to_bytes(4, "big")
+        stored, hour_ms = 5_000, 3600 * 1000
+        newest_ms = int(time() * 1000) - 1_000
+        for index in range(stored):
+            created_ms = newest_ms - (stored - index) * (hour_ms // stored)
+            payload = (
+                b32hexencode(
+                    created_ms.to_bytes(6, "big")
+                    + index.to_bytes(10, "big")
+                    + fingerprint
+                )
+                .lower()
+                .decode()
+            )
+            key = batches.batch_s3_key(payload)
+            s3.objects[_batches.BUCKET, key] = b"{}"
+            for sub in range(10):
+                s3.objects[_batches.BUCKET, f"{key}/0/file{sub}.jsonl"] = b"{}"
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        batch_id = _create(app_client, file_id)["id"]
+
+        body = app_client.get("/v1/batches?limit=10").json()
+        assert [item["id"] for item in body["data"]] == [batch_id]
+
+    def test_the_newest_batch_is_listed_after_a_burst_in_the_real_key_layout(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A nightly burst, quiet since, still lists the batch created after it.
+
+        An ended batch leaves three entries at the record level — the record,
+        the `.billed` marker the billing claim writes, and the one common
+        prefix its own objects roll up into — so a 1,000-key page carries only
+        about 333 records where a bare record layout carries 1,000. A burst
+        that fits in a probe's pages under the bare layout therefore does not
+        under the real one, and the seek has to cross it by the records each
+        probe reads rather than by halving its window: a burst sitting some
+        hours in the past is otherwise never bisected into within the budget,
+        and the listing answers from its oldest end.
+
+        Ref: https://stdapi.ai/api_openai_batches/#listing-window
+             stdapi/batches.py:_scan_bucket
+        """
+        s3, _ = _batches.install(monkeypatch)
+        fingerprint = crc32(_batches.BUCKET.encode()).to_bytes(4, "big")
+        stored, hour_ms = 1_500, 3600 * 1000
+        # The burst spans three hours and ended 21 hours ago, with nothing
+        # since: no probe of the recent past reaches it, and every bisect the
+        # budget affords lands before it.
+        burst_end_ms = int(time() * 1000) - 21 * hour_ms
+        for index in range(stored):
+            created_ms = burst_end_ms - (stored - index) * (3 * hour_ms // stored)
+            payload = (
+                b32hexencode(
+                    created_ms.to_bytes(6, "big")
+                    + index.to_bytes(10, "big")
+                    + fingerprint
+                )
+                .lower()
+                .decode()
+            )
+            key = batches.batch_s3_key(payload)
+            s3.objects[_batches.BUCKET, key] = b"{}"
+            s3.objects[_batches.BUCKET, f"{key}.billed"] = b""
+            s3.objects[_batches.BUCKET, f"{key}/0/input.jsonl"] = b"{}"
+
+        # The batch to find is the last of the burst, so reaching it is the
+        # seek's job rather than a recent probe's.
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        with monkeypatch.context() as clock:
+            clock.setattr(
+                "stdapi.files._core.uuid7",
+                lambda: UUID(bytes=burst_end_ms.to_bytes(6, "big") + bytes(10)),
+            )
+            batch_id = _create(app_client, file_id)["id"]
+
+        body = app_client.get("/v1/batches?limit=10").json()
+        assert batch_id in [item["id"] for item in body["data"]]
+
+    def test_a_batch_created_during_a_density_spike_is_still_listed(
+        self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A burst too dense for one probe still leaves the newest batch listed.
+
+        The scan spends at most 20 storage requests, and 5,000 records inside
+        one minute is denser than any probe can walk past — so halving the seek
+        window alone never lands inside the burst before the budget runs out.
+        Each probe that runs out of pages instead carries the seek forward to
+        the last record it read, which is what makes a burst crossable at the
+        rate the pages read it. Retrieval by identifier, which never depends on
+        the scan, is asserted alongside it.
+
+        Ref: https://stdapi.ai/api_openai_batches/#listing-window
+             stdapi/batches.py:_scan_bucket
+        """
+        s3, _ = _batches.install(monkeypatch)
+        fingerprint = crc32(_batches.BUCKET.encode()).to_bytes(4, "big")
+        stored, minute_ms = 5_000, 60 * 1000
+        newest_ms = int(time() * 1000) - 1_000
+        for index in range(stored):
+            created_ms = newest_ms - (stored - index) * (minute_ms // stored)
+            payload = (
+                b32hexencode(
+                    created_ms.to_bytes(6, "big")
+                    + index.to_bytes(10, "big")
+                    + fingerprint
+                )
+                .lower()
+                .decode()
+            )
+            s3.objects[_batches.BUCKET, batches.batch_s3_key(payload)] = b"{}"
+        file_id = _batches.install_input_file(monkeypatch, chat_lines(100))
+        batch_id = _create(app_client, file_id)["id"]
+
+        assert batch_id in [
+            item["id"] for item in app_client.get("/v1/batches?limit=10").json()["data"]
+        ]
+        assert app_client.get(f"/v1/batches/{batch_id}").status_code == 200
 
     def test_batches_sharing_a_second_page_in_identifier_order(
         self, app_client: TestClient, monkeypatch: pytest.MonkeyPatch
