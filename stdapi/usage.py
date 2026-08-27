@@ -85,10 +85,10 @@ _BEST_EFFORT_PRICED_DIMENSIONS: Final[frozenset[Dimension]] = frozenset(
     {Dimension.TEXT_UNITS}
 )
 
-#: Services AWS bills on something other than the quantities recorded here, so no
-#: price can resolve and a miss is never a catalog gap. A Marketplace model endpoint
-#: is billed by the instance-hour of the endpoint, not by the tokens it serves.
-UNPRICED_SERVICES: Final[frozenset[Service]] = frozenset({Service.BEDROCK_MARKETPLACE})
+#: Services billed by endpoint instance-hours (see Service), so a miss is no catalog gap.
+UNPRICED_SERVICES: Final[frozenset[Service]] = frozenset(
+    {Service.BEDROCK_MARKETPLACE, Service.SAGEMAKER}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1056,12 +1056,11 @@ def usage_log_entries() -> list[UsageLogEntry]:
 #: EMF metric counting the billed backend invocations behind a usage record.
 REQUESTS_METRIC: Final = "Requests"
 
-#: Route paths, after their provider prefix, mapped to the ``Operation`` metric
-#: dimension values. Deliberately an allow list: a path this table does not name
-#: publishes no Operation dimension at all, so the dimension can never take a
-#: caller-controlled value nor an unbounded number of them.
+#: Allow list mapping route paths, after their provider prefix, to ``Operation`` values.
 _OPERATION_DIMENSIONS: Final[tuple[tuple[Callable[[str], object], str], ...]] = tuple(
     (regex_compile(pattern).fullmatch, name)
+    # An unlisted path publishes no Operation dimension at all, so the metric
+    # dimension can never take a caller-controlled or unbounded value.
     for pattern, name in (
         (r"/v1/chat/completions", "chat.completions"),
         (r"/v1/completions", "completions"),
