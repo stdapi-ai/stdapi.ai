@@ -120,9 +120,9 @@ jobs:
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends ffmpeg
 
-      # The image's ffmpeg is minimal and its filesystem is rewritten, so a
-      # missing codec or a pruned file only shows up here. The boot test skips
-      # itself: this job holds no AWS credentials.
+      # A missing codec, an unreadable file or a broken probe only shows up when
+      # the image is run, which is here. The boot test skips itself: this job
+      # holds no AWS credentials.
       - name: Test the candidate image
         env:
           CONTAINER_ENGINE: docker

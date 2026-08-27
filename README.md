@@ -38,13 +38,18 @@ Run stdapi.ai locally with the free community image. Requires [AWS credentials](
 
 ```bash
 docker run --rm -p 8000:8000 \
+  --user "$(id -u):$(id -g)" -e HOME=/home/nonroot \
   -v ~/.aws:/home/nonroot/.aws:ro \
   -e AWS_BEDROCK_REGIONS=us-east-1,us-west-2 \
   -e ENABLE_DOCS=true \
   ghcr.io/stdapi-ai/stdapi.ai-community:latest
 ```
 
-> **Podman on Fedora/RHEL (SELinux):** Add `--userns=keep-id` and use `:ro,z` instead of `:ro`
+> The image runs as the unprivileged user `nonroot` (uid/gid 65532); `--user` lets it read your own `~/.aws` files. Drop both flags when you pass credentials as environment variables instead.
+>
+> **Never run this with `sudo`:** under `sudo`, `$(id -u):$(id -g)` resolves to `0:0`, and the container silently runs as root instead of `nonroot`. If your host has no `docker` group, add credentials as environment variables (below) instead of using `sudo` with `--user`.
+>
+> **Podman on Fedora/RHEL (SELinux):** use `--userns=keep-id:uid=65532,gid=65532` in place of `--user`/`HOME`, and `:ro,z` instead of `:ro`
 
 Open **[http://localhost:8000/docs](http://localhost:8000/docs)** in your browser — Swagger UI lets you explore all endpoints and send live requests without writing any code.
 
