@@ -100,26 +100,43 @@ class FakeS3:
         *,
         Bucket: str,  # noqa: N803
         Prefix: str = "",  # noqa: N803
+        Delimiter: str = "",  # noqa: N803
         MaxKeys: int = 1000,  # noqa: N803
         ContinuationToken: str | None = None,  # noqa: N803
+        StartAfter: str | None = None,  # noqa: N803
         **_kwargs: Any,  # noqa: ANN401
     ) -> dict[str, Any]:
         """List one page of *Bucket* under *Prefix*, in key order.
 
         Paging is honoured: ``MaxKeys`` bounds the page and the continuation
         token resumes after the last key returned, so a caller's paging loop
-        runs more than once.
+        runs more than once. ``StartAfter`` seeks into the key space, and a
+        delimiter rolls the keys that carry one up into a common prefix — both
+        counting against ``MaxKeys`` the way S3 counts them, so a caller
+        reading the tail of a large bucket reads what S3 would answer.
         """
-        keys = [
-            key
-            for (bucket, key) in sorted(self.objects)
-            if bucket == Bucket
-            and key.startswith(Prefix)
-            and (ContinuationToken is None or key > ContinuationToken)
-        ]
-        page = keys[:MaxKeys]
-        response: dict[str, Any] = {"Contents": [{"Key": key} for key in page]}
-        if page and len(keys) > MaxKeys:
+        # A continuation token supersedes StartAfter, the way S3 reads them.
+        resume = ContinuationToken or StartAfter
+        entries: list[str] = []
+        rolled: set[str] = set()
+        for bucket, key in sorted(self.objects):
+            if bucket != Bucket or not key.startswith(Prefix):
+                continue
+            entry = key
+            if Delimiter and Delimiter in (rest := key[len(Prefix) :]):
+                entry = Prefix + rest.split(Delimiter)[0] + Delimiter
+                if entry in rolled:
+                    continue
+                rolled.add(entry)
+            if resume is None or entry > resume:
+                entries.append(entry)
+        page = entries[:MaxKeys]
+        response: dict[str, Any] = {
+            "Contents": [{"Key": key} for key in page if key not in rolled],
+            "CommonPrefixes": [{"Prefix": key} for key in page if key in rolled],
+            "IsTruncated": len(entries) > MaxKeys,
+        }
+        if page and len(entries) > MaxKeys:
             response["NextContinuationToken"] = page[-1]
         return response
 
