@@ -1323,6 +1323,9 @@ class TestEveryRouteIsAuthenticated:
         r"|/favicon\.ico|/robots\.txt|/docs-assets/\{name\}"  # static assets
         r"|/"  # the landing page, which carries no data
         r"|/\.well-known/.*"  # discovery metadata, public by protocol
+        # Authenticates in-body: an ephemeral client secret is a valid
+        # credential there, which Depends(authenticate) would refuse first.
+        r"|/v1/realtime/calls"
         r")$"
     )
 

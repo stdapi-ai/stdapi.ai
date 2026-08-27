@@ -43,6 +43,9 @@ granian = ["granian[uvloop]"]
 # fastapi-mcp 0.4.0 declares "mcp>=1.12.0" with no ceiling, but mcp 2.0 changed
 # Server.__init__ and fastapi_mcp fails on it. Cap until fastapi-mcp supports 2.x.
 mcp     = ["fastapi-mcp", "mcp<2"]
+# WebRTC media termination for POST /v1/realtime/calls. Glibc wheels only:
+# aiortc and its google-crc32c dependency publish no musllinux wheels.
+webrtc  = ["aiortc>=1.15,<2"]
 
 [dependency-groups]
 test = [
@@ -85,7 +88,7 @@ docs-gen = [
     "pyarrow>=17",
 ]
 dev = [
-    "stdapi[opentelemetry, uvicorn, granian, mcp]",
+    "stdapi[opentelemetry, uvicorn, granian, mcp, webrtc]",
     {include-group = "test"},
     {include-group = "lint"},
     {include-group = "docs"},

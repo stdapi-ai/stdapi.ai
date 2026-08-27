@@ -18,7 +18,7 @@ from secrets import token_bytes
 from sys import byteorder
 from time import time
 from traceback import format_exception
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, TypeIs
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeIs
 from uuid import uuid4
 
 from pybase64 import urlsafe_b64decode, urlsafe_b64encode
@@ -75,7 +75,7 @@ from stdapi.utils import b64decode, b64encode, to_json_bytes, to_json_str, webuu
 
 if TYPE_CHECKING:
     from asyncio import Task
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Mapping
 
     from fastapi import WebSocket
     from types_aiobotocore_bedrock.literals import RegionName
@@ -554,6 +554,90 @@ async def drain_session_stops(timeout: float) -> int:  # noqa: ASYNC109 -- share
     return await drain_tasks(_STOP_TASKS, timeout)
 
 
+class RealtimeClientTransport(Protocol):
+    """The client half of a realtime session, whatever carries it.
+
+    A WebSocket serves it through :class:`_WebSocketTransport`; the WebRTC
+    call transport implements the same surface over an ``oai-events`` data
+    channel and media tracks.
+    """
+
+    @property
+    def connected(self) -> bool:
+        """Whether events can still be sent to the client."""
+        ...
+
+    async def receive(self) -> Mapping[str, Any]:
+        """Return the next client message, in the ASGI WebSocket shape.
+
+        Returns:
+            A ``websocket.receive`` message carrying one event as ``text``,
+            or a ``websocket.disconnect`` message once the client is gone.
+        """
+        ...
+
+    async def send_event(self, event: JsonMapping) -> None:
+        """Send one server event to the client.
+
+        Args:
+            event: The event body, identifier included.
+        """
+        ...
+
+    async def close(self, code: int, reason: str) -> None:
+        """Close the transport.
+
+        Args:
+            code: WebSocket close code, mapped by non-socket transports.
+            reason: Close reason.
+        """
+        ...
+
+
+class _WebSocketTransport:
+    """The one live WebSocket, as the session's client transport."""
+
+    __slots__ = ("_websocket",)
+
+    def __init__(self, websocket: WebSocket) -> None:
+        """Wrap one accepted connection.
+
+        Args:
+            websocket: The accepted connection.
+        """
+        self._websocket = websocket
+
+    @property
+    def connected(self) -> bool:
+        """Whether events can still be sent to the client."""
+        return self._websocket.client_state is WebSocketState.CONNECTED
+
+    async def receive(self) -> Mapping[str, Any]:
+        """Return the next client message.
+
+        Returns:
+            The ASGI message as the socket delivered it.
+        """
+        return await self._websocket.receive()
+
+    async def send_event(self, event: JsonMapping) -> None:
+        """Send one server event as a text frame.
+
+        Args:
+            event: The event body, identifier included.
+        """
+        await self._websocket.send_text(to_json_str(event))
+
+    async def close(self, code: int, reason: str) -> None:
+        """Close the socket.
+
+        Args:
+            code: WebSocket close code.
+            reason: Close reason.
+        """
+        await self._websocket.close(code=code, reason=reason)
+
+
 class _Item:
     """One conversation item, as the client sees it and may address it."""
 
@@ -692,6 +776,7 @@ class RealtimeSession:
         "_closing",
         "_config",
         "_conversation_id",
+        "_fixed_formats",
         "_items",
         "_last_item_id",
         "_locked",
@@ -705,33 +790,37 @@ class RealtimeSession:
         "_started",
         "_stopping",
         "_suppressed",
-        "_websocket",
+        "_transport",
     )
 
     def __init__(
         self,
-        websocket: WebSocket,
+        transport: RealtimeClientTransport,
         model: RealtimeModelBase[Any, Any],
         model_id: str,
         config: SessionConfig,
         *,
         locked: bool = False,
+        fixed_formats: bool = False,
     ) -> None:
-        """Bind one client socket to the model that will serve it.
+        """Bind one client transport to the model that will serve it.
 
         Args:
-            websocket: The accepted connection.
+            transport: The client transport, already accepted.
             model: The model class serving the session.
             model_id: Identifier of the model serving the session.
             config: Session configuration the client connected with.
             locked: Whether the client may not change what its credential
                 pinned: the model, the instructions and the output token cap.
+            fixed_formats: Whether the audio formats are fixed by the
+                transport's own media negotiation, refusing any change.
         """
-        self._websocket = websocket
+        self._transport = transport
         self._model = model
         self._model_id = model_id
         self._config = config
         self._locked = locked
+        self._fixed_formats = fixed_formats
         self._session_id = f"sess_{uuid4().hex}"
         self._conversation_id = f"conv_{uuid4().hex}"
         self._backend: RealtimeBackendSession | None = None
@@ -830,7 +919,7 @@ class RealtimeSession:
     async def _pump_client(self) -> None:
         """Apply everything the client sends, until it stops or the socket does."""
         while self._closing is None:
-            message = await self._websocket.receive()
+            message = await self._transport.receive()
             if message["type"] == "websocket.disconnect":
                 return
             payload = message.get("text") or message.get("bytes") or ""
@@ -897,6 +986,18 @@ class RealtimeSession:
         if (parsed := _parse_session(merged)) is None:
             await self._error(
                 "invalid_request_error", "The session configuration is not valid."
+            )
+            return
+        # The encoding is what the media negotiation pinned; the rate the
+        # client may echo with it is the one that encoding is defined at.
+        if self._fixed_formats and (
+            parsed.audio.input.format.type != self._config.audio.input.format.type
+            or parsed.audio.output.format.type != self._config.audio.output.format.type
+        ):
+            await self._error(
+                "invalid_request_error",
+                "The audio formats are fixed by the call's media negotiation "
+                "and cannot be changed.",
             )
             return
         if self._locked and not self._same_pinned_settings(parsed):
@@ -1768,11 +1869,9 @@ class RealtimeSession:
         Args:
             event: The event body, which is given its own identifier here.
         """
-        if self._websocket.client_state is not WebSocketState.CONNECTED:
+        if not self._transport.connected:
             return
-        await self._websocket.send_text(
-            to_json_str({"event_id": f"event_{webuuid()}", **event})
-        )
+        await self._transport.send_event({"event_id": f"event_{webuuid()}", **event})
 
     async def _error(self, kind: str, message: str, code: str | None = None) -> None:
         """Report a non-fatal error to the client.
@@ -1808,17 +1907,17 @@ class RealtimeSession:
         self._closing = (ERROR_CLOSE_CODE, f"{kind}.{code}" if code else kind)
 
     async def _close(self, code: int, reason: str) -> None:
-        """Close the socket, tolerating one already closed by the client.
+        """Close the transport, tolerating one already closed by the client.
 
         Args:
             code: WebSocket close code.
             reason: Close reason.
         """
-        if self._websocket.client_state is not WebSocketState.CONNECTED:
+        if not self._transport.connected:
             return
         with suppress(Exception):
             async with async_timeout(_CLOSE_TIMEOUT):
-                await self._websocket.close(code=code, reason=reason)
+                await self._transport.close(code, reason)
 
 
 async def _finish_reader(task: Task[None]) -> None:
@@ -1877,7 +1976,9 @@ def _instructions(config: SessionConfig) -> str:
     return config.instructions or _DEFAULT_INSTRUCTIONS
 
 
-async def serve_realtime_session(websocket: WebSocket, model: str | None) -> None:
+async def serve_realtime_session(
+    websocket: WebSocket, model: str | None, call_id: str | None = None
+) -> None:
     """Serve one Realtime WebSocket, from the upgrade to the close frame.
 
     Everything the HTTP middleware would have done is done here instead: the
@@ -1890,6 +1991,9 @@ async def serve_realtime_session(websocket: WebSocket, model: str | None) -> Non
     Args:
         websocket: The connection being opened.
         model: Model named on the query string, if any.
+        call_id: WebRTC call named on the query string, if any, attaching the
+            connection to that call as its sideband instead of opening a
+            session of its own.
     """
     subprotocol = next(
         (
@@ -1907,7 +2011,10 @@ async def serve_realtime_session(websocket: WebSocket, model: str | None) -> Non
                 subprotocol=subprotocol, headers=[(b"x-request-id", log["id"].encode())]
             )
             log["status_code"] = 101
-            await _open_session(websocket, model)
+            if call_id is not None:
+                await _open_sideband(websocket, call_id)
+            else:
+                await _open_session(websocket, model)
         except WebSocketDisconnect:
             log["status_code"] = 499
         except ApiError as exception:
@@ -1989,8 +2096,45 @@ async def _open_session(websocket: WebSocket, model: str | None) -> None:
         message = "This model cannot serve a live conversation."
         raise ApiError(message, status=404)
     await RealtimeSession(
-        websocket, realtime_model, model_id, config, locked=locked
+        _WebSocketTransport(websocket), realtime_model, model_id, config, locked=locked
     ).run()
+
+
+async def _open_sideband(websocket: WebSocket, call_id: str) -> None:
+    """Authenticate and attach one connection to a WebRTC call as its sideband.
+
+    Only the deployment's own credentials open a sideband: an ephemeral client
+    secret belongs to the untrusted caller, who already holds the in-band data
+    channel.
+
+    Args:
+        websocket: The accepted connection.
+        call_id: Identifier of the call to attach to.
+
+    Raises:
+        ApiError: The credential was refused, the deployment is stopping, the
+            feature is not enabled, or no call under that identifier is held
+            by this instance.
+    """
+    await verify_websocket_credentials(websocket_credential(websocket), websocket.scope)
+    if _SHUTTING_DOWN:
+        message = "The server is shutting down. Reconnect to start a new session."
+        raise ApiError(message, status=503)
+    if not SETTINGS.realtime_webrtc_enabled:
+        log_error_details(
+            "WebRTC calls are disabled: set realtime_webrtc_enabled to serve "
+            "them, and their sidebands.",
+            level="warning",
+        )
+        message = (
+            "WebRTC calls are not available on this deployment, so there is "
+            "no call to attach to. Contact the administrator."
+        )
+        raise ApiError(message, status=404)
+    # Imported lazily: the webrtc extra is only present when the setting proved it.
+    from stdapi.realtime_webrtc import serve_sideband  # noqa: PLC0415
+
+    await serve_sideband(websocket, call_id)
 
 
 async def _refuse(websocket: WebSocket, exception: ApiError) -> None:

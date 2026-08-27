@@ -178,7 +178,7 @@ This is a hand-picked sample, not the full roster — the [Models](models.md) pa
 - 24 kHz PCM, or G.711 at 8 kHz for telephony; server-side voice activity detection or manual turn control, with barge-in on the item the caller spoke over
 - Ephemeral, browser-safe client secrets, minted by one instance behind a load balancer and verified by any other
 - A configured guardrail is applied per turn — a written item is checked before it reaches the model, a spoken answer once it is complete ([guardrail coverage](api_openai_realtime.md#guardrail-coverage))
-- **Its limits, up front** — a session lasts at most 8 minutes and calls no tools, and WebSocket is the only transport: upstream's WebRTC and SIP call route is not served. For WebRTC or telephony, LiveKit Agents and Pipecat terminate the media themselves and reach this API like any other client — see [transports](api_openai_realtime.md#transports) and the [feature compatibility table](api_openai_realtime.md#feature-compatibility)
+- **Its limits, up front** — a session lasts at most 8 minutes and calls no tools. WebSocket is the default transport; [WebRTC calls terminated by the gateway](api_openai_realtime.md#webrtc-calls) are an operator opt-in with documented single-instance and UDP-ingress constraints, and SIP is never terminated in-process. For telephony or multi-instance WebRTC, LiveKit Agents and Pipecat terminate the media themselves and reach this API like any other client — see [transports](api_openai_realtime.md#transports) and the [feature compatibility table](api_openai_realtime.md#feature-compatibility)
 
 ### :material-file-document: Documents & Files
 
