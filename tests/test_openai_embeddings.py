@@ -829,7 +829,7 @@ class TestEmbeddingsRouteMapping:
 
 @pytest.mark.local
 class TestEmbeddingRouteAdvertised:
-    """A TEXT-in / EMBEDDING-out model advertises exactly the three embedding surfaces.
+    """A TEXT-in / EMBEDDING-out model advertises exactly the embedding surfaces.
 
     Agents discover embedding models through ``search_models`` and
     ``supported_mcp_tools``, so a modality or registration typo would silently
@@ -847,12 +847,16 @@ class TestEmbeddingRouteAdvertised:
             "vendor.embed-v1", output_modalities=output_modalities
         )
 
-    def test_embedding_model_advertises_the_three_embedding_routes(self) -> None:
-        """The OpenAI and both Cohere embedding routes are advertised, and nothing else.
+    def test_embedding_model_advertises_every_embedding_route(self) -> None:
+        """The OpenAI, Cohere and Ollama embedding routes are advertised, and nothing else.
+
+        The Ollama pair contributes its paths but no MCP tool: those routes are
+        mounted and deliberately not published as tools.
 
         Ref: stdapi/routes/openai_embeddings.py:register_route_capability
              stdapi/routes/cohere_embed.py:register_route_capability
              stdapi/routes/cohere_embed_v1.py:register_route_capability
+             stdapi/routes/ollama_embed.py:register_route_capability
         """
         import stdapi.main  # noqa: F401, PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
@@ -864,7 +868,10 @@ class TestEmbeddingRouteAdvertised:
 
         cohere = SETTINGS.cohere_routes_prefix
         openai = SETTINGS.openai_routes_prefix
+        ollama = SETTINGS.ollama_routes_prefix
         assert routes == [
+            f"{ollama}/api/embed",
+            f"{ollama}/api/embeddings",
             f"{cohere}/v1/embed",
             f"{cohere}/v2/embed",
             f"{openai}/v1/embeddings",

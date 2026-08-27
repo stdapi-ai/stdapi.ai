@@ -54,6 +54,10 @@ _HOST_CLIENTS: Mapping[str, Mapping[str, str]] = {
     # and takes the whole directory's collection down with it.
     "test_llama_index.py": {"llama_index": "llama-index-llms-openai"},
     "test_livekit.py": {"livekit": "livekit-plugins-openai"},
+    # The one client that comes from the project's own ``test`` group rather than
+    # the overlay: the unit suite's Ollama modules drive it too, so pinning it
+    # again in requirements.txt would resolve a second copy of the same library.
+    "test_ollama_sdk.py": {"ollama": "ollama"},
     "test_openai_agents.py": {"agents": "openai-agents"},
     "test_pipecat.py": {"pipecat": "pipecat-ai"},
     "test_pydantic_ai.py": {"pydantic_ai": "pydantic-ai-slim"},

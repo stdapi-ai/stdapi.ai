@@ -21,6 +21,7 @@ from mcp.types import AudioContent, ImageContent
 from pydantic_core import to_json
 
 from stdapi import server
+from stdapi.api_providers.ollama import MCP_EXCLUDED_OPERATIONS
 from stdapi.auth import authenticate
 from stdapi.config import SETTINGS, LogLevel
 from stdapi.metering import EDITION_TITLE
@@ -415,6 +416,26 @@ def _bind_media_results(mcp: FastApiMCP) -> None:
     mcp._execute_api_tool = execute_api_tool  # noqa: SLF001
 
 
+def _operation_filters() -> tuple[list[str] | None, list[str] | None]:
+    """Resolve which operations become MCP tools.
+
+    The Ollama endpoints are mounted but not published by default: each
+    duplicates a tool an agent already has on another dialect, and redundant
+    tools degrade tool choice. Naming one in ``mcp_include_tools`` publishes it.
+
+    ``FastApiMCP`` takes one filter or the other and refuses both, so an
+    explicit include list is resolved here, which is also how
+    ``mcp_exclude_tools`` narrows ``mcp_include_tools``.
+
+    Returns:
+        The ``(include, exclude)`` operation ID lists, each None when unused.
+    """
+    excluded = set(SETTINGS.mcp_exclude_tools or ())
+    if (included := SETTINGS.mcp_include_tools) is not None:
+        return [op for op in included if op not in excluded], None
+    return None, sorted(MCP_EXCLUDED_OPERATIONS | excluded) or None
+
+
 def mount_mcp(app: FastAPI) -> None:
     """Attach FastApiMCP to *app* and mount the enabled transports.
 
@@ -432,12 +453,13 @@ def mount_mcp(app: FastAPI) -> None:
     _mcp_logger.propagate = False
     fastapi_mcp.server.json = _CompactJson
 
+    include_operations, exclude_operations = _operation_filters()
     mcp = FastApiMCP(
         app,
         name=EDITION_TITLE,
         description="AWS standardized AI API",
-        include_operations=SETTINGS.mcp_include_tools,
-        exclude_operations=SETTINGS.mcp_exclude_tools,
+        include_operations=include_operations,
+        exclude_operations=exclude_operations,
         auth_config=AuthConfig(dependencies=[Depends(authenticate)]),
         http_client=AsyncClient(
             transport=ASGITransport(app=app, raise_app_exceptions=False),

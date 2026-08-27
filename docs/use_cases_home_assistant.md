@@ -121,6 +121,19 @@ Naming the same model in both `TTS_MODELS` and `TTS_STREAMING_MODELS` puts its v
 
 `TTS_VOICES` lists OpenAI-style voice names (`alloy`, `echo`, `fable`, and so on); stdapi.ai maps each one to an Amazon Polly voice of matching gender and language. List one entry per voice you want Assist to offer.
 
+#### :material-robot-outline: Conversation Agent
+
+Enables: the middle stage of the Assist pipeline — turning the recognized text into an answer and into device actions.
+
+The speech halves above use the Wyoming bridge; the conversation agent does not need one. Home Assistant's built-in **Ollama** integration talks to stdapi.ai directly through the [Ollama-compatible API](api_ollama_chat.md):
+
+1. **Settings → Devices & Services → Add Integration → Ollama**
+2. **URL**: your stdapi.ai deployment URL with no path suffix, e.g. `https://YOUR_STDAPI_URL` — Home Assistant appends `/api/chat` itself
+3. **API key**: your stdapi.ai key. A local Ollama needs no credentials, so this field is easy to skip; without it every request is refused with `401`
+4. **Model**: pick one from the list, which is what [`GET /api/tags`](api_ollama_models.md) publishes. The names a local Ollama would offer, such as `llama3.2:latest`, are not served here
+
+Then select the integration as the conversation agent of your Assist pipeline. Choose a model that supports tool calling if you want the agent to control devices rather than only answer questions.
+
 ---
 
 ### :material-alert-outline: Known Issues

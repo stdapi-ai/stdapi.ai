@@ -1,7 +1,7 @@
 ---
-title: Python AI Libraries - LangChain, pydantic-ai and the OpenAI Agents SDK on Amazon Bedrock
-description: Build Python applications and agents on Amazon Bedrock with stdapi.ai. Configure LangChain (ChatOpenAI, OpenAIEmbeddings, ChatAnthropic), pydantic-ai and the OpenAI Agents SDK against stdapi.ai's OpenAI- and Anthropic-compatible endpoints.
-keywords: LangChain AWS Bedrock, ChatOpenAI custom base URL, pydantic-ai AWS Bedrock, OpenAI Agents SDK AWS Bedrock, LangChain Anthropic Bedrock, Python AI library AWS, OpenAIEmbeddings custom endpoint, LangChain agent Bedrock
+title: Python AI Libraries - LangChain, pydantic-ai, the OpenAI Agents SDK and the Ollama client on Amazon Bedrock
+description: Build Python applications and agents on Amazon Bedrock with stdapi.ai. Configure LangChain (ChatOpenAI, OpenAIEmbeddings, ChatAnthropic), pydantic-ai, the OpenAI Agents SDK and the official Ollama client against stdapi.ai's OpenAI-, Anthropic- and Ollama-compatible endpoints.
+keywords: LangChain AWS Bedrock, ChatOpenAI custom base URL, pydantic-ai AWS Bedrock, OpenAI Agents SDK AWS Bedrock, LangChain Anthropic Bedrock, Python AI library AWS, OpenAIEmbeddings custom endpoint, LangChain agent Bedrock, ollama Python client custom host, Ollama API AWS Bedrock
 ---
 
 # :material-language-python: Python Client Libraries Integration
@@ -10,9 +10,9 @@ Build Python applications and agents directly on Amazon Bedrock models with stda
 
 ## :material-information-outline: About These Libraries
 
-**🔗 Links:** [LangChain](https://python.langchain.com/) | [pydantic-ai](https://ai.pydantic.dev/) | [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/)
+**🔗 Links:** [LangChain](https://python.langchain.com/) | [pydantic-ai](https://ai.pydantic.dev/) | [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) | [Ollama Python](https://github.com/ollama/ollama-python)
 
-These are three of the most widely used Python frameworks for building LLM-backed applications and agents. All of them ship OpenAI-compatible client classes that accept a custom base URL and API key as constructor arguments—no plugin, wrapper, or extension needed.
+These are among the most widely used Python libraries for building LLM-backed applications and agents. Every one of them accepts a custom base URL and API key as constructor arguments—no plugin, wrapper, or extension needed.
 
 **What you can build:**
 
@@ -20,6 +20,7 @@ These are three of the most widely used Python frameworks for building LLM-backe
 - **RAG applications** - Combine chat models with `OpenAIEmbeddings` for retrieval, see [RAG Pipelines](use_cases_rag.md)
 - **Stateful and voice agents** - Server-side conversations, hosted retrieval and spoken sessions through the OpenAI Agents SDK
 - **Internal services** - Backend applications and scripts that call Bedrock models without a UI or CLI in between
+- **Ollama-native code** - Applications already written against the Ollama client, repointed at the gateway without changing their calls
 
 ## :material-help-circle-outline: Why Python Libraries + stdapi.ai?
 
@@ -211,9 +212,37 @@ agent = Agent(
 
 `RealtimeRunner` opens a spoken session against [`WS /v1/realtime`](api_openai_realtime.md): give its `model_config` the `wss://YOUR_STDAPI_URL/v1/realtime?model=<id>` URL and either the API key or a [minted client secret](api_openai_realtime.md#ephemeral-client-secrets). Sessions last up to 8 minutes and call no tools — see the [Realtime API](api_openai_realtime.md#feature-compatibility) for what a session does and does not emit.
 
+### :material-cube-outline: Ollama Python Client
+
+The official [`ollama`](https://github.com/ollama/ollama-python) client reaches the gateway's [Ollama-compatible endpoints](api_ollama_chat.md). Point `Client` at your gateway and pass the API key as a bearer header — the same shape the client uses for any authenticated Ollama endpoint:
+
+!!! example "ollama.Client"
+    ```python
+    import ollama
+
+    client = ollama.Client(
+        host="https://YOUR_STDAPI_URL", headers={"Authorization": "Bearer YOUR_STDAPI_KEY"}
+    )
+
+    response = client.chat(
+        model="anthropic.claude-fable-5",
+        messages=[
+            {"role": "user", "content": "Name the largest planet in the solar system."}
+        ],
+    )
+    print(response.message.content)
+    ```
+
+The host carries no path suffix: the client appends `/api/chat`, `/api/tags` and the rest itself. `client.generate()`, `client.embed()`, `client.list()`, `client.show()` and `client.ps()` all work against the same instance; `client.pull()` reports success immediately, because every model the gateway offers is hosted and available as soon as it appears in the model list.
+
+!!! warning "Models are not stored here"
+    `create`, `copy`, `push` and `delete` are refused with a `400`: the gateway serves hosted models and keeps no model store to write to. Reporting success would tell your code a model changed when it did not.
+
+See [Ollama Chat API](api_ollama_chat.md), [Ollama Generate API](api_ollama_generate.md), [Ollama Embed API](api_ollama_embed.md) and [Ollama Models API](api_ollama_models.md) for the full parameter and model reference.
+
 ## :material-rocket-launch: Deploy the Gateway on AWS
 
-There is no application sample to deploy here — your LangChain, pydantic-ai or OpenAI Agents SDK process is code you already own. The Terraform sample below is one worked example of a credible AWS deployment for the gateway itself, not the only architecture that works: it is a normal HTTPS service, and where your Python process runs relative to its VPC is your choice, not a fixed part of the architecture.
+There is no application sample to deploy here — your LangChain, pydantic-ai, OpenAI Agents SDK or Ollama client process is code you already own. The Terraform sample below is one worked example of a credible AWS deployment for the gateway itself, not the only architecture that works: it is a normal HTTPS service, and where your Python process runs relative to its VPC is your choice, not a fixed part of the architecture.
 
 ### :material-sitemap: Architecture
 
