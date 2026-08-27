@@ -58,7 +58,7 @@ The requests are sent inline, the batch runs without a connection held open, and
 | Results (JSONL)                  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Streamed; available once `processing_status` is `ended`                   |
 | Cancel                           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Requests that already produced a Message keep it, the ones that never ran are reported `canceled`; cancelling twice, or cancelling a batch that has ended, changes nothing |
 | Delete                           |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Only once the batch has ended — cancel it first, as upstream requires     |
-| List batches                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Newest first, with `before_id` / `after_id` cursors                       |
+| List batches                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Newest first, with `before_id` / `after_id` cursors — see [Listing Order](api_openai_batches.md#listing-order), which governs this surface too |
 | `archived_at`                    | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Results stay readable until the batch is deleted                          |
 
 </div>

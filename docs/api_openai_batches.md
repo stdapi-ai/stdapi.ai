@@ -96,19 +96,26 @@ runs from it.
 
 !!! warning "The Listing Window"
     A listing does not reach every batch ever created. It is answered from a
-    window of the **1,000 most recent batch records** held in the bucket set by
-    [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket), and an `after`
-    cursor naming a batch outside that window returns an empty page. Three
-    things narrow it further:
+    window of **up to 1,000 of the most recent batch records** held in the
+    bucket set by [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket),
+    and an `after` cursor naming a batch outside that window returns an empty
+    page. Finding that window costs a bounded number of storage requests, so
+    however many batches the bucket holds, the window is taken from the newest
+    of them as long as that seek converges within its budget. Three things
+    narrow it further:
 
+    - **A burst larger than one listing's whole budget can outrun the seek**,
+      widening the window toward the older end of that burst instead of
+      reaching the newest batch in it. The seek crosses several thousand batch
+      records per listing whatever their density, so this needs a burst larger
+      than that with nothing created since — each batch requires its own
+      inference job, and a real deployment is bound by Bedrock's batch job
+      quota long before it reaches this.
     - The window is **shared with the [Anthropic Message Batches](api_anthropic_batches.md)
       surface**: records created through either API count against the same
-      1,000, and each listing then shows only its own.
+      window, and each listing then shows only its own.
     - **Deleted batches keep their slot.** A deleted batch is not listed, but
-      its record still occupies one of the 1,000.
-    - Beyond roughly **100,000 stored batch records**, the window is taken from
-      the *oldest* records rather than the newest, and recent batches stop
-      appearing altogether.
+      its record still occupies one place in the window.
 
     Retrieving a batch by its identifier is unaffected — that works for as long
     as the record exists. Keep the identifiers you need rather than relying on

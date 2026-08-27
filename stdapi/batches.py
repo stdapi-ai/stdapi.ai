@@ -10,7 +10,7 @@ the batch reports the aggregate. Results are written per job and translated to
 the calling API's dialect on read.
 """
 
-from asyncio import gather
+from asyncio import TaskGroup, gather
 from base64 import b32hexencode
 from binascii import crc32 as _crc32
 from contextlib import contextmanager, suppress
@@ -63,7 +63,15 @@ from stdapi.usage import record_bedrock_usage
 from stdapi.utils import now_utc_timestamp, to_json_bytes, validation_error_handler
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Sequence
+    from asyncio import Task
+    from collections.abc import (
+        AsyncIterator,
+        Awaitable,
+        Callable,
+        Coroutine,
+        Generator,
+        Sequence,
+    )
 
     from types_aiobotocore_bedrock.client import BedrockClient
     from types_aiobotocore_bedrock.literals import ModelInvocationTypeType, RegionName
@@ -169,8 +177,17 @@ _INPUT_FILE_NAME = "input.jsonl"
 #: Maximum batch records returned by one listing scan.
 _LIST_SCAN_LIMIT: int = 1000
 
-#: Maximum storage pages read per bucket by one listing scan.
-_LIST_SCAN_PAGES: int = 100
+#: Maximum storage requests one bucket's listing scan makes.
+_LIST_SCAN_REQUESTS: int = 20
+
+#: Storage pages one probe of a listing scan walks before giving its instant up.
+_LIST_PROBE_PAGES: int = 4
+
+#: Time span a listing scan's first tail probe reaches back over, in milliseconds.
+_LIST_SEEK_SPAN_MS: int = 3600 * 1000
+
+#: Factor a tail probe's span grows by while it reaches too few records.
+_LIST_SEEK_GROWTH: int = 16
 
 #: Requests translated concurrently while a batch is being prepared.
 _BUILD_CONCURRENCY: int = 32
@@ -806,6 +823,46 @@ async def _prepare_anthropic_request(
     )
 
 
+async def _resolve_distinct(
+    names: set[str], resolve: Callable[[str], Coroutine[Any, Any, ModelBase[Any, Any]]]
+) -> list[ModelBase[Any, Any]]:
+    """Resolve every model name a batch input writes, a bounded number at a time.
+
+    An input file may name one model per request, so the resolutions run in the
+    same waves the translation does rather than all at once, and under a task
+    group whose first refusal cancels the wave: a refused file costs one wave
+    of lookups, not one per name it holds.
+
+    Args:
+        names: The distinct model names the input writes.
+        resolve: Coroutine function resolving one name.
+
+    Returns:
+        The resolved models.
+
+    Raises:
+        ApiError: When a name resolves to no model a batch can run.
+    """
+    resolved: list[ModelBase[Any, Any]] = []
+    ordered = sorted(names)
+    for start in range(0, len(ordered), _BUILD_CONCURRENCY):
+        try:
+            async with TaskGroup() as wave:
+                tasks: list[Task[ModelBase[Any, Any]]] = [
+                    wave.create_task(resolve(name))
+                    for name in ordered[start : start + _BUILD_CONCURRENCY]
+                ]
+        except BaseExceptionGroup as failures:
+            # The refusal itself, not the group the wave wrapped it in: this is
+            # the message the client reads.
+            first: BaseException = failures
+            while isinstance(first, BaseExceptionGroup):
+                first = first.exceptions[0]
+            raise first from None
+        resolved.extend(task.result() for task in tasks)
+    return resolved
+
+
 async def _prepare_all[T](
     items: Sequence[T], prepare: Callable[[T, int], Awaitable[PreparedRequest]]
 ) -> list[PreparedRequest]:
@@ -1403,17 +1460,91 @@ async def _delete_job_data(ref: BatchJobRef) -> None:
             return
 
 
-async def _scan_bucket(bucket: str) -> list[str]:
-    """Return the newest batch payloads the scan reaches in *bucket*.
+def _instant_key(created_ms: int) -> str:
+    """Return the lowest record key a batch created at *created_ms* can hold.
 
-    Payloads sort by creation time and storage walks them oldest first, so the
-    scan keeps a trailing window: a listing shows recent batches rather than
-    the first ones ever created. Storage cannot be walked backwards, so the
-    window holds the newest of the records the page budget *reached*: past
-    ``_LIST_SCAN_PAGES`` pages it is taken from the oldest keys instead and the
-    newest batches drop out of every listing. That is documented as a
-    limitation in ``docs/api_openai_batches.md``; lifting it means seeking the
-    tail (``StartAfter``) rather than raising the budget.
+    A payload opens with the 48-bit millisecond timestamp of its UUIDv7 and is
+    encoded in the order-preserving base32hex alphabet, so zero-filling what
+    follows that timestamp names where an instant starts in key order.
+
+    Args:
+        created_ms: Creation instant, in milliseconds since the epoch.
+
+    Returns:
+        The key every batch created at *created_ms* or later sorts at or after.
+    """
+    return batch_s3_key(
+        b32hexencode(created_ms.to_bytes(6, "big") + bytes(14)).lower().decode()
+    )
+
+
+async def _walk_tail(
+    s3: S3Client, bucket: str, start_after: str | None, budget: int
+) -> tuple[list[str], bool, int]:
+    """Walk the records stored after *start_after*, keeping the newest of them.
+
+    The delimiter rolls each batch's own data up under its own key prefix, so
+    what a page carries is batch records rather than the objects one batch
+    stores.
+
+    Args:
+        s3: Client for the bucket's region.
+        bucket: The bucket to read.
+        start_after: Key to resume after, or ``None`` to walk from the start.
+        budget: Maximum storage requests this walk may make.
+
+    Returns:
+        Tuple of (at most ``_LIST_SCAN_LIMIT`` payloads oldest first, whether
+        the end of the listing was reached, storage requests made).
+    """
+    prefix = SETTINGS.aws_s3_batches_prefix
+    payloads: list[str] = []
+    token: str | None = None
+    for request in range(1, budget + 1):
+        resume: dict[str, str] = {}
+        if token:
+            resume = {"ContinuationToken": token}
+        elif start_after:
+            resume = {"StartAfter": start_after}
+        response = await s3.list_objects_v2(
+            Bucket=bucket,
+            Prefix=prefix,
+            Delimiter="/",
+            MaxKeys=_LIST_SCAN_LIMIT,
+            **resume,  # type: ignore[arg-type]
+        )
+        payloads.extend(
+            payload
+            for obj in response.get("Contents", ())
+            if len(payload := obj["Key"].removeprefix(prefix)) == 32
+        )
+        del payloads[:-_LIST_SCAN_LIMIT]
+        token = response.get("NextContinuationToken")
+        if not token:
+            return payloads, True, request
+    return payloads, False, budget
+
+
+async def _scan_bucket(bucket: str) -> list[str]:
+    """Return the newest batch payloads stored in *bucket*.
+
+    Payloads sort by creation time and storage only ever walks them oldest
+    first, so reaching the newest ones means seeking into the key space rather
+    than paging to the end of it: paging forward answers from the oldest
+    records as soon as the bucket outgrows the budget that paging is given,
+    which is when a client most needs the newest.
+
+    A bucket holding no more than one page is answered by that one request.
+    Past that, each probe resumes after the key an instant starts at, and the
+    instant moves until one probe reaches the end of the listing while still
+    holding records — later when the probe was left with more to walk than its
+    pages cover, earlier when it reached too few records. A probe that reached
+    the end holds *every* record newer than its instant, which is what makes
+    the answer a tail rather than a prefix of the oldest keys.
+
+    The first instant probed is a recent one, and reaching further back costs
+    one request per step where giving an instant up costs a walk: a scan pays
+    for guessing too far back, never for guessing too close.
 
     Args:
         bucket: The bucket to scan.
@@ -1421,27 +1552,57 @@ async def _scan_bucket(bucket: str) -> list[str]:
     Returns:
         At most ``_LIST_SCAN_LIMIT`` payloads, oldest first.
     """
-    prefix = SETTINGS.aws_s3_batches_prefix
     s3: S3Client = get_client("s3", BUCKET_TO_REGION.get(bucket))
-    payloads: list[str] = []
-    token: str | None = None
-    for _page in range(_LIST_SCAN_PAGES):
-        response = await s3.list_objects_v2(
-            Bucket=bucket,
-            Prefix=prefix,
-            MaxKeys=1000,
-            **({"ContinuationToken": token} if token else {}),  # type: ignore[arg-type]
+    budget = _LIST_SCAN_REQUESTS
+    reached, complete, used = await _walk_tail(s3, bucket, None, 1)
+    if complete:
+        return reached
+    budget -= used
+    # A record created this second sorts after a key built from this second, so
+    # the seek's upper bound is the next one; the listing overflows what one
+    # walk covers, so its start is already known to be too far back.
+    now_ms = (now_utc_timestamp() + 1) * 1000
+    span = _LIST_SEEK_SPAN_MS
+    crowded, sparse = 0, now_ms
+    newest: list[str] = []
+    while budget > 0:
+        if crowded:
+            instant = (crowded + sparse) // 2
+            if instant in (crowded, sparse):
+                break
+        else:
+            # Until one probe comes back crowded the span grows instead of
+            # being halved: a quiet recent past is otherwise walked back to the
+            # epoch one halving at a time.
+            instant = now_ms - span
+            span *= _LIST_SEEK_GROWTH
+            if instant <= 0:
+                break
+        payloads, complete, used = await _walk_tail(
+            s3, bucket, _instant_key(instant), min(_LIST_PROBE_PAGES, budget)
         )
-        payloads.extend(
-            key
-            for obj in response.get("Contents", ())
-            if len(key := obj["Key"].removeprefix(prefix)) == 32
-        )
-        del payloads[:-_LIST_SCAN_LIMIT]
-        token = response.get("NextContinuationToken")
-        if not token:
+        budget -= used
+        if not complete:
+            # Not a tail, but newer than anything walked before it: the answer
+            # if no probe reaches the end of the listing within the budget. The
+            # bound moves to the last record the walk reached rather than to
+            # the instant it started from, so a burst denser than one probe
+            # covers is crossed by the records each probe reads instead of by
+            # halvings alone -- which the budget runs out of first.
+            if payloads:
+                instant = min(
+                    max(instant, payload_created_at(payloads[-1]) * 1000), sparse
+                )
+            crowded, reached = instant, payloads
+            continue
+        if len(payloads) > len(newest):
+            newest = payloads
+        if len(newest) >= _LIST_SCAN_LIMIT:
+            # A complete probe already answers with the most this scan can
+            # ever return, so seeking further back would only spend budget.
             break
-    return payloads
+        sparse = instant
+    return newest or reached
 
 
 async def list_batches(
@@ -1813,7 +1974,7 @@ async def _to_message(line: JsonMapping, model: str, custom_id: str) -> JsonMapp
 
     Args:
         line: One decoded result line.
-        model: Model name as written by the client.
+        model: Resolved backend model identifier the message ran on.
         custom_id: Client-chosen identifier of the request.
 
     Returns:
@@ -2084,21 +2245,25 @@ async def prepare_openai_requests(
             bodies.append(params.model_validate(body))
         custom_ids.append(str(line.get("custom_id", "")))
     _validate_custom_ids(custom_ids, "Line")
+    # Resolved once per distinct name — never the full file — and compared
+    # before translating a single request: two names of one model are one
+    # model, and a file naming more than one is refused before it pays for
+    # translating any of its lines.
+    resolve = _resolve_embedding_model if embeddings else _resolve_model
     with _pinned_models():
-        prepared = await _prepare_all(
-            list(zip(custom_ids, bodies, strict=True)),
-            (lambda item, index: _prepare_embedding_request(item[0], item[1], index))  # type: ignore[arg-type]
-            if embeddings
-            else (lambda item, index: _prepare_openai_request(item[0], item[1], index)),  # type: ignore[arg-type]
-        )
-        # Compared once resolved: two names of one model are one model.
-        if len({item.model_id for item in prepared}) > 1:
+        resolved = await _resolve_distinct({body.model for body in bodies}, resolve)
+        if len({model.model.id for model in resolved}) > 1:
             msg = (
                 "Every request in a batch input file must name the same model. "
                 "Split the file into one file per model."
             )
             raise ApiError(msg)
-        return prepared
+        return await _prepare_all(
+            list(zip(custom_ids, bodies, strict=True)),
+            (lambda item, index: _prepare_embedding_request(item[0], item[1], index))  # type: ignore[arg-type]
+            if embeddings
+            else (lambda item, index: _prepare_openai_request(item[0], item[1], index)),  # type: ignore[arg-type]
+        )
 
 
 async def prepare_anthropic_requests(

@@ -572,6 +572,13 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     - `think` must also be set on the request; without it a model returns its answer only.
     - The `capabilities` list from `/api/show` never advertises `thinking`, so a client gating its toggle on that list will not offer it. `think` can still be sent to any model — one that does not reason simply returns no thinking text.
 
+??? failure "A batch is missing from the listing, but still answers when retrieved by ID"
+    The listing answers from a window of the most recent batches, found by a seek bounded to a fixed number of storage requests. A burst of thousands of batches created inside the same minute can outrun that budget, and the ones beyond it fall outside the window.
+
+    - The record is intact: [`GET /v1/batches/{batch_id}`](api_openai_batches.md) returns it, and so does cancelling or reading its output. Only the *listing* is bounded — see [Listing Order](api_openai_batches.md#listing-order).
+    - A cursor that points outside the current window returns an empty page rather than an error, so a paginating client stops early instead of failing.
+    - Record the `id` each `POST /v1/batches` returns and address batches by it, rather than rediscovering them through the listing. Amazon Bedrock's own batch quotas bound how fast batches can realistically be created, so this density is hard to reach by accident.
+
 ### AWS error → HTTP status mapping
 
 stdapi.ai translates upstream AWS error codes into standard HTTP responses with an OpenAI/Anthropic-style error type. Use this table to map a status code back to its likely AWS cause. HTTP status and error type are as returned on OpenAI-compatible routes (`/v1/...`); Anthropic-compatible routes (`/anthropic/...`) diverge on the two footnoted rows.
