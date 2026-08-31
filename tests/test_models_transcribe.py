@@ -2754,7 +2754,7 @@ class TestDiarizationSpacingFallbacks:
         start, end = amazon_transcribe._segment_span(  # noqa: SLF001
             transcript,
             0,
-            segment,
+            segment,  # type: ignore[arg-type]
             items,  # type: ignore[arg-type]
         )
 
