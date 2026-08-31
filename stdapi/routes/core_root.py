@@ -7,7 +7,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from stdapi.config import SETTINGS
-from stdapi.metering import EDITION_TITLE
+from stdapi.metering import DOCS_UTM, EDITION_TITLE
 from stdapi.server import SERVER_VERSION
 
 if TYPE_CHECKING:
@@ -30,8 +30,11 @@ class PingResponse:
     status: str = "Healthy"
 
 
-#: Public API reference, used where an absolute documentation URL is required.
+#: Public API reference, as machine-readable metadata quotes it: no query string.
 _API_REFERENCE_URL = "https://stdapi.ai/api_reference/"
+
+#: The same reference, campaign-tagged, for the one place a human clicks it.
+_API_REFERENCE_LINK = f"{_API_REFERENCE_URL}?{DOCS_UTM}"
 
 #: Welcome message payload for root endpoint
 _WELCOME = {
@@ -39,7 +42,7 @@ _WELCOME = {
     + (
         "/docs"
         if SETTINGS.enable_docs
-        else ("/redoc" if SETTINGS.enable_redoc else _API_REFERENCE_URL)
+        else ("/redoc" if SETTINGS.enable_redoc else _API_REFERENCE_LINK)
     )
 }
 

@@ -25,6 +25,13 @@ def on_pre_build(config: Any) -> None:  # noqa: ARG001,ANN401
         from stdapi.main import app  # noqa: PLC0415
 
         openapi_schema = app.openapi()
+    # The tagged contact URL is meant for the gateway's own Swagger/ReDoc
+    # pages; left in, the docs site's API Reference page (also rendered with
+    # ReDoc) would link to itself with the tag, overwriting a real visitor's
+    # traffic source with our own.
+    contact_url = openapi_schema.get("info", {}).get("contact", {}).get("url")
+    if contact_url:
+        openapi_schema["info"]["contact"]["url"] = contact_url.split("?", 1)[0]
     with Path("docs/openapi.yml").open("w") as f:
         content = dump(openapi_schema, stream=None, sort_keys=False, allow_unicode=True)
         content = content.replace(" (Community Edition)", "")

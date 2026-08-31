@@ -55,7 +55,13 @@ from stdapi.cleanup import (
 from stdapi.config import SETTINGS
 from stdapi.exceptions import ServerError
 from stdapi.input_file import reset_current_input_files
-from stdapi.metering import EDITION_TITLE, LICENCE_INFO, SERVER_FULL_VERSION, register
+from stdapi.metering import (
+    DOCS_UTM,
+    EDITION_TITLE,
+    LICENCE_INFO,
+    SERVER_FULL_VERSION,
+    register,
+)
 from stdapi.models import (
     drain_model_refresh,
     initialize_bedrock_models,
@@ -414,7 +420,8 @@ app = FastAPI(
     description="AWS standardized AI API",
     version=SERVER_VERSION,
     lifespan=lifespan,
-    contact={"name": "stdapi.ai", "url": "https://stdapi.ai"},
+    # Swagger UI renders this as the clickable link in the /docs header.
+    contact={"name": "stdapi.ai", "url": f"https://stdapi.ai/?{DOCS_UTM}"},
     license_info=LICENCE_INFO,
     # The built-in pages load their icon from fastapi.tiangolo.com; the routes in
     # stdapi/routes/core_docs.py serve the same pages from the gateway alone.
