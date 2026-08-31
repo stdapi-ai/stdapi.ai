@@ -14,14 +14,23 @@ import pytest
 from stdapi.config import SETTINGS
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     import httpx
     from starlette.testclient import TestClient
+
+#: Campaign parameters every link a human clicks off the gateway carries.
+_DOCS_UTM = "utm_source=api-docs&utm_medium=product&utm_campaign=owned-surfaces"
 
 #: Documentation target the welcome message points at for the current settings.
 _EXPECTED_DOC_TARGET = (
     "/docs"
     if SETTINGS.enable_docs
-    else ("/redoc" if SETTINGS.enable_redoc else "https://stdapi.ai/api_reference/")
+    else (
+        "/redoc"
+        if SETTINGS.enable_redoc
+        else f"https://stdapi.ai/api_reference/?{_DOCS_UTM}"
+    )
 )
 
 #: Whether at least one MCP transport is enabled, which gates the server card.
@@ -64,6 +73,23 @@ class TestRoot:
             "Welcome to the stdapi.ai API! Documentation is available at "
             f"{_EXPECTED_DOC_TARGET}"
         )
+
+    def test_the_public_documentation_link_is_campaign_tagged(
+        self, test_client: TestClient
+    ) -> None:
+        """The welcome message's public URL carries the campaign parameters.
+
+        The fallback is only reached with both built-in doc pages disabled, and
+        it is the one link in this payload a human clicks: untagged, its traffic
+        cannot be told apart from any other arrival at the site.
+
+        Ref: stdapi/routes/core_root.py:_API_REFERENCE_LINK
+             stdapi/metering.py:DOCS_UTM
+        """
+        if SETTINGS.enable_docs or SETTINGS.enable_redoc:
+            pytest.skip("A built-in documentation page is enabled")
+
+        assert _DOCS_UTM in test_client.get("/").json()["message"]
 
     def test_json_content_type(self, test_client: TestClient) -> None:
         """GET / is served as ``application/json``."""
@@ -120,6 +146,83 @@ class TestRoot:
             assert "link" not in response.headers
         else:
             assert response.headers["link"] == ", ".join(expected_parts)
+
+
+class TestOpenApiInfoLinks:
+    """The two stdapi.ai URLs the OpenAPI ``info`` block carries.
+
+    One is read by a human -- Swagger UI renders ``contact.url`` as the link in
+    its header -- and one is read by licence tooling. Only the first is tagged.
+
+    Ref: stdapi/main.py
+         stdapi/metering.py:DOCS_UTM
+         https://spec.openapis.org/oas/v3.1.0#info-object
+    """
+
+    @staticmethod
+    def _info() -> dict[str, object]:
+        """Return the ``info`` block of the application's own OpenAPI document.
+
+        Read from the application rather than over ``/openapi.json``: the
+        document is only served when ``enable_openapi_json`` is set, and it is
+        off in the default test configuration.
+
+        Returns:
+            The ``info`` object.
+        """
+        from stdapi.main import app  # noqa: PLC0415
+
+        info: dict[str, object] = app.openapi()["info"]
+        return info
+
+    def test_the_contact_url_is_campaign_tagged(self) -> None:
+        """``contact.url`` carries the campaign parameters."""
+        contact = self._info()["contact"]
+        assert isinstance(contact, dict)
+
+        assert contact["url"] == f"https://stdapi.ai/?{_DOCS_UTM}"
+
+    def test_the_licence_url_is_not_tagged(self) -> None:
+        """``license.url`` stays clean on both editions: it identifies a licence, not a visit.
+
+        Licence tooling matches this field against a known URL, so a query
+        string on it makes the licence unrecognisable. The community build
+        never carries a ``url`` at all, so that branch alone would pass
+        vacuously; ``PRODUCT_CODE`` is fixed at import time, so the
+        commercial branch is built directly through ``licence_info`` instead
+        of relying on the process this suite runs in.
+        """
+        from stdapi.metering import licence_info  # noqa: PLC0415
+
+        community = self._info().get("license", {})
+        assert isinstance(community, dict)
+        assert "utm_" not in community.get("url", "")
+
+        commercial = licence_info("some-marketplace-product-code")
+        assert "utm_" not in commercial.get("url", "")
+
+    def test_the_docs_site_export_carries_no_tracking_query(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The docs site's own copy of the OpenAPI document is not self-tagged.
+
+        ``docs_hooks/fastapi_openapi.py`` exports ``app.openapi()`` into
+        ``docs/openapi.yml``, which ``docs/api_reference.md`` renders with
+        ReDoc: a tagged ``contact.url`` there would have the docs site link
+        to itself with the campaign parameters meant for a visitor arriving
+        from elsewhere, overwriting their real traffic source.
+
+        Ref: docs_hooks/fastapi_openapi.py:on_pre_build
+        """
+        from docs_hooks.fastapi_openapi import on_pre_build  # noqa: PLC0415
+
+        (tmp_path / "docs").mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        on_pre_build(None)
+
+        content = (tmp_path / "docs" / "openapi.yml").read_text()
+        assert "utm_" not in content
 
 
 class TestApiCatalog:

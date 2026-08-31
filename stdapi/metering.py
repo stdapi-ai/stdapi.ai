@@ -18,15 +18,35 @@ if TYPE_CHECKING:
 
 #: AWS Marketplace product code; empty for the community (unmetered) build.
 PRODUCT_CODE = ""
+#: Campaign parameters marking a click that started on the gateway's own docs surface.
+DOCS_UTM = "utm_source=api-docs&utm_medium=product&utm_campaign=owned-surfaces"
+
+
+def licence_info(product_code: str) -> dict[str, str]:
+    """Build the OpenAPI ``license`` object for one product code.
+
+    A function rather than a module-level constant alone: ``PRODUCT_CODE`` is
+    fixed at import time, so this is what lets a test build the commercial
+    branch without a second build of the server.
+
+    Args:
+        product_code: AWS Marketplace product code; empty for the community build.
+
+    Returns:
+        The ``license`` object reported in the OpenAPI spec.
+    """
+    return (
+        {"name": "Commercial License", "url": "https://stdapi.ai/operations_licensing/"}
+        if product_code
+        else {
+            "name": "GNU Affero General Public License v3.0 or later (Commercial license available)",
+            "identifier": "AGPL-3.0-or-later",
+        }
+    )
+
+
 #: License metadata reported in the OpenAPI spec.
-LICENCE_INFO = (
-    {"name": "Commercial License", "url": "https://stdapi.ai/operations_licensing/"}
-    if PRODUCT_CODE
-    else {
-        "name": "GNU Affero General Public License v3.0 or later (Commercial license available)",
-        "identifier": "AGPL-3.0-or-later",
-    }
-)
+LICENCE_INFO = licence_info(PRODUCT_CODE)
 #: Server edition title reported in the OpenAPI spec.
 EDITION_TITLE = f"stdapi.ai ({'Enterprise' if PRODUCT_CODE else 'Community'} Edition)"
 #: Full server version string, suffixed with the edition marker ('e'/'c').
