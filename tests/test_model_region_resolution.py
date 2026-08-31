@@ -494,7 +494,10 @@ class TestRegionRestrictOrder:
             region_routing, "ORDERED_BEDROCK_REGIONS", ["us-east-1", "us-west-2"]
         )
 
-        async def fake_fetch(region: RegionName) -> list[ModelDetails]:
+        async def fake_fetch(
+            region: RegionName, denied_regions: dict[str, str]
+        ) -> list[ModelDetails]:
+            del denied_regions
             return [_model(None, [region])]
 
         monkeypatch.setattr(

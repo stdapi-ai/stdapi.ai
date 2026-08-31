@@ -596,6 +596,10 @@ class TestAnthropicMessages:
         assert len(response.content[0].text) > 0
 
     # --- Temperature and sampling ---
+    #
+    # The SDK dropped the three sampling parameters from ``messages.create()``
+    # in 1.0.0, so they travel in ``extra_body``: the wire request is the one a
+    # client that still sends them makes, which is what the gateway must accept.
 
     def test_temperature_parameter(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
@@ -615,7 +619,7 @@ class TestAnthropicMessages:
                 model=anthropic_chat_basic_model,
                 max_tokens=50,
                 messages=[{"role": "user", "content": "Say hi."}],
-                temperature=temp,
+                extra_body={"temperature": temp},
             )
             assert response.type == "message"
             assert len(response.content) >= 1
@@ -636,7 +640,7 @@ class TestAnthropicMessages:
             model=anthropic_chat_basic_model,
             max_tokens=50,
             messages=[{"role": "user", "content": "Say hi."}],
-            top_p=0.9,
+            extra_body={"top_p": 0.9},
         )
         assert response.type == "message"
         assert len(response.content) >= 1
@@ -661,7 +665,7 @@ class TestAnthropicMessages:
             model=anthropic_chat_model,
             max_tokens=50,
             messages=[{"role": "user", "content": "Say hi."}],
-            top_k=40,
+            extra_body={"top_k": 40},
         )
         assert response.type == "message"
         assert len(response.content) >= 1
@@ -1328,7 +1332,7 @@ class TestAnthropicMessages:
                 model=anthropic_chat_basic_model,
                 max_tokens=100,
                 messages=[{"role": "user", "content": "Hello"}],
-                temperature=2.0,
+                extra_body={"temperature": 2.0},
             )
 
         assert excinfo.value.status_code == 400
@@ -1379,7 +1383,7 @@ class TestAnthropicMessages:
                 model=anthropic_chat_basic_model,
                 max_tokens=100,
                 messages=[{"role": "user", "content": "Hello"}],
-                top_p=1.5,
+                extra_body={"top_p": 1.5},
             )
 
         assert excinfo.value.status_code == 400
@@ -3030,7 +3034,7 @@ class TestAnthropicMessages:
                 model=anthropic_chat_basic_model,
                 max_tokens=100,
                 messages=[{"role": "user", "content": "Hello"}],
-                temperature=-0.5,
+                extra_body={"temperature": -0.5},
             )
 
         assert excinfo.value.status_code == 400

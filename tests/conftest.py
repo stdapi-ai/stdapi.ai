@@ -23,6 +23,7 @@ import faulthandler
 import re
 import signal
 import sys
+from importlib import util
 from io import BytesIO
 from json import JSONDecodeError, dumps, loads
 from os import environ, getenv
@@ -41,18 +42,41 @@ from dotenv import load_dotenv
 from openai import APIStatusError, AsyncOpenAI, OpenAI
 from PIL import Image as PILImage
 from pybase64 import b64encode
+from starlette.testclient import TestClient
 
-# Starlette's TestClient prefers httpx2, which every vendor SDK rejects as an
-# ``http_client``; aliasing the name while starlette binds it takes its httpx
-# fallback. Dropped at once so genai-prices still gets the real httpx2.
-assert "starlette.testclient" not in sys.modules, (
-    "starlette.testclient was imported before this alias could be installed"
-)
-sys.modules["httpx2"] = httpx
-try:
-    from starlette.testclient import TestClient
-finally:
-    del sys.modules["httpx2"]
+
+def _httpx_flavoured_testclient() -> ModuleType:
+    """Load a second copy of ``starlette.testclient`` bound to plain ``httpx``.
+
+    Starlette imports ``httpx2`` when it is installed and falls back to ``httpx``
+    otherwise, so its test transport speaks whichever one the process has. The
+    OpenAI and Anthropic SDKs require ``httpx2`` and the session ``TestClient``
+    follows them; the Ollama SDK builds a plain ``httpx`` client and cannot read
+    an ``httpx2`` response. Executing the module again with the name aliased
+    yields an ``httpx``-flavoured transport class that still drives the session's
+    own portal, so the app lifespan and the AWS client pool stay shared.
+
+    Returns:
+        The re-executed module.
+    """
+    spec = util.find_spec("starlette.testclient")
+    assert spec is not None
+    assert spec.loader is not None
+    module = util.module_from_spec(spec)
+    saved = sys.modules.get("httpx2")
+    sys.modules["httpx2"] = httpx
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if saved is None:
+            del sys.modules["httpx2"]
+        else:
+            sys.modules["httpx2"] = saved
+    return module
+
+
+#: ``starlette.testclient`` re-executed against ``httpx``, for SDKs built on it.
+_HTTPX_TESTCLIENT = _httpx_flavoured_testclient()
 
 # A stall in an in-process live-AWS test just stops the suite; SIGUSR1 dumps every
 # thread's stack, the only way to locate it on a host that restricts ptrace.
@@ -60,6 +84,7 @@ faulthandler.register(signal.SIGUSR1, all_threads=True)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Generator, Iterator
+    from types import ModuleType
     from typing import Any
 
     from pluggy import Result as _PluggyResult
@@ -1214,9 +1239,10 @@ def openai_client(
             api_key=api_key,
             max_retries=0,
             organization=_OPENAI_ORGANIZATION,
-            # The agentic overlay pins an older `openai` whose client is typed
-            # against httpx 1.x, where the suite runs on httpx 2.
-            http_client=test_client,  # type: ignore[arg-type]
+            # Cast rather than ignored: the agentic overlay pins an older
+            # `openai` typed against a different httpx, so an ignore here is
+            # unused under one of the two lock files whichever way it is written.
+            http_client=cast("Any", test_client),
         )
 
     # Official API test
@@ -1275,23 +1301,31 @@ def ollama_client(
     """Official Ollama client bound to the selected target.
 
     ``ollama.Client`` builds its own ``httpx.Client`` and exposes no injection
-    point for another one, so the in-process lane hands it the session
-    ``TestClient``'s ASGI transport instead: the app lifespan, and the shared
-    AWS client pool bound to the loop it was built on, stay the session's.
-    Passing the ``TestClient`` itself would mean writing the client's own
-    ``Content-Type`` onto a client every other test module shares -- and it is
-    the transport, not the client object, that the ``httpx2`` alias at the top
-    of this file makes compatible with what ``ollama`` was built against.
+    point for another one, so the in-process lane hands it an ASGI transport
+    driving the session ``TestClient``'s portal: the app lifespan, and the
+    shared AWS client pool bound to the loop it was built on, stay the
+    session's. The transport is rebuilt from the ``httpx``-flavoured copy of
+    starlette's module because the session client's own speaks ``httpx2``,
+    whose responses ``ollama``'s ``httpx.Client`` cannot read.
 
     Yields:
         The client, already carrying credentials for its target.
     """
     if test_client is not None:
+        # Typed as the base class starlette declares; its own transport carries
+        # the portal and the app state this one has to be rebuilt from.
+        session_transport: Any = test_client._transport  # noqa: SLF001
         yield ollama.Client(
             host=str(test_client.base_url),
             headers={"Authorization": f"Bearer {api_key}"},
-            # The only handle on the portal-backed transport starlette builds.
-            transport=test_client._transport,  # noqa: SLF001
+            transport=_HTTPX_TESTCLIENT._TestClientTransport(  # noqa: SLF001
+                session_transport.app,
+                portal_factory=session_transport.portal_factory,
+                raise_server_exceptions=session_transport.raise_server_exceptions,
+                root_path=session_transport.root_path,
+                app_state=session_transport.app_state,
+                client=session_transport.client,
+            ),
         )
         return
     if use_official_api:
@@ -2076,8 +2110,7 @@ def anthropic_client(
             base_url="http://testserver/anthropic/",
             api_key=api_key,
             max_retries=0,
-            # Starlette types TestClient against httpx2; the alias fixes runtime only.
-            http_client=test_client,  # type: ignore[arg-type]
+            http_client=test_client,
         )
     if use_official_api:
         if getenv("ANTHROPIC_API_KEY"):

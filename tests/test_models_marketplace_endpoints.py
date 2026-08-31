@@ -618,7 +618,7 @@ async def test_the_catalogue_still_builds_with_discovery_on_and_no_pool(
     monkeypatch.delitem(_CLIENTS, "bedrock", raising=False)
     monkeypatch.setattr(region_routing, "ORDERED_BEDROCK_REGIONS", ["eu-west-1"])
 
-    async def _fetch(_region: str) -> list[ModelDetails]:
+    async def _fetch(_region: str, _denied: dict[str, str]) -> list[ModelDetails]:
         return [make_model_details("vendor.some-model-v1", regions=["eu-west-1"])]
 
     async def _available(_model: ModelDetails) -> list[str]:
@@ -631,7 +631,7 @@ async def test_the_catalogue_still_builds_with_discovery_on_and_no_pool(
     monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["eu-west-1"])
     failed: dict[str, str] = {}
 
-    all_models, _ = await stdapi.models._collect_all_models(failed, {}, {})  # noqa: SLF001
+    all_models, _ = await stdapi.models._collect_all_models(failed, {}, {}, {})  # noqa: SLF001
 
     assert "vendor.some-model-v1" in all_models, (
         "Marketplace discovery must not cost the catalogue its other models"
