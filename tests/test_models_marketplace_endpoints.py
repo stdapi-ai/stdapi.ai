@@ -456,7 +456,10 @@ async def test_an_unbuilt_client_pool_degrades_instead_of_raising(
     Ref: stdapi/aws.py:get_client
          stdapi/models/marketplace_endpoints.py:_no_client_reason
     """
-    assert not _CLIENTS, "This test needs the unbuilt pool the offline lane has"
+    # Removed rather than asserted absent: a live test sharing the process
+    # builds the pool, and the condition under test is a missing service
+    # entry, which is what an unbuilt pool means to ``get_client``.
+    monkeypatch.delitem(_CLIENTS, "bedrock", raising=False)
     monkeypatch.setattr(SETTINGS, "aws_bedrock_marketplace_endpoints_enabled", True)
     monkeypatch.setattr(SETTINGS, "aws_bedrock_marketplace_endpoint_regions", [])
     monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["eu-west-1"])
@@ -535,7 +538,10 @@ async def test_the_catalogue_still_builds_with_discovery_on_and_no_pool(
 
     Ref: stdapi/models/__init__.py:_collect_all_models
     """
-    assert not _CLIENTS, "This test needs the unbuilt pool the offline lane has"
+    # Removed rather than asserted absent: a live test sharing the process
+    # builds the pool, and the condition under test is a missing service
+    # entry, which is what an unbuilt pool means to ``get_client``.
+    monkeypatch.delitem(_CLIENTS, "bedrock", raising=False)
     monkeypatch.setattr(region_routing, "ORDERED_BEDROCK_REGIONS", ["eu-west-1"])
 
     async def _fetch(_region: str, _denied: dict[str, str]) -> list[ModelDetails]:
