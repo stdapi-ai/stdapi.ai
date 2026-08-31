@@ -28,29 +28,38 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from pydantic import ValidationError
 
+from stdapi import models
+from stdapi.batches import _batch_model_id
 from stdapi.config import DEFAULT_MANTLE_PREFERRED_MODELS, SETTINGS, _Settings
 from stdapi.models import (
     MANTLE_MODELS,
     MANTLE_SERVICE,
+    RUNTIME_SERVICE,
+    SAGEMAKER_SERVICE,
     ModelDetails,
     _merge_mantle_models,
     is_mantle_preferred,
 )
+from stdapi.models.chat import get_chat_model, serves_via_mantle
 from stdapi.models.pricing_overrides import (
     DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES,
     DEFAULT_MODEL_GLOBAL_PRICES,
     DEFAULT_MODEL_LONG_CONTEXT_PRICES,
     DEFAULT_MODEL_PRICES,
 )
+from stdapi.monitoring import TENANT, Tenant, TenantAwsCredential
 from stdapi.pricing import (
     Dimension,
     Service,
     _apply_default_prices,
     _state,
+    resolve_model_key,
     resolve_price,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from types_aiobotocore_bedrock.literals import RegionName
 
     from stdapi.pricing import Price, PriceKey
@@ -290,6 +299,252 @@ class TestDefaultRouting:
         finally:
             MANTLE_MODELS.clear()
             MANTLE_MODELS.update(saved_mantle_models)
+
+
+def _details(model_id: str, name: str, service: str) -> ModelDetails:
+    """Build one catalogue entry on *service*.
+
+    Args:
+        model_id: The model identifier.
+        name: The display name the catalogue carries.
+        service: The hosting service label.
+
+    Returns:
+        The entry.
+    """
+    model = ModelDetails(
+        id=model_id,
+        name=name,
+        provider="OpenAI",
+        input_modalities=["TEXT"],
+        output_modalities=["TEXT"],
+        regions=[_REGION],
+    )
+    model.service = service
+    return model
+
+
+@pytest.fixture
+def displaced_runtime_catalog(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    """Build the catalogue a preferred, dual-homed model leaves behind.
+
+    Both catalogues name a dual-homed GPT-5.6 model *identically*, so the merge
+    overwrites the bedrock-runtime entry in place rather than adding a second
+    one under another identifier. Everything derived from the catalogue
+    afterwards -- the twin index, the tenant service pin, the batch
+    advertisement -- sees only what the merge left behind.
+
+    Yields:
+        The dual-homed model identifier.
+    """
+    monkeypatch.setattr(
+        SETTINGS,
+        "aws_bedrock_mantle_preferred_models",
+        [*DEFAULT_MANTLE_PREFERRED_MODELS],
+    )
+    model_id = _DUAL_HOMED[0]
+    saved_models = dict(models._MODELS)  # noqa: SLF001
+    saved_mantle = dict(MANTLE_MODELS)
+    runtime = {model_id: _details(model_id, "GPT-5.6 Sol", RUNTIME_SERVICE)}
+    _merge_mantle_models(
+        runtime, {model_id: _details(model_id, model_id, MANTLE_SERVICE)}
+    )
+    models._MODELS.clear()  # noqa: SLF001
+    models._MODELS.update(runtime)  # noqa: SLF001
+    models.update_unified_models_collections()
+    try:
+        yield model_id
+    finally:
+        restored = dict(saved_models)
+        _merge_mantle_models(restored, saved_mantle)
+        models._MODELS.clear()  # noqa: SLF001
+        models._MODELS.update(restored)  # noqa: SLF001
+        models.update_unified_models_collections()
+
+
+@pytest.fixture
+def tenant_credential(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Serve the request under an API key carrying an AWS credential of its own.
+
+    Yields:
+        Nothing; the tenant is installed for the duration of the test.
+    """
+    monkeypatch.setattr(SETTINGS, "tenant_aws_credentials", True)
+    token = TENANT.set(
+        Tenant(
+            key_id="T" + "0" * 15,
+            name="tenant",
+            aws_credential=TenantAwsCredential(
+                role_arn="arn:aws:iam::210987654321:role/stdapi-tenant",
+                external_id="external-id-under-test",
+            ),
+        )
+    )
+    try:
+        yield
+    finally:
+        TENANT.reset(token)
+
+
+@pytest.mark.xdist_group("model_cache")
+class TestDisplacedRuntimeEntry:
+    """The runtime entry a preferred model displaced stays reachable off-catalogue.
+
+    Preferring Mantle for a dual-homed model publishes one entry under one
+    identifier, which is what the public catalogue must show. It does not mean
+    the model stopped existing on bedrock-runtime: the twin index, the tenant
+    service pin and the batch gate all need the runtime entry the merge
+    overwrote. Deriving them from the published catalogue alone loses it, and
+    every consequence below follows from that one loss.
+
+    Ref: stdapi/models/__init__.py:_merge_mantle_models
+         stdapi/models/__init__.py:build_runtime_twins
+         docs/operations_authentication_security.md
+    """
+
+    def test_the_displaced_entry_is_still_the_runtime_twin(
+        self, displaced_runtime_catalog: str
+    ) -> None:
+        """A dual-homed model pairs with itself when both catalogues name it alike.
+
+        The pairing is derived from the two catalogues, so a model whose Mantle
+        and runtime names are the same string pairs with that string. ``None``
+        has to keep meaning "no runtime form at all".
+        """
+        assert models.runtime_twin(displaced_runtime_catalog) == (
+            displaced_runtime_catalog
+        )
+
+    def test_the_published_catalogue_is_unchanged(
+        self, displaced_runtime_catalog: str
+    ) -> None:
+        """Keeping the runtime entry reachable publishes no second entry.
+
+        The displaced entry is off-catalogue by construction: the model is
+        listed once, on the service serving it, under the display name only
+        bedrock-runtime carries.
+        """
+        published = models._ALL_MODELS[displaced_runtime_catalog]  # noqa: SLF001
+
+        assert published.service == MANTLE_SERVICE
+        assert published.name == "GPT-5.6 Sol"
+        assert len(models._ALL_MODELS) == len(models.EXTRA_MODELS) + 1  # noqa: SLF001
+
+    def test_a_tenant_credential_is_served_by_the_runtime_entry(
+        self, displaced_runtime_catalog: str, tenant_credential: None
+    ) -> None:
+        """A key carrying its own AWS credential reaches the family, not a refusal.
+
+        Mantle rides the deployment's own session, so a tenant-signed request
+        is steered onto the runtime entry where its credential signs and pays.
+        Refusing instead contradicts what the operations guide promises.
+        """
+        pinned, pinned_id = models._pin_tenant_billable_service(  # noqa: SLF001
+            models._ALL_MODELS[displaced_runtime_catalog],  # noqa: SLF001
+            displaced_runtime_catalog,
+        )
+
+        assert pinned_id == displaced_runtime_catalog
+        assert pinned.service == RUNTIME_SERVICE
+
+    def test_a_tenant_request_is_not_routed_to_mantle(
+        self, displaced_runtime_catalog: str, tenant_credential: None
+    ) -> None:
+        """The pinned model must also pick the runtime chat class.
+
+        Both entries share one identifier, so pinning the catalogue entry
+        alone would still resolve the Mantle family and bill the operator --
+        the leak the pin exists to close.
+        """
+        assert not serves_via_mantle(displaced_runtime_catalog)
+
+    def test_a_plain_request_is_still_routed_to_mantle(
+        self, displaced_runtime_catalog: str
+    ) -> None:
+        """Without a tenant credential the preference is what it always was."""
+        assert serves_via_mantle(displaced_runtime_catalog)
+
+    def test_the_batch_advertisement_is_derived_from_the_runtime_key(
+        self, displaced_runtime_catalog: str
+    ) -> None:
+        """Batch stays unadvertised for the family, on the rate rather than by accident.
+
+        AWS publishes no batch-tier rate for GPT-5.6, so the flag is False --
+        as it was while the family was runtime-served. A published rate would
+        advertise it, which is what makes the flag derived.
+        """
+        published = models._ALL_MODELS[displaced_runtime_catalog]  # noqa: SLF001
+        priced = frozenset({resolve_model_key(displaced_runtime_catalog)})
+
+        assert models._advertises_batch(published, frozenset()) is False  # noqa: SLF001
+        assert models._advertises_batch(published, priced) is True  # noqa: SLF001
+
+    def test_a_batch_runs_the_runtime_chat_class(
+        self, displaced_runtime_catalog: str
+    ) -> None:
+        """A batch names the runtime identifier and runs the runtime family.
+
+        Batches run on bedrock-runtime alone. Now that the model has a runtime
+        home the gate stops refusing it upfront, so the class the job is built
+        with has to be the runtime one: a Mantle class would translate the
+        request for an endpoint the job never reaches.
+
+        Ref: stdapi/batches.py:_batch_model_id
+        """
+        assert (
+            _batch_model_id("gpt-5.6-sol", displaced_runtime_catalog)
+            == displaced_runtime_catalog
+        )
+        resolved = get_chat_model(displaced_runtime_catalog, allow_mantle=False)
+
+        assert not type(resolved).__module__.startswith("stdapi.models.chat._mantle")
+
+    def test_the_displaced_entry_survives_the_published_catalogue(
+        self, displaced_runtime_catalog: str
+    ) -> None:
+        """A server reading the shared catalogue lands in the state a sweep leaves.
+
+        The runtime home is off-catalogue, so it travels beside the catalogue
+        rather than inside it. A server restoring without it would refuse the
+        family to every credential-carrying key, and batch it under nothing.
+
+        Ref: stdapi/models/_shared_cache.py
+        """
+        payload = models._catalog_payload(dict(models._MODELS), {})  # noqa: SLF001
+        models._DISPLACED_RUNTIME_MODELS.clear()  # noqa: SLF001
+
+        restored = models._restore_catalog(payload, None)  # noqa: SLF001
+
+        assert restored is not None
+        assert models.runtime_home(displaced_runtime_catalog) is not None
+
+    def test_an_endpoint_of_the_operators_is_never_a_runtime_home(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A SageMaker AI or Marketplace endpoint displaced by a Mantle model is not one.
+
+        An operator names its own endpoints, so one can collide with a Mantle
+        model identifier. Recording it as the model's runtime home would steer
+        every tenant-credentialed request onto a resource the deployment pays
+        instance-hours for -- the leak the pin exists to refuse.
+        """
+        monkeypatch.setattr(
+            SETTINGS,
+            "aws_bedrock_mantle_preferred_models",
+            [*DEFAULT_MANTLE_PREFERRED_MODELS],
+        )
+        model_id = _DUAL_HOMED[0]
+        saved_mantle = dict(MANTLE_MODELS)
+        try:
+            endpoint = {model_id: _details(model_id, "GPT-5.6 Sol", SAGEMAKER_SERVICE)}
+            _merge_mantle_models(
+                endpoint, {model_id: _details(model_id, model_id, MANTLE_SERVICE)}
+            )
+
+            assert not models._DISPLACED_RUNTIME_MODELS  # noqa: SLF001
+        finally:
+            restored = dict(saved_mantle)
+            _merge_mantle_models({}, restored)
 
 
 class TestGuardrailRefusal:

@@ -389,8 +389,11 @@ def install(
         )
 
     monkeypatch.setattr(batches, "validate_model", _validate_model)
+    chat_model = TranslatingChatModel if translate else StubChatModel
+    # ``allow_mantle`` is swallowed: a batch always asks for the runtime class,
+    # and the double is the runtime class.
     monkeypatch.setattr(
-        batches, "get_chat_model", TranslatingChatModel if translate else StubChatModel
+        batches, "get_chat_model", lambda model_id, **_kwargs: chat_model(model_id)
     )
     monkeypatch.setattr(batches, "get_embedding_model", StubEmbeddingModel)
     monkeypatch.setattr(batches, "serves_via_mantle", lambda _model_id: False)
