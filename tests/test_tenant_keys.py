@@ -1317,6 +1317,53 @@ class TestAwsCredentialRecords:
         assert after is not None
         assert after["external_id"] == before["external_id"]
 
+    async def test_the_minted_external_id_never_reaches_the_log(
+        self, tenant_backend: SSMClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Both mint paths report the event without disclosing the value.
+
+        The log is shipped to CloudWatch and read far more widely than the
+        table, so the value the tenant's trust policy is conditioned on stays
+        in the credential record the operator reads it from. The event itself
+        is still reported, so the operator knows the ExternalId exists.
+
+        Ref: stdapi/tenant_keys.py:_mint
+             stdapi/tenant_keys.py:_backfill_external_id
+        """
+        from stdapi.monitoring import log_error_details  # noqa: PLC0415
+
+        logged: list[object] = []
+
+        def _spy(
+            *detail: object, level: str | None = None, status: int | None = None
+        ) -> None:
+            logged.extend(detail)
+            log_error_details(*detail, level=level, status=status)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(SETTINGS, "tenant_aws_credentials", True)
+        monkeypatch.setattr(tenant_keys, "log_error_details", _spy)
+        key_id = "l" + "0" * 15
+        await _declare_and_mint(
+            tenant_backend,
+            key_id,
+            aws_role_arn="arn:aws:iam::210987654321:role/stdapi-tenant",
+        )
+        minted = await get_item("TENANT", f"secret#{key_id}")
+        assert minted is not None
+        # Strip it back to the pre-#154 shape so the backfill mints a second one.
+        await put_item(
+            {name: value for name, value in minted.items() if name != "external_id"}
+        )
+        await reconcile_tenant_keys()
+        backfilled = await get_item("TENANT", f"secret#{key_id}")
+        assert backfilled is not None
+
+        emitted = "\n".join(str(detail) for detail in logged)
+        assert str(minted["external_id"]) not in emitted
+        assert str(backfilled["external_id"]) not in emitted
+        assert f"Minted tenant API key '{key_id}'" in emitted
+        assert f"Minted the ExternalId of tenant key '{key_id}'" in emitted
+
 
 class TestReconciliationLifecycle:
     """The background loop, and the failures that must never reach a caller.
@@ -1430,10 +1477,15 @@ class TestRealBackends:
     Parameter Store's create-once write (``Overwrite=False``) is the mint's
     idempotency lock; the offline stand-in agrees, but the real service is the
     authority.
+
+    These call the module in process, so they take ``sandbox_dynamodb``: it
+    binds the table access to a client opened on the loop the test runs on,
+    which the app's own pool cannot be, and without it every one of them raises
+    :class:`TableUnavailableError` instead.
     """
 
     async def test_racing_mints_deliver_exactly_one_key(
-        self, sandbox_dynamodb_table: str, monkeypatch: pytest.MonkeyPatch
+        self, sandbox_dynamodb: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Four concurrent mints against the real services agree on one secret.
 
@@ -1452,7 +1504,7 @@ class TestRealBackends:
         from stdapi.aws import _CLIENTS  # noqa: PLC0415
         from stdapi.config import AWS_REGION  # noqa: PLC0415
 
-        monkeypatch.setattr(SETTINGS, "aws_dynamodb_table", sandbox_dynamodb_table)
+        del sandbox_dynamodb
         monkeypatch.setattr(SETTINGS, "tenant_key_ssm_parameter_prefix", _PREFIX)
         key_id = token_hex(8)
         parameter = f"{_PREFIX}/{key_id}"

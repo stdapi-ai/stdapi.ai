@@ -197,7 +197,7 @@ tenants = {
 }
 ```
 
-The design is AWS's own [cross-account confused-deputy pattern](https://docs.aws.amazon.com/IAM/latest/UserGuide/confused-deputy.html): the server assumes the tenant's role with `sts:AssumeRole`, presenting an **`ExternalId` the server mints** for that tenant — read it from the `external_id` attribute of the tenant's `secret#<key id>` record (it is also printed in the server log when minted; it is deliberately not a secret). The tenant writes it into the role's trust policy:
+The design is AWS's own [cross-account confused-deputy pattern](https://docs.aws.amazon.com/IAM/latest/UserGuide/confused-deputy.html): the server assumes the tenant's role with `sts:AssumeRole`, presenting an **`ExternalId` the server mints** for that tenant — read it from the `external_id` attribute of the tenant's `secret#<key id>` record, the only place it is published. The tenant writes it into the role's trust policy:
 
 ```json
 {

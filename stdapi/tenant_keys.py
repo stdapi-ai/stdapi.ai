@@ -14,8 +14,10 @@ server never write the same item:
   name, ``disabled``, and the scope patterns. Rewritten freely by tooling
   such as the Terraform module.
 - ``pk=TENANT``, ``sk=secret#<key id>`` -- the server-minted credential:
-  ``secret_hash`` and ``salt``. Never written by the operator, so the
-  operator's tooling never sees, stores or transports the secret.
+  ``secret_hash``, ``salt`` and the ``external_id`` a cross-account role's
+  trust policy must require, which the operator reads from here. Never
+  written by the operator, so the operator's tooling never sees, stores or
+  transports the secret.
 
 Minting closes the gap between the two: a tenant record with no secret record
 is pending, and the reconciliation loop mints a secret for it, delivers the
@@ -23,7 +25,8 @@ full key to AWS Systems Manager Parameter Store as a ``SecureString`` under
 ``tenant_key_ssm_parameter_prefix``, and records the salted hash. The
 parameter's create-once semantics make the mint idempotent across instances
 and crashes: whoever created the parameter defined the secret, and everyone
-else derives the hash from it.
+else derives the hash from it, retrying past the throttle Parameter Store
+answers a genuine race with.
 
 Validated keys are cached in-process for ``tenant_key_cache_seconds`` (60 s
 by default), which is also the revocation window: a key revoked or edited in
@@ -130,6 +133,15 @@ _DUMMY_SALT: Final = token_bytes(_SALT_SIZE)
 
 #: Region the minted keys are delivered through.
 _SSM_REGION: RegionName = AWS_REGION  # type: ignore[assignment]
+
+#: Parameter Store's answer to concurrent writes of one parameter, which the mint races into.
+_THROTTLED: Final = "TooManyUpdates"
+
+#: Attempts at the create-once write before the mint is left to the next reconciliation.
+_MINT_ATTEMPTS: Final = 5
+
+#: Seconds between those attempts, long enough for the winner's write to land.
+_MINT_RETRY_SECONDS: Final = 0.2
 
 #: Matcher a tenant record's cross-account IAM role ARN must satisfy.
 _ROLE_ARN_RE: Final = re_compile(
@@ -501,6 +513,11 @@ async def _mint(key_id: str, name: str) -> None:
     and any other instance -- or a retry after a crash between delivery and
     recording -- reads the parameter back and records the same secret's hash.
 
+    A genuine race is not answered with that create-once refusal, though:
+    Parameter Store throttles concurrent writes of one name with
+    :data:`_THROTTLED` before either write lands, so a loser has to retry to
+    find the winner's parameter rather than take it for absent.
+
     Args:
         key_id: The key to mint.
         name: The tenant's declared name, for the parameter description.
@@ -512,32 +529,38 @@ async def _mint(key_id: str, name: str) -> None:
     parameter = _delivery_parameter(key_id)
     secret = "".join(choice(_ALPHABET) for _ in range(_SECRET_LENGTH))
     ssm_client = get_client("ssm", _SSM_REGION)
-    try:
-        await ssm_client.put_parameter(
-            Name=parameter,
-            Value=f"{KEY_PREFIX}{key_id}-{secret}",
-            Type="SecureString",
-            Overwrite=False,
-            Description=(
-                f"stdapi.ai API key of tenant '{name}'. "
-                "Deliver it to the tenant, then delete this parameter."
-            ),
-        )
-    except ClientError as error:
-        if error.response.get("Error", {}).get("Code") != "ParameterAlreadyExists":
-            raise
-        value = (await ssm_client.get_parameter(Name=parameter, WithDecryption=True))[
-            "Parameter"
-        ]["Value"]
-        recovered = _parse(value) if is_tenant_key(value) else None
-        if recovered is None or recovered[0] != key_id:
-            log_error_details(
-                f"SSM parameter '{parameter}' does not hold tenant key "
-                f"'{key_id}': delete the parameter to let the server mint one",
-                level="warning",
+    for remaining in range(_MINT_ATTEMPTS - 1, -1, -1):
+        try:
+            await ssm_client.put_parameter(
+                Name=parameter,
+                Value=f"{KEY_PREFIX}{key_id}-{secret}",
+                Type="SecureString",
+                Overwrite=False,
+                Description=(
+                    f"stdapi.ai API key of tenant '{name}'. "
+                    "Deliver it to the tenant, then delete this parameter."
+                ),
             )
-            return
-        secret = recovered[1]
+        except ClientError as error:
+            code = error.response.get("Error", {}).get("Code")
+            if code == _THROTTLED and remaining:
+                await sleep(_MINT_RETRY_SECONDS)
+                continue
+            if code != "ParameterAlreadyExists":
+                raise
+            value = (
+                await ssm_client.get_parameter(Name=parameter, WithDecryption=True)
+            )["Parameter"]["Value"]
+            recovered = _parse(value) if is_tenant_key(value) else None
+            if recovered is None or recovered[0] != key_id:
+                log_error_details(
+                    f"SSM parameter '{parameter}' does not hold tenant key "
+                    f"'{key_id}': delete the parameter to let the server mint one",
+                    level="warning",
+                )
+                return
+            secret = recovered[1]
+        break
     salt = token_bytes(_SALT_SIZE)
     # Minted with every key so registering a role later needs no write.
     external_id = webuuid()
@@ -554,7 +577,7 @@ async def _mint(key_id: str, name: str) -> None:
     )
     log_error_details(
         f"Minted tenant API key '{key_id}' into SSM parameter '{parameter}', "
-        f"with ExternalId '{external_id}' for a cross-account role"
+        "with an ExternalId for a cross-account role in its credential record"
         if written
         else f"Tenant API key '{key_id}' was minted by another instance",
         level="info",
@@ -680,8 +703,8 @@ async def _backfill_external_id(key_id: str, secret_item: Item) -> None:
         )
         return
     log_error_details(
-        f"Minted ExternalId '{external_id}' for tenant key '{key_id}': the "
-        "tenant must require it in its role's trust policy"
+        f"Minted the ExternalId of tenant key '{key_id}' into its credential "
+        "record: the tenant must require it in its role's trust policy"
         if written
         else f"The ExternalId of tenant key '{key_id}' was minted by another instance",
         level="info",
