@@ -126,6 +126,13 @@ repo_url: https://github.com/stdapi-ai/stdapi.ai
 repo_name: stdapi-ai/stdapi.ai
 edit_uri: ''
 
+# A dead in-page anchor (a link surviving a renamed heading) is otherwise a
+# WARNING even under --strict, which only promotes the mkdocs default: an
+# unresolvable fragment lands the reader at the top of the page, silently.
+validation:
+  links:
+    anchors: warn
+
 plugins:
   - blog:
       blog_dir: blog
