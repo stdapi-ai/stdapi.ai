@@ -54,6 +54,14 @@ RUN "${VIRTUAL_ENV}/bin/python" -m stdapi.docs_assets && \
 
 FROM python:3.14-slim-trixie
 
+# The MCP Registry validates this against the name in the server.json it is
+# given and rejects a mismatch, so the image has to carry it before the server
+# can be published. Declared here rather than at push time so every build of
+# this file carries it and the container suite can check it. The namespace is
+# claimed on the stdapi.ai apex with the registry's v=MCPv1 TXT record, which
+# must be published before the first mcp-publisher publish.
+LABEL io.modelcontextprotocol.server.name="ai.stdapi/stdapi-ai"
+
 # - ffmpeg: encodes Polly speech to wav/flac/aac/pcm and normalizes any
 #   "audio/*" upload (AMR, AIFF, WMA, AU, ...) to FLAC for Bedrock speech models
 # - libmagic1: file type detection for python-magic
