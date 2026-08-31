@@ -442,10 +442,13 @@ Each is a setting, and each default is chosen to keep the bill predictable:
 |:------------------------------------------------------------------------------------|:--------|:------------------------------------------------------------------------------------------------------|
 | [`USAGE_API`](operations_configuration.md#usage-api)                                | `false` | Everything above. While it is off the endpoints refuse and the extra series are not published.        |
 | [`USAGE_API_CACHE_TTL`](operations_configuration.md#usage-api-cache-ttl)            | `60` s  | A polling client billing every poll. Within the TTL an identical query is served from cache and costs nothing — and a client polling faster than the bucket width learns nothing new anyway. |
-| [`USAGE_API_MAX_METRICS`](operations_configuration.md#usage-api-max-metrics)        | `500`   | A wide `group_by` reading thousands of series. The query is refused **before** it is billed.          |
+| [`USAGE_API_MAX_METRICS`](operations_configuration.md#usage-api-max-metrics)        | `500`   | A wide `group_by` reading thousands of series. The query is refused **before** it is billed — see the caveat below. |
 | [`USAGE_API_MAX_RANGE_DAYS`](operations_configuration.md#usage-api-max-range-days)  | `92`    | A single call asking for a year of daily buckets.                                                     |
 
 Lower `USAGE_API_MAX_METRICS` and raise `USAGE_API_CACHE_TTL` on a large catalogue; the defaults are a ceiling, not a target.
+
+!!! warning "`USAGE_API_MAX_METRICS` counts only recently active series"
+    The free listing the cap is checked against is CloudWatch's own, which returns only the series **published in the last two weeks**. It is therefore a floor on what the paid read will match, not an exact count: a query over an older range, on a deployment whose model set has since churned, can be admitted by a near-empty listing and then read more series than the cap names. Treat the setting as a guard against the everyday wide `group_by`, and bound the worst case with `USAGE_API_MAX_RANGE_DAYS` and `USAGE_API_CACHE_TTL` as well.
 
 !!! note "`/v1/organization/costs` reports your AWS bill, not your customers' invoices"
     It reports what **AWS bills this deployment** for serving the requests, on the same [estimated basis](#cost-tracking-real-time-aws-pricing) as the request logs. It is not a reseller's revenue figure: if you bill your own clients at a markup, or at a flat rate, that number is yours to compute and does not appear here.

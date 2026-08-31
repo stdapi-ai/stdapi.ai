@@ -828,6 +828,49 @@ class TestToolSelectionSettings:
         assert served == ["tool_gamma"]
         assert card == ["tool_gamma"]
 
+    @staticmethod
+    def _usage_tools_published(
+        monkeypatch: pytest.MonkeyPatch, *, enabled: bool
+    ) -> bool:
+        """Whether the organization usage operations survive the default filters.
+
+        Returns:
+            True when none of them is excluded.
+        """
+        from stdapi.mcp import (  # noqa: PLC0415
+            _USAGE_API_OPERATIONS,
+            _operation_filters,
+        )
+
+        monkeypatch.setattr(SETTINGS, "mcp_include_tools", None)
+        monkeypatch.setattr(SETTINGS, "mcp_exclude_tools", None)
+        monkeypatch.setattr(SETTINGS, "usage_api", enabled)
+        _, exclude = _operation_filters()
+        return _USAGE_API_OPERATIONS.isdisjoint(exclude or ())
+
+    def test_the_usage_tools_are_withheld_while_the_surface_is_off(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Off by default, so a stock session is not given eleven 503 tools.
+
+        Every tool schema an agent loads costs it context on each session, and
+        these eleven can only answer that the surface is disabled.
+
+        Ref: stdapi/routes/openai_organization_usage.py:_require_metrics
+        """
+        assert self._usage_tools_published(monkeypatch, enabled=False) is False
+
+    def test_the_usage_tools_are_published_once_the_surface_is_on(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An operator who enabled the surface keeps every other tool as well.
+
+        ``mcp_include_tools`` is an exclusive list, so re-exposing these by
+        naming them there would drop every tool it does not name: the gate has
+        to be the setting the endpoints themselves read.
+        """
+        assert self._usage_tools_published(monkeypatch, enabled=True) is True
+
     @pytest.mark.usefixtures("local_test_client")
     def test_unfiltered_advertises_every_operation(
         self, monkeypatch: pytest.MonkeyPatch, api_key: str
