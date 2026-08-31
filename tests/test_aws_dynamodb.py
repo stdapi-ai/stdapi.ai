@@ -29,6 +29,7 @@ from stdapi.aws_dynamodb import (
     SCHEMA_ATTRIBUTE,
     SCHEMA_VERSION,
     SORT_KEY,
+    TABLE_REGION,
     TableUnavailableError,
     _failure,
     decode_item,
@@ -47,6 +48,10 @@ from stdapi.aws_dynamodb import (
 from stdapi.config import SETTINGS
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from fastapi.testclient import TestClient
+
     from stdapi.aws_dynamodb import Item, ItemValue
     from stdapi.monitoring import EventLog
 
@@ -338,6 +343,31 @@ class TestDegradationContract:
 
         assert "aws_dynamodb_table" in detail
         assert "aws_dynamodb_region" in detail
+
+    async def test_a_call_with_no_pooled_client_names_the_pool(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A configured table with no open client blames the pool, not the setting.
+
+        The pool is built once at startup and cleared when any client fails to
+        open, so a table configured with no client is a deployment that never
+        finished starting or one already shutting down. Settings are immutable
+        after startup, so the one thing this cannot be is the table name
+        changing under a running server.
+
+        Ref: stdapi/aws_dynamodb.py:_client
+             stdapi/aws.py:get_client
+        """
+        from stdapi.aws import _CLIENTS  # noqa: PLC0415
+
+        monkeypatch.setattr(SETTINGS, "aws_dynamodb_table", "configured")
+        monkeypatch.delitem(_CLIENTS, "dynamodb", raising=False)
+
+        with pytest.raises(TableUnavailableError) as raised:
+            await get_item("KEY#a", "key")
+
+        assert "client pool" in raised.value.detail
+        assert TABLE_REGION in raised.value.detail
 
     def test_a_transport_failure_is_reported_without_the_aws_message(self) -> None:
         """Nothing AWS wrote is carried forward, not even into the operator log.
@@ -668,6 +698,39 @@ class TestTableAccess:
             "shard#v1#2",
             "shard#v1#3",
         ]
+
+    @pytest.mark.parametrize(
+        ("operation", "call"),
+        [
+            ("GetItem", lambda: get_item("KEY#a", "key")),
+            ("PutItem", lambda: put_item({PARTITION_KEY: "KEY#a", SORT_KEY: "key"})),
+            ("DeleteItem", lambda: delete_item("KEY#a", "key")),
+            ("Query", lambda: query_partition("KEY#a")),
+        ],
+    )
+    async def test_every_call_degrades_on_a_service_error(
+        self,
+        dynamodb_table: str,
+        monkeypatch: pytest.MonkeyPatch,
+        operation: str,
+        call: Callable[[], Awaitable[object]],
+    ) -> None:
+        """A table that answers with an error degrades whichever helper asked.
+
+        Every feature sharing this table catches only
+        :class:`TableUnavailableError`, so a helper letting a raw ``ClientError``
+        through -- on a throttle, or on a table deleted under a running server --
+        would reach a caller as an unhandled exception.
+
+        Ref: stdapi/aws_dynamodb.py:_failure
+        """
+        monkeypatch.setattr(SETTINGS, "aws_dynamodb_table", "deleted-under-us")
+
+        with pytest.raises(TableUnavailableError) as raised:
+            await call()
+
+        assert f"dynamodb:{operation}" in raised.value.detail
+        assert "aws_dynamodb_table" in raised.value.detail
 
 
 @pytest.mark.local

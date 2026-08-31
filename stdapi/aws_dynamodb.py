@@ -226,9 +226,11 @@ def encode_value(value: ItemValue) -> dict[str, Any]:  # noqa: C901, PLR0911 - o
 def decode_value(value: Mapping[str, Any]) -> ItemValue:  # noqa: PLR0911 - one arm per attribute type
     """Decode a DynamoDB attribute value.
 
-    A number comes back as an ``int`` when it was written without a fractional
-    part or an exponent, and as a ``float`` otherwise: DynamoDB stores every
-    number as a decimal string, so its Python type is not preserved.
+    A number comes back as an ``int`` unless the decimal string DynamoDB
+    returns carries a fractional part or an exponent, which is not how it was
+    written: the service stores every number as a decimal and trims its
+    trailing zeroes, so ``1.0`` reads back as the ``int`` 1 and a caller that
+    needs a ``float`` coerces one.
 
     Args:
         value: The single-entry ``{type: value}`` mapping DynamoDB returned.
@@ -244,8 +246,6 @@ def decode_value(value: Mapping[str, Any]) -> ItemValue:  # noqa: PLR0911 - one 
         case "S" | "BOOL":
             return raw  # type: ignore[no-any-return]
         case "N":
-            # A decimal point or an exponent is the only thing separating a
-            # number that was a float from one that was an int.
             return float(raw) if any(c in raw for c in ".eE") else int(raw)
         case "B":
             return bytes(raw)
@@ -314,7 +314,8 @@ def _client() -> Any:  # noqa: ANN401
 
     Raises:
         TableUnavailableError: No table is configured, so the pool holds no
-            client -- a feature called this without checking its own setting.
+            client -- a feature called this without checking its own setting --
+            or the pool itself holds no client at all.
     """
     if not _table():
         msg = (
@@ -328,8 +329,9 @@ def _client() -> Any:  # noqa: ANN401
         return get_client("dynamodb", SETTINGS.aws_dynamodb_region)
     except KeyError:
         msg = (
-            f"No DynamoDB client is open for region {TABLE_REGION}: "
-            "'aws_dynamodb_table' was set after the server started."
+            f"No DynamoDB client is open for region {TABLE_REGION}: the "
+            "server's AWS client pool did not finish starting, or is shutting "
+            "down."
         )
         raise TableUnavailableError(msg) from None
 
@@ -596,6 +598,9 @@ async def verify_table(start_event: EventLog) -> None:
             description = (await client.describe_table(TableName=table))["Table"]
         except (BotoCoreError, ClientError) as error:
             raise _failure(error, "DescribeTable") from error
+        # Called after, not alongside: whatever denies or fails the first call
+        # denies this one too, and one warning naming one IAM action is what
+        # the operator acts on.
         try:
             ttl = (await client.describe_time_to_live(TableName=table))[
                 "TimeToLiveDescription"
