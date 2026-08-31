@@ -165,7 +165,7 @@ The commercial license also removes AGPL obligations for proprietary application
 
 **📦 Sample deployments:** [Terraform configurations](https://github.com/stdapi-ai/samples)
 
-**📚 Documentation:** [Full guides and API reference](https://stdapi.ai)
+**📚 Documentation:** [Full guides and API reference](../../index.md)
 
 ## Conclusion
 

@@ -24,7 +24,7 @@ Here's how.
 | Component | Role |
 |-----------|------|
 | [**Open WebUI**](https://github.com/open-webui/open-webui) | ChatGPT-like interface (100,000+ ⭐ on GitHub) |
-| [**stdapi.ai**](https://stdapi.ai) | OpenAI-compatible API gateway for AWS |
+| [**stdapi.ai**](../../index.md) | OpenAI-compatible API gateway for AWS |
 | **AWS Bedrock** | Access to 100+ foundation models |
 
 **stdapi.ai** sits between Open WebUI and AWS Bedrock, translating OpenAI API calls into native AWS requests. Standard SDKs connect on the base URL alone — Open WebUI, n8n, VS Code AI assistants, custom apps.
@@ -101,7 +101,7 @@ Your existing OpenAI-powered tools work without modification. Change the base UR
 
 📦 **Deployment repo:** [github.com/stdapi-ai/samples](https://github.com/stdapi-ai/samples/tree/main/getting_started_openwebui)
 
-📖 **Documentation:** [stdapi.ai](https://stdapi.ai)
+📖 **Documentation:** [stdapi.ai](../../index.md)
 
 📩 **Need help?** We can help you deploy and customize this solution for your needs. Reach out to us.
 
