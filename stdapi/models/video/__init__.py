@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, NamedTuple
 from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import BaseModel
 
-from stdapi.api_errors import ApiError, UnsupportedModelError
+from stdapi.api_errors import ApiError, UnsupportedModelError, iam_denial_detail
 from stdapi.aws import get_client
 from stdapi.aws_bedrock import handle_bedrock_client_error
 from stdapi.aws_s3 import get_s3_bucket_for_region, require_s3_bucket_for_region
@@ -31,6 +31,7 @@ from stdapi.models import (
     load_model_plugins,
     resolve_routed_model_id,
     route_and_execute,
+    skipped_regions_detail,
 )
 from stdapi.models.capabilities import Capability
 from stdapi.monitoring import REQUEST_LOG, build_metadata, log_error_details
@@ -545,19 +546,23 @@ async def list_video_jobs(
     jobs: list[VideoJob] = []
     errors: list[BaseException] = []
     failed_regions: dict[str, str] = {}
+    denied_regions: dict[str, str] = {}
     for region, result in zip(regions, region_results, strict=True):
         if isinstance(result, BaseException):
             if not isinstance(result, (BotoCoreError, ClientError)):
                 raise result
             errors.append(result)
-            failed_regions[region] = f"{type(result).__name__}: {result}"
+            if detail := iam_denial_detail(result):
+                denied_regions[region] = detail
+            else:
+                failed_regions[region] = f"{type(result).__name__}: {result}"
             continue
         jobs.extend(result)
     if errors and len(errors) == len(regions):
         raise errors[0]
-    if failed_regions and REQUEST_LOG.get(None) is not None:
+    if (failed_regions or denied_regions) and REQUEST_LOG.get(None) is not None:
         log_error_details(
-            {"unreachable_bedrock_regions": failed_regions},  # type: ignore[dict-item]
+            skipped_regions_detail(failed_regions, denied_regions),  # type: ignore[arg-type]
             level="warning",
         )
     jobs.sort(

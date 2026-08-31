@@ -50,8 +50,6 @@ from stdapi.config import SETTINGS
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from fastapi.testclient import TestClient
-
     from stdapi.aws_dynamodb import Item, ItemValue
     from stdapi.monitoring import EventLog
 
