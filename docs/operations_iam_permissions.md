@@ -527,6 +527,9 @@ Required by the features whose records every instance of a deployment reads and 
     !!! note "If the table uses a customer managed key"
         A table encrypted with a customer managed AWS KMS key needs no `kms:*` permission here: Amazon DynamoDB creates the grants it uses on your behalf when the table is created. Encryption at rest is always on, and the default AWS owned key is free.
 
+    !!! warning "Write access to the table is control of what the gateway serves"
+        The published model list carries the routing state the gateway invokes with — inference profiles and Amazon Bedrock Marketplace and Amazon SageMaker AI endpoint ARNs — so anything that can write to this table can decide where the gateway sends inference traffic. Treat `dynamodb:PutItem` on it as equivalent to the gateway's own inference permissions: grant it to the gateway's task role only, keep the table dedicated to the gateway, and scope the inference permissions above to the endpoint ARNs you actually deploy.
+
 ---
 
 ## :material-key-multiple: Tenant API Key Delivery (Optional) { #tenant-key-delivery }

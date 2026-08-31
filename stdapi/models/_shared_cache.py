@@ -92,6 +92,9 @@ _SHARD_BYTES: Final = 350_000
 #: Shards one list may span before publishing it is abandoned as a defect.
 _MAX_SHARDS: Final = 32
 
+#: Bytes a published list may decompress to, bounding an unauthenticated blob.
+_MAX_PAYLOAD_BYTES: Final = 64_000_000
+
 #: Seconds a sweeping server holds the lease before another may reclaim it.
 LEASE_SECONDS: Final = 120
 
@@ -204,9 +207,10 @@ async def read_catalog(start_event: EventLog | None) -> PublishedCatalog | None:
     Returns:
         The published list, or None when there is none this server can use --
         no manifest, a layout it cannot read, a list already older than
-        ``model_cache_seconds``, a shard set that does not match its manifest,
-        or a table that did not answer. Every one of those is a cache miss, and
-        the caller sweeps AWS Bedrock instead.
+        ``model_cache_seconds``, a manifest naming more pieces or more bytes
+        than one list is ever cut into, a shard set that does not match its
+        manifest, or a table that did not answer. Every one of those is a cache
+        miss, and the caller sweeps AWS Bedrock instead.
     """
     partition = _partition()
     try:
@@ -227,6 +231,11 @@ async def read_catalog(start_event: EventLog | None) -> PublishedCatalog | None:
         or not isinstance(checksum, str)
     ):
         return None
+    # Checked before the pieces are fetched: nothing this server publishes ever
+    # spans more, so a manifest that claims to is a record not to act on.
+    if not 0 < shard_count <= _MAX_SHARDS:
+        _warn(start_event, _corrupt(f"names {shard_count} pieces"))
+        return None
     # The manifest's own age is the single staleness rule: the table's
     # time-to-live deletes an expired item eventually, never on time.
     if SETTINGS.now().timestamp() - created_at >= SETTINGS.model_cache_seconds:
@@ -235,7 +244,7 @@ async def read_catalog(start_event: EventLog | None) -> PublishedCatalog | None:
     return None if payload is None else PublishedCatalog(payload, created_at)
 
 
-async def _read_shards(
+async def _read_shards(  # noqa: PLR0911 - one arm per way a shard set is unusable
     partition: str,
     version: str,
     shard_count: int,
@@ -256,7 +265,7 @@ async def _read_shards(
         to what the manifest describes, or cannot be decoded.
     """
     # Imported here: compression is needed only by a deployment that shares.
-    from compression.zstd import ZstdError, decompress  # noqa: PLC0415
+    from compression.zstd import ZstdDecompressor, ZstdError  # noqa: PLC0415
 
     try:
         shards = await query_partition(
@@ -279,9 +288,27 @@ async def _read_shards(
     if sha256(blob).hexdigest() != checksum:
         _warn(start_event, _corrupt("does not match its own checksum"))
         return None
+    # Bounded, because the blob is expanded before anything has established
+    # where it came from: a few hundred kilobytes of zstd decompress to
+    # gigabytes of repetitive JSON, which would take the fleet down at once.
+    decompressor = ZstdDecompressor()
     try:
-        payload: JsonValue = from_json(decompress(bytes(blob)))
-    except (ZstdError, ValueError) as exception:
+        decoded = decompressor.decompress(bytes(blob), max_length=_MAX_PAYLOAD_BYTES)
+    except ZstdError as exception:
+        _warn(start_event, _corrupt(f"could not be decoded ({exception})"))
+        return None
+    if not decompressor.eof:
+        _warn(
+            start_event,
+            _corrupt(
+                "stops short of its own end or expands past the "
+                f"{_MAX_PAYLOAD_BYTES} bytes a published list may occupy"
+            ),
+        )
+        return None
+    try:
+        payload: JsonValue = from_json(decoded)
+    except ValueError as exception:
         _warn(start_event, _corrupt(f"could not be decoded ({exception})"))
         return None
     return payload
@@ -334,8 +361,13 @@ async def publish_catalog(
         return
     partition = _partition()
     version = token_hex(8)
+    # ``model_cache_seconds`` is part of the floor because it is the age a
+    # reader accepts a manifest until: expiring one sooner would silently stop
+    # the sharing this feature exists for.
     manifest_expiry = created_at + max(
-        SETTINGS.model_cache_max_stale_seconds, _MIN_MANIFEST_TTL_SECONDS
+        SETTINGS.model_cache_max_stale_seconds,
+        SETTINGS.model_cache_seconds,
+        _MIN_MANIFEST_TTL_SECONDS,
     )
     try:
         for index, shard in enumerate(shards):

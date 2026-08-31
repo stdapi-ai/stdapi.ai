@@ -22,8 +22,9 @@ Ref: stdapi/models/__init__.py:initialize_bedrock_models
 
 from __future__ import annotations
 
-from asyncio import gather, sleep
+from asyncio import Event, gather, sleep
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -31,7 +32,16 @@ from botocore.exceptions import EndpointConnectionError
 
 import stdapi.models
 from stdapi import server
-from stdapi.aws_dynamodb import PARTITION_KEY, SORT_KEY, get_item, item_key, put_item
+from stdapi.aws_dynamodb import (
+    EXPIRES_AT_ATTRIBUTE,
+    PARTITION_KEY,
+    SCHEMA_ATTRIBUTE,
+    SCHEMA_VERSION,
+    SORT_KEY,
+    get_item,
+    item_key,
+    put_item,
+)
 from stdapi.config import SETTINGS
 from stdapi.models import (
     MANTLE_MODELS,
@@ -42,6 +52,7 @@ from stdapi.models import (
     initialize_bedrock_models,
     validate_model,
 )
+from stdapi.utils import to_json_bytes
 from tests._helpers import make_model_details
 
 if TYPE_CHECKING:
@@ -304,13 +315,16 @@ class TestServingAnExpiredCatalog:
 
         The caller that triggered it already has its answer, so the failure has
         nowhere to be raised -- and the next request must not immediately try
-        again.
+        again. It is reported at ``warning``, which with the deeply-stale case
+        below brackets the escalation boundary: every transient Bedrock hiccup
+        would otherwise page an operator.
 
         Ref: stdapi/models/__init__.py:_refresh_in_background
         """
         catalog("vendor.one")
         await initialize_bedrock_models()
-        _age_catalog(60)
+        # Expired, but within the intervals that keep this a warning.
+        _age_catalog(1, since_success=SETTINGS.model_cache_seconds + 1)
         sweep = catalog(error=EndpointConnectionError(endpoint_url="https://x.invalid"))
 
         assert await initialize_bedrock_models() is False
@@ -318,7 +332,10 @@ class TestServingAnExpiredCatalog:
 
         assert sweep.calls == 1
         assert "vendor.one" in stdapi.models._MODELS  # noqa: SLF001
-        assert "model_cache_refresh" in capsys.readouterr().out
+        reported = capsys.readouterr().out
+        assert "model_cache_refresh" in reported
+        assert '"level":"warning"' in reported
+        assert '"level":"error"' not in reported
         # Backed off: the next request serves the same catalog without sweeping.
         assert await initialize_bedrock_models() is False
         assert sweep.calls == 1
@@ -327,6 +344,9 @@ class TestServingAnExpiredCatalog:
         self, catalog: Callable[..., _Sweep], capsys: pytest.CaptureFixture[str]
     ) -> None:
         """Past two refresh intervals a failing refresh is louder than a warning.
+
+        Past ``_DEGRADED_INTERVALS`` intervals and no sooner: the warning case
+        above is the other side of the same boundary.
 
         Ref: stdapi/models/__init__.py:_refresh_in_background
         """
@@ -358,6 +378,40 @@ class TestServingAnExpiredCatalog:
 
         assert sweep.calls == 1
         assert not stdapi.models._REFRESH_TASKS  # noqa: SLF001
+
+    async def test_a_refresh_past_the_deadline_is_cancelled_and_counted(
+        self, catalog: Callable[..., _Sweep], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A sweep that will not finish in time is dropped, not waited out.
+
+        The count is what the stop event reports, under the registry name the
+        model refresh occupies: a shutdown that hangs on a multi-region sweep
+        is the failure this deadline exists to prevent.
+
+        Ref: stdapi/models/__init__.py:drain_model_refresh
+             stdapi/main.py:drain_background_tasks
+        """
+        from stdapi.main import drain_background_tasks  # noqa: PLC0415
+
+        catalog("vendor.one")
+        await initialize_bedrock_models()
+        _age_catalog(60)
+        # A sweep that never returns, so the deadline is what ends it.
+        never_finishes = Event()
+
+        async def _blocked(*_accumulators: object) -> None:
+            await never_finishes.wait()
+
+        monkeypatch.setattr(stdapi.models, "_collect_all_models", _blocked)
+        monkeypatch.setattr(SETTINGS, "shutdown_drain_timeout", 0.05)
+
+        await initialize_bedrock_models()
+        refresh = stdapi.models._CACHE["refresh_task"]  # noqa: SLF001
+
+        assert await drain_background_tasks() == {"model_refresh": 1}
+
+        assert refresh is not None
+        assert refresh.cancelled()
 
 
 class TestCatalogGeneration:
@@ -512,6 +566,56 @@ class TestSharedCatalog:
         """Turn the shared catalog on for a test already bound to a table."""
         monkeypatch.setattr(SETTINGS, "model_cache_shared", True)
 
+    @staticmethod
+    def _reported(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        """Collect what the shared catalog reports to the operator.
+
+        Args:
+            monkeypatch: The test's patcher.
+
+        Returns:
+            The list the warnings are appended to as they are reported.
+        """
+        reported: list[str] = []
+        monkeypatch.setattr(_shared_cache, "_REPORTED", set())
+        monkeypatch.setattr(
+            _shared_cache,
+            "log_error_details",
+            lambda detail, level: reported.append(detail),  # noqa: ARG005
+        )
+        return reported
+
+    @staticmethod
+    async def _publish_raw(blob: bytes, checksum: str, shard_count: int = 1) -> None:
+        """Write a manifest and one shard holding exactly *blob*.
+
+        Bypasses ``publish_catalog`` so a test can put in the table what only a
+        defect or another writer would ever produce.
+
+        Args:
+            blob: The compressed bytes to store as the single shard.
+            checksum: The digest the manifest claims for them.
+            shard_count: The piece count the manifest claims.
+        """
+        partition = item_key(_shared_cache.NAMESPACE, _shared_cache.fingerprint())
+        await put_item(
+            {
+                PARTITION_KEY: partition,
+                SORT_KEY: item_key(_shared_cache._SHARD, "cafe", "0000"),  # noqa: SLF001
+                "data": blob,
+            }
+        )
+        await put_item(
+            {
+                PARTITION_KEY: partition,
+                SORT_KEY: "manifest",
+                "version": "cafe",
+                "created_at": int(datetime.now(UTC).timestamp()),
+                "shard_count": shard_count,
+                "checksum": checksum,
+            }
+        )
+
     async def test_a_second_server_reads_instead_of_sweeping(
         self,
         catalog: Callable[..., _Sweep],
@@ -562,7 +666,14 @@ class TestSharedCatalog:
             inference_profiles_regional={"us-east-1": "us.vendor.one"},
             marketplace_endpoints={"us-east-1": "arn:aws:sagemaker:::endpoint/x"},
         )
+        # The collections a sweep fills as a side effect: a reader that did not
+        # sweep has to end up holding them too, or it advertises a model it
+        # cannot route.
+        MANTLE_MODELS["vendor.mantle"] = make_model_details("vendor.mantle")
+        MARKETPLACE_ENDPOINT_MODELS["vendor.one"] = model
         payload = stdapi.models._catalog_payload({"vendor.one": model}, {})  # noqa: SLF001
+        MANTLE_MODELS.clear()
+        MARKETPLACE_ENDPOINT_MODELS.clear()
         await _shared_cache.publish_catalog(
             payload, int(datetime.now(UTC).timestamp()), None
         )
@@ -573,12 +684,52 @@ class TestSharedCatalog:
 
         assert restored is not None
         rebuilt = restored[0]["vendor.one"]
+        assert rebuilt.inference_profiles == {"us-east-1": "us.vendor.one"}
         assert rebuilt.inference_profiles_regional == {"us-east-1": "us.vendor.one"}
         assert rebuilt.marketplace_endpoints == {
             "us-east-1": "arn:aws:sagemaker:::endpoint/x"
         }
-        assert set(MANTLE_MODELS) == set()
-        assert set(MARKETPLACE_ENDPOINT_MODELS) == set()
+        assert set(MANTLE_MODELS) == {"vendor.mantle"}
+        assert set(MARKETPLACE_ENDPOINT_MODELS) == {"vendor.one"}
+        assert MARKETPLACE_ENDPOINT_MODELS["vendor.one"].marketplace_endpoints == {
+            "us-east-1": "arn:aws:sagemaker:::endpoint/x"
+        }
+
+    async def test_a_reader_inherits_the_age_of_what_it_read(
+        self,
+        catalog: Callable[..., _Sweep],
+        dynamodb_table: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A read catalog expires when its publisher's would, not a full interval later.
+
+        Dating it from the read instead would let each server restart the whole
+        ``model_cache_seconds`` from whenever it happened to start, so a fleet
+        could hold a catalogue approaching twice that age and a rolling
+        scale-out would never re-sweep in step.
+
+        Ref: stdapi/models/__init__.py:_collect_catalog
+        """
+        del dynamodb_table
+        self._enable(monkeypatch)
+        # Published in the past, but still inside model_cache_seconds, so the
+        # difference between its age and the read time is what is asserted.
+        elapsed = max(1, SETTINGS.model_cache_seconds // 2)
+        published_at = int(datetime.now(UTC).timestamp()) - elapsed
+        payload = stdapi.models._catalog_payload(  # noqa: SLF001
+            {"vendor.one": make_model_details("vendor.one")}, {}
+        )
+        await _shared_cache.publish_catalog(payload, published_at, None)
+        reader = catalog("vendor.two")
+
+        await initialize_bedrock_models()
+
+        assert reader.calls == 0
+        expected = datetime.fromtimestamp(published_at, tz=UTC)
+        assert stdapi.models._CACHE["updated_at"] == expected  # noqa: SLF001
+        assert stdapi.models._CACHE["update_next"] == (  # noqa: SLF001
+            expected + stdapi.models._CACHE["update_interval"]  # noqa: SLF001
+        )
 
     async def test_a_catalog_too_big_for_one_item_is_cut_up(
         self,
@@ -629,7 +780,7 @@ class TestSharedCatalog:
         self._enable(monkeypatch)
         monkeypatch.setattr(_shared_cache, "_SHARD_BYTES", 16)
         monkeypatch.setattr(_shared_cache, "_MAX_SHARDS", 2)
-        monkeypatch.setattr(_shared_cache, "_REPORTED", set())
+        reported = self._reported(monkeypatch)
         payload = stdapi.models._catalog_payload(  # noqa: SLF001
             {
                 f"vendor.m{index}": make_model_details(f"vendor.m{index}")
@@ -643,6 +794,11 @@ class TestSharedCatalog:
         )
 
         assert await _shared_cache.read_catalog(None) is None
+        # Silence here would leave an operator with sharing switched on, a
+        # healthy table and every server sweeping for itself forever.
+        assert len(reported) == 1
+        assert "model_cache_shared" in reported[0]
+        assert "was not shared" in reported[0]
 
     async def test_a_torn_write_reads_as_no_catalog_at_all(
         self, dynamodb_table: str, monkeypatch: pytest.MonkeyPatch
@@ -667,6 +823,195 @@ class TestSharedCatalog:
         )
 
         assert await _shared_cache.read_catalog(None) is None
+
+    async def test_a_shard_that_was_tampered_with_fails_its_checksum(
+        self, dynamodb_table: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A complete shard set whose bytes changed is a miss and a warning.
+
+        The piece count adding up is not enough: a shard rewritten in place
+        leaves the manifest pointing at a set that decodes to something its
+        publisher never wrote, and the checksum is what catches it.
+
+        Ref: stdapi/models/_shared_cache.py:_read_shards
+        """
+        del dynamodb_table
+        self._enable(monkeypatch)
+        reported = self._reported(monkeypatch)
+        payload = stdapi.models._catalog_payload(  # noqa: SLF001
+            {"vendor.one": make_model_details("vendor.one")}, {}
+        )
+        await _shared_cache.publish_catalog(
+            payload, int(datetime.now(UTC).timestamp()), None
+        )
+        manifest = await get_item(
+            item_key(_shared_cache.NAMESPACE, _shared_cache.fingerprint()), "manifest"
+        )
+        assert manifest is not None
+        await put_item(
+            {
+                PARTITION_KEY: item_key(
+                    _shared_cache.NAMESPACE, _shared_cache.fingerprint()
+                ),
+                SORT_KEY: item_key(
+                    _shared_cache._SHARD,  # noqa: SLF001
+                    str(manifest["version"]),
+                    "0000",
+                ),
+                "data": b"not what was published",
+            }
+        )
+
+        assert await _shared_cache.read_catalog(None) is None
+        assert len(reported) == 1
+        assert "does not match its own checksum" in reported[0]
+
+    async def test_a_blob_that_does_not_decode_is_a_miss(
+        self, dynamodb_table: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A frame agreeing with its own checksum is still refused if it will not decode.
+
+        The checksum only proves the pieces are the ones the manifest names, so
+        the decode is the last thing between the table and the catalog served,
+        and it fails in two ways: a frame that never ends, and one that ends on
+        something that is not the published list.
+
+        Ref: stdapi/models/_shared_cache.py:_read_shards
+        """
+        from compression.zstd import compress  # noqa: PLC0415
+
+        del dynamodb_table
+        self._enable(monkeypatch)
+        reported = self._reported(monkeypatch)
+        payload = stdapi.models._catalog_payload(  # noqa: SLF001
+            {"vendor.one": make_model_details("vendor.one")}, {}
+        )
+        truncated = compress(to_json_bytes(payload))[:-8]
+
+        await self._publish_raw(truncated, sha256(truncated).hexdigest())
+
+        assert await _shared_cache.read_catalog(None) is None
+        assert len(reported) == 1
+        assert "stops short of its own end" in reported[0]
+
+        not_json = compress(b"{ this was never a model list")
+        await self._publish_raw(not_json, sha256(not_json).hexdigest())
+
+        assert await _shared_cache.read_catalog(None) is None
+        assert len(reported) == 2
+        assert "could not be decoded" in reported[1]
+
+    async def test_a_record_from_a_newer_build_is_skipped(
+        self, dynamodb_table: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A layout this build does not know is read as an empty cache, silently.
+
+        A rolling deployment puts both builds on the same table, and a newer
+        one's records have to be skipped rather than half-understood.
+
+        Ref: stdapi/models/_shared_cache.py:read_catalog
+             stdapi/aws_dynamodb.py:readable_schema
+        """
+        del dynamodb_table
+        self._enable(monkeypatch)
+        reported = self._reported(monkeypatch)
+        payload = stdapi.models._catalog_payload(  # noqa: SLF001
+            {"vendor.one": make_model_details("vendor.one")}, {}
+        )
+        await _shared_cache.publish_catalog(
+            payload, int(datetime.now(UTC).timestamp()), None
+        )
+        partition = item_key(_shared_cache.NAMESPACE, _shared_cache.fingerprint())
+        manifest = await get_item(partition, "manifest")
+        assert manifest is not None
+        assert await _shared_cache.read_catalog(None) is not None, "not readable at all"
+
+        await put_item(dict(manifest) | {SCHEMA_ATTRIBUTE: SCHEMA_VERSION + 1})
+
+        assert await _shared_cache.read_catalog(None) is None
+        assert reported == [], "a newer build's record is not a fault to report"
+
+    async def test_a_shard_from_a_newer_build_is_skipped(
+        self, dynamodb_table: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The layout gate covers the pieces as well as the manifest naming them.
+
+        Ref: stdapi/models/_shared_cache.py:_read_shards
+             stdapi/aws_dynamodb.py:readable_schema
+        """
+        del dynamodb_table
+        self._enable(monkeypatch)
+        payload = stdapi.models._catalog_payload(  # noqa: SLF001
+            {"vendor.one": make_model_details("vendor.one")}, {}
+        )
+        await _shared_cache.publish_catalog(
+            payload, int(datetime.now(UTC).timestamp()), None
+        )
+        partition = item_key(_shared_cache.NAMESPACE, _shared_cache.fingerprint())
+        manifest = await get_item(partition, "manifest")
+        assert manifest is not None
+        shard_key = item_key(
+            _shared_cache._SHARD,  # noqa: SLF001
+            str(manifest["version"]),
+            "0000",
+        )
+        shard = await get_item(partition, shard_key)
+        assert shard is not None
+
+        await put_item(dict(shard) | {SCHEMA_ATTRIBUTE: SCHEMA_VERSION + 1})
+
+        assert await _shared_cache.read_catalog(None) is None
+
+    async def test_a_manifest_naming_more_pieces_than_exist_is_refused(
+        self, dynamodb_table: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A piece count past the publishing ceiling is rejected before it is read.
+
+        Nothing this build publishes spans more than ``_MAX_SHARDS`` pieces, so
+        a manifest that claims to is a record to refuse rather than a query to
+        pay for and a buffer to fill.
+
+        Ref: stdapi/models/_shared_cache.py:read_catalog
+        """
+        del dynamodb_table
+        self._enable(monkeypatch)
+        reported = self._reported(monkeypatch)
+
+        await self._publish_raw(
+            b"unread",
+            sha256(b"unread").hexdigest(),
+            _shared_cache._MAX_SHARDS + 1,  # noqa: SLF001
+        )
+
+        assert await _shared_cache.read_catalog(None) is None
+        assert len(reported) == 1
+        assert "pieces" in reported[0]
+
+    async def test_a_blob_that_expands_past_the_ceiling_is_refused(
+        self, dynamodb_table: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Decompression is bounded, so a small item cannot claim the server's memory.
+
+        The blob is expanded before anything has established where it came
+        from, and zstd reaches ratios that turn a few hundred kilobytes of
+        table content into gigabytes of allocation on every server at once.
+
+        Ref: stdapi/models/_shared_cache.py:_read_shards
+        """
+        from compression.zstd import compress  # noqa: PLC0415
+
+        del dynamodb_table
+        self._enable(monkeypatch)
+        reported = self._reported(monkeypatch)
+        monkeypatch.setattr(_shared_cache, "_MAX_PAYLOAD_BYTES", 1024)
+        bomb = compress(b'{"models":' + b" " * 1_000_000 + b"}")
+        assert len(bomb) < 1024, "the blob has to be smaller than what it expands to"
+
+        await self._publish_raw(bomb, sha256(bomb).hexdigest())
+
+        assert await _shared_cache.read_catalog(None) is None
+        assert len(reported) == 1
+        assert "1024 bytes" in reported[0]
 
     async def test_a_catalog_published_by_another_build_is_not_read(
         self,
@@ -721,6 +1066,39 @@ class TestSharedCatalog:
 
         assert await _shared_cache.read_catalog(None) is None
 
+    async def test_a_published_list_outlives_the_age_readers_accept_it_until(
+        self, dynamodb_table: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The table's expiry never deletes a manifest a reader would still use.
+
+        A time-to-live shorter than ``model_cache_seconds`` drops the manifest
+        mid-interval and sends the whole fleet back to sweeping for itself for
+        the rest of it, silently: a missing manifest is an ordinary miss and
+        says nothing to anyone.
+
+        Ref: stdapi/models/_shared_cache.py:publish_catalog
+             https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html
+        """
+        del dynamodb_table
+        self._enable(monkeypatch)
+        # A lifetime past the other two floors, and no stale window at all.
+        monkeypatch.setattr(SETTINGS, "model_cache_seconds", 7200)
+        monkeypatch.setattr(SETTINGS, "model_cache_max_stale_seconds", 0)
+        created_at = int(datetime.now(UTC).timestamp())
+        payload = stdapi.models._catalog_payload(  # noqa: SLF001
+            {"vendor.one": make_model_details("vendor.one")}, {}
+        )
+
+        await _shared_cache.publish_catalog(payload, created_at, None)
+
+        manifest = await get_item(
+            item_key(_shared_cache.NAMESPACE, _shared_cache.fingerprint()), "manifest"
+        )
+        assert manifest is not None
+        expires_at = manifest[EXPIRES_AT_ATTRIBUTE]
+        assert isinstance(expires_at, int)
+        assert expires_at >= created_at + 7200
+
     async def test_one_server_wins_the_right_to_sweep(
         self, dynamodb_table: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -751,19 +1129,58 @@ class TestSharedCatalog:
         Ref: stdapi/models/__init__.py:_collect_catalog
         """
         del dynamodb_table
-        self._enable(monkeypatch)
+        # Primed with sharing off, so the table holds no list this server could
+        # read: the peer's lease is what has to stop the sweep here, and a
+        # readable list would settle it before the lease is ever consulted.
         sweep = catalog("vendor.one")
         await initialize_bedrock_models()
         assert sweep.calls == 1
+        self._enable(monkeypatch)
         _age_catalog(60)
         # A peer takes the lease, and publishes nothing yet.
         monkeypatch.setattr(server, "SERVER_NAME", "another-server")
         assert await _shared_cache.acquire_lease(None) is _shared_cache.Lease.HELD
+        monkeypatch.setattr(server, "SERVER_NAME", "this-server")
 
         await stdapi.models._refresh_bedrock_models(None)  # noqa: SLF001
 
         assert sweep.calls == 1
         assert "vendor.one" in stdapi.models._MODELS  # noqa: SLF001
+
+    async def test_the_staleness_ceiling_outranks_the_peers_lease(
+        self,
+        catalog: Callable[..., _Sweep],
+        dynamodb_table: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Past the ceiling a server sweeps for itself rather than wait on a peer.
+
+        Waiting is only allowed while there is a list this server may still
+        answer with. Past ``model_cache_max_stale_seconds`` there is not, and
+        deferring would serve for another lease period exactly what the ceiling
+        exists to stop -- on every server of a fleet but the one holding the
+        lease, which is where the promise would quietly stop holding.
+
+        Ref: stdapi/models/__init__.py:_collect_catalog
+             stdapi/config.py:_Settings.model_cache_max_stale_seconds
+        """
+        del dynamodb_table
+        # Primed with sharing off: nothing publishable in the table, so the
+        # lease is what this server has to get past.
+        first = catalog("vendor.one")
+        await initialize_bedrock_models()
+        assert first.calls == 1
+        self._enable(monkeypatch)
+        _age_catalog(60, since_success=SETTINGS.model_cache_max_stale_seconds + 60)
+        monkeypatch.setattr(server, "SERVER_NAME", "another-server")
+        assert await _shared_cache.acquire_lease(None) is _shared_cache.Lease.HELD
+        monkeypatch.setattr(server, "SERVER_NAME", "this-server")
+        sweep = catalog("vendor.two")
+
+        await initialize_bedrock_models()
+
+        assert sweep.calls == 1
+        assert "vendor.one" not in stdapi.models._MODELS  # noqa: SLF001
 
     async def test_a_failure_that_comes_back_is_reported_again(
         self, dynamodb_table: str, monkeypatch: pytest.MonkeyPatch

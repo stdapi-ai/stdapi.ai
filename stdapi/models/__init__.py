@@ -3138,8 +3138,9 @@ async def _collect_catalog(
     current catalog *and* this one wins the right to produce it; the server
     that loses keeps serving what it has and picks up the winner's result on
     its next check, which is what stops a fleet from sweeping N times. A server
-    with nothing to serve sweeps regardless of the lease: waiting on a peer
-    would mean answering nothing at all.
+    with nothing it may serve -- no catalog at all, or one already past
+    ``model_cache_max_stale_seconds`` -- sweeps regardless of the lease:
+    waiting on a peer would mean answering from a list it has promised not to.
 
     Args:
         start_event: Optional startup event log to record warnings on.
@@ -3166,9 +3167,11 @@ async def _collect_catalog(
     if shared:
         lease = await _shared_cache.acquire_lease(start_event)
         lease_held = lease is _shared_cache.Lease.HELD
-        # An unreachable table leaves no peer to wait for, so this server falls
-        # back to sweeping for itself rather than serving what it has forever.
-        if lease is _shared_cache.Lease.PEER and _CACHE["updated_at"] is not None:
+        # Waiting on the peer is allowed only while this server still has a
+        # catalog it may answer with: an unreachable table leaves no peer to
+        # wait for, and one past ``model_cache_max_stale_seconds`` may not be
+        # served either, so both sweep rather than defer.
+        if lease is _shared_cache.Lease.PEER and _may_serve_stale():
             _CACHE["update_next"] = SETTINGS.now() + timedelta(
                 seconds=_REFRESH_RETRY_SECONDS
             )
