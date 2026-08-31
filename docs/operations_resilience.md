@@ -334,6 +334,8 @@ Setting an explicit region for any of these services pins it to that single regi
 
 A Bedrock region that cannot be reached at startup (invalid region for the account, network issue, throttling) does not block the server from starting: it is skipped with an `unreachable_bedrock_regions` warning, its models are served from the remaining regions, and the region is retried automatically on the next model list refresh ([`MODEL_CACHE_SECONDS`](operations_configuration.md#model-cache-seconds)). Startup only fails when **every** configured region is unreachable, or when **every** per-model availability check errors — see [Unreachable Region Tolerance](operations_configuration.md#aws-bedrock-regions).
 
+A region AWS refuses is tolerated the same way, but reported apart under `bedrock_regions_missing_iam_permission`, naming the IAM action that was denied. Retrying cannot fix a denial, so the two states never share a warning — see [Denied Region Reporting](operations_configuration.md#aws-bedrock-regions). Where the refused call is only an enrichment, the region is kept rather than skipped: a denied `bedrock:ListProvisionedModelThroughputs` costs its provisioned-only models, not its whole catalogue.
+
 ### :material-refresh-auto: Model List Refresh { #model-list-refresh }
 
 The list of models a server offers is discovered from Amazon Bedrock across every configured region and kept for [`MODEL_CACHE_SECONDS`](operations_configuration.md#model-cache-seconds) (default 15 minutes). What happens when it expires is what decides whether a request pays for the refresh.

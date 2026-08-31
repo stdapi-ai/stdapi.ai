@@ -1151,6 +1151,16 @@ export AWS_BEDROCK_REGIONS=us-east-1,us-west-2,eu-west-1
 !!! info "Unreachable Region Tolerance"
     A configured region that cannot be reached (invalid region for the account, network issue, throttling) does not block startup: it is skipped with an `unreachable_bedrock_regions` warning and its models are served from the remaining regions. The skipped region is retried automatically on the next model list refresh (see [`MODEL_CACHE_SECONDS`](#model-cache-seconds)), so a recovered region rejoins without a restart. Startup only fails when **every** configured region fails, or when **every** per-model availability check errors (e.g. the `bedrock:GetFoundationModelAvailability` permission is denied) — which indicates broken credentials or configuration rather than a regional outage.
 
+!!! info "Denied Region Reporting"
+    A region AWS *refused* is never reported as unreachable. Denials are listed under their own `bedrock_regions_missing_iam_permission` warning, which names the IAM action, the region and — where AWS supplies it — the resource ARN. Nothing retries its way out of a denial: grant the named action from [IAM Permissions](operations_iam_permissions.md) and restart. The distinction matters when judging a model that vanished from the catalogue, because an unreachable region is an outage while a denied one is a policy gap.
+
+    Two wordings are used, because AWS answers the same `AccessDeniedException` for two different situations and only one of them is yours to fix:
+
+    - **`the server role is missing the IAM permission <action>`** — AWS named the action and the principal itself, which it only does when IAM policy evaluation produced the denial. This is a real policy gap.
+    - **`AWS denied <action> … unless the service does not offer the operation there`** — AWS refused without naming an action, so the action shown is the one derived from the call. A service that is not offered in a region answers this way, and so does an account-level restriction; neither is fixed by editing a policy.
+
+    Discovery degrades rather than failing where it can. `bedrock:ListProvisionedModelThroughputs` is refused outright in the regions that do not offer provisioned throughput, so a denial there costs only the models that are exclusively provisioned in that region — the region keeps serving its on-demand catalogue, and the warning reads `provisioned model discovery skipped: …`.
+
 #### `AWS_BEDROCK_CROSS_REGION_INFERENCE` { #cross-region-inference }
 
 :octicons-package-24: **Purpose**

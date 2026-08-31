@@ -1,7 +1,8 @@
 """Unified API errors — format-agnostic exceptions for all API routes."""
 
+import re
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from botocore.exceptions import (
     ClientError,
@@ -13,6 +14,8 @@ from botocore.exceptions import (
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
 
+    from botocore.model import OperationModel
+
 #: AWS error codes meaning the identity a call was signed with was denied it.
 ACCESS_DENIED_CODES: Final = frozenset({"AccessDeniedException", "AccessDenied"})
 
@@ -22,6 +25,117 @@ UNREACHABLE_ENDPOINT_ERRORS: Final = (
     EndpointResolutionError,
     ConnectTimeoutError,
 )
+
+#: Response key the AWS ``after-call`` hook records a denied call's IAM action under.
+DENIED_CALL_KEY: Final = "stdapiDeniedCall"
+
+#: How an AWS denial names the action it refused, and the resource it was attempted on.
+_DENIAL_RE: Final = re.compile(
+    r"to perform:?\s+(?P<action>[a-z0-9][a-z0-9-]*:[A-Za-z0-9_*]+)"
+    r"(?:\s+on\s+(?:resource:?\s+)?(?P<resource>arn:[^\s,\"']+))?"
+)
+
+#: The S3 operations authorized by an IAM action that is not their own name.
+_S3_IAM_ACTIONS: Final[dict[str, str]] = {
+    "CompleteMultipartUpload": "s3:PutObject",
+    "CopyObject": "s3:PutObject",
+    "CreateMultipartUpload": "s3:PutObject",
+    "DeleteObjects": "s3:DeleteObject",
+    "HeadBucket": "s3:ListBucket",
+    "HeadObject": "s3:GetObject",
+    "ListMultipartUploads": "s3:ListBucketMultipartUploads",
+    "ListObjects": "s3:ListBucket",
+    "ListObjectsV2": "s3:ListBucket",
+    "ListParts": "s3:ListMultipartUploadParts",
+    "UploadPart": "s3:PutObject",
+    "UploadPartCopy": "s3:PutObject",
+}
+
+
+def iam_action(model: OperationModel) -> str:
+    """Return the IAM action that authorizes an AWS API operation.
+
+    The action is ``<service prefix>:<OperationName>``, and botocore already
+    carries both halves: ``signingName`` is the service's IAM prefix wherever
+    the two differ from the endpoint prefix (``pricing`` for ``api.pricing``,
+    ``bedrock`` for ``bedrock-runtime``, ``aws-marketplace`` for
+    ``metering.marketplace``), and the endpoint prefix is the prefix for the
+    services that declare no signing name. Amazon S3 is the one service this
+    server calls whose operations are authorized by a differently named action,
+    so those are mapped explicitly.
+
+    Args:
+        model: Operation model of the call, as botocore passes it to its
+            ``after-call`` hook.
+
+    Returns:
+        The IAM action, e.g. ``bedrock:ListProvisionedModelThroughputs``.
+    """
+    metadata = model.service_model.metadata
+    prefix: str = metadata.get("signingName") or metadata["endpointPrefix"]
+    if prefix == "s3":
+        return _S3_IAM_ACTIONS.get(model.name, f"s3:{model.name}")
+    return f"{prefix}:{model.name}"
+
+
+def _denied_call(exc: ClientError) -> tuple[str, str | None, bool] | None:
+    """Return the IAM action and resource a denial is about.
+
+    The action AWS itself named in its message wins, because it is the
+    authoritative answer for an operation authorized by several actions; the
+    name derived from the call at :func:`iam_action` covers the services that
+    answer a bare "Access Denied", Amazon S3 above all.
+
+    Args:
+        exc: The AWS client error to read.
+
+    Returns:
+        ``(action, resource ARN or None, whether AWS named the action itself)``,
+        or ``None`` when *exc* is not a denial or names no action at all.
+    """
+    response: Any = exc.response
+    error = response.get("Error") or {}
+    if error.get("Code") not in ACCESS_DENIED_CODES:
+        return None
+    if match := _DENIAL_RE.search(error.get("Message") or ""):
+        return match["action"], match["resource"], True
+    action = (response.get(DENIED_CALL_KEY) or {}).get("action")
+    return (action, None, False) if action else None
+
+
+def iam_denial_detail(error: BaseException) -> str | None:
+    """Return what an operator has to grant for a denied call, named in full.
+
+    A denial that IAM itself evaluated always names the principal and the
+    action ("... is not authorized to perform: <action>"), a grammar AWS keeps
+    across every service, and only that one is certainly a policy gap. A
+    service refusing the account outright answers the same code with prose of
+    its own, so a denial AWS did not word that way is reported without claiming
+    which of the two it is — the action is named either way, which is what an
+    operator needs first.
+
+    Args:
+        error: The failure to describe; anything that is not an AWS denial
+            answers ``None``, so a caller sorting mixed failures needs no
+            type check of its own.
+
+    Returns:
+        The operator-facing sentence, or ``None`` when *error* is not a denial
+        whose IAM action could be named.
+    """
+    if not isinstance(error, ClientError) or (denial := _denied_call(error)) is None:
+        return None
+    action, resource, named_by_aws = denial
+    response: Any = error.response
+    recorded = response.get(DENIED_CALL_KEY) or {}
+    where = f" in {region}" if (region := recorded.get("region")) else ""
+    on = f" on {resource}" if resource else ""
+    if named_by_aws:
+        return f"the server role is missing the IAM permission {action}{where}{on}"
+    return (
+        f"AWS denied {action}{where}{on}: grant that permission to the server "
+        "role, unless the service does not offer the operation there"
+    )
 
 
 class ApiError(Exception):
@@ -323,8 +437,11 @@ def denied_feature_unavailable(exc: ClientError) -> ApiError | None:
     log = REQUEST_LOG.get(None)
     model_id = log.get("model_id") if log is not None else None
     model = f" for model {model_id}" if model_id else ""
+    missing = iam_denial_detail(exc) or (
+        f"the server role is missing the permission that authorizes {operation}"
+    )
     return FeatureUnavailableError(
         _DENIED_FEATURE,
-        f"Access denied calling {operation}{model}: grant the server role the "
-        f"permission AWS names. AWS reported: {exc.response['Error']['Message']}",
+        f"Access denied calling {operation}{model}: {missing}. "
+        f"AWS reported: {exc.response['Error']['Message']}",
     )

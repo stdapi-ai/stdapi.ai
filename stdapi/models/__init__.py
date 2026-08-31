@@ -26,7 +26,13 @@ from pydantic import AwareDatetime, BaseModel, Field, JsonValue, ValidationError
 from pydantic_core import from_json, to_json
 
 import stdapi.region_routing as _region_routing
-from stdapi.api_errors import AmbiguousModelError, ApiError, UnsupportedModelError
+from stdapi.api_errors import (
+    ACCESS_DENIED_CODES,
+    AmbiguousModelError,
+    ApiError,
+    UnsupportedModelError,
+    iam_denial_detail,
+)
 from stdapi.aws import get_client
 from stdapi.aws_bedrock import (
     BEDROCK_PROMPT_VAR,
@@ -2272,28 +2278,43 @@ def update_unified_models_collections() -> None:
     sync_batch_support(force=True)
 
 
-async def _get_provisioned_models(bedrock_client: BedrockClient) -> set[str]:
+async def _get_provisioned_models(
+    bedrock_client: BedrockClient, region: RegionName, denied_regions: dict[str, str]
+) -> set[str]:
     """Return the set of provisioned model IDs available in this region.
+
+    A denial never fails the region. Provisioned throughput is offered in a
+    subset of regions, and where it is not, the control plane refuses the call
+    with a bare ``AccessDeniedException`` — worded "Your account is not
+    authorized to invoke this API operation." as of 2026-08-31, having been
+    worded differently before. Matching that prose is what once cost a whole
+    region its catalogue, so any denial is tolerated here and recorded in
+    *denied_regions* instead: it can only cost the models that are exclusively
+    provisioned in this region, where failing costs every model in it.
 
     Args:
         bedrock_client: Bedrock control-plane client for the region.
+        region: The region being queried, named in the recorded detail.
+        denied_regions: Accumulator a denial is recorded in, for the operator.
 
     Returns:
-        Set of provisioned model IDs (ARN suffix only).
+        Set of provisioned model IDs (ARN suffix only), empty when denied.
     """
     models_ids: set[str] = set()
     params: ListProvisionedModelThroughputsRequestTypeDef = {}
     while True:
         try:
             response = await bedrock_client.list_provisioned_model_throughputs(**params)
-        except ClientError as exc:  # pragma: no cover
-            error = exc.response["Error"]
-            if (
-                error["Code"] == "AccessDeniedException"
-                and "not supported" in error["Message"]
-            ):
-                break
-            raise
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] not in ACCESS_DENIED_CODES:
+                raise
+            # Degrading is decided by the code alone; naming what was denied is
+            # best effort, so a service that says nothing cannot cost the region.
+            detail = iam_denial_detail(exc) or (
+                f"the permission that authorizes {exc.operation_name} was denied"
+            )
+            denied_regions[region] = f"provisioned model discovery skipped: {detail}"
+            break
         for model in response["provisionedModelSummaries"]:
             models_ids.add(model["modelArn"].rsplit("/", 1)[-1])
         if not (next_token := response.get("nextToken")):
@@ -2413,7 +2434,9 @@ def _filter_inference_profiles(
             profiles[model_id] = profile
 
 
-async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetails]:
+async def _get_bedrock_models_from_region(
+    region: RegionName, denied_regions: dict[str, str] | None = None
+) -> list[ModelDetails]:
     """Fetch available foundation models from *region* and return filtered ``ModelDetails``.
 
     Models restricted via ``aws_bedrock_model_region_restrict`` to regions that
@@ -2423,6 +2446,8 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
 
     Args:
         region: AWS region to query.
+        denied_regions: Accumulator for the permissions denied in this region
+            that the fetch degrades around rather than failing on.
 
     Returns:
         List of available model details for the given region.
@@ -2431,7 +2456,9 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
 
     foundation_models, provisioned_models, (profiles, regional_profiles) = await gather(
         bedrock_client.list_foundation_models(),
-        _get_provisioned_models(bedrock_client),
+        _get_provisioned_models(
+            bedrock_client, region, {} if denied_regions is None else denied_regions
+        ),
         _get_inference_profiles(bedrock_client),
     )
     next_refresh = SETTINGS.now() + _CACHE["update_interval"]
@@ -2669,7 +2696,7 @@ def _merge_mantle_models(
 
 
 async def _collect_region_candidates(
-    failed_regions: dict[str, str],
+    failed_regions: dict[str, str], denied_regions: dict[str, str] | None = None
 ) -> dict[str, list[ModelDetails]]:
     """Fetch candidate models from every configured region, in parallel.
 
@@ -2678,8 +2705,16 @@ async def _collect_region_candidates(
     on the next cache refresh. Models only available in a skipped region
     drop out of the cache until that region recovers.
 
+    A region refused for a missing IAM permission is recorded in
+    *denied_regions* instead: no retry can fix it, and reporting it as
+    unreachable would read as a regional outage rather than as the one-line
+    policy change it is.
+
     Args:
         failed_regions: Accumulator mapping unreachable regions to the error.
+        denied_regions: Accumulator mapping every region an IAM action was
+            denied in to what was denied, whether the region was skipped
+            entirely or only degraded; discarded when omitted.
 
     Returns:
         Per model ID, its per-region candidates in region priority order;
@@ -2690,9 +2725,10 @@ async def _collect_region_candidates(
         BotoCoreError: When every configured region fails (first error).
         ClientError: When every configured region fails (first error).
     """
+    denied = {} if denied_regions is None else denied_regions
     regions = list(_region_routing.ORDERED_BEDROCK_REGIONS)
     region_models = await gather(
-        *(_get_bedrock_models_from_region(region) for region in regions),
+        *(_get_bedrock_models_from_region(region, denied) for region in regions),
         return_exceptions=True,
     )
     candidates: dict[str, list[ModelDetails]] = {}
@@ -2702,7 +2738,10 @@ async def _collect_region_candidates(
             if not isinstance(result, (BotoCoreError, ClientError)):
                 raise result
             errors.append(result)
-            failed_regions[region] = f"{type(result).__name__}: {result}"
+            if detail := iam_denial_detail(result):
+                denied[region] = detail
+            else:
+                failed_regions[region] = f"{type(result).__name__}: {result}"
             continue
         for model in result:
             candidates.setdefault(model.id, []).append(model)
@@ -2760,7 +2799,11 @@ async def _check_candidates(
                 if not isinstance(result, (BotoCoreError, ClientError)):
                     raise result
                 errors.append(result)
-                issues = [f"availability check failed: {type(result).__name__}"]
+                issues = [
+                    f"availability check failed: {detail}"
+                    if (detail := iam_denial_detail(result))
+                    else f"availability check failed: {type(result).__name__}"
+                ]
             else:
                 issues = result
             if not issues:
@@ -2782,6 +2825,7 @@ async def _check_candidates(
 
 async def _collect_all_models(
     failed_regions: dict[str, str],
+    denied_regions: dict[str, str],
     mantle_regions_without_endpoint: dict[str, str],
     unavailable_models: dict[str, dict[str, list[str]]],
 ) -> tuple[dict[str, ModelDetails], dict[str, str]]:
@@ -2802,6 +2846,8 @@ async def _collect_all_models(
 
     Args:
         failed_regions: Accumulator mapping unreachable regions to the error.
+        denied_regions: Accumulator mapping regions refused for a missing IAM
+            permission to the permission.
         mantle_regions_without_endpoint: Accumulator mapping regions that do not
             serve Bedrock Mantle to what the operator has to change.
         unavailable_models: Accumulator for failed availability checks.
@@ -2822,7 +2868,7 @@ async def _collect_all_models(
         else None
     )
     try:
-        candidates = await _collect_region_candidates(failed_regions)
+        candidates = await _collect_region_candidates(failed_regions, denied_regions)
         all_models = await _check_candidates(candidates, unavailable_models)
         invalid_arn_mappings = _apply_user_profiles(all_models)
         if SETTINGS.aws_bedrock_marketplace_endpoints_enabled:
@@ -2833,7 +2879,10 @@ async def _collect_all_models(
             )
 
             merge_marketplace_endpoint_models(
-                all_models, await collect_marketplace_endpoint_models(failed_regions)
+                all_models,
+                await collect_marketplace_endpoint_models(
+                    failed_regions, denied_regions
+                ),
             )
         if mantle_task is not None:
             _merge_mantle_models(all_models, await mantle_task)
@@ -3058,6 +3107,7 @@ async def _refresh_bedrock_models(start_event: EventLog | None) -> bool:
     updated = False
     unavailable_models: dict[str, dict[str, list[str]]] = {}
     failed_regions: dict[str, str] = {}
+    denied_regions: dict[str, str] = {}
     mantle_regions_without_endpoint: dict[str, str] = {}
     new_model_ids: set[str] = set()
 
@@ -3067,6 +3117,7 @@ async def _refresh_bedrock_models(start_event: EventLog | None) -> bool:
             collected = await _collect_catalog(
                 start_event,
                 failed_regions,
+                denied_regions,
                 mantle_regions_without_endpoint,
                 unavailable_models,
             )
@@ -3111,6 +3162,7 @@ async def _refresh_bedrock_models(start_event: EventLog | None) -> bool:
     _warn_bedrock_refresh_issues(
         start_event,
         failed_regions,
+        denied_regions,
         mantle_regions_without_endpoint,
         unavailable_models,
         invalid_arn_mappings,
@@ -3167,6 +3219,7 @@ async def _install_catalog(
 async def _collect_catalog(
     start_event: EventLog | None,
     failed_regions: dict[str, str],
+    denied_regions: dict[str, str],
     mantle_regions_without_endpoint: dict[str, str],
     unavailable_models: dict[str, dict[str, list[str]]],
 ) -> tuple[dict[str, ModelDetails], dict[str, str], AwareDatetime] | None:
@@ -3184,6 +3237,8 @@ async def _collect_catalog(
     Args:
         start_event: Optional startup event log to record warnings on.
         failed_regions: Accumulator mapping unreachable regions to the error.
+        denied_regions: Accumulator mapping regions refused for a missing IAM
+            permission to the action that would lift the refusal.
         mantle_regions_without_endpoint: Accumulator mapping regions that do
             not serve Bedrock Mantle to what the operator has to change.
         unavailable_models: Accumulator for failed availability checks.
@@ -3225,7 +3280,10 @@ async def _collect_catalog(
     collected_at = SETTINGS.now()
     try:
         all_models, invalid_arn_mappings = await _collect_all_models(
-            failed_regions, mantle_regions_without_endpoint, unavailable_models
+            failed_regions,
+            denied_regions,
+            mantle_regions_without_endpoint,
+            unavailable_models,
         )
         if lease_held:
             await _shared_cache.publish_catalog(
@@ -3477,9 +3535,35 @@ def _reject_unappliable_guardrail_aliases(
     raise ServerError(detail)
 
 
+def skipped_regions_detail(
+    failed_regions: dict[str, str], denied_regions: dict[str, str]
+) -> dict[str, dict[str, str]]:
+    """Return the warning payload for the regions a refresh had to skip.
+
+    A denial gets its own key: an operator reads "unreachable" as a regional
+    outage and judges a model retirement by it, where a region named as denied
+    is one policy statement away from coming back.
+
+    Args:
+        failed_regions: Regions whose fetch failed, mapped to the error.
+        denied_regions: Regions refused for a missing IAM permission, mapped to
+            the permission.
+
+    Returns:
+        The warning payload, empty when no region was skipped.
+    """
+    detail: dict[str, dict[str, str]] = {}
+    if failed_regions:
+        detail["unreachable_bedrock_regions"] = failed_regions
+    if denied_regions:
+        detail["bedrock_regions_missing_iam_permission"] = denied_regions
+    return detail
+
+
 def _warn_bedrock_refresh_issues(
     start_event: EventLog | None,
     failed_regions: dict[str, str],
+    denied_regions: dict[str, str],
     mantle_regions_without_endpoint: dict[str, str],
     unavailable_models: dict[str, dict[str, list[str]]],
     invalid_arn_mappings: dict[str, str],
@@ -3488,12 +3572,14 @@ def _warn_bedrock_refresh_issues(
 ) -> None:
     """Record warnings for Bedrock model availability/configuration issues.
 
-    On lazy refreshes (no *start_event*), unreachable regions are still
-    surfaced as a warning on the current request log, if any.
+    On lazy refreshes (no *start_event*), skipped regions are still surfaced as
+    a warning on the current request log, if any.
 
     Args:
         start_event: Startup event log to record warnings on, if any.
         failed_regions: Regions whose fetch failed, mapped to the error.
+        denied_regions: Regions skipped because the server role lacks a
+            permission, mapped to the IAM permission it is missing.
         mantle_regions_without_endpoint: Regions that do not serve Bedrock
             Mantle, mapped to what the operator has to change.
         unavailable_models: Model IDs mapped to per-region availability issues.
@@ -3504,17 +3590,14 @@ def _warn_bedrock_refresh_issues(
             while Amazon Bedrock Guardrails are configured.
     """
     if start_event is None:
-        if failed_regions and REQUEST_LOG.get(None) is not None:
+        if (failed_regions or denied_regions) and REQUEST_LOG.get(None) is not None:
             log_error_details(
-                {"unreachable_bedrock_regions": failed_regions},  # type: ignore[dict-item]
+                skipped_regions_detail(failed_regions, denied_regions),  # type: ignore[arg-type]
                 level="warning",
             )
         return
-    if failed_regions:
-        add_server_warning(
-            start_event,
-            {"unreachable_bedrock_regions": failed_regions},  # type: ignore[dict-item]
-        )
+    if detail := skipped_regions_detail(failed_regions, denied_regions):
+        add_server_warning(start_event, detail)  # type: ignore[arg-type]
     if mantle_regions_without_endpoint:
         no_endpoint = {
             "bedrock_mantle_regions_without_endpoint": mantle_regions_without_endpoint

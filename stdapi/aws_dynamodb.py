@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from botocore.exceptions import BotoCoreError, ClientError
 
+from stdapi.api_errors import iam_denial_detail
 from stdapi.aws import get_client
 from stdapi.config import SETTINGS
 from stdapi.monitoring import add_server_warning
@@ -92,11 +93,6 @@ _CONDITION_FAILED: Final = "ConditionalCheckFailedException"
 
 #: Error code answering a call naming a table that does not exist in the region.
 _TABLE_NOT_FOUND: Final = "ResourceNotFoundException"
-
-#: Error codes answering a call the server's role is not allowed to make.
-_ACCESS_DENIED_CODES: Final[frozenset[str]] = frozenset(
-    {"AccessDenied", "AccessDeniedException", "UnrecognizedClientException"}
-)
 
 #: Time-to-live status of a table whose expiring items are actually deleted.
 _TTL_ENABLED: Final = "ENABLED"
@@ -354,10 +350,14 @@ def _failure(
     where = f"table '{table}' in {TABLE_REGION}"
     if isinstance(error, ClientError):
         code = error.response.get("Error", {}).get("Code", "")
-        if code in _ACCESS_DENIED_CODES:
+        # The shared renderer, so a DynamoDB denial names the action and the
+        # resource AWS itself named and reads like every other denial the
+        # server reports. It answers None for a credential failure such as
+        # UnrecognizedClientException, which no policy change fixes.
+        if denial := iam_denial_detail(error):
             detail = (
-                f"Access denied calling {action} on {where}: grant the server "
-                f"role '{action}' on that table."
+                f"{denial}; the features sharing table '{table}' are "
+                "unavailable until it is granted."
             )
         elif code == _TABLE_NOT_FOUND:
             detail = (

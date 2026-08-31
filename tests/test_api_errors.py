@@ -14,7 +14,8 @@ Ref: https://developers.openai.com/api/docs/guides/error-codes.md
      stdapi/api_errors.py:UnsupportedModelError
 """
 
-from typing import Any
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from botocore.exceptions import (
@@ -26,12 +27,20 @@ from botocore.exceptions import (
 
 from stdapi import models as models_module
 from stdapi.api_errors import (
+    DENIED_CALL_KEY,
     ApiError,
     FeatureUnavailableError,
     UnsupportedModelError,
     denied_feature_unavailable,
     feature_unavailable_guard,
+    iam_action,
+    iam_denial_detail,
 )
+from stdapi.aws import _record_after_call
+from stdapi.config import AWS_SESSION
+
+if TYPE_CHECKING:
+    from botocore.model import OperationModel
 
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
@@ -299,3 +308,256 @@ class TestUnsupportedModelError:
         message = str(raised.value)
         assert len(message) <= _MODEL_NOT_FOUND_MAX_CHARS
         assert not any(model_id in message for model_id in _CATALOGUE)
+
+
+#: An AWS denial as worded by the services that name the action they refused.
+_DENIAL_MESSAGE = (
+    "User: arn:aws:sts::123456789012:assumed-role/stdapi/task is not authorized "
+    "to perform: bedrock:ListProvisionedModelThroughputs on resource: "
+    "arn:aws:bedrock:eu-west-3:123456789012:provisioned-model/* because no "
+    "identity-based policy allows the action"
+)
+
+#: The resource ARN that denial was attempted on.
+_DENIAL_RESOURCE = "arn:aws:bedrock:eu-west-3:123456789012:provisioned-model/*"
+
+
+def _operation_model(service: str, operation: str) -> OperationModel:
+    """Return the botocore operation model of a real AWS API operation."""
+    from botocore.session import get_session  # noqa: PLC0415
+
+    model: OperationModel = (
+        get_session().get_service_model(service).operation_model(operation)
+    )
+    return model
+
+
+def _denied_call(message: str, operation: str, **recorded: str) -> ClientError:
+    """Return a denial as botocore raises it, optionally hook-enriched."""
+    response: Any = {"Error": {"Code": "AccessDeniedException", "Message": message}}
+    if recorded:
+        response[DENIED_CALL_KEY] = recorded
+    return ClientError(response, operation)
+
+
+class TestIamActionDerivation:
+    """The IAM action a failed AWS call needed, derived rather than tabulated.
+
+    An operator reading "access denied" learns nothing actionable, and the
+    action name is the whole answer. botocore already carries both halves of
+    it — the service's IAM prefix in ``signingName`` and the operation name in
+    the operation model — so deriving it beats a table that silently rots as
+    services are added.
+
+    Ref: https://docs.aws.amazon.com/service-authorization/latest/reference/reference_policies_actions-resources-contextkeys.html
+         stdapi/api_errors.py:iam_action
+    """
+
+    @pytest.mark.parametrize(
+        ("service", "operation", "expected"),
+        [
+            pytest.param(
+                "bedrock",
+                "ListProvisionedModelThroughputs",
+                "bedrock:ListProvisionedModelThroughputs",
+                id="prefix-equals-endpoint",
+            ),
+            pytest.param(
+                "bedrock-runtime",
+                "Converse",
+                "bedrock:Converse",
+                id="signing-name-wins",
+            ),
+            pytest.param(
+                "pricing",
+                "GetProducts",
+                "pricing:GetProducts",
+                id="api-endpoint-prefix",
+            ),
+            pytest.param("sts", "AssumeRole", "sts:AssumeRole", id="no-signing-name"),
+            pytest.param(
+                "meteringmarketplace",
+                "BatchMeterUsage",
+                "aws-marketplace:BatchMeterUsage",
+                id="renamed-service",
+            ),
+        ],
+    )
+    def test_the_action_comes_from_the_service_model(
+        self, service: str, operation: str, expected: str
+    ) -> None:
+        """The prefix is the signing name, falling back to the endpoint prefix.
+
+        ``bedrock-runtime``, ``api.pricing`` and ``metering.marketplace`` are
+        the three shapes proving the endpoint prefix alone would be wrong.
+        """
+        assert iam_action(_operation_model(service, operation)) == expected
+
+    def test_s3_operations_map_to_the_action_that_authorizes_them(self) -> None:
+        """S3 is the one service this server calls that renames its actions.
+
+        It also answers a bare "Access Denied" naming nothing, so the derived
+        name is the only one an operator ever gets for it.
+        """
+        assert iam_action(_operation_model("s3", "ListObjectsV2")) == "s3:ListBucket"
+        assert iam_action(_operation_model("s3", "HeadObject")) == "s3:GetObject"
+        assert iam_action(_operation_model("s3", "GetObject")) == "s3:GetObject"
+
+
+class TestIamDenialDetail:
+    """What an operator is told when AWS refuses one of this server's own calls.
+
+    Ref: stdapi/api_errors.py:iam_denial_detail
+         stdapi/aws.py:_record_after_call
+    """
+
+    def test_the_action_aws_named_wins_over_the_derived_one(self) -> None:
+        """AWS names the authoritative action, so its message is parsed first.
+
+        An operation can be authorized by more than one action, and only AWS
+        knows which of them was evaluated.
+        """
+        detail = iam_denial_detail(
+            _denied_call(_DENIAL_MESSAGE, "ListProvisionedModelThroughputs")
+        )
+
+        assert detail is not None
+        assert "bedrock:ListProvisionedModelThroughputs" in detail
+        assert _DENIAL_RESOURCE in detail, (
+            "the resource the action was attempted on belongs in the detail"
+        )
+        assert "assumed-role/stdapi/task" not in detail, (
+            "the principal is the server's own role and adds nothing"
+        )
+
+    def test_a_bare_denial_falls_back_to_the_recorded_action(self) -> None:
+        """S3 names no action, so the one the after-call hook recorded is used."""
+        response: Any = {
+            "Error": {"Code": "AccessDenied", "Message": "Access Denied"},
+            DENIED_CALL_KEY: {"action": "s3:ListBucket", "region": "eu-west-3"},
+        }
+
+        detail = iam_denial_detail(ClientError(response, "ListObjectsV2"))
+
+        assert detail is not None
+        assert "s3:ListBucket" in detail
+        assert "eu-west-3" in detail, "the region the call was made in belongs in it"
+        assert "is missing the IAM permission" not in detail, (
+            "only IAM's own grammar proves a policy gap; this one is unattributed"
+        )
+
+    def test_a_service_refusing_the_account_is_not_called_a_policy_gap(self) -> None:
+        """Bedrock refuses the account where provisioned throughput is not offered.
+
+        Verbatim from ``bedrock:ListProvisionedModelThroughputs`` in af-south-1
+        on 2026-08-31: an ``AccessDeniedException`` that names no principal and
+        no action, which no IAM policy can fix. Saying "the server role is
+        missing" it would send an operator editing a policy for nothing.
+        """
+        response: Any = {
+            "Error": {
+                "Code": "AccessDeniedException",
+                "Message": "Your account is not authorized to invoke this API operation.",
+            },
+            DENIED_CALL_KEY: {
+                "action": "bedrock:ListProvisionedModelThroughputs",
+                "region": "af-south-1",
+            },
+        }
+
+        detail = iam_denial_detail(
+            ClientError(response, "ListProvisionedModelThroughputs")
+        )
+
+        assert detail is not None
+        assert "bedrock:ListProvisionedModelThroughputs" in detail
+        assert "af-south-1" in detail
+        assert "is missing the IAM permission" not in detail
+
+    def test_a_failure_that_is_not_a_denial_is_not_described_as_one(self) -> None:
+        """A throttle and a transport error must not read as a missing permission."""
+        assert iam_denial_detail(_denied(_THROTTLED_CODE)) is None
+        assert (
+            iam_denial_detail(EndpointConnectionError(endpoint_url="https://x.invalid"))
+            is None
+        )
+
+    def test_the_after_call_hook_records_the_action_and_the_region(self) -> None:
+        """Botocore raises from the very dict the hook is handed, so it can enrich it.
+
+        The hook is the only place where the operation model and the client's
+        region are both still known: a ``ClientError`` carries neither.
+        """
+        parsed: dict[str, Any] = {
+            "Error": {"Code": "AccessDeniedException", "Message": "Access Denied"},
+            "ResponseMetadata": {"RequestId": "req-1"},
+        }
+
+        _record_after_call(
+            parsed,
+            _operation_model("bedrock", "ListProvisionedModelThroughputs"),
+            {"client_region": "eu-west-3"},
+        )
+
+        assert parsed[DENIED_CALL_KEY] == {
+            "action": "bedrock:ListProvisionedModelThroughputs",
+            "region": "eu-west-3",
+        }
+
+    async def test_a_real_client_raises_the_enriched_error(self) -> None:
+        """End to end: the error botocore raises carries what the hook recorded.
+
+        The design rests on botocore raising ``ClientError`` from the very dict
+        it passed to ``after-call``; only the transport is faked here, so a
+        botocore release that stopped doing that fails this test.
+        """
+        parsed: Any = {
+            "Error": {"Code": "AccessDeniedException", "Message": "Access Denied"},
+            "ResponseMetadata": {"RequestId": "req-3", "HTTPStatusCode": 403},
+        }
+
+        async def _make_request(
+            *_args: object, **_kwargs: object
+        ) -> tuple[SimpleNamespace, Any]:
+            return SimpleNamespace(status_code=403), parsed
+
+        async with AWS_SESSION.create_client(
+            "bedrock",
+            region_name="eu-west-3",
+            aws_access_key_id="x",
+            aws_secret_access_key="y",  # noqa: S106
+        ) as client:
+            client._endpoint.make_request = _make_request  # type: ignore[attr-defined] # noqa: SLF001
+            with pytest.raises(ClientError) as raised:
+                await client.list_provisioned_model_throughputs()
+
+        detail = iam_denial_detail(raised.value)
+        assert detail is not None
+        assert "bedrock:ListProvisionedModelThroughputs" in detail
+        assert "eu-west-3" in detail
+
+    def test_a_successful_call_is_left_untouched(self) -> None:
+        """Nothing denied, nothing recorded: the happy path pays nothing."""
+        parsed: dict[str, Any] = {"ResponseMetadata": {"RequestId": "req-2"}}
+
+        _record_after_call(
+            parsed, _operation_model("bedrock", "ListFoundationModels"), {}
+        )
+
+        assert DENIED_CALL_KEY not in parsed
+
+    def test_the_generic_denial_answer_names_the_action(
+        self, request_log: dict[str, Any]
+    ) -> None:
+        """The last-resort net names the permission, not only the operation."""
+        assert (
+            denied_feature_unavailable(
+                _denied_call(_DENIAL_MESSAGE, "ListProvisionedModelThroughputs")
+            )
+            is not None
+        )
+
+        assert any(
+            "bedrock:ListProvisionedModelThroughputs" in str(detail)
+            for detail in request_log["error_detail"]
+        )

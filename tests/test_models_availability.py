@@ -21,6 +21,7 @@ from botocore.exceptions import ClientError, EndpointConnectionError
 
 import stdapi.models
 from stdapi import region_routing
+from stdapi.api_errors import DENIED_CALL_KEY
 from stdapi.config import SETTINGS
 from stdapi.models import (
     ModelBase,
@@ -752,7 +753,9 @@ def _patch_regions_and_fetch(
     """Fake the region list and per-region fetch results."""
     monkeypatch.setattr(region_routing, "ORDERED_BEDROCK_REGIONS", list(results))
 
-    async def _fake(region: RegionName) -> list[ModelDetails]:
+    async def _fake(
+        region: RegionName, _denied: dict[str, str] | None = None
+    ) -> list[ModelDetails]:
         result = results[region]
         if isinstance(result, Exception):
             raise result
@@ -1022,6 +1025,147 @@ class TestInitializeBedrockModelsFaultIsolation:
         assert "m1" in stdapi.models._MODELS  # noqa: SLF001
 
 
+#: How AWS words the denial that hides behind a region reported as unreachable.
+_DENIAL_MESSAGE = (
+    "User: arn:aws:sts::123456789012:assumed-role/stdapi/task is not authorized to "
+    "perform: bedrock:ListProvisionedModelThroughputs"
+)
+
+
+def _denied_regions(entries: list[JsonValue]) -> dict[str, JsonValue]:
+    """Extract the bedrock_regions_missing_iam_permission payload from log entries."""
+    (payload,) = [
+        entry["bedrock_regions_missing_iam_permission"]
+        for entry in entries
+        if isinstance(entry, dict) and "bedrock_regions_missing_iam_permission" in entry
+    ]
+    assert isinstance(payload, dict)
+    return payload
+
+
+@pytest.mark.usefixtures("_isolated_model_cache")
+class TestRegionDeniedByIam:
+    """A region the role has no permission in is not a region that is down.
+
+    "Unreachable" is what an operator reads to decide whether a model really
+    went away, so an IAM gap wearing that label sends them looking for a
+    regional outage instead of at their own policy. The two states are
+    reported under separate keys, and the denied one names the permission.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_ListProvisionedModelThroughputs.html
+         stdapi/models/__init__.py:_collect_region_candidates
+         stdapi/models/__init__.py:skipped_regions_detail
+    """
+
+    @staticmethod
+    def _patch_denied_region(monkeypatch: pytest.MonkeyPatch) -> None:
+        """One healthy region, one refused for a missing IAM permission.
+
+        Mantle is switched off so the only skipped region is the denied one:
+        its endpoint is a real HTTPS host no unit test may depend on.
+        """
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_enabled", False)
+        _patch_regions_and_fetch(
+            monkeypatch,
+            {
+                "us-east-1": make_client_error(
+                    "AccessDeniedException",
+                    "ListProvisionedModelThroughputs",
+                    message=_DENIAL_MESSAGE,
+                ),
+                "eu-west-1": [_make_model("m1", region="eu-west-1")],
+            },
+        )
+
+        async def _available(_model: ModelDetails) -> list[str]:
+            return []
+
+        monkeypatch.setattr(stdapi.models, "_check_model_availability", _available)
+
+    async def test_a_denied_region_is_recorded_apart_from_a_failed_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The sweep sorts a denial into its own accumulator, naming the permission."""
+        self._patch_denied_region(monkeypatch)
+        failed: dict[str, str] = {}
+        denied: dict[str, str] = {}
+
+        await _collect_region_candidates(failed, denied)
+
+        assert failed == {}, "a missing permission is not an unreachable endpoint"
+        assert "bedrock:ListProvisionedModelThroughputs" in denied["us-east-1"]
+
+    async def test_the_startup_warning_does_not_call_it_unreachable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Startup warns under the denied key only, and names what to grant."""
+        self._patch_denied_region(monkeypatch)
+        start_event = make_event_log(type="start")
+
+        assert await stdapi.models.initialize_bedrock_models(start_event) is True
+
+        warnings = start_event["server_warnings"]
+        assert not any(
+            isinstance(entry, dict) and "unreachable_bedrock_regions" in entry
+            for entry in warnings
+        ), "an IAM denial must not be reported as a region outage"
+        denied = _denied_regions(warnings)
+        assert "bedrock:ListProvisionedModelThroughputs" in str(denied["us-east-1"])
+        assert "eu-west-1" not in denied
+
+    async def test_a_denied_provisioned_listing_keeps_the_region(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The region keeps its on-demand models when only the PT listing is refused.
+
+        Provisioned throughput is offered in a subset of regions and the control
+        plane refuses the listing elsewhere, with prose AWS has already reworded
+        once. Failing the region over it deleted every model that region serves;
+        the denial is recorded and the listing proceeds.
+
+        Ref: stdapi/models/__init__.py:_get_provisioned_models
+        """
+        client = _StubModelListClient([_summary("vendor.on-demand-v1")])
+        monkeypatch.setattr(
+            stdapi.models, "get_client", lambda _service, _region: client
+        )
+
+        async def _empty_profiles(
+            _client: object,
+        ) -> tuple[dict[str, str], dict[str, str]]:
+            return {}, {}
+
+        monkeypatch.setattr(stdapi.models, "_get_inference_profiles", _empty_profiles)
+        denied: dict[str, str] = {}
+
+        models = await stdapi.models._get_bedrock_models_from_region(  # noqa: SLF001
+            "af-south-1", denied
+        )
+
+        assert [model.id for model in models] == ["vendor.on-demand-v1"]
+        assert "bedrock:ListProvisionedModelThroughputs" in denied["af-south-1"]
+        assert "provisioned model discovery skipped" in denied["af-south-1"]
+
+    async def test_a_transport_failure_is_still_unreachable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The split does not reclassify the failures that really are outages."""
+        _patch_regions_and_fetch(
+            monkeypatch,
+            {
+                "us-east-1": EndpointConnectionError(endpoint_url="https://x.invalid"),
+                "eu-west-1": [_make_model("m1", region="eu-west-1")],
+            },
+        )
+        failed: dict[str, str] = {}
+        denied: dict[str, str] = {}
+
+        await _collect_region_candidates(failed, denied)
+
+        assert denied == {}
+        assert "us-east-1" in failed
+
+
 class _StubModelListClient:
     """Stub bedrock client returning pre-defined foundation model summaries."""
 
@@ -1031,6 +1175,30 @@ class _StubModelListClient:
     async def list_foundation_models(self) -> dict[str, Any]:
         """Return the pre-defined model summaries."""
         return {"modelSummaries": self._summaries}
+
+    async def list_provisioned_model_throughputs(
+        self, **_params: str
+    ) -> dict[str, Any]:
+        """Refuse exactly as Bedrock does where provisioned throughput is absent.
+
+        The response carries what ``stdapi.aws._record_after_call`` records on a
+        real denial, since it is the hook, not the service, that names the
+        action for a message worded like this one.
+
+        Raises:
+            ClientError: Always, with the verbatim message AWS answers with.
+        """
+        response: Any = {
+            "Error": {
+                "Code": "AccessDeniedException",
+                "Message": "Your account is not authorized to invoke this API operation.",
+            },
+            DENIED_CALL_KEY: {
+                "action": "bedrock:ListProvisionedModelThroughputs",
+                "region": "af-south-1",
+            },
+        }
+        raise ClientError(response, "ListProvisionedModelThroughputs")
 
 
 def _summary(
@@ -1090,7 +1258,9 @@ class TestBedrockModelLifecycleFilter:
             stdapi.models, "get_client", lambda _service, _region: client
         )
 
-        async def _empty_provisioned(_client: object) -> set[str]:
+        async def _empty_provisioned(
+            _client: object, _region: str, _denied: dict[str, str]
+        ) -> set[str]:
             return set()
 
         async def _empty_profiles(
