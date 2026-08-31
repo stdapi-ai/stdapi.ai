@@ -81,7 +81,8 @@ _GROUP_DIMENSION: Final[dict[str, str]] = {
 _REFUSALS: Final[dict[str, str]] = {
     "project_id": "this server has no projects, so usage is never attributed to one",
     "project_ids": "this server has no projects, so usage is never attributed to one",
-    "batch": "the service tier a request ran under is not reported apart",
+    "batch": "Batch API usage is not reported by the usage endpoints at all; "
+    "its spend appears in '/v1/organization/costs'",
     "service_tier": "the service tier a request ran under is not reported apart",
     "size": "the size of a generated image is not reported",
     "sizes": "the size of a generated image is not reported",
@@ -880,7 +881,10 @@ async def usage_completions(
     project_ids: _ProjectIds = None,
     batch: Annotated[
         bool | None,
-        Query(description="UNSUPPORTED: batch usage is not reported apart."),
+        Query(
+            description="UNSUPPORTED: Batch API usage is not reported by this "
+            "endpoint; its spend appears in `/v1/organization/costs`."
+        ),
     ] = None,
     limit: _Limit = None,
     page: _Page = None,
@@ -1560,7 +1564,6 @@ async def organization_costs(
     log_request_params({"start_time": start_time, "bucket_width": bucket_width})
     _require_admin()
     _require_metrics(costs=True)
-    _require_admin()
     _refuse_unsupported("project_ids", project_ids)
     keys = _check_group_by(group_by or (), frozenset({"api_key_id"}))
     if not SETTINGS.tenant_api_keys:

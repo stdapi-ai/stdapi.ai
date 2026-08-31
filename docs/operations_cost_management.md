@@ -442,10 +442,13 @@ Each is a setting, and each default is chosen to keep the bill predictable:
 |:------------------------------------------------------------------------------------|:--------|:------------------------------------------------------------------------------------------------------|
 | [`USAGE_API`](operations_configuration.md#usage-api)                                | `false` | Everything above. While it is off the endpoints refuse and the extra series are not published.        |
 | [`USAGE_API_CACHE_TTL`](operations_configuration.md#usage-api-cache-ttl)            | `60` s  | A polling client billing every poll. Within the TTL an identical query is served from cache and costs nothing — and a client polling faster than the bucket width learns nothing new anyway. |
-| [`USAGE_API_MAX_METRICS`](operations_configuration.md#usage-api-max-metrics)        | `500`   | A wide `group_by` reading thousands of series. The query is refused **before** it is billed.          |
+| [`USAGE_API_MAX_METRICS`](operations_configuration.md#usage-api-max-metrics)        | `500`   | A wide `group_by` reading thousands of series. The query is refused **before** it is billed — see the caveat below. |
 | [`USAGE_API_MAX_RANGE_DAYS`](operations_configuration.md#usage-api-max-range-days)  | `92`    | A single call asking for a year of daily buckets.                                                     |
 
 Lower `USAGE_API_MAX_METRICS` and raise `USAGE_API_CACHE_TTL` on a large catalogue; the defaults are a ceiling, not a target.
+
+!!! warning "`USAGE_API_MAX_METRICS` counts what a two-week index can see"
+    The free listing the cap is checked against is CloudWatch's own, taken under the filters and the endpoint operations of the query being served — so narrowing a query with `models` genuinely narrows the count. That listing returns only the series **published in the last two weeks**, and the paid read finds its own series through the same index, so what is counted is what the read will match. The flip side is a limit of the surface rather than of this setting: a series idle for longer than a fortnight is reported by neither — see [a model idle for two weeks stops being reported](api_openai_organization_usage.md#retention).
 
 !!! note "`/v1/organization/costs` reports your AWS bill, not your customers' invoices"
     It reports what **AWS bills this deployment** for serving the requests, on the same [estimated basis](#cost-tracking-real-time-aws-pricing) as the request logs. It is not a reseller's revenue figure: if you bill your own clients at a markup, or at a flat rate, that number is yours to compute and does not appear here.
