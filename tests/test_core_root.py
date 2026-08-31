@@ -170,7 +170,8 @@ class TestOpenApiInfoLinks:
         """
         from stdapi.main import app  # noqa: PLC0415
 
-        return app.openapi()["info"]
+        info: dict[str, object] = app.openapi()["info"]
+        return info
 
     def test_the_contact_url_is_campaign_tagged(self) -> None:
         """``contact.url`` carries the campaign parameters."""
