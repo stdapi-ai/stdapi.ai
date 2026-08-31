@@ -160,6 +160,9 @@ def serves_via_mantle(model_id: str) -> bool:
     Returns:
         True for Mantle-registered models, or when the (gated) per-request
         ``x-stdapi-service: bedrock-mantle`` header targets a dual-homed model.
+        False for a request signed by a tenant's own AWS credential: the
+        service pin already steered that request onto the runtime entry, and
+        an identifier shared by both catalogues cannot say so on its own.
 
     Raises:
         ApiError: The header asks for Mantle while the API key carries a
@@ -183,10 +186,22 @@ def serves_via_mantle(model_id: str) -> bool:
             )
             raise ApiError(msg)
         return True
-    return is_mantle_served(model_id)
+    if not is_mantle_served(model_id):
+        return False
+    # A tenant's credential can neither sign nor pay for a Mantle request, and
+    # a model both catalogues name alike keeps that identifier once pinned to
+    # bedrock-runtime, so the class has to be chosen on the same rule. Refused
+    # unconditionally rather than only when a runtime home is indexed: the pin
+    # has already turned away every model with none, and a sweep that lost the
+    # runtime entry between the two would otherwise bill the operator for a
+    # tenant's request. Without one the runtime class fails at AWS instead,
+    # which spends nothing on either account.
+    return tenant_aws_credential() is None
 
 
-def get_chat_model(model_id: str) -> ChatModelBase[Any, Any]:
+def get_chat_model(
+    model_id: str, *, allow_mantle: bool = True
+) -> ChatModelBase[Any, Any]:
     """Resolve the chat model class matching the provided identifier.
 
     Mantle-served models (and dual-homed models targeted by the per-request
@@ -202,6 +217,11 @@ def get_chat_model(model_id: str) -> ChatModelBase[Any, Any]:
 
     Args:
         model_id: The provider model identifier (e.g., "amazon.nova-micro-v1:0").
+        allow_mantle: Let a Mantle-served identifier resolve from the Mantle
+            registry. A caller invoking the model through bedrock-runtime
+            whatever the catalogue prefers -- batch inference, which no other
+            endpoint runs -- passes False, since the two catalogues may name
+            one model identically and the identifier cannot express the choice.
 
     Returns:
         The chat model associated to the ``model_id``.
@@ -216,7 +236,7 @@ def get_chat_model(model_id: str) -> ChatModelBase[Any, Any]:
         )
 
         return get_sagemaker_chat_model(model_id)
-    if serves_via_mantle(model_id):
+    if allow_mantle and serves_via_mantle(model_id):
         # Imported here: the _mantle package subclasses ChatModelBase.
         from stdapi.models.chat._mantle import get_mantle_chat_model  # noqa: PLC0415
 

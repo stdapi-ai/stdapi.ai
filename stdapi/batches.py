@@ -47,6 +47,7 @@ from stdapi.files import (
 from stdapi.models import (
     ModelBase,
     ModelRegionUnavailableError,
+    bind_runtime_home,
     runtime_twin,
     validate_model,
 )
@@ -602,7 +603,9 @@ def _batch_model_id(model: str, model_id: str) -> str:
 
     Batched requests run on one backend only, so a model this server normally
     reaches through another one runs under the identifier that backend knows
-    it by. A model that backend knows under no name at all cannot be batched.
+    it by -- which may be the very identifier it was named by, the two
+    catalogues sharing one for a dual-homed model. A model that backend knows
+    under no name at all cannot be batched.
 
     Args:
         model: Model name as written by the client.
@@ -654,6 +657,10 @@ async def _resolve_model(model: str) -> ChatModel:
     Raises:
         ApiError: When the model cannot serve batched requests.
     """
+    # Every details lookup that follows reads the bedrock-runtime entry: a
+    # dual-homed model keeps one identifier, and the catalogue publishes the
+    # preferred endpoint's entry under it -- Mantle regions, no profile.
+    bind_runtime_home()
     pinned = _PINNED_MODELS.get()
     if isinstance(already := (pinned or {}).get(model), ChatModel):
         return already
@@ -670,7 +677,10 @@ async def _resolve_model(model: str) -> ChatModel:
             )
         ).id,
     )
-    resolved = get_chat_model(model_id)
+    # The runtime family, never the Mantle one: a dual-homed model keeps one
+    # identifier across both catalogues, so the identifier alone would resolve
+    # to the endpoint the catalogue prefers rather than the one running the job.
+    resolved = get_chat_model(model_id, allow_mantle=False)
     if not isinstance(resolved, ChatModel):
         msg = f"The model `{model}` is not available for batched requests."
         raise ApiError(msg)
@@ -691,6 +701,7 @@ async def _resolve_embedding_model(model: str) -> EmbeddingModelBase[Any, Any]:
     Raises:
         ApiError: When the model cannot serve batched requests.
     """
+    bind_runtime_home()
     pinned = _PINNED_MODELS.get()
     if isinstance(already := (pinned or {}).get(model), EmbeddingModelBase):
         return already
