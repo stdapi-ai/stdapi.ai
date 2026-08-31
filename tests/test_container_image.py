@@ -106,6 +106,12 @@ _HOST_SIDE_ENGINE_MARKERS = ("flatpak-spawn", "--remote")
 #: Seconds allowed for one image build; one of them compiles the whole ffmpeg.
 _BUILD_TIMEOUT = 3600
 
+#: Label the MCP Registry reads to match an image against its server entry.
+_MCP_SERVER_NAME_LABEL = "io.modelcontextprotocol.server.name"
+
+#: Server name the registry entry declares, which the label must equal exactly.
+_MCP_SERVER_NAME = "ai.stdapi/stdapi-ai"
+
 #: Seconds allowed for any short-lived engine command.
 _RUN_TIMEOUT = 300
 
@@ -1581,6 +1587,33 @@ class TestTranscodeFallbackContract:
         )
 
         _assert_signature("flac", output)
+
+
+class TestMcpRegistryLabel:
+    """Both published images name the MCP server they are.
+
+    The MCP Registry validates ``io.modelcontextprotocol.server.name`` against
+    the ``name`` of the ``server.json`` it is given and rejects a mismatch, so
+    an image missing the label cannot be published at all -- and the label
+    being in the build context but absent from the pushed image is the failure
+    this checks for. Asserted on the image the suite is pointed at, which is
+    the published one during release validation.
+
+    Ref: https://github.com/modelcontextprotocol/registry/blob/main/docs/modelcontextprotocol-io/package-types.mdx
+         Dockerfile
+    """
+
+    def test_the_image_names_the_mcp_server_it_publishes(self, image: str) -> None:
+        """The label is present and holds the namespace the registry entry uses."""
+        labels = _image_config(image).get("Labels")
+        assert isinstance(labels, dict), (
+            f"the image '{image}' declares no labels at all"
+        )
+
+        assert labels.get(_MCP_SERVER_NAME_LABEL) == _MCP_SERVER_NAME, (
+            f"'{_MCP_SERVER_NAME_LABEL}' must be '{_MCP_SERVER_NAME}' for the "
+            f"MCP Registry to accept this image, got {labels.get(_MCP_SERVER_NAME_LABEL)!r}"
+        )
 
 
 class TestUvBootstrap:
