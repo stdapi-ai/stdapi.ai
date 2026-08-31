@@ -175,8 +175,11 @@ class TestAnthropicFiles:
         assert ids.index(f2.id) < ids.index(f1.id), (
             f"the later upload must be listed first, got {ids}"
         )
-        assert page.first_id == page.data[0].id
-        assert page.last_id == page.data[-1].id
+        # Read through ``model_extra``: the response still carries the three
+        # listing fields, but the SDK's page model stopped declaring them in
+        # 1.0.0, when it moved to an opaque ``next_page`` cursor.
+        assert (page.model_extra or {})["first_id"] == page.data[0].id
+        assert (page.model_extra or {})["last_id"] == page.data[-1].id
 
     # The SDK dropped the two cursor parameters from ``files.list()`` in 1.0.0
     # in favour of an opaque ``page`` token, so they travel in ``extra_query``:
@@ -199,7 +202,9 @@ class TestAnthropicFiles:
         # The first file of the page is a cursor that must exclude itself.
         page1 = anthropic_client.beta.files.list(limit=1)
         assert len(page1.data) == 1
-        assert page1.has_more is True, "the three uploads should not fit in one page"
+        assert (page1.model_extra or {})["has_more"] is True, (
+            "the three uploads should not fit in one page"
+        )
         cursor_id = page1.data[0].id
         page2 = anthropic_client.beta.files.list(extra_query={"after_id": cursor_id})
         ids2 = {f.id for f in page2.data}
