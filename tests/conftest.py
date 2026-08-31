@@ -1239,9 +1239,10 @@ def openai_client(
             api_key=api_key,
             max_retries=0,
             organization=_OPENAI_ORGANIZATION,
-            # The agentic overlay pins an older `openai` whose client is typed
-            # against httpx 1.x, where the suite runs on httpx 2.
-            http_client=test_client,  # type: ignore[arg-type]
+            # Cast rather than ignored: the agentic overlay pins an older
+            # `openai` typed against a different httpx, so an ignore here is
+            # unused under one of the two lock files whichever way it is written.
+            http_client=cast("Any", test_client),
         )
 
     # Official API test
@@ -1311,7 +1312,9 @@ def ollama_client(
         The client, already carrying credentials for its target.
     """
     if test_client is not None:
-        session_transport = test_client._transport  # noqa: SLF001
+        # Typed as the base class starlette declares; its own transport carries
+        # the portal and the app state this one has to be rebuilt from.
+        session_transport: Any = test_client._transport  # noqa: SLF001
         yield ollama.Client(
             host=str(test_client.base_url),
             headers={"Authorization": f"Bearer {api_key}"},
@@ -2107,8 +2110,7 @@ def anthropic_client(
             base_url="http://testserver/anthropic/",
             api_key=api_key,
             max_retries=0,
-            # Starlette types TestClient against httpx2; the alias fixes runtime only.
-            http_client=test_client,  # type: ignore[arg-type]
+            http_client=test_client,
         )
     if use_official_api:
         if getenv("ANTHROPIC_API_KEY"):
