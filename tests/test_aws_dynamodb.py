@@ -47,8 +47,6 @@ from stdapi.aws_dynamodb import (
 from stdapi.config import SETTINGS
 
 if TYPE_CHECKING:
-    from fastapi.testclient import TestClient
-
     from stdapi.aws_dynamodb import Item, ItemValue
     from stdapi.monitoring import EventLog
 
@@ -111,6 +109,26 @@ class TestKeys:
         """
         with pytest.raises(ValueError, match="at least one part"):
             item_key()
+
+    def test_the_documented_key_spaces_are_the_implemented_ones(self) -> None:
+        """The module docstring names every partition, and only real ones.
+
+        The docstring is the operator-facing map of what the shared table
+        holds; a namespace documented there but written by no code sends
+        whoever audits the table looking for records that do not exist.
+
+        Ref: stdapi/aws_dynamodb.py
+        """
+        import stdapi.aws_dynamodb as module  # noqa: PLC0415
+        from stdapi.models._shared_cache import NAMESPACE  # noqa: PLC0415
+        from stdapi.tenant_keys import _PARTITION  # noqa: PLC0415
+
+        assert module.__doc__ is not None
+        documented = {
+            match.split(KEY_SEPARATOR, 1)[0]
+            for match in re.findall(r"``pk=([^`]+)``", module.__doc__)
+        }
+        assert documented == {_PARTITION, NAMESPACE}
 
 
 class TestSchemaVersion:
@@ -769,26 +787,28 @@ class TestRealTable:
     """The semantics a stand-in can get subtly wrong, against the real service.
 
     Only what depends on DynamoDB's own behaviour rather than on this module's:
-    the atomicity of a conditional write under a genuine race, and that the
-    table an operator deployed really carries the key schema and the
-    time-to-live these features assume.
+    the atomicity of a conditional write under a genuine race, the item size a
+    shard has to fit inside, and that the startup check agrees with the schema
+    the deployment module creates.
 
-    These call the module in process, so they take ``local_test_client``: its
-    lifespan is what builds the AWS client pool ``_client`` reads, and without it
+    These call the module in process, so they take ``sandbox_dynamodb``: it
+    fills the AWS client pool ``_client`` reads with a client opened on the loop
+    the test runs on. The app's own pool cannot serve them -- its lifespan runs
+    inside ``TestClient``'s portal, on another loop -- and without the fixture
     every one of them raises :class:`TableUnavailableError` instead.
+
+    The fixture's table is created here, so what an operator's *deployed* table
+    carries is not settled by these; that is the deployment's own check.
     """
 
-    async def test_the_deployed_table_matches_what_the_features_assume(
-        self,
-        local_test_client: TestClient,
-        sandbox_dynamodb_table: str,
-        monkeypatch: pytest.MonkeyPatch,
+    async def test_the_startup_check_accepts_the_schema_the_module_creates(
+        self, sandbox_dynamodb: str
     ) -> None:
-        """The real table has the composite key and the time-to-live, or startup says so.
+        """A table shaped like the module's passes the check that gates startup.
 
         Ref: stdapi/aws_dynamodb.py:verify_table
         """
-        monkeypatch.setattr(SETTINGS, "aws_dynamodb_table", sandbox_dynamodb_table)
+        del sandbox_dynamodb
         start_event: EventLog = {"type": "start", "level": "info"}  # type: ignore[typeddict-item]
 
         await verify_table(start_event)
@@ -796,10 +816,7 @@ class TestRealTable:
         assert "server_warnings" not in start_event
 
     async def test_one_writer_wins_a_real_conditional_write(
-        self,
-        local_test_client: TestClient,
-        sandbox_dynamodb_table: str,
-        monkeypatch: pytest.MonkeyPatch,
+        self, sandbox_dynamodb: str
     ) -> None:
         """DynamoDB itself, not the stand-in, settles the race for the lease.
 
@@ -809,7 +826,7 @@ class TestRealTable:
         from asyncio import gather  # noqa: PLC0415
         from secrets import token_hex  # noqa: PLC0415
 
-        monkeypatch.setattr(SETTINGS, "aws_dynamodb_table", sandbox_dynamodb_table)
+        del sandbox_dynamodb
         partition = item_key("MODELCACHE", f"test-{token_hex(8)}")
         lease: dict[str, Any] = {
             PARTITION_KEY: partition,
@@ -833,10 +850,7 @@ class TestRealTable:
             await delete_item(partition, "lease")
 
     async def test_a_shared_model_cache_shard_fits_in_one_item(
-        self,
-        local_test_client: TestClient,
-        sandbox_dynamodb_table: str,
-        monkeypatch: pytest.MonkeyPatch,
+        self, sandbox_dynamodb: str
     ) -> None:
         """A full-size shard is accepted by the real service, not just the stand-in.
 
@@ -852,7 +866,7 @@ class TestRealTable:
 
         from stdapi.models._shared_cache import _SHARD_BYTES  # noqa: PLC0415
 
-        monkeypatch.setattr(SETTINGS, "aws_dynamodb_table", sandbox_dynamodb_table)
+        del sandbox_dynamodb
         partition = item_key("MODELCACHE", f"test-{token_hex(8)}")
         sort_key = item_key("shard", token_hex(8), "0000")
         try:

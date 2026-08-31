@@ -562,7 +562,7 @@ _LIVE_FIXTURES = frozenset(
         "live_server",
         "ollama_client",
         "openai_client",
-        "sandbox_dynamodb_table",
+        "sandbox_dynamodb",
         "test_client",
     }
 )
@@ -2294,18 +2294,95 @@ async def dynamodb_table(
 
 
 @pytest.fixture(scope="session")
-def sandbox_dynamodb_table() -> str:
-    """Name the real DynamoDB table the sandbox deployment created.
+def sandbox_dynamodb_table() -> Iterator[str]:
+    """Create one throwaway DynamoDB table in the real service for the session.
 
-    Returns:
+    The live counterpart of the ``dynamodb_table`` stand-in, carrying the key
+    schema and the time-to-live the deployment module gives the shared table.
+    Provisioned here rather than taken from a deployment, because depending on
+    one is what let this lane skip itself into never having run at all.
+
+    Created and deleted through a *synchronous* client: it outlives any one
+    test's event loop, and the table's lifecycle has no reason to be bound to
+    one. Only the per-test client below has to be.
+
+    Credentials that may not create a table skip the lane rather than fail it:
+    provisioning is this fixture's own requirement, not the behaviour any test
+    here is about.
+
+    Yields:
         The table name.
 
-    Ref: stdapi/config.py:_Settings.aws_dynamodb_table
+    Ref: terraform-aws-stdapi-ai/dynamodb.tf
     """
-    table = getenv("AWS_DYNAMODB_TABLE")
-    if not table:
-        pytest.skip("AWS_DYNAMODB_TABLE is not set: no sandbox DynamoDB table")
-    return table
+    from botocore.exceptions import ClientError, NoCredentialsError  # noqa: PLC0415
+    from botocore.session import get_session as get_sync_session  # noqa: PLC0415
+
+    from stdapi.aws_dynamodb import TABLE_REGION  # noqa: PLC0415
+
+    table = f"stdapi-test-{token_hex(8)}"
+    client = get_sync_session().create_client("dynamodb", region_name=TABLE_REGION)
+    try:
+        client.create_table(
+            TableName=table,
+            AttributeDefinitions=[
+                {"AttributeName": "pk", "AttributeType": "S"},
+                {"AttributeName": "sk", "AttributeType": "S"},
+            ],
+            KeySchema=[
+                {"AttributeName": "pk", "KeyType": "HASH"},
+                {"AttributeName": "sk", "KeyType": "RANGE"},
+            ],
+            BillingMode="PAY_PER_REQUEST",
+        )
+    except NoCredentialsError:
+        pytest.skip("No AWS credentials: cannot create a DynamoDB table")
+    except ClientError as error:
+        code = error.response.get("Error", {}).get("Code")
+        if code not in {
+            "AccessDenied",
+            "AccessDeniedException",
+            "UnrecognizedClientException",
+        }:
+            raise
+        pytest.skip(f"dynamodb:CreateTable is not allowed here ({code})")
+    try:
+        client.get_waiter("table_exists").wait(TableName=table)
+        client.update_time_to_live(
+            TableName=table,
+            TimeToLiveSpecification={"Enabled": True, "AttributeName": "expires_at"},
+        )
+        yield table
+    finally:
+        client.delete_table(TableName=table)
+
+
+@pytest.fixture
+async def sandbox_dynamodb(
+    sandbox_dynamodb_table: str, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[str]:
+    """Bind ``stdapi.aws_dynamodb`` to the session's table, on the test's loop.
+
+    The client is opened here rather than taken from the app's pool: the
+    lifespan builds that pool inside ``TestClient``'s portal, whose event loop
+    is not the one an async test runs on, and a client awaited from the wrong
+    loop fails every call.
+
+    Yields:
+        The table name.
+
+    Ref: stdapi/aws.py:get_client
+         stdapi/aws_dynamodb.py:TABLE_REGION
+    """
+    from stdapi.aws import _CLIENTS  # noqa: PLC0415
+    from stdapi.aws_dynamodb import TABLE_REGION  # noqa: PLC0415
+    from stdapi.config import SETTINGS  # noqa: PLC0415
+
+    session = get_session()
+    async with session.create_client("dynamodb", region_name=TABLE_REGION) as client:
+        monkeypatch.setitem(_CLIENTS, "dynamodb", {TABLE_REGION: client})
+        monkeypatch.setattr(SETTINGS, "aws_dynamodb_table", sandbox_dynamodb_table)
+        yield sandbox_dynamodb_table
 
 
 #: Failure-output substrings marking a model unavailable on the live backend.

@@ -14,7 +14,6 @@ can never produce the same key:
   credential hash -- one partition, so one query lists every tenant.
 - Shared model cache: ``pk=MODELCACHE#<fingerprint>``, ``sk`` one of
   ``manifest``, ``lease`` or ``shard#<version>#<n>``.
-- Rate-limit counters: ``pk=LIMIT#<key id>``, ``sk=<window id>``.
 
 A ``sk`` is the *kind* of record within its partition: a bare token for a kind
 that has one record per partition, and ``<kind>#<discriminator>`` for a kind
