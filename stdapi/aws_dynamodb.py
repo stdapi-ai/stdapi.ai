@@ -315,7 +315,7 @@ def _client() -> Any:  # noqa: ANN401
     Raises:
         TableUnavailableError: No table is configured, so the pool holds no
             client -- a feature called this without checking its own setting --
-            or the pool itself holds no client at all.
+            or the pool holds no client for the table's region.
     """
     if not _table():
         msg = (
@@ -329,9 +329,10 @@ def _client() -> Any:  # noqa: ANN401
         return get_client("dynamodb", SETTINGS.aws_dynamodb_region)
     except KeyError:
         msg = (
-            f"No DynamoDB client is open for region {TABLE_REGION}: the "
-            "server's AWS client pool did not finish starting, or is shutting "
-            "down."
+            f"No DynamoDB client is open for region {TABLE_REGION}: "
+            "'aws_dynamodb_table' was set after the server started, or the "
+            "server's AWS client pool did not finish starting, or it is "
+            "shutting down."
         )
         raise TableUnavailableError(msg) from None
 
