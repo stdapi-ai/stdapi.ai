@@ -27,7 +27,7 @@ Upload and manage files via an Anthropic-compatible interface. Files are stored 
   <br>Upload any file with a single `multipart/form-data` request. Files are immediately available for use in inference.
 
 - :material-swap-vertical: __Bidirectional Pagination__
-  <br>Traverse your file list in both directions using `after_id` and `before_id` cursors, matching the official Files API pagination.
+  <br>Traverse your file list in both directions using `after_id` and `before_id` cursors — the gateway's own ID-cursor envelope, not the opaque `page` token the official Files API moved to (see below).
 
 - :material-file-document-multiple: __Messages Integration__
   <br>Reference uploaded files directly in Messages requests as document or image source blocks using `"type": "file"`.
@@ -140,6 +140,9 @@ curl "$BASE/v1/files/file_0190c51c7de7455d9b8c2efe27dfbf67" \
 ```
 
 ### List Files
+
+!!! warning "SDK auto-pagination stops after one page"
+    The gateway serves the ID-cursor envelope (`first_id`, `last_id`, `has_more`, and the `after_id`/`before_id` query parameters), not the opaque `page`/`next_page` cursor the official Files API and `anthropic` SDK ≥ 1.0 moved to. The SDK's own iteration (`client.beta.files.list()` as an async iterator) follows `next_page`, which this response never sets, so it stops after the first page instead of walking your whole file list. Paginate by hand with `after_id`/`before_id`, as the examples below do. Adopting the newer cursor is tracked in [issue #206](https://github.com/stdapi-ai/stdapi.ai/issues/206).
 
 ```bash
 # Default (newest first, up to 20 files)

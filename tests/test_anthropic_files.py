@@ -148,6 +148,7 @@ class TestAnthropicFiles:
         self,
         anthropic_client: Anthropic,
         upload_file: Callable[[str, bytes, str], FileMetadata],
+        use_official_api: bool,
     ) -> None:
         """Listed entries carry each file's own metadata and the page's edge IDs as cursors.
 
@@ -175,9 +176,25 @@ class TestAnthropicFiles:
         assert ids.index(f2.id) < ids.index(f1.id), (
             f"the later upload must be listed first, got {ids}"
         )
-        assert page.first_id == page.data[0].id
-        assert page.last_id == page.data[-1].id
+        if use_official_api:
+            # Upstream replaced the edge-ID cursors with an opaque ``next_page``
+            # token and no longer sends them at all; the gateway still serves
+            # the envelope its own clients were written against.
+            return
+        # Read through ``model_extra``: the gateway still sends the three
+        # listing fields, but the SDK's page model stopped declaring them in
+        # 1.0.0, when it moved to the opaque cursor.
+        assert (page.model_extra or {})["first_id"] == page.data[0].id
+        assert (page.model_extra or {})["last_id"] == page.data[-1].id
 
+    # The SDK dropped the two cursor parameters from ``files.list()`` in 1.0.0
+    # in favour of an opaque ``page`` token, so they travel in ``extra_query``:
+    # the wire request stays the one a client that still sends them makes.
+
+    @pytest.mark.gateway(
+        "upstream replaced the ID cursors with an opaque `page` token; the "
+        "gateway still serves the ID scheme its clients were written against"
+    )
     def test_anthropic_list_after_id(
         self,
         anthropic_client: Anthropic,
@@ -195,18 +212,26 @@ class TestAnthropicFiles:
         # The first file of the page is a cursor that must exclude itself.
         page1 = anthropic_client.beta.files.list(limit=1)
         assert len(page1.data) == 1
-        assert page1.has_more is True, "the three uploads should not fit in one page"
+        assert (page1.model_extra or {})["has_more"] is True, (
+            "the three uploads should not fit in one page"
+        )
         cursor_id = page1.data[0].id
-        page2 = anthropic_client.beta.files.list(after_id=cursor_id)
+        page2 = anthropic_client.beta.files.list(extra_query={"after_id": cursor_id})
         ids2 = {f.id for f in page2.data}
         assert cursor_id not in ids2
 
         # A cursor on the earliest of our uploads in list order must retain the two others.
-        after_own = anthropic_client.beta.files.list(after_id=files[2].id, limit=1000)
+        after_own = anthropic_client.beta.files.list(
+            limit=1000, extra_query={"after_id": files[2].id}
+        )
         ids_after_own = {f.id for f in after_own.data}
         assert files[2].id not in ids_after_own
         assert {f.id for f in files[:2]} <= ids_after_own
 
+    @pytest.mark.gateway(
+        "upstream replaced the ID cursors with an opaque `page` token; the "
+        "gateway still serves the ID scheme its clients were written against"
+    )
     def test_anthropic_list_before_id(
         self,
         anthropic_client: Anthropic,
@@ -224,12 +249,16 @@ class TestAnthropicFiles:
         all_files = anthropic_client.beta.files.list(limit=100)
         assert all_files.data, "the three uploads must be listed"
         cursor_id = all_files.data[-1].id
-        before_page = anthropic_client.beta.files.list(before_id=cursor_id)
+        before_page = anthropic_client.beta.files.list(
+            extra_query={"before_id": cursor_id}
+        )
         ids_before = {f.id for f in before_page.data}
         assert cursor_id not in ids_before
 
         # A cursor on the latest of our uploads in list order must retain the two others.
-        before_own = anthropic_client.beta.files.list(before_id=files[0].id, limit=1000)
+        before_own = anthropic_client.beta.files.list(
+            limit=1000, extra_query={"before_id": files[0].id}
+        )
         ids_before_own = {f.id for f in before_own.data}
         assert files[0].id not in ids_before_own
         assert {f.id for f in files[1:]} <= ids_before_own
