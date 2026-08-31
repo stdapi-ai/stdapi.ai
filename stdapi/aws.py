@@ -22,7 +22,13 @@ from botocore.utils import parse_timestamp
 from pydantic_core import to_json
 
 from stdapi import server
-from stdapi.api_errors import ApiError, TenantCredentialError
+from stdapi.api_errors import (
+    ACCESS_DENIED_CODES,
+    DENIED_CALL_KEY,
+    ApiError,
+    TenantCredentialError,
+    iam_action,
+)
 from stdapi.aws_bedrock_mantle import mantle_http_session
 from stdapi.aws_sagemaker import sagemaker_http_session
 from stdapi.config import AWS_REGION, AWS_SESSION, SETTINGS
@@ -149,18 +155,31 @@ def _aws_request_id(response: dict[str, Any]) -> str:
 
 
 def _record_after_call(
-    parsed: dict[str, Any], model: OperationModel, **_kwargs: object
+    parsed: dict[str, Any],
+    model: OperationModel,
+    context: dict[str, Any] | None = None,
+    **_kwargs: object,
 ) -> None:
     """Record a completed AWS API call's request ID (``after-call`` hook).
 
     Also fires for HTTP error responses, before botocore raises the matching
-    ``ClientError``, so failed calls are captured with their error code.
+    ``ClientError``, so failed calls are captured with their error code. A
+    denial additionally gets the IAM action it needed and the region it was
+    made in recorded on the response botocore is about to raise from, which is
+    the only place both are still known: a ``ClientError`` carries neither.
 
     Args:
         parsed: Parsed AWS response, including ``ResponseMetadata``.
         model: Operation model of the call.
+        context: Botocore request context, whose ``client_region`` is the
+            region the call was made in.
         **_kwargs: Unused botocore event arguments.
     """
+    if (parsed.get("Error") or {}).get("Code") in ACCESS_DENIED_CODES:
+        parsed[DENIED_CALL_KEY] = {
+            "action": iam_action(model),
+            "region": (context or {}).get("client_region"),
+        }
     if not (request_id := _aws_request_id(parsed)):
         return
     # Imported here: stdapi.monitoring transitively imports this module.

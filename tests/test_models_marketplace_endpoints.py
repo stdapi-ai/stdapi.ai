@@ -390,7 +390,10 @@ async def test_denied_discovery_names_the_permission_and_keeps_the_catalogue(
     """A refused region degrades to a warning naming what the role is missing.
 
     Discovery runs inside the model refresh, so raising would empty the whole
-    catalogue for a permission only this optional feature needs.
+    catalogue for a permission only this optional feature needs. A refusal AWS
+    worded itself, without naming an action, cannot be told from a service
+    refusing the account outright, so it stays with the unreachable regions and
+    names both permissions in prose instead.
 
     Ref: stdapi/models/marketplace_endpoints.py:collect_marketplace_endpoint_models
     """
@@ -407,11 +410,59 @@ async def test_denied_discovery_names_the_permission_and_keeps_the_catalogue(
     monkeypatch.setattr(SETTINGS, "aws_bedrock_marketplace_endpoint_regions", [])
     monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["eu-west-1"])
     failed: dict[str, str] = {}
+    denied: dict[str, str] = {}
 
-    assert await collect_marketplace_endpoint_models(failed) == {}
+    assert await collect_marketplace_endpoint_models(failed, denied) == {}
+    assert not denied
     detail = failed["eu-west-1 (Marketplace endpoints)"]
     assert "bedrock:ListMarketplaceModelEndpoints" in detail
     assert "bedrock:GetMarketplaceModelEndpoint" in detail
+
+
+async def test_an_iam_denial_is_never_reported_as_an_unreachable_region(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A region IAM refused is filed as a policy gap, like the core sweep's.
+
+    The startup warning splits the two on purpose: an unreachable region reads
+    as a regional outage worth retrying, a denied one as the one-line policy
+    change it is. Filing this collector's denials with the failures also put
+    the raw ``ClientError`` text -- which carries the principal ARN AWS named
+    -- into the structured warning.
+
+    Ref: stdapi/models/__init__.py:_collect_region_candidates
+         stdapi/api_errors.py:iam_denial_detail
+         docs/operations_troubleshooting.md
+    """
+
+    class _Denied:
+        async def list_marketplace_model_endpoints(self, **_: object) -> dict[str, Any]:
+            raise ClientError(
+                {
+                    "Error": {
+                        "Code": "AccessDeniedException",
+                        "Message": (
+                            "User: arn:aws:sts::123456789012:assumed-role/"
+                            "stdapi/task is not authorized to perform: "
+                            "bedrock:ListMarketplaceModelEndpoints"
+                        ),
+                    }
+                },
+                "ListMarketplaceModelEndpoints",
+            )
+
+    _patch_client(monkeypatch, _Denied())
+    monkeypatch.setattr(SETTINGS, "aws_bedrock_marketplace_endpoints_enabled", True)
+    monkeypatch.setattr(SETTINGS, "aws_bedrock_marketplace_endpoint_regions", [])
+    monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["eu-west-1"])
+    failed: dict[str, str] = {}
+    denied: dict[str, str] = {}
+
+    assert await collect_marketplace_endpoint_models(failed, denied) == {}
+    assert not failed
+    detail = denied["eu-west-1 (Marketplace endpoints)"]
+    assert "bedrock:ListMarketplaceModelEndpoints" in detail
+    assert "assumed-role" not in detail
 
 
 async def test_a_declined_endpoint_reaches_the_operator(

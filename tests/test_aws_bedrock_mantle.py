@@ -3334,6 +3334,7 @@ class TestMantleDisabled:
 
         async def no_candidates(
             failed_regions: dict[str, str],  # noqa: ARG001
+            denied_regions: dict[str, str] | None = None,  # noqa: ARG001
         ) -> dict[str, Any]:
             return {}
 
@@ -3346,7 +3347,7 @@ class TestMantleDisabled:
         monkeypatch.setattr(stdapi_models, "_collect_mantle_models", fail_if_called)
         monkeypatch.setattr(stdapi_models, "_collect_region_candidates", no_candidates)
         monkeypatch.setattr(stdapi_models, "_check_candidates", no_models)
-        all_models, _ = await stdapi_models._collect_all_models({}, {}, {})  # noqa: SLF001
+        all_models, _ = await stdapi_models._collect_all_models({}, {}, {}, {})  # noqa: SLF001
         assert all_models == {}
 
     def test_serves_via_mantle_false_when_disabled_and_catalog_empty(
@@ -3398,6 +3399,7 @@ class TestCollectAllModelsCancellation:
 
         async def no_candidates(
             failed_regions: dict[str, str],  # noqa: ARG001
+            denied_regions: dict[str, str] | None = None,  # noqa: ARG001
         ) -> dict[str, Any]:
             return {}
 
@@ -3411,7 +3413,7 @@ class TestCollectAllModelsCancellation:
         monkeypatch.setattr(stdapi_models, "_collect_region_candidates", no_candidates)
         monkeypatch.setattr(stdapi_models, "_check_candidates", no_models)
 
-        collection = create_task(stdapi_models._collect_all_models({}, {}, {}))  # noqa: SLF001
+        collection = create_task(stdapi_models._collect_all_models({}, {}, {}, {}))  # noqa: SLF001
         await wait_for(fetch_started.wait(), timeout=5)
         collection.cancel()
         with pytest.raises(CancelledError):
@@ -5332,7 +5334,7 @@ class TestMantleStartupDiagnostic:
         start_event = make_event_log(type="start")
 
         stdapi_models._warn_bedrock_refresh_issues(  # noqa: SLF001
-            start_event, {}, {"eu-west-3": "no endpoint"}, {}, {}, set()
+            start_event, {}, {}, {"eu-west-3": "no endpoint"}, {}, {}, set()
         )
 
         warnings = start_event.get("server_warnings", [])
@@ -5354,7 +5356,9 @@ class TestMantleStartupDiagnostic:
         monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_regions", [])
         start_event = make_event_log(type="start")
 
-        stdapi_models._warn_bedrock_refresh_issues(start_event, {}, {}, {}, {}, set())  # noqa: SLF001
+        stdapi_models._warn_bedrock_refresh_issues(  # noqa: SLF001
+            start_event, {}, {}, {}, {}, {}, set()
+        )
 
         warnings = [str(warning) for warning in start_event.get("server_warnings", [])]
         assert any("AWS_BEDROCK_MANTLE_REGIONS" in warning for warning in warnings)
@@ -5403,7 +5407,7 @@ class TestGuardrailMantleStartupWarning:
         """A non-zero Mantle-served model count under guardrails warns at startup."""
         start_event = self._start_event()
         stdapi_models._warn_bedrock_refresh_issues(  # noqa: SLF001
-            start_event, {}, {}, {}, {}, set(), unguarded_models=3
+            start_event, {}, {}, {}, {}, {}, set(), unguarded_models=3
         )
         warnings = start_event.get("server_warnings", [])
         assert any(
@@ -5415,7 +5419,7 @@ class TestGuardrailMantleStartupWarning:
         """A zero count adds no guardrail-related warning."""
         start_event = self._start_event()
         stdapi_models._warn_bedrock_refresh_issues(  # noqa: SLF001
-            start_event, {}, {}, {}, {}, set(), unguarded_models=0
+            start_event, {}, {}, {}, {}, {}, set(), unguarded_models=0
         )
         assert "server_warnings" not in start_event
 

@@ -50,8 +50,6 @@ from stdapi.config import SETTINGS
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from fastapi.testclient import TestClient
-
     from stdapi.aws_dynamodb import Item, ItemValue
     from stdapi.monitoring import EventLog
 
@@ -61,17 +59,21 @@ _LEASE_CONDITION = (
 )
 
 
-def _client_error(code: str, operation: str = "GetItem") -> ClientError:
+def _client_error(
+    code: str, operation: str = "GetItem", message: str = "denied"
+) -> ClientError:
     """Build the botocore error AWS answers a refused or impossible call with.
 
     Args:
         code: The AWS error code.
         operation: The operation that failed.
+        message: The message AWS words the failure with; a denial IAM itself
+            evaluated names the principal and the action in it.
 
     Returns:
         The error, shaped as botocore raises it.
     """
-    return ClientError({"Error": {"Code": code, "Message": "denied"}}, operation)
+    return ClientError({"Error": {"Code": code, "Message": message}}, operation)
 
 
 class TestKeys:
@@ -322,13 +324,50 @@ class TestDegradationContract:
     def test_a_denial_names_the_action_to_grant(self) -> None:
         """The operator reads the exact IAM action their role is missing.
 
+        Rendered by the same ``iam_denial_detail`` every other AWS denial the
+        server reports goes through, so the action, the resource AWS named and
+        the wording match the rest of the startup log rather than diverging as
+        a copy of the shared rule would.
+
         Ref: stdapi/aws_dynamodb.py:_failure
+             stdapi/api_errors.py:iam_denial_detail
              https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazondynamodb.html
         """
-        detail = _failure(_client_error("AccessDeniedException"), "GetItem").detail
+        error = _client_error(
+            "AccessDeniedException",
+            message=(
+                "User: arn:aws:sts::123456789012:assumed-role/stdapi/task is "
+                "not authorized to perform: dynamodb:GetItem on resource: "
+                "arn:aws:dynamodb:us-east-1:123456789012:table/stdapi"
+            ),
+        )
 
-        assert "dynamodb:GetItem" in detail
-        assert "grant the server role" in detail
+        detail = _failure(error, "GetItem").detail
+
+        assert "missing the IAM permission dynamodb:GetItem" in detail
+        assert "arn:aws:dynamodb:us-east-1:123456789012:table/stdapi" in detail
+        assert "until it is granted" in detail
+
+    def test_an_invalid_credential_is_not_reported_as_a_policy_gap(self) -> None:
+        """A rejected security token must not send the operator to IAM.
+
+        DynamoDB answers ``UnrecognizedClientException`` when the credential is
+        invalid, expired or the region is not enabled for the account -- none
+        of which a policy change fixes. Every other caller in the server treats
+        that code as a credential failure, so the shared renderer answers
+        nothing for it and the generic branch names the code instead.
+
+        Ref: stdapi/aws_dynamodb.py:_failure
+             stdapi/api_errors.py:ACCESS_DENIED_CODES
+             https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Programming.Errors.html
+        """
+        detail = _failure(
+            _client_error("UnrecognizedClientException"), "DescribeTable"
+        ).detail
+
+        assert "UnrecognizedClientException" in detail
+        assert "IAM permission" not in detail
+        assert "granted" not in detail
 
     def test_a_missing_table_names_the_settings_to_check(
         self, monkeypatch: pytest.MonkeyPatch

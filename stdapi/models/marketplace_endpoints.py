@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Final
 
 from botocore.exceptions import BotoCoreError, ClientError
 
+from stdapi.api_errors import iam_denial_detail
 from stdapi.aws import get_client, pooled_clients
 from stdapi.config import SETTINGS
 from stdapi.models import MARKETPLACE_ENDPOINT_MODELS, MARKETPLACE_SERVICE, ModelDetails
@@ -277,7 +278,7 @@ async def _endpoints_in_region(
 
 
 async def collect_marketplace_endpoint_models(
-    failed_regions: dict[str, str],
+    failed_regions: dict[str, str], denied_regions: dict[str, str] | None = None
 ) -> dict[str, ModelDetails]:
     """Discover the Marketplace model endpoints of every searched region.
 
@@ -285,8 +286,16 @@ async def collect_marketplace_endpoint_models(
     refresh, mirroring the bedrock-runtime behavior: one degraded region must
     not empty the catalogue.
 
+    A region refused for a missing IAM permission is recorded in
+    *denied_regions* instead, like the core region sweep: no retry can fix it,
+    reporting it as unreachable would read as a regional outage rather than as
+    the one-line policy change it is, and the rendered sentence names the
+    action without the raw error text AWS wrote the principal ARN into.
+
     Args:
         failed_regions: Accumulator mapping unreachable regions to the error.
+        denied_regions: Accumulator mapping every region an IAM action was
+            denied in to what was denied; discarded when omitted.
 
     Returns:
         Servable endpoints keyed by model ID. Two endpoints of one listing in
@@ -297,6 +306,7 @@ async def collect_marketplace_endpoint_models(
     regions = marketplace_endpoint_regions()
     if not regions:
         return {}
+    denied = {} if denied_regions is None else denied_regions
     results = await gather(
         *(_endpoints_in_region(region) for region in regions), return_exceptions=True
     )
@@ -305,12 +315,17 @@ async def collect_marketplace_endpoint_models(
         if isinstance(result, BaseException):
             if not isinstance(result, (BotoCoreError, ClientError)):
                 raise result
-            failed_regions[f"{region} (Marketplace endpoints)"] = (
-                f"{type(result).__name__}: {result}. The server role needs "
-                "bedrock:ListMarketplaceModelEndpoints and "
-                "bedrock:GetMarketplaceModelEndpoint, or set "
-                "AWS_BEDROCK_MARKETPLACE_ENDPOINTS_ENABLED=false"
-            )
+            if detail := iam_denial_detail(result):
+                denied[f"{region} (Marketplace endpoints)"] = (
+                    f"{detail}; or set AWS_BEDROCK_MARKETPLACE_ENDPOINTS_ENABLED=false"
+                )
+            else:
+                failed_regions[f"{region} (Marketplace endpoints)"] = (
+                    f"{type(result).__name__}: {result}. The server role needs "
+                    "bedrock:ListMarketplaceModelEndpoints and "
+                    "bedrock:GetMarketplaceModelEndpoint, or set "
+                    "AWS_BEDROCK_MARKETPLACE_ENDPOINTS_ENABLED=false"
+                )
             continue
         region_models, declined = result
         if declined:

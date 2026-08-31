@@ -101,6 +101,7 @@ class _Sweep:
     async def __call__(
         self,
         failed_regions: dict[str, str],
+        denied_regions: dict[str, str],
         mantle_regions_without_endpoint: dict[str, str],
         unavailable_models: dict[str, dict[str, list[str]]],
     ) -> tuple[dict[str, ModelDetails], dict[str, str]]:
@@ -108,6 +109,7 @@ class _Sweep:
 
         Args:
             failed_regions: Accumulator, unused.
+            denied_regions: Accumulator, unused.
             mantle_regions_without_endpoint: Accumulator, unused.
             unavailable_models: Accumulator, unused.
 
@@ -117,7 +119,8 @@ class _Sweep:
         Raises:
             Exception: Whatever this sweep was built to fail with.
         """
-        del failed_regions, mantle_regions_without_endpoint, unavailable_models
+        del failed_regions, denied_regions
+        del mantle_regions_without_endpoint, unavailable_models
         self.calls += 1
         # Yields the loop, so a concurrent caller can reach the single-flight
         # guard while this one is still "sweeping".
