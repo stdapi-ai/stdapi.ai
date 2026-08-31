@@ -46,6 +46,9 @@ OLLAMA_ROUTES: list[tuple[str, str]] = [
     ("post", "/api/copy"),
     ("post", "/api/push"),
     ("delete", "/api/delete"),
+    # The two liveness probes are out of the schema, so nothing else lists them.
+    ("head", "/api/tags"),
+    ("head", "/api/version"),
 ]
 
 
@@ -135,7 +138,9 @@ def test_every_ollama_route_requires_authentication(
     """No endpoint of this dialect is reachable without credentials.
 
     A refusal is still an authenticated endpoint: the four that only ever answer
-    an error are the ones most easily written without the dependency. Driven
+    an error are the ones most easily written without the dependency, and the
+    two ``HEAD`` liveness probes are the ones most easily opened on purpose,
+    since a local Ollama answers them to a client holding no credential. Driven
     over raw HTTP because the point is the absent credential, which the client
     always supplies once it has one.
 

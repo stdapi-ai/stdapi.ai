@@ -1,4 +1,10 @@
-"""Ollama API."""
+"""Ollama API.
+
+Every operation of this dialect duplicates a tool an agent already has on
+another dialect, and a redundant tool degrades tool choice, so none of them is
+published as an MCP tool by default; an operator re-exposes one by naming it in
+``mcp_include_tools``.
+"""
 
 from typing import TYPE_CHECKING, Final
 
@@ -18,14 +24,9 @@ TAG_OLLAMA: str = "Ollama"
 NDJSON_MEDIA_TYPE: Final = "application/x-ndjson"
 
 #: Ollama release whose published API contract this surface targets.
-#: Reported by ``GET /api/version``: clients gate features on it, so it is a
-#: compatibility declaration rather than this server's own version.
 OLLAMA_API_VERSION: Final = "0.33.1"
 
 #: Operation IDs mounted but not published as MCP tools by default.
-#: Every one of them duplicates a tool an agent already has on another dialect,
-#: and a redundant tool degrades tool choice. Operators re-expose one by naming
-#: it in ``mcp_include_tools``.
 MCP_EXCLUDED_OPERATIONS: Final = frozenset(
     {
         "ollama_chat",

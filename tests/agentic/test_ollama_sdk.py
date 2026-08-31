@@ -5,8 +5,8 @@ dialect's own reference implementation: the library every Ollama integration is
 built on, pointed at ``agentic_server`` over a real socket with a real bearer
 token.
 
-Its **pydantic models are the assertion**, the argument that earns Pipecat its
-place here. ``ListResponse.Model.modified_at`` and ``ShowResponse.modified_at``
+Its **pydantic models are the assertion**, the argument that earns the ``ollama``
+client its place here. ``ListResponse.Model.modified_at`` and ``ShowResponse.modified_at``
 are typed ``datetime``, ``size`` is a ``ByteSize``, and ``model_info`` reaches
 the client through a field alias (``ShowResponse.modelinfo``) -- so a shape the
 gateway gets wrong surfaces as a ``ValidationError`` in the client rather than
@@ -91,8 +91,8 @@ _TIMEOUT = 600.0
 
 #: Cheapest model serving the chat and generate routes.
 #:
-#: The same one ``tests/_ollama.py`` names for the unit lane's chat coverage, so
-#: a divergence between the two lanes is never a difference of model.
+#: The same one ``tests/conftest.py:OLLAMA_MODEL_MAPPINGS`` names for the unit
+#: lane, so a divergence between the two lanes is never a difference of model.
 _CHAT_MODEL = "amazon.nova-micro-v1:0"
 
 #: Second chat family, so a Converse-native quirk cannot pass for a dialect bug.

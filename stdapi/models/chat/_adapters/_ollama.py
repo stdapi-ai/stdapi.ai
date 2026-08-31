@@ -21,6 +21,7 @@ from stdapi.types.ollama import (
     ToolCall,
     ToolCallFunction,
     created_at,
+    streamed_at,
     total_duration,
 )
 from stdapi.types.openai import (
@@ -67,19 +68,15 @@ if TYPE_CHECKING:
     )
 
 #: Ollama's two stop reasons, keyed by the OpenAI finish reason.
-#: ``llm/server.go`` only ever emits "stop" and "length"; a guardrail or
-#: malformed-output stop has no Ollama spelling and reports the closer of the two.
 _DONE_REASON_BY_FINISH_REASON: dict[str, str] = {
     "stop": "stop",
     "length": "length",
+    # ``llm/server.go`` emits nothing else, so the three reasons with no Ollama
+    # spelling report the closer of the two.
     "tool_calls": "stop",
     "function_call": "stop",
     "content_filter": "stop",
 }
-
-#: Field the reasoning text is serialized under, as the operator configured it.
-#: Settings are immutable after startup, so this is resolved once.
-_REASONING_FIELD: str = SETTINGS.chat_completions_reasoning_field
 
 #: Name given to the schema wrapper Ollama's bare ``format`` object lacks.
 _SCHEMA_NAME: str = "response"
@@ -99,10 +96,11 @@ def _reasoning_of(message: ChatCompletionMessage | JsonMapping) -> str | None:
         The thinking text, or None when there is none or the operator disabled
         emitting it.
     """
-    if _REASONING_FIELD == "none":
+    field = SETTINGS.chat_completions_reasoning_field
+    if field == "none":
         return None
     if isinstance(message, dict):
-        value = message.get(_REASONING_FIELD)
+        value = message.get(field)
         return value if isinstance(value, str) else None
     return message.reasoning_content
 
@@ -206,6 +204,10 @@ def _map_messages(messages: list[ChatMessage]) -> list[ChatCompletionMessagePara
 def _take_tool_call_id(pending: list[tuple[str, str]], message: ChatMessage) -> str:
     """Resolve the tool call a tool result answers, consuming the match.
 
+    A client-sent ``tool_call_id`` selects a pending call and is never returned
+    as is: this dialect emits no identifier for a client to echo, so a foreign
+    one names a tool call the backend never saw and would be refused.
+
     Args:
         pending: Synthesized ``(id, name)`` pairs not yet answered, in call order.
         message: The tool result message.
@@ -213,10 +215,15 @@ def _take_tool_call_id(pending: list[tuple[str, str]], message: ChatMessage) -> 
     Returns:
         The identifier of the tool call this result answers.
     """
-    if message.tool_call_id:
-        return message.tool_call_id
-    index = 0
-    if message.tool_name:
+    index = next(
+        (
+            i
+            for i, (call_id, _) in enumerate(pending)
+            if call_id == message.tool_call_id
+        ),
+        None,
+    )
+    if index is None:
         index = next(
             (i for i, (_, name) in enumerate(pending) if name == message.tool_name), 0
         )
@@ -706,7 +713,7 @@ async def chat_stream(
             message["thinking"] = thinking
         yield {
             "model": model,
-            "created_at": created_at(),
+            "created_at": streamed_at(),
             "message": message,
             "done": False,
         }
@@ -719,7 +726,7 @@ async def chat_stream(
         state.mark_first_token()
         yield {
             "model": model,
-            "created_at": created_at(),
+            "created_at": streamed_at(),
             "message": {
                 "role": "assistant",
                 "content": "",
@@ -731,7 +738,7 @@ async def chat_stream(
         }
     yield {
         "model": model,
-        "created_at": created_at(),
+        "created_at": streamed_at(),
         "message": {"role": "assistant", "content": ""},
         "done": True,
         "done_reason": _DONE_REASON_BY_FINISH_REASON.get(
@@ -771,7 +778,7 @@ async def generate_stream(
         state.mark_first_token()
         event: JsonMapping = {
             "model": model,
-            "created_at": created_at(),
+            "created_at": streamed_at(),
             "response": content or "",
             "done": False,
         }
@@ -785,7 +792,7 @@ async def generate_stream(
         return
     yield {
         "model": model,
-        "created_at": created_at(),
+        "created_at": streamed_at(),
         "response": "",
         "done": True,
         "done_reason": _DONE_REASON_BY_FINISH_REASON.get(

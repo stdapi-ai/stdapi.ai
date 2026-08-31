@@ -109,7 +109,7 @@ async def embed(
     return log_response_params(
         EmbedResponse(
             model=request.model,
-            embeddings=[list(vector) for vector in response.embeddings],
+            embeddings=response.embeddings,
             total_duration=total_duration(),
             prompt_eval_count=response.prompt_tokens,
         ),
@@ -161,6 +161,5 @@ async def embeddings(
         extra_params=get_extra_model_parameters(model_id, request),
     )
     return log_response_params(
-        EmbeddingsResponse(embedding=list(response.embeddings[0])),
-        exclude={"embedding"},
+        EmbeddingsResponse(embedding=response.embeddings[0]), exclude={"embedding"}
     )

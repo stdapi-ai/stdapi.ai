@@ -39,6 +39,18 @@ def created_at() -> str:
     return REQUEST_TIME.get().isoformat()
 
 
+def streamed_at() -> str:
+    """Return the current time in the ISO 8601 form Ollama stamps an event with.
+
+    Every object of a stream carries the moment it was emitted, so a client
+    reading consecutive timestamps measures the generation as it happens.
+
+    Returns:
+        The timestamp of the event being emitted.
+    """
+    return SETTINGS.now().isoformat()
+
+
 def total_duration() -> int:
     """Return the time spent on the request so far, in nanoseconds.
 
@@ -284,7 +296,11 @@ class EmbedRequest(BaseModelRequestWithExtra):
         default=None, description="Number of dimensions of the returned vectors."
     )
     truncate: bool | None = Field(
-        default=None, description="Truncate inputs longer than the context window."
+        default=None,
+        description=(
+            "UNSUPPORTED, accepted and ignored: inputs longer than the context "
+            "window are handled by the backend."
+        ),
     )
     keep_alive: KeepAlive | None = Field(
         default=None,

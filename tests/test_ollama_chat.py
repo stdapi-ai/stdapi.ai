@@ -267,11 +267,17 @@ def test_chat_calls_a_tool(
 ) -> None:
     """A declared tool comes back as a complete tool call with parsed arguments.
 
+    The call is asked for in the prompt: this dialect has no ``tool_choice``, so
+    an open question would leave the assertion resting on the model's discretion
+    rather than on the translation under test.
+
     Ref: https://docs.ollama.com/api/chat#tools
     """
     answer = ollama_client.chat(
         model=ollama_chat_model,
-        messages=[{"role": "user", "content": "What is the weather in Paris, France?"}],
+        messages=[
+            {"role": "user", "content": "Call the get_weather tool for Paris, France."}
+        ],
         tools=[WEATHER_TOOL],
         stream=False,
     )
@@ -288,14 +294,18 @@ def test_chat_replays_a_tool_result(
 
     Ollama's own tool calls carry no ``id``, and the client's ``Message`` has no
     field for one, so a conversation replaying a call is the shape every Ollama
-    client sends.
+    client sends. The prompt asks for the result to be stated so that answering
+    it is not a second tool call, which would leave ``content`` empty.
 
     Ref: stdapi/models/chat/_adapters/_ollama.py:_take_tool_call_id
     """
     answer = ollama_client.chat(
         model=ollama_chat_model,
         messages=[
-            ollama.Message(role="user", content="What is the weather in Paris?"),
+            ollama.Message(
+                role="user",
+                content="Call the get_weather tool for Paris, then state its result.",
+            ),
             ollama.Message(
                 role="assistant",
                 content="",

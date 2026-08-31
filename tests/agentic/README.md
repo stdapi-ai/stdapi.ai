@@ -764,7 +764,8 @@ Eight things bite:
   generate, embed, the legacy embeddings route, tags, show, ps and all five
   model-management verbs — but not `/api/version`, which `test_ollama_sdk.py`
   therefore reaches by borrowing the client's own `httpx.Client` (`_client`, as
-  `tests/_ollama.py` does) rather than building a second one. Open WebUI is the
+  the unit lane's `ollama_http` fixture in `tests/conftest.py` does) rather than
+  building a second one. Open WebUI is the
   client that actually *gates* on that route. Everything else in the module is
   asserted by the library's own pydantic types: `modified_at` and `expires_at` are
   `datetime`, `size` is a `ByteSize`, and `model_info` arrives through the

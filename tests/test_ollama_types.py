@@ -20,6 +20,7 @@ import ollama
 import pytest
 from sse_starlette import ServerSentEvent
 
+from stdapi.config import SETTINGS
 from stdapi.models.chat._adapters import _ollama as adapter
 from stdapi.monitoring import REQUEST_TIME
 from stdapi.types.ollama import (
@@ -431,6 +432,55 @@ def test_tool_calls_are_correlated_without_identifiers() -> None:
     assert call.function.arguments == '{"c":"FR"}'
 
 
+def test_a_foreign_tool_call_id_never_reaches_the_backend() -> None:
+    """An id this dialect never minted selects a pending call instead of being echoed.
+
+    Only a raw-HTTP client can send one -- the official client's ``Message`` has
+    no such field, and assistant tool calls carry no id to echo -- so it can only
+    name a tool call the backend never declared, which Converse refuses. It is
+    therefore used to consume a pending entry and dropped otherwise, leaving the
+    correlation to the tool name and then to call order.
+
+    Ref: stdapi/models/chat/_adapters/_ollama.py:_take_tool_call_id
+    """
+    params = adapter.to_chat_completion_params(
+        ChatRequest.model_validate(
+            {
+                "model": "m",
+                "messages": [
+                    {"role": "user", "content": "weather and time?"},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {"function": {"name": "get_weather", "arguments": {}}},
+                            {"function": {"name": "get_time", "arguments": {}}},
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "content": "noon",
+                        "tool_name": "get_time",
+                        "tool_call_id": "toolu_from_another_server",
+                    },
+                    {"role": "tool", "content": "sunny", "tool_name": "get_weather"},
+                ],
+            }
+        ),
+        "m",
+    )
+    assistant = params.messages[1]
+    assert isinstance(assistant, ChatCompletionAssistantMessageParam)
+    assert assistant.tool_calls is not None
+    declared = [call.id for call in assistant.tool_calls]
+    answered = [
+        message.tool_call_id
+        for message in params.messages[2:]
+        if isinstance(message, ChatCompletionToolMessageParam)
+    ]
+    assert answered == [declared[1], declared[0]]
+
+
 def test_tools_become_function_tools() -> None:
     """A declared tool reaches the model as an OpenAI function tool.
 
@@ -602,6 +652,95 @@ class TestTheOfficialClientRequestBodies:
         assert ShowRequest.model_validate(body).requested_model() == "m"
 
 
+async def _chat_completion_events(
+    deltas: list[dict[str, Any]],
+) -> AsyncGenerator[ServerSentEvent]:
+    """Serialize deltas as the upstream chat completion stream would.
+
+    Args:
+        deltas: One ``delta`` object per chunk.
+
+    Yields:
+        One event per delta, then the terminal ``[DONE]``.
+    """
+    for delta in deltas:
+        yield ServerSentEvent(data=dumps({"choices": [{"index": 0, "delta": delta}]}))
+    yield ServerSentEvent(data="[DONE]")
+
+
+async def _translate_chat(deltas: list[dict[str, Any]]) -> list[Any]:
+    """Run the deltas through the Ollama chat stream translation.
+
+    Args:
+        deltas: One ``delta`` object per chunk.
+
+    Returns:
+        Every event the translation yielded, in order.
+    """
+    return [
+        event
+        async for event in adapter.chat_stream(_chat_completion_events(deltas), "m")
+    ]
+
+
+@pytest.mark.usefixtures("request_time")
+async def test_each_streamed_event_carries_the_moment_it_was_emitted(
+    monkeypatch: pytest.MonkeyPatch, request_time: datetime
+) -> None:
+    """A stream's timestamps advance, as the documented examples show them doing.
+
+    A client reading consecutive ``created_at`` values measures time to first
+    token and inter-token latency from them; one stamp for the whole stream
+    makes every delta zero.
+
+    Ref: https://docs.ollama.com/api/chat (streaming response)
+         stdapi/types/ollama.py:streamed_at
+    """
+    ticks = iter(
+        datetime(2026, 1, 2, 3, 4, 5 + second, tzinfo=UTC) for second in range(1, 10)
+    )
+    monkeypatch.setattr(type(SETTINGS), "now", lambda _: next(ticks))
+
+    stamps = [
+        event["created_at"]
+        for event in await _translate_chat([{"content": "a"}, {"content": "b"}])
+    ]
+
+    assert request_time.isoformat() not in stamps
+    assert len(set(stamps)) == len(stamps)
+    assert stamps == sorted(stamps)
+
+
+@pytest.mark.usefixtures("request_time")
+@pytest.mark.parametrize(
+    ("setting", "delta_field", "expected"),
+    [
+        ("reasoning_content", "reasoning_content", "thought"),
+        ("reasoning", "reasoning", "thought"),
+        ("none", "reasoning_content", None),
+    ],
+)
+async def test_the_reasoning_field_setting_is_read_at_call_time(
+    monkeypatch: pytest.MonkeyPatch,
+    setting: str,
+    delta_field: str,
+    expected: str | None,
+) -> None:
+    """`message.thinking` follows the setting as it stands when the answer is built.
+
+    Resolving it once at import would freeze whichever value the first import
+    saw, which is what makes the documented ``none`` behaviour assertable here.
+
+    Ref: docs/api_ollama_chat.md (message.thinking)
+         stdapi/config.py:_Settings.chat_completions_reasoning_field
+    """
+    monkeypatch.setattr(SETTINGS, "chat_completions_reasoning_field", setting)
+
+    events = await _translate_chat([{"content": "hi", delta_field: "thought"}])
+
+    assert events[0]["message"].get("thinking") == expected
+
+
 class TestStreamedToolCalls:
     """Tool calls arriving in fragments, reassembled before the terminal event.
 
@@ -613,25 +752,9 @@ class TestStreamedToolCalls:
          https://docs.ollama.com/api/chat
     """
 
-    @staticmethod
-    async def _events(deltas: list[dict[str, Any]]) -> AsyncGenerator[ServerSentEvent]:
-        """Serialize deltas as the upstream chat completion stream would.
-
-        Args:
-            deltas: One ``delta`` object per chunk.
-
-        Yields:
-            One event per delta, then the terminal ``[DONE]``.
-        """
-        for delta in deltas:
-            yield ServerSentEvent(
-                data=dumps({"choices": [{"index": 0, "delta": delta}]})
-            )
-        yield ServerSentEvent(data="[DONE]")
-
     @pytest.fixture(autouse=True)
     def _clock(self, request_time: datetime) -> None:
-        """Pin the request clock every translated event is stamped from."""
+        """Pin the request clock the translated metrics are measured from."""
 
     async def _translate(self, deltas: list[dict[str, Any]]) -> list[Any]:
         """Run the deltas through the Ollama stream translation.
@@ -642,7 +765,7 @@ class TestStreamedToolCalls:
         Returns:
             Every event the translation yielded, in order.
         """
-        return [event async for event in adapter.chat_stream(self._events(deltas), "m")]
+        return await _translate_chat(deltas)
 
     @staticmethod
     def _fragment(index: int, name: str | None, arguments: str) -> dict[str, Any]:
