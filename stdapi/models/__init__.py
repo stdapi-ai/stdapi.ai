@@ -4,11 +4,13 @@ from asyncio import CancelledError, Lock, create_task, gather, sleep
 from asyncio import timeout as async_timeout
 from collections.abc import Mapping
 from contextlib import suppress
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from fnmatch import translate as fnmatch_translate
 from functools import partial
 from importlib import import_module
+from itertools import chain
 from pkgutil import iter_modules
 from re import IGNORECASE, Pattern
 from re import compile as re_compile
@@ -505,6 +507,13 @@ _WILDCARD_MAX_LENGTH: Final = 255
 #: Mantle-served model ID to the bedrock-runtime model ID naming the same model
 _MANTLE_RUNTIME_TWINS: dict[str, str] = {}
 
+#: bedrock-runtime entries a preferred Mantle model displaced from the catalogue
+_DISPLACED_RUNTIME_MODELS: dict[str, ModelDetails] = {}
+
+#: Whether this request reaches its models through bedrock-runtime whatever the
+#: catalogue prefers, so a displaced runtime entry is the one it invokes.
+_RUNTIME_BOUND: ContextVar[bool] = ContextVar("runtime_bound", default=False)
+
 #: Qualifiers, versions and dates two names of one model may differ by.
 _TWIN_QUALIFIERS = re_compile(
     r"\([^)]*\)|-instruct\b|-it\b|-v\d+(?::\d+)?$|-\d+:\d+$|-\d{8}(?=-|$)", IGNORECASE
@@ -869,7 +878,9 @@ class ModelBase[RequestT, ResponseT]:
 
         A plain registry lookup: caching it per instance would require
         ``__dict__`` (the hierarchy is fully slotted) and could serve details
-        made stale by a catalog refresh.
+        made stale by a catalog refresh. A runtime-bound request reads the
+        entry a preferred Mantle model displaced, which the registry no longer
+        carries under this identifier.
 
         Returns:
             Model details including region, provider, and capabilities.
@@ -877,6 +888,8 @@ class ModelBase[RequestT, ResponseT]:
         Raises:
             KeyError: If the model is not found in the registry.
         """
+        if (runtime := _invoked_details(self._model_id)) is not None:
+            return runtime
         try:
             return _MODELS[self._model_id]
         except KeyError:
@@ -1545,6 +1558,10 @@ async def get_model_details(model_id: str) -> ModelDetails:
     way of naming a model, but it is never a catalog key, so the invocation
     path re-resolving the ID ``validate_model`` returned would otherwise miss.
 
+    A runtime-bound request reads the bedrock-runtime entry a preferred Mantle
+    model displaced: the two catalogues may name that model identically, so
+    the catalog key alone cannot say which endpoint's entry is being invoked.
+
     Args:
         model_id: Bedrock model identifier, or a Marketplace endpoint ARN.
 
@@ -1555,6 +1572,8 @@ async def get_model_details(model_id: str) -> ModelDetails:
         KeyError: If the model is not found.
     """
     async with _CACHE["access_lock"]:
+        if (runtime := _invoked_details(model_id)) is not None:
+            return runtime
         try:
             return _MODELS[model_id]
         except KeyError:
@@ -2049,11 +2068,18 @@ def build_runtime_twins() -> None:
     release. A Mantle-served model is paired with the runtime model whose name
     matches once versions, dates and qualifiers are dropped, providers being
     prefix-compatible (``moonshotai`` and ``moonshot``).
+
+    The entries a preferred Mantle model displaced are scanned alongside the
+    catalogue: a model both endpoints name identically is published once, and
+    the runtime side of the pair exists nowhere else. It pairs with itself,
+    which is the identifier bedrock-runtime knows it by.
     """
     _MANTLE_RUNTIME_TWINS.clear()
     runtime: dict[str, list[tuple[str, str]]] = {}
     mantle: list[tuple[str, str, str]] = []
-    for model_id, model in _ALL_MODELS.items():
+    for model_id, model in chain(
+        _ALL_MODELS.items(), _DISPLACED_RUNTIME_MODELS.items()
+    ):
         provider, _, name = model_id.partition(".")
         provider = _TWIN_SEPARATORS.sub("", provider.lower())
         if model.service == MANTLE_SERVICE:
@@ -2089,6 +2115,62 @@ def runtime_twin(model_id: str) -> str | None:
     return _MANTLE_RUNTIME_TWINS.get(model_id)
 
 
+def runtime_home(model_id: str) -> ModelDetails | None:
+    """Return the bedrock-runtime catalogue entry serving *model_id*.
+
+    A model both endpoints serve under one identifier is published once, from
+    the preferred endpoint, and the entry the merge displaced is off-catalogue:
+    it is read here rather than from the catalogue, which carries the preferred
+    entry under that identifier.
+
+    Args:
+        model_id: Model identifier, as bedrock-runtime names it.
+
+    Returns:
+        The bedrock-runtime entry, or ``None`` when that endpoint serves no
+        model under this identifier.
+    """
+    model = _DISPLACED_RUNTIME_MODELS.get(model_id) or _ALL_MODELS.get(model_id)
+    return model if model is not None and model.service == RUNTIME_SERVICE else None
+
+
+def bind_runtime_home() -> Token[bool]:
+    """Read every dual-homed model from its bedrock-runtime entry for this request.
+
+    Batch inference runs on bedrock-runtime alone, and the two catalogues may
+    name one model identically, so the identifier cannot carry the choice: the
+    caller states it once and every details lookup of the request follows it.
+    A request signed by a tenant's own AWS credential is runtime-bound without
+    saying so, since no other endpoint that credential can pay for exists.
+
+    Returns:
+        A token restoring the previous binding.
+    """
+    return _RUNTIME_BOUND.set(True)
+
+
+def _invoked_details(model_id: str) -> ModelDetails | None:
+    """Return the off-catalogue bedrock-runtime entry this request invokes.
+
+    A model both endpoints serve under one identifier is published once, from
+    the preferred endpoint, so the catalogue entry is the Mantle one. A request
+    bedrock-runtime serves has to read the entry the merge displaced instead:
+    the published entry carries Mantle's regions and no inference profile, and
+    invoking bedrock-runtime with those sends the bare identifier to a region
+    that does not serve it.
+
+    Args:
+        model_id: Model identifier.
+
+    Returns:
+        The displaced bedrock-runtime entry, or ``None`` when the request is
+        not runtime-bound or the identifier displaced nothing.
+    """
+    if _RUNTIME_BOUND.get() or tenant_aws_credential() is not None:
+        return _DISPLACED_RUNTIME_MODELS.get(model_id)
+    return None
+
+
 def _pin_tenant_billable_service(
     model: ModelDetails, model_id: str
 ) -> tuple[ModelDetails, str]:
@@ -2099,8 +2181,11 @@ def _pin_tenant_billable_service(
     resource: a tenant-signed request can pay for none of them, so serving one
     there would land the spend on the operator's bill. A Mantle-served model
     that also exists on bedrock-runtime (the GPT-5.6 family by default) is
-    pinned to its runtime twin, where the tenant's credential signs and pays; a
-    model with no runtime home is refused with the reason. A reranking model
+    pinned to its runtime twin, where the tenant's credential signs and pays;
+    the two catalogues may name that twin identically, so the pin can leave the
+    identifier untouched and swap the entry alone -- which is why the chat
+    class is picked from the same rule (:func:`~stdapi.models.chat.serves_via_mantle`).
+    A model with no runtime home is refused with the reason. A reranking model
     is refused too: its per-query-billed invocations run through a service the
     tenant's credential never signs, so serving one would silently bill the
     operator.
@@ -2123,7 +2208,7 @@ def _pin_tenant_billable_service(
         raise _tenant_unavailable(model_id)
     if model.service == MANTLE_SERVICE:
         twin_id = runtime_twin(model.id)
-        twin = _ALL_MODELS.get(twin_id) if twin_id else None
+        twin = runtime_home(twin_id) if twin_id else None
         if twin is not None:
             return twin, twin.id
         raise _tenant_unavailable(model_id)
@@ -2684,15 +2769,32 @@ def _merge_mantle_models(
     here rather than declared: the Mantle catalog carries no human-readable
     name, so the model would otherwise be published under its raw identifier.
 
+    The two catalogues may name a dual-homed model *identically*, in which case
+    the preferred entry overwrites the other under one key and the catalogue
+    stops carrying any trace of the runtime home. The displaced entry is kept
+    off-catalogue in :data:`_DISPLACED_RUNTIME_MODELS` so everything that has
+    to reach the model through bedrock-runtime -- the twin index, the tenant
+    service pin, batching -- still finds it. Only a bedrock-runtime entry is
+    kept: an operator's Marketplace or SageMaker AI endpoint colliding with a
+    Mantle model name is not a runtime home, and serving one as if it were
+    would bill the deployment for a tenant's request.
+
     Args:
         all_models: Resolved bedrock-runtime models, updated in-place.
         mantle_models: Mantle models collected by :func:`_collect_mantle_models`.
     """
     MANTLE_MODELS.clear()
     MANTLE_MODELS.update(mantle_models)
+    _DISPLACED_RUNTIME_MODELS.clear()
     for model_id, mantle_model in mantle_models.items():
-        if model_id not in all_models or is_mantle_preferred(model_id):
-            all_models[model_id] = mantle_model
+        runtime_model = all_models.get(model_id)
+        if runtime_model is not None and not is_mantle_preferred(model_id):
+            continue
+        if runtime_model is not None:
+            mantle_model.name = runtime_model.name
+            if runtime_model.service == RUNTIME_SERVICE:
+                _DISPLACED_RUNTIME_MODELS[model_id] = runtime_model
+        all_models[model_id] = mantle_model
 
 
 async def _collect_region_candidates(
@@ -3338,6 +3440,7 @@ def _catalog_payload(
     return {
         "models": _dump_models(all_models),
         "mantle": _dump_models(MANTLE_MODELS),
+        "runtime_displaced": _dump_models(_DISPLACED_RUNTIME_MODELS),
         "marketplace_endpoints": _dump_models(MARKETPLACE_ENDPOINT_MODELS),
         "sagemaker_endpoints": _dump_models(SAGEMAKER_ENDPOINT_MODELS),
         "invalid_arn_mappings": mappings,
@@ -3367,6 +3470,7 @@ def _restore_catalog(
             raise TypeError(msg)  # noqa: TRY301 - one handler for every unusable payload
         models = _load_models(payload, "models")
         mantle = _load_models(payload, "mantle")
+        displaced = _load_models(payload, "runtime_displaced")
         marketplace = _load_models(payload, "marketplace_endpoints")
         sagemaker = _load_models(payload, "sagemaker_endpoints")
         invalid_arn_mappings = {
@@ -3383,6 +3487,8 @@ def _restore_catalog(
         return None
     MANTLE_MODELS.clear()
     MANTLE_MODELS.update(mantle)
+    _DISPLACED_RUNTIME_MODELS.clear()
+    _DISPLACED_RUNTIME_MODELS.update(displaced)
     MARKETPLACE_ENDPOINT_MODELS.clear()
     MARKETPLACE_ENDPOINT_MODELS.update(marketplace)
     SAGEMAKER_ENDPOINT_MODELS.clear()
