@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 
 #: AWS Marketplace product code; empty for the community (unmetered) build.
 PRODUCT_CODE = ""
+#: Campaign parameters marking a click that started on the gateway's own docs surface.
+DOCS_UTM = "utm_source=api-docs&utm_medium=product&utm_campaign=owned-surfaces"
 #: License metadata reported in the OpenAPI spec.
 LICENCE_INFO = (
     {"name": "Commercial License", "url": "https://stdapi.ai/operations_licensing/"}
