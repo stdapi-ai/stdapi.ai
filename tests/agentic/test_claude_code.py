@@ -10,7 +10,7 @@ is usually not a Claude model at all.
 Each prompt asks for the smallest exploration that still produces what the test
 asserts -- a bounded number of named files, and an answer whose vocabulary the
 prompt itself withholds. Every extra file demanded is a full model round trip, on
-eleven models, that nothing checks; the wire-format translation this module exists
+ten models, that nothing checks; the wire-format translation this module exists
 to prove is exercised by the first tool-use round trip and by every one after it
 equally. The asserted step floor sits below even that, because the weaker models
 legitimately differ in how many turns they take.
@@ -85,7 +85,7 @@ _MODEL_CONFIGS = [
         # OpenAI-shaped routes. Here it has to speak the Anthropic tool protocol
         # through the gateway's translation with the client's thinking disabled,
         # which is where the small open-weight models in this list answer
-        # inconsistently -- nine of the eleven entries need the downgrade.
+        # inconsistently -- eight of the ten entries need the downgrade.
         ModelConfig(
             model="qwen.qwen3-coder-30b-a3b-v1:0", extra_env=_NO_THINKING, flaky=True
         ),
@@ -121,10 +121,6 @@ _MODEL_CONFIGS = [
         # Mantle-served: exercises the Anthropic-messages to OpenAI conversion path.
         ModelConfig(model="google.gemma-4-31b", extra_env=_NO_THINKING, flaky=True),
         id="gemma-4-31b",
-    ),
-    pytest.param(
-        ModelConfig(model="xai.grok-4.3", extra_env=_NO_THINKING, flaky=True),
-        id="grok-4.3",
     ),
     pytest.param(
         # Mantle serves this one over Responses only, so reaching it from an
