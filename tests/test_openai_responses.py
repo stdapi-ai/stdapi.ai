@@ -2498,11 +2498,13 @@ class TestServerToolsUnservedOnRuntime:
     they resolve to their ``bedrock-runtime`` twin by default.  Forwarding the
     tool there produced a ``function_call`` no client can answer and no search
     at all, so the model declares ``SERVER_TOOLS_UNSERVED`` and the request is
-    refused with the two ways to reach Mantle (issue #186).
+    refused (issue #186). Which endpoint would serve the tool, and the settings
+    that reach it, are the operator's: the caller reads none of them.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html
          stdapi/models/chat/openai_gpt.py:ChatModel
          stdapi/models/chat/_adapters/_openai_responses.py:_resolve_integrated_tool_name
+         AGENTS.md, "Never Leak Internals"
     """
 
     @pytest.mark.parametrize(
@@ -2520,7 +2522,7 @@ class TestServerToolsUnservedOnRuntime:
         monkeypatch: pytest.MonkeyPatch,
         tool: dict[str, Any],
     ) -> None:
-        """Every integrated tool type is a 400 naming both ways to reach Mantle.
+        """Every integrated tool type is a 400 that names no backend to the caller.
 
         The refusal must precede the Bedrock call: a request that reached
         Converse would be answered with the stub tool instead.
@@ -2548,8 +2550,15 @@ class TestServerToolsUnservedOnRuntime:
         error = response.json()["error"]
         assert error["type"] == "invalid_request_error"
         assert f"Server tool '{tool['type']}'" in error["message"]
-        assert "x-stdapi-service: bedrock-mantle" in error["message"]
-        assert "AWS_BEDROCK_MANTLE_PREFERRED_MODELS" in error["message"]
+        assert "contact the administrator" in error["message"]
+        for internal in (
+            "x-stdapi-service",
+            "AWS_BEDROCK_MANTLE_PREFERRED_MODELS",
+            "AWS_BEDROCK_MANTLE_SERVICE_HEADER",
+            "bedrock-runtime",
+            "Mantle",
+        ):
+            assert internal not in error["message"], internal
 
 
 class TestCodeInterpreterTool:

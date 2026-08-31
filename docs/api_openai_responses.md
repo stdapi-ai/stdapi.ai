@@ -687,13 +687,12 @@ runs one or more queries, and grounds its answer in what it finds.
 
     That default is **a price change** for these models, because Mantle has no
     cross-region inference profiles and so no Global routing discount: GPT-5.6
-    Sol, Terra and Luna cost **exactly 10% more per token** than the classic
-    endpoint charges under its default Global routing — $4.40 / $22.00 per
-    million input / output tokens for Sol, $2.20 / $13.20 for Terra and
-    $0.22 / $1.32 for Luna, against $4.00 / $20.00, $2.00 / $12.00 and
-    $0.20 / $1.20. Cached tokens and the long-context rates move by the same
-    10%. Alongside it, Amazon Bedrock Guardrails cannot apply to these models
-    (configuring both is refused at startup),
+    Sol, Terra and Luna cost **exactly 10% more per token** — input, output,
+    cached and long-context rates alike — than the classic endpoint charges
+    under its default Global routing; the per-million figures are in the
+    [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration.md#bedrock-mantle-preferred-models)
+    reference. Alongside it, Amazon Bedrock Guardrails cannot apply to these
+    models (configuring both is refused at startup),
     [input token counting](#input-token-counting) answers `400` for them, and
     their usage is billed and reported under Bedrock Mantle. Batch inference,
     prompt caching and stored response IDs are unaffected.
@@ -701,10 +700,19 @@ runs one or more queries, and grounds its answer in what it finds.
     Set `AWS_BEDROCK_MANTLE_PREFERRED_MODELS` to an empty value to serve the
     family on `bedrock-runtime` instead, at the Global rate and under your
     guardrail. A request then asking for `web_search` or `code_interpreter` is
-    **rejected with a `400`** naming both ways back to Mantle — that setting, or
-    the `x-stdapi-service: bedrock-mantle` header where
+    **rejected with a `400`** rather than answered without a search. The
+    `x-stdapi-service: bedrock-mantle` header routes a single request back to
+    Mantle where
     [`AWS_BEDROCK_MANTLE_SERVICE_HEADER`](operations_configuration.md#bedrock-mantle-service-header)
-    enables it — rather than answered without a search.
+    enables it — which a deployment configuring a guardrail cannot do, that
+    combination being refused at startup too.
+
+    A request authenticated with a
+    [tenant AWS credential](operations_authentication_security.md#tenant-aws-credentials)
+    is always served on `bedrock-runtime`, whatever the routing: Mantle runs on
+    the deployment's own account, which the tenant's credential cannot pay for.
+    These tools are refused with a `400` for such a request, and no setting or
+    header changes that.
 
     Available in `us-east-1`, `us-east-2` and `us-west-2`, and billed per query.
 

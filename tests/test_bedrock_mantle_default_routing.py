@@ -21,6 +21,8 @@ Ref: stdapi/config.py:DEFAULT_MANTLE_PREFERRED_MODELS
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
+from re import findall
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -35,7 +37,9 @@ from stdapi.models import (
     is_mantle_preferred,
 )
 from stdapi.models.pricing_overrides import (
+    DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES,
     DEFAULT_MODEL_GLOBAL_PRICES,
+    DEFAULT_MODEL_LONG_CONTEXT_PRICES,
     DEFAULT_MODEL_PRICES,
 )
 from stdapi.pricing import (
@@ -58,6 +62,12 @@ _DUAL_HOMED = ("openai.gpt-5.6-sol", "openai.gpt-5.6-terra", "openai.gpt-5.6-lun
 
 #: A region the GPT-5.6 model-card rates are published for.
 _REGION: RegionName = "us-east-1"
+
+#: The one page quoting the per-million figures in prose; every other links to it.
+_PRICE_REFERENCE = Path(__file__).parents[1] / "docs" / "operations_configuration.md"
+
+#: The sentence in that page carrying the figures.
+_PRICE_SENTENCE_MARKER = "exactly 10% more per token"
 
 
 class TestDefaultRouting:
@@ -363,12 +373,34 @@ class TestPriceOfTheMove:
             Dimension.CACHE_WRITE_TOKENS,
         ],
     )
+    @pytest.mark.parametrize(
+        ("in_region_prices", "global_prices"),
+        [
+            (DEFAULT_MODEL_PRICES, DEFAULT_MODEL_GLOBAL_PRICES),
+            (
+                DEFAULT_MODEL_LONG_CONTEXT_PRICES,
+                DEFAULT_MODEL_GLOBAL_LONG_CONTEXT_PRICES,
+            ),
+        ],
+        ids=["short_context", "long_context"],
+    )
     def test_mantle_costs_exactly_ten_percent_more_than_global_routing(
-        self, model_id: str, dimension: Dimension
+        self,
+        model_id: str,
+        dimension: Dimension,
+        in_region_prices: dict[str, dict[Dimension, str]],
+        global_prices: dict[str, dict[Dimension, str]],
     ) -> None:
-        """Every billed token dimension is 1.1x the rate the Global profile charges."""
-        in_region = Decimal(DEFAULT_MODEL_PRICES[model_id][dimension])
-        global_routed = Decimal(DEFAULT_MODEL_GLOBAL_PRICES[model_id][dimension])
+        """Every billed token dimension is 1.1x the rate the Global profile charges.
+
+        The short and long-context tables both carry the ratio the operator
+        documentation commits to: a prompt past
+        ``MODEL_LONG_CONTEXT_THRESHOLDS`` bills the whole call at the long rates,
+        so a Global long rate republished at another ratio would move the price
+        of the default routing with nothing else noticing.
+        """
+        in_region = Decimal(in_region_prices[model_id][dimension])
+        global_routed = Decimal(global_prices[model_id][dimension])
         assert in_region == global_routed * Decimal("1.1")
 
     @pytest.mark.parametrize("model_id", _DUAL_HOMED)
@@ -405,3 +437,64 @@ class TestPriceOfTheMove:
         assert mantle.amount == in_region
         assert mantle_global.amount == in_region
         assert runtime_global.amount * Decimal("1.1") == in_region
+
+    @pytest.mark.parametrize("model_id", _DUAL_HOMED)
+    def test_the_catalogue_prices_a_long_context_mantle_call_in_region(
+        self, model_id: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A prompt past the long-context boundary keeps the In-Region long rate.
+
+        ``resolve_price`` relaxes the routing axis on the long-context rows too,
+        so a Mantle call asking for Global routing must not land on the Global
+        long rate bedrock-runtime gets -- the same 10% the short rates carry.
+        """
+        index: dict[PriceKey, Price] = {}
+        _apply_default_prices(index)
+        monkeypatch.setattr(_state, "price_index", index)
+
+        long_in_region = Decimal(
+            DEFAULT_MODEL_LONG_CONTEXT_PRICES[model_id][Dimension.INPUT_TOKENS]
+        )
+        mantle_long = resolve_price(
+            Service.BEDROCK_MANTLE,
+            model_id,
+            _REGION,
+            Dimension.INPUT_TOKENS,
+            routing="global",
+            context="long",
+        )
+        runtime_long_global = resolve_price(
+            Service.BEDROCK,
+            model_id,
+            _REGION,
+            Dimension.INPUT_TOKENS,
+            routing="global",
+            context="long",
+        )
+        assert mantle_long is not None
+        assert runtime_long_global is not None
+        assert mantle_long.amount == long_in_region
+        assert runtime_long_global.amount * Decimal("1.1") == long_in_region
+
+    def test_the_operator_reference_quotes_the_rates_the_gateway_charges(self) -> None:
+        """The one prose copy of the per-million figures matches the tables above.
+
+        A repriced model moves the tables and nothing else, so the sentence an
+        operator sizes spend from is compared to them rather than trusted --
+        the figures are quoted here and nowhere else for that reason.
+
+        Ref: docs/operations_configuration.md#bedrock-mantle-preferred-models
+        """
+        sentences = [
+            line
+            for line in _PRICE_REFERENCE.read_text(encoding="utf-8").splitlines()
+            if _PRICE_SENTENCE_MARKER in line
+        ]
+        assert len(sentences) == 1, sentences
+
+        assert set(findall(r"\$\d+\.\d\d", sentences[0])) == {
+            f"${Decimal(table[model_id][dimension]) * 1_000_000:.2f}"
+            for table in (DEFAULT_MODEL_PRICES, DEFAULT_MODEL_GLOBAL_PRICES)
+            for model_id in _DUAL_HOMED
+            for dimension in (Dimension.INPUT_TOKENS, Dimension.OUTPUT_TOKENS)
+        }
