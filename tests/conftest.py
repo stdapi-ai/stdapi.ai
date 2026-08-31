@@ -2354,7 +2354,9 @@ def sandbox_dynamodb_table() -> Iterator[str]:
     from stdapi.aws_dynamodb import TABLE_REGION  # noqa: PLC0415
 
     table = f"stdapi-test-{token_hex(8)}"
-    client = get_sync_session().create_client("dynamodb", region_name=TABLE_REGION)
+    # Typed loosely: botocore builds every service client from one class, so
+    # the DynamoDB operations exist only at runtime.
+    client: Any = get_sync_session().create_client("dynamodb", region_name=TABLE_REGION)
     try:
         client.create_table(
             TableName=table,
