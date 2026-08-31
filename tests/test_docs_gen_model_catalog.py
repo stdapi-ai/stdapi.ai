@@ -22,6 +22,7 @@ from docs_gen.model_catalog.config import (
     ENRICHMENT_PATH,
     HEADLINE_DIMENSIONS,
     INDEX_GZIP_BUDGET,
+    OVERRIDES_PATH,
     PROVENANCE_PATH,
     REPO_ROOT,
     SOURCES,
@@ -45,6 +46,7 @@ from docs_gen.model_catalog.sources import (
     SourceResult,
     aws_model_cards,
     models_dev,
+    open_asr,
 )
 from docs_gen.model_catalog.tokens import format_tokens, parse_tokens
 
@@ -311,6 +313,41 @@ def test_an_override_pins_a_match_and_a_rejection(
     )
     assert rejected.method == "override"
     assert nothing is None
+
+
+def test_a_pin_on_one_twin_governs_every_service_variant() -> None:
+    """A rejection pinned on one service-variant twin must be pinned on all of them.
+
+    ``fold_service_variants`` groups Bedrock IDs that differ only by the API
+    version tag (``build._API_VERSION_TAG``) and keeps only the headline
+    twin's scores (``_absorb_variant`` never merges ``scores``), so a pin
+    that exists on one twin only is invisible whenever a later run makes a
+    different twin the headline, or re-matches the twin the fold discarded.
+    Every committed override must therefore be mirrored across all of a
+    model's twins.
+
+    Ref: docs_gen/model_catalog/build.py:fold_service_variants
+         docs_gen/model_catalog/matching.py:_override_for
+    """
+    overrides = json.loads(OVERRIDES_PATH.read_text())
+    families: dict[str, set[str]] = {}
+    for model_id in overrides:
+        if model_id.startswith("_"):
+            continue
+        family = build._API_VERSION_TAG.sub("", model_id)  # noqa: SLF001
+        families.setdefault(family, set()).add(model_id)
+
+    for family, twins in families.items():
+        if len(twins) < 2:
+            continue
+        keysets = {model_id: frozenset(overrides[model_id]) for model_id in twins}
+        union: frozenset[str] = frozenset().union(*keysets.values())
+        for model_id, keys in keysets.items():
+            missing = union - keys
+            assert not missing, (
+                f"{model_id} ({family}) is missing pins {sorted(missing)} that "
+                f"a sibling twin carries"
+            )
 
 
 # --- the model that resolves the leftovers --------------------------------
@@ -646,6 +683,21 @@ def test_an_unreadable_source_degrades_its_columns_instead_of_failing(
     assert "upstream is down" in collected["lmarena"].notes[0]
 
 
+def test_an_unreadable_source_counts_no_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Zero rows is what keeps a dead source off the page's sources table.
+
+    Ref: docs_gen/model_catalog/build.py
+    """
+
+    def broken(*, refresh: bool) -> SourceResult:  # noqa: ARG001
+        message = "upstream is down"
+        raise RuntimeError(message)
+
+    monkeypatch.setitem(build.COLLECTORS, "open_asr", broken)
+    collected = build.collect_sources(refresh=False, only=["open_asr"])
+    assert build._source_rows("open_asr", collected, {}, {}) == 0  # noqa: SLF001
+
+
 # --- the committed artefact -----------------------------------------------
 
 
@@ -713,6 +765,16 @@ def test_every_published_source_is_attributed_on_the_page(catalog: Catalog) -> N
     for source in catalog.manifest.sources:
         assert source.name in markdown
         assert source.licence_url in markdown
+
+
+def test_no_published_source_is_credited_with_nothing(catalog: Catalog) -> None:
+    """A "0 of 0 entries" row advertises a dead source as a live one.
+
+    Ref: docs/models.md
+    """
+    assert catalog.manifest.sources
+    for source in catalog.manifest.sources:
+        assert source.rows, f"{source.key} is published having contributed nothing"
 
 
 @pytest.mark.parametrize(
@@ -1606,6 +1668,80 @@ def test_yesterdays_snapshot_beats_no_snapshot(
         sources.snapshot("thing", unreachable)
 
 
+#: One English short-form row as the leaderboard application serves it.
+_OPEN_ASR_CONFIG: dict[str, Any] = {
+    "components": [
+        {"props": {"elem_id": "about", "value": "prose"}},
+        {
+            "props": {
+                "elem_id": "leaderboard-table",
+                "value": {
+                    "headers": ["Rank", "model", "Average WER ⬇️", "RTFx ⬆️️"],
+                    "data": [
+                        [
+                            1,
+                            (
+                                '<a href="https://huggingface.co/mistralai/'
+                                'Voxtral-Small-24B-2507">mistralai/'
+                                "Voxtral-Small-24B-2507</a>"
+                            ),
+                            5.79,
+                            None,
+                        ]
+                    ],
+                },
+            }
+        },
+    ]
+}
+
+
+def test_open_asr_rates_come_from_the_running_leaderboard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The results dataset went private, so the application's own table is read.
+
+    Ref: docs_gen/model_catalog/sources/open_asr.py
+    """
+    monkeypatch.setattr("docs_gen.model_catalog.sources.SNAPSHOT_DIR", tmp_path)
+    monkeypatch.setattr(open_asr, "get_json", lambda _url: _OPEN_ASR_CONFIG)
+    result = open_asr.fetch(refresh=True)
+    assert result.notes == []
+    assert [(entry.name, entry.value) for entry in result.scores] == [
+        ("mistralai/Voxtral-Small-24B-2507", 5.79)
+    ]
+    assert result.scores[0].organization == "mistralai"
+    assert not result.scores[0].higher_is_better
+
+
+def test_open_asr_refuses_a_table_without_the_column_it_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A renamed column must degrade the source, not publish the wrong number.
+
+    Ref: docs_gen/model_catalog/sources/open_asr.py
+    """
+    renamed = json.loads(json.dumps(_OPEN_ASR_CONFIG))
+    renamed["components"][1]["props"]["value"]["headers"][2] = "WER"
+    monkeypatch.setattr("docs_gen.model_catalog.sources.SNAPSHOT_DIR", tmp_path)
+    monkeypatch.setattr(open_asr, "get_json", lambda _url: renamed)
+    with pytest.raises(http.FetchError, match="Average WER"):
+        open_asr.fetch(refresh=True)
+
+
+def test_open_asr_refuses_a_layout_without_its_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A relaid-out application must be noticed, not silently read as empty.
+
+    Ref: docs_gen/model_catalog/sources/open_asr.py
+    """
+    monkeypatch.setattr("docs_gen.model_catalog.sources.SNAPSHOT_DIR", tmp_path)
+    monkeypatch.setattr(open_asr, "get_json", lambda _url: {"components": []})
+    with pytest.raises(http.FetchError, match="leaderboard-table"):
+        open_asr.fetch(refresh=True)
+
+
 def test_a_previous_row_keeps_its_history_and_drops_only_what_no_longer_fits(
     tmp_path: Path,
 ) -> None:
@@ -1848,6 +1984,178 @@ def test_a_service_is_named_on_a_price_only_where_the_services_differ() -> None:
         "AWS Bedrock Mantle",
         "AWS Bedrock Runtime",
     ]
+
+
+def _twins() -> list[ModelRow]:
+    """Build the two rows one model reached through both AWS services makes.
+
+    Returns:
+        The Mantle row, which has the wider reach and so survives the fold, and
+        the Bedrock Runtime row it absorbs.
+    """
+    return [
+        _served("qwen.qwen3-32b", "AWS Bedrock Mantle", regions=[0, 1]),
+        _served("qwen.qwen3-32b-v1:0", "AWS Bedrock Runtime", regions=[0]),
+    ]
+
+
+def test_a_lifecycle_date_one_surface_reports_belongs_to_the_folded_model() -> None:
+    """Bedrock Mantle states no lifecycle; Bedrock Runtime states one.
+
+    The Mantle listing carries no ``modelLifecycle``, so the surviving row has
+    no date of its own and the date its twin reports is the model's.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html
+    """
+    mantle, runtime = _twins()
+    runtime.start_of_life = "2025-09-15"
+    runtime.end_of_life = "2027-01-01"
+    rows, _, _ = build.fold_service_variants([mantle, runtime])
+    assert rows[0].start_of_life == "2025-09-15"
+    assert rows[0].end_of_life == "2027-01-01"
+
+
+def test_an_api_lifecycle_date_outranks_the_date_a_model_card_states() -> None:
+    """The card for this model states the upstream release, not Bedrock's GA.
+
+    ``model-card-qwen-qwen3-235b-a22b-2507`` states ``Apr 28, 2025`` — the date
+    Alibaba released the original Qwen3-235B-A22B — while Bedrock's own
+    ``startOfLifeTime`` for the model it serves is ``2025-09-15``. The API wins.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-235b-a22b-2507.html
+    """
+    rows, _, _ = build.fold_service_variants(
+        [
+            _served("qwen.qwen3-235b-a22b-2507", "AWS Bedrock Mantle", regions=[0, 1]),
+            _served(
+                "qwen.qwen3-235b-a22b-2507-v1:0",
+                "AWS Bedrock Runtime",
+                regions=[0],
+                start_of_life="2025-09-15",
+            ),
+        ]
+    )
+    # The card names both IDs, as the real one does.
+    card = {
+        "qwen.qwen3-235b-a22b-2507": {"start_of_life": "2025-04-28"},
+        "qwen.qwen3-235b-a22b-2507-v1:0": {"start_of_life": "2025-04-28"},
+    }
+    build.apply_stated_facts(rows, card, {})
+    assert rows[0].start_of_life == "2025-09-15"
+
+
+def test_a_fact_stated_against_an_absorbed_id_is_still_the_models() -> None:
+    """models.dev keys its facts to the Runtime ID, which the fold absorbs.
+
+    The folded row is one model reached through several IDs, so a fact stated
+    against any of them is the model's own. Resolving only the surviving ID
+    silently drops the fact and leaves the column to the previous data set.
+
+    Ref: docs_gen/model_catalog/build.py
+    """
+    rows, absorbed, _ = build.fold_service_variants(_twins())
+    assert absorbed == {"qwen.qwen3-32b-v1:0"}
+    build.apply_stated_facts(
+        rows, {}, {"qwen.qwen3-32b-v1:0": {"knowledge_cutoff": "2024-04"}}
+    )
+    assert rows[0].knowledge_cutoff == "2024-04"
+
+
+def test_a_capability_stated_only_against_an_absorbed_id_does_not_propagate() -> None:
+    """A capability an absorbed variant denies must not become a published denial.
+
+    models.dev states ``reasoning: false`` against the Runtime ID of
+    Qwen3-235B-A22B-2507, but the probe record has ``reasoning_effort=high``
+    answering with a 1551-character ``reasoningContent`` block. Unknown is the
+    honest value, and only facts cross the fold — the split ``_absorb_variant``
+    already makes between ``_VARIANT_FACTS`` and ``_VARIANT_EITHER``.
+
+    Ref: tests/probes/results/qwen.qwen3-235b-a22b-2507-v1_0.json
+    """
+    rows, _, _ = build.fold_service_variants(_twins())
+    build.apply_stated_facts(
+        rows,
+        {},
+        {"qwen.qwen3-32b-v1:0": {"reasoning": False, "knowledge_cutoff": "2024-04"}},
+    )
+    assert rows[0].reasoning is None
+    # The fact beside it still crosses, so this pins the split and not a refusal
+    # to read the absorbed ID at all.
+    assert rows[0].knowledge_cutoff == "2024-04"
+
+
+def test_the_aws_card_outranks_the_open_database_across_every_variant_id() -> None:
+    """AWS's own page for a model outranks a third party's entry for it.
+
+    The Qwen3-32B card states a 32K context window and models.dev states 16K
+    against the absorbed Runtime ID. Reading every ID must not let the open
+    database overtake the card.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-32b.html
+    """
+    rows, _, _ = build.fold_service_variants(_twins())
+    build.apply_stated_facts(
+        rows,
+        {"qwen.qwen3-32b": {"context_window": "32K"}},
+        {"qwen.qwen3-32b-v1:0": {"context_window": "16K"}},
+    )
+    assert rows[0].context_window == "32K"
+
+
+# --- Amazon Bedrock states the lifecycle; a card only fills the gaps ---------
+
+
+def test_the_bedrock_lifecycle_date_outranks_the_one_a_card_states() -> None:
+    """``modelLifecycle`` is the reference; the card does not overrule it.
+
+    The card for Qwen3-32B states ``Apr 29, 2025``, the upstream Alibaba
+    release, while Amazon Bedrock reports ``2025-09-15`` for the model it
+    serves. The API answers the question this column asks.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_ListFoundationModels.html
+    """
+    row = a_row(
+        "qwen.qwen3-32b-v1:0", start_of_life="2025-09-15", end_of_life="2027-01-01"
+    )
+    build.apply_card_lifecycle_fallback(
+        [row],
+        {
+            "qwen.qwen3-32b-v1:0": {
+                "start_of_life": "2025-04-29",
+                "end_of_life": "2026-01-01",
+            }
+        },
+    )
+    assert row.start_of_life == "2025-09-15"
+    assert row.end_of_life == "2027-01-01"
+
+
+def test_a_card_states_the_lifecycle_where_bedrock_says_nothing() -> None:
+    """A model Bedrock reports no lifecycle for still shows a date.
+
+    Blanking the column for the models AWS's API says nothing about would lose
+    more than the approximation costs, so the card fills the gap.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html
+    """
+    row = a_row("qwen.qwen3-coder-480b-a35b-instruct")
+    assert row.start_of_life is None
+    build.apply_card_lifecycle_fallback(
+        [row], {"qwen.qwen3-coder-480b-a35b-instruct": {"start_of_life": "2025-07-23"}}
+    )
+    assert row.start_of_life == "2025-07-23"
+
+
+def test_a_card_lifecycle_date_reaches_a_row_through_an_absorbed_id() -> None:
+    """The card names the Runtime ID; the fold publishes the Mantle one.
+
+    Ref: docs_gen/model_catalog/build.py
+    """
+    rows, _, _ = build.fold_service_variants(_twins())
+    build.apply_card_lifecycle_fallback(
+        rows, {"qwen.qwen3-32b-v1:0": {"start_of_life": "2025-04-29"}}
+    )
+    assert rows[0].start_of_life == "2025-04-29"
 
 
 # --- the price the gateway would actually bill -------------------------------

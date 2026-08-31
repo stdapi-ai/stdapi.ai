@@ -225,7 +225,10 @@ SOURCES: tuple[SourceInfo, ...] = (
             "Context windows, output limits, knowledge cutoffs and lifecycle "
             "dates as stated on each model's Amazon Bedrock model card. Only "
             "those facts are taken; AWS's own descriptive copy is not "
-            "reproduced."
+            "reproduced. A lifecycle date is read from the card only where "
+            "Amazon Bedrock's own API states none, and a card's launch date is "
+            "often the vendor's announcement rather than the date the model "
+            "reached Amazon Bedrock, so those few dates are an approximation."
         ),
     ),
     SourceInfo(

@@ -68,10 +68,12 @@ available from any running instance through
 <tr><td>Claude 3 Haiku (legacy)</td><td><code>anthropic.claude-3-haiku-20240307-v1:0</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>15</td></tr>
 <tr><td>Claude 3 Sonnet</td><td><code>anthropic.claude-3-sonnet-20240229-v1:0</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>5</td></tr>
 <tr><td>Claude Fable 5</td><td><code>anthropic.claude-fable-5</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
+<tr><td>claude-fern-trn2-1024k</td><td><code>anthropic.claude-fern-trn2-1024k</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>1</td></tr>
 <tr><td>claude-haiku-4-5</td><td><code>anthropic.claude-haiku-4-5</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>7</td></tr>
 <tr><td>Claude Haiku 4.5</td><td><code>anthropic.claude-haiku-4-5-20251001-v1:0</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
 <tr><td>Claude Opus 4.1 (legacy)</td><td><code>anthropic.claude-opus-4-1-20250805-v1:0</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>3</td></tr>
 <tr><td>Claude Opus 4.5</td><td><code>anthropic.claude-opus-4-5-20251101-v1:0</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
+<tr><td>claude-opus-4-6</td><td><code>anthropic.claude-opus-4-6</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>2</td></tr>
 <tr><td>Claude Opus 4.6</td><td><code>anthropic.claude-opus-4-6-v1</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
 <tr><td>Claude Opus 4.7</td><td><code>anthropic.claude-opus-4-7</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
 <tr><td>Claude Opus 4.8</td><td><code>anthropic.claude-opus-4-8</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
@@ -80,8 +82,8 @@ available from any running instance through
 <tr><td>Claude Sonnet 4.5</td><td><code>anthropic.claude-sonnet-4-5-20250929-v1:0</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
 <tr><td>Claude Sonnet 4.6</td><td><code>anthropic.claude-sonnet-4-6</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
 <tr><td>Claude Sonnet 5</td><td><code>anthropic.claude-sonnet-5</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
-<tr><td>Embed English</td><td><code>cohere.embed-english-v3</code></td><td>Cohere</td><td>TEXT</td><td>EMBEDDING</td><td>12</td></tr>
-<tr><td>Embed Multilingual</td><td><code>cohere.embed-multilingual-v3</code></td><td>Cohere</td><td>TEXT</td><td>EMBEDDING</td><td>12</td></tr>
+<tr><td>Embed English</td><td><code>cohere.embed-english-v3</code></td><td>Cohere</td><td>TEXT, IMAGE</td><td>EMBEDDING</td><td>12</td></tr>
+<tr><td>Embed Multilingual</td><td><code>cohere.embed-multilingual-v3</code></td><td>Cohere</td><td>TEXT, IMAGE</td><td>EMBEDDING</td><td>12</td></tr>
 <tr><td>Embed v4</td><td><code>cohere.embed-v4:0</code></td><td>Cohere</td><td>TEXT, IMAGE</td><td>EMBEDDING</td><td>23</td></tr>
 <tr><td>Rerank 3.5</td><td><code>cohere.rerank-v3-5:0</code></td><td>Cohere</td><td>TEXT</td><td>RERANKING</td><td>5</td></tr>
 <tr><td>DeepSeek-R1</td><td><code>deepseek.r1-v1:0</code></td><td>DeepSeek</td><td>TEXT</td><td>TEXT</td><td>3</td></tr>
@@ -130,9 +132,9 @@ available from any running instance through
 <tr><td>gpt-5.4-2026-03-05</td><td><code>openai.gpt-5.4-2026-03-05</code></td><td>OpenAI</td><td>TEXT, IMAGE</td><td>TEXT</td><td>3</td></tr>
 <tr><td>gpt-5.5</td><td><code>openai.gpt-5.5</code></td><td>OpenAI</td><td>TEXT, IMAGE</td><td>TEXT</td><td>2</td></tr>
 <tr><td>gpt-5.5-2026-04-23</td><td><code>openai.gpt-5.5-2026-04-23</code></td><td>OpenAI</td><td>TEXT, IMAGE</td><td>TEXT</td><td>2</td></tr>
-<tr><td>GPT-5.6 Luna</td><td><code>openai.gpt-5.6-luna</code></td><td>OpenAI</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
-<tr><td>GPT-5.6 Sol</td><td><code>openai.gpt-5.6-sol</code></td><td>OpenAI</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
-<tr><td>GPT-5.6 Terra</td><td><code>openai.gpt-5.6-terra</code></td><td>OpenAI</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
+<tr><td>GPT-5.6 Luna</td><td><code>openai.gpt-5.6-luna</code></td><td>OpenAI</td><td>TEXT, IMAGE</td><td>TEXT</td><td>3</td></tr>
+<tr><td>GPT-5.6 Sol</td><td><code>openai.gpt-5.6-sol</code></td><td>OpenAI</td><td>TEXT, IMAGE</td><td>TEXT</td><td>2</td></tr>
+<tr><td>GPT-5.6 Terra</td><td><code>openai.gpt-5.6-terra</code></td><td>OpenAI</td><td>TEXT, IMAGE</td><td>TEXT</td><td>3</td></tr>
 <tr><td>gpt-oss-120b</td><td><code>openai.gpt-oss-120b</code></td><td>OpenAI</td><td>TEXT</td><td>TEXT</td><td>15</td></tr>
 <tr><td>gpt-oss-20b</td><td><code>openai.gpt-oss-20b</code></td><td>OpenAI</td><td>TEXT</td><td>TEXT</td><td>15</td></tr>
 <tr><td>GPT OSS Safeguard 120B</td><td><code>openai.gpt-oss-safeguard-120b</code></td><td>OpenAI</td><td>TEXT</td><td>TEXT</td><td>10</td></tr>
@@ -147,7 +149,7 @@ available from any running instance through
 <tr><td>Qwen3 Next 80B A3B</td><td><code>qwen.qwen3-next-80b-a3b</code></td><td>Qwen</td><td>TEXT</td><td>TEXT</td><td>10</td></tr>
 <tr><td>qwen3-next-80b-a3b-instruct</td><td><code>qwen.qwen3-next-80b-a3b-instruct</code></td><td>Qwen</td><td>TEXT</td><td>TEXT</td><td>15</td></tr>
 <tr><td>Qwen3 VL 235B A22B</td><td><code>qwen.qwen3-vl-235b-a22b</code></td><td>Qwen</td><td>TEXT, IMAGE</td><td>TEXT</td><td>10</td></tr>
-<tr><td>qwen3-vl-235b-a22b-instruct</td><td><code>qwen.qwen3-vl-235b-a22b-instruct</code></td><td>Qwen</td><td>TEXT</td><td>TEXT</td><td>15</td></tr>
+<tr><td>qwen3-vl-235b-a22b-instruct</td><td><code>qwen.qwen3-vl-235b-a22b-instruct</code></td><td>Qwen</td><td>TEXT, IMAGE</td><td>TEXT</td><td>15</td></tr>
 <tr><td>Stable Diffusion 3.5 Large</td><td><code>stability.sd3-5-large-v1:0</code></td><td>Stability AI</td><td>TEXT, IMAGE</td><td>IMAGE</td><td>1</td></tr>
 <tr><td>Stable Image Conservative Upscale</td><td><code>stability.stable-conservative-upscale-v1:0</code></td><td>Stability AI</td><td>TEXT, IMAGE</td><td>IMAGE</td><td>3</td></tr>
 <tr><td>Stable Image Creative Upscale</td><td><code>stability.stable-creative-upscale-v1:0</code></td><td>Stability AI</td><td>TEXT, IMAGE</td><td>IMAGE</td><td>3</td></tr>
@@ -212,7 +214,7 @@ reflects the AWS account this snapshot came from — your own
 ## :material-database-outline: Sources, licences and caveats
 
 <!-- catalog:generated -->
-Snapshot taken on **2026-08-26** from a stdapi.ai instance, covering 138 models across 33 AWS regions. Prices and availability move — before you commit to a number, confirm it against the [Amazon Bedrock pricing page](https://aws.amazon.com/bedrock/pricing/) and your own [`search_models`](api_search_models.md).
+Snapshot taken on **2026-08-31** from a stdapi.ai instance, covering 140 models across 33 AWS regions. Prices and availability move — before you commit to a number, confirm it against the [Amazon Bedrock pricing page](https://aws.amazon.com/bedrock/pricing/) and your own [`search_models`](api_search_models.md).
 <!-- /catalog:generated -->
 
 <!-- catalog:sources -->
@@ -220,19 +222,19 @@ Every number on this page comes from one of the sources below, reproduced unmodi
 
 | Source | Licence | Read on | Used here |
 | --- | --- | --- | --- |
-| The gateway's own [`search_models`](api_search_models.md) and [`model_pricing`](api_model_pricing.md) | — | 2026-08-26 | 138 |
-| [Amazon Bedrock `ListFoundationModels`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_ListFoundationModels.html), read raw so its undocumented fields survive | — | 2026-08-26 | capabilities, APIs, media types, limits |
-| [LMArena Leaderboard](https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-08-24 | 79 of 793 entries |
-| [MTEB — Massive Text Embedding Benchmark](https://github.com/embeddings-benchmark/results) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | 2026-08-26 | 5 of 12 entries |
-| [Epoch AI — AI Benchmarking Hub](https://epoch.ai/benchmarks/use-this-data) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-08-18 | 59 of 655 entries |
-| [Amazon Bedrock model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html) | [AWS documentation](https://aws.amazon.com/terms/) | 2026-08-26 | 112 of 124 model cards |
-| [models.dev](https://models.dev/) | [MIT](https://github.com/anomalyco/models.dev/blob/dev/LICENSE) | 2026-08-26 | 65 of 120 models |
-| [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) | 2026-08-26 | 2 of 65 entries |
+| The gateway's own [`search_models`](api_search_models.md) and [`model_pricing`](api_model_pricing.md) | — | 2026-08-31 | 140 |
+| [Amazon Bedrock `ListFoundationModels`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_ListFoundationModels.html), read raw so its undocumented fields survive | — | 2026-08-31 | capabilities, APIs, media types, limits |
+| [LMArena Leaderboard](https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-08-27 | 79 of 797 entries |
+| [MTEB — Massive Text Embedding Benchmark](https://github.com/embeddings-benchmark/results) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | 2026-08-31 | 5 of 12 entries |
+| [Epoch AI — AI Benchmarking Hub](https://epoch.ai/benchmarks/use-this-data) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-08-30 | 60 of 661 entries |
+| [Amazon Bedrock model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html) | [AWS documentation](https://aws.amazon.com/terms/) | 2026-08-31 | 112 of 124 model cards |
+| [models.dev](https://models.dev/) | [MIT](https://github.com/anomalyco/models.dev/blob/dev/LICENSE) | 2026-08-31 | 65 of 120 models |
+| [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) | 2026-08-31 | 2 of 61 entries |
 
 - **LMArena Leaderboard** — Arena Elo ratings by LMArena (Arena Intelligence Inc.), reproduced unmodified under CC BY 4.0. The mapping to Amazon Bedrock model IDs is ours.
 - **MTEB — Massive Text Embedding Benchmark** — Benchmark results from the MTEB results repository, dedicated to the public domain under CC0 1.0. The mapping to Amazon Bedrock model IDs is ours.
 - **Epoch AI — AI Benchmarking Hub** — Benchmark results by Epoch AI, reproduced unmodified under CC BY 4.0. Rows derived from the Aider Polyglot and Terminal-Bench leaderboards keep their Apache-2.0 licence. The mapping to Amazon Bedrock model IDs is ours.
-- **Amazon Bedrock model cards** — Context windows, output limits, knowledge cutoffs and lifecycle dates as stated on each model's Amazon Bedrock model card. Only those facts are taken; AWS's own descriptive copy is not reproduced.
+- **Amazon Bedrock model cards** — Context windows, output limits, knowledge cutoffs and lifecycle dates as stated on each model's Amazon Bedrock model card. Only those facts are taken; AWS's own descriptive copy is not reproduced. A lifecycle date is read from the card only where Amazon Bedrock's own API states none, and a card's launch date is often the vendor's announcement rather than the date the model reached Amazon Bedrock, so those few dates are an approximation.
 - **models.dev** — Context windows, knowledge cutoffs and capability flags from models.dev, an open database of AI models, used under the MIT licence. Its Amazon Bedrock entries are keyed by Bedrock model ID, so the join is exact.
 - **Open ASR Leaderboard** — Word error rates from the Open ASR Leaderboard, reproduced unmodified under Apache-2.0. The mapping to Amazon Bedrock model IDs is ours.
 
