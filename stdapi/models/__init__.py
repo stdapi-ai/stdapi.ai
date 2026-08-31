@@ -2657,7 +2657,10 @@ def _merge_mantle_models(
     """Merge previously-collected Mantle models into *all_models*.
 
     bedrock-runtime keeps priority for dual-homed models unless the model is
-    preferred on Mantle -- which the GPT-5.6 family is by default.
+    preferred on Mantle -- which the GPT-5.6 family is by default. A displaced
+    model keeps the display name its bedrock-runtime listing gave it, derived
+    here rather than declared: the Mantle catalog carries no human-readable
+    name, so the model would otherwise be published under its raw identifier.
 
     The two catalogues may name a dual-homed model *identically*, in which case
     the preferred entry overwrites the other under one key and the catalogue
