@@ -46,6 +46,26 @@ _REALTIME_CALL_OPERATIONS: Final = frozenset(
     }
 )
 
+#: Organization costs operation, which also needs ``cost_tracking`` to answer.
+_COSTS_OPERATIONS: Final = frozenset({"openai_organization_costs"})
+
+#: Organization usage operations, published only where they can answer: without
+#: ``usage_api`` and ``cloudwatch_metrics`` every one of them refuses with a 503.
+_USAGE_API_OPERATIONS: Final = _COSTS_OPERATIONS | frozenset(
+    {
+        "openai_organization_usage_completions",
+        "openai_organization_usage_embeddings",
+        "openai_organization_usage_moderations",
+        "openai_organization_usage_images",
+        "openai_organization_usage_audio_speeches",
+        "openai_organization_usage_audio_transcriptions",
+        "openai_organization_usage_web_search_calls",
+        "openai_organization_usage_file_search_calls",
+        "openai_organization_usage_vector_stores",
+        "openai_organization_usage_code_interpreter_sessions",
+    }
+)
+
 #: Marker fastapi_mcp always prepends to the auto-generated response/example block.
 _RESPONSES_MARKER = "\n\n### Responses:"
 
@@ -433,6 +453,10 @@ def _operation_filters() -> tuple[list[str] | None, list[str] | None]:
     The Ollama endpoints are mounted but not published by default: each
     duplicates a tool an agent already has on another dialect, and redundant
     tools degrade tool choice. Naming one in ``mcp_include_tools`` publishes it.
+    The organization usage endpoints are published only while every setting
+    they read is enabled -- ``usage_api`` and ``cloudwatch_metrics``, plus
+    ``cost_tracking`` for the costs one -- so a deployment does not spend a
+    tool schema on a surface whose only answer is a 503.
 
     ``FastApiMCP`` takes one filter or the other and refuses both, so an
     explicit include list is resolved here, which is also how
@@ -444,8 +468,15 @@ def _operation_filters() -> tuple[list[str] | None, list[str] | None]:
     excluded = set(SETTINGS.mcp_exclude_tools or ())
     if (included := SETTINGS.mcp_include_tools) is not None:
         return [op for op in included if op not in excluded], None
+    usage = (
+        frozenset()
+        if SETTINGS.usage_api and SETTINGS.cloudwatch_metrics
+        else _USAGE_API_OPERATIONS
+    )
+    if not SETTINGS.cost_tracking:
+        usage |= _COSTS_OPERATIONS
     return None, sorted(
-        MCP_EXCLUDED_OPERATIONS | _REALTIME_CALL_OPERATIONS | excluded
+        MCP_EXCLUDED_OPERATIONS | _REALTIME_CALL_OPERATIONS | usage | excluded
     ) or None
 
 

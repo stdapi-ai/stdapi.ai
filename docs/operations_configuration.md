@@ -4127,7 +4127,7 @@ export COST_TRACKING=true
 
 ## :material-chart-timeline-variant: Usage API { #usage-api-section }
 
-The [Organization Usage and Costs API](api_openai_organization_usage.md) serves the OpenAI Administration usage and costs endpoints from the metrics this deployment already publishes. It is **opt-in and off by default**; while it is off, the routes do not exist at all.
+The [Organization Usage and Costs API](api_openai_organization_usage.md) serves the OpenAI Administration usage and costs endpoints from the metrics this deployment already publishes. It is **opt-in and off by default**; while it is off, the routes still exist and answer `503`, so a client can tell a disabled feature from a missing deployment.
 
 The routes it adds, under the configured [`OPENAI_ROUTES_PREFIX`](#openai-routes-prefix):
 
@@ -4156,7 +4156,7 @@ The routes it adds, under the configured [`OPENAI_ROUTES_PREFIX`](#openai-routes
 #### `USAGE_API` { #usage-api }
 
 :octicons-package-24: **Purpose**
-:   Serve the [organization usage and costs endpoints](api_openai_organization_usage.md). When disabled, the routes do not exist at all. Enabling it also publishes the usage metrics under an additional dimension set, which carries its own [monthly cost](operations_cost_management.md#usage-api-cost).
+:   Serve the [organization usage and costs endpoints](api_openai_organization_usage.md). When disabled, the routes exist and answer `503`. Enabling it also publishes the usage metrics under an additional dimension set, which carries its own [monthly cost](operations_cost_management.md#usage-api-cost).
 
 :octicons-database-24: **Type**
 :   Boolean

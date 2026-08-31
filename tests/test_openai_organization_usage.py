@@ -28,6 +28,10 @@ import pytest
 if TYPE_CHECKING:
     from fastapi.testclient import TestClient
 
+#: Every test drives the in-process app against a stub, so a remote target
+#: would re-run them locally and report coverage it never obtained.
+pytestmark = pytest.mark.local
+
 #: One day, in seconds.
 _DAY = 86400
 
@@ -62,6 +66,10 @@ class _FakeCloudWatch:
         self.listed = listed if listed is not None else []
         self.results = results if results is not None else []
         self.queries: list[dict[str, Any]] = []
+        #: One ``(results, NextToken)`` pair per call when the read paginates;
+        #: the last pair answers every further call, so a pair still carrying a
+        #: token is a backend that never stops paginating.
+        self.pages: list[tuple[list[dict[str, Any]], str | None]] | None = None
 
     def get_paginator(self, _name: str) -> _FakePaginator:
         """Return the listing paginator.
@@ -78,7 +86,13 @@ class _FakeCloudWatch:
             The stubbed response.
         """
         self.queries.append(kwargs)
-        return {"MetricDataResults": self.results}
+        if self.pages is None:
+            return {"MetricDataResults": self.results}
+        results, token = self.pages[min(len(self.queries), len(self.pages)) - 1]
+        response: dict[str, Any] = {"MetricDataResults": results}
+        if token:
+            response["NextToken"] = token
+        return response
 
 
 def _series(
@@ -929,9 +943,7 @@ class TestQueryBounds:
         )
         assert cloudwatch.queries[0]["MetricDataQueries"][0]["Period"] == period
 
-    @pytest.mark.parametrize(
-        ("width", "maximum"), [("1m", 1440), ("1h", 168), ("1d", 31)]
-    )
+    @pytest.mark.parametrize(("width", "maximum"), [("1h", 168), ("1d", 31)])
     def test_a_page_wider_than_upstream_allows_is_refused(
         self,
         app_client: TestClient,
@@ -940,7 +952,15 @@ class TestQueryBounds:
         width: str,
         maximum: int,
     ) -> None:
-        """Upstream bounds the page size per bucket width; so does this."""
+        """Upstream bounds the page size per bucket width; so does this.
+
+        The message has to name the per-width maximum: the schema's own
+        ``le=1440`` refuses anything above the widest of the three whatever the
+        width, so a bare 400 would not tell the two refusals apart. ``1m`` is
+        the width the schema alone covers, and is asserted separately.
+
+        Ref: stdapi/routes/openai_organization_usage.py:_resolve_limit
+        """
         response = _get(
             app_client,
             "completions",
@@ -949,6 +969,98 @@ class TestQueryBounds:
             limit=maximum + 1,
         )
         assert response.status_code == 400, response.text
+        assert (
+            f"'limit' may not exceed {maximum}" in response.json()["error"]["message"]
+        )
+
+    def test_a_page_wider_than_every_width_allows_is_refused(
+        self, app_client: TestClient, cloudwatch: _FakeCloudWatch, recent_start: int
+    ) -> None:
+        """The widest maximum bounds the parameter itself, before any handler runs."""
+        response = _get(
+            app_client,
+            "completions",
+            start_time=recent_start,
+            bucket_width="1m",
+            limit=1441,
+        )
+        assert response.status_code == 400, response.text
+        assert cloudwatch.queries == []
+
+
+class TestBackendPagination:
+    """Reading a range CloudWatch answers over more than one page."""
+
+    def test_every_page_of_a_read_is_merged_into_the_report(
+        self, app_client: TestClient, cloudwatch: _FakeCloudWatch, recent_start: int
+    ) -> None:
+        """A continued read reports both pages, and carries the token back.
+
+        CloudWatch caps one ``GetMetricData`` response at 100 800 data points
+        and hands back a ``NextToken`` for the rest. Dropping the later pages
+        would answer a partial total with a 200 -- a wrong number, not an error.
+
+        Ref: https://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/API_GetMetricData.html
+        """
+        cloudwatch.pages = [
+            (
+                [
+                    _series(
+                        "InputTokens", "model.a|chat.completions", {recent_start: 1.0}
+                    )
+                ],
+                "page-2",
+            ),
+            (
+                [
+                    _series(
+                        "InputTokens", "model.b|chat.completions", {recent_start: 2.0}
+                    )
+                ],
+                None,
+            ),
+        ]
+        rows = _get(
+            app_client,
+            "completions",
+            start_time=recent_start,
+            limit=1,
+            group_by="model",
+        ).json()["data"][0]["results"]
+
+        assert [row["model"] for row in rows] == ["model.a", "model.b"]
+        assert len(cloudwatch.queries) == 2
+        assert cloudwatch.queries[1]["NextToken"] == "page-2"
+
+    def test_a_read_that_never_stops_paginating_is_refused(
+        self, app_client: TestClient, cloudwatch: _FakeCloudWatch, recent_start: int
+    ) -> None:
+        """Past the page cap the query is refused, never truncated silently.
+
+        The alternative is answering the pages already read as if they were the
+        whole range: a usage figure that is wrong, answered 200, with nothing
+        for the caller to notice it by.
+
+        Ref: stdapi/aws_cloudwatch.py:read_series
+        """
+        from stdapi.aws_cloudwatch import _MAX_PAGES  # noqa: PLC0415
+
+        cloudwatch.pages = [
+            (
+                [
+                    _series(
+                        "InputTokens", "model.a|chat.completions", {recent_start: 1.0}
+                    )
+                ],
+                "more",
+            )
+        ]
+
+        response = _get(app_client, "completions", start_time=recent_start, limit=1)
+
+        assert response.status_code == 400, response.text
+        assert "Narrow it" in response.json()["error"]["message"]
+        assert len(cloudwatch.queries) == _MAX_PAGES
 
 
 class TestPagination:
@@ -1193,6 +1305,51 @@ class TestAuthorization:
         response = _get(app_client, "completions", start_time=recent_start)
         assert response.status_code == 403, response.text
 
+    def test_a_bad_parameter_is_answered_after_authorization_on_every_endpoint(
+        self,
+        app_client: TestClient,
+        cloudwatch: _FakeCloudWatch,
+        recent_start: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No endpoint of the surface refuses a parameter before it refuses the caller.
+
+        The check is per route body rather than inside the shared helper, so a
+        twelfth endpoint added without it would leak the same oracle on its own.
+
+        Ref: stdapi/routes/openai_organization_usage.py:_require_admin
+        """
+        from stdapi.monitoring import Tenant  # noqa: PLC0415
+
+        _as_caller(monkeypatch, "TENANT", Tenant(key_id="key1", name="tenant"))
+
+        for endpoint in (
+            "completions",
+            "embeddings",
+            "moderations",
+            "images",
+            "audio_speeches",
+            "audio_transcriptions",
+            "web_search_calls",
+            "file_search_calls",
+            "vector_stores",
+            "code_interpreter_sessions",
+        ):
+            response = _get(
+                app_client,
+                endpoint,
+                start_time=recent_start,
+                project_ids="proj_1",
+                group_by="project_id",
+            )
+            assert response.status_code == 403, f"{endpoint}: {response.text}"
+        costs = app_client.get(
+            "/v1/organization/costs",
+            params={"start_time": recent_start, "group_by": "line_item"},
+        )
+        assert costs.status_code == 403, costs.text
+        assert cloudwatch.queries == []
+
     def test_the_surface_refuses_everything_when_it_is_not_enabled(
         self,
         app_client: TestClient,
@@ -1210,3 +1367,75 @@ class TestAuthorization:
         response = _get(app_client, "completions", start_time=recent_start)
         assert response.status_code == 503, response.text
         assert cloudwatch.queries == []
+
+
+class TestStartupWarnings:
+    """What the operator is told at startup about what the surface will answer."""
+
+    @staticmethod
+    def _warnings(
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        cloudwatch_metrics: bool = True,
+        cost_tracking: bool = True,
+        user_pool: str = "",
+        admin_scopes: tuple[str, ...] = ("stdapi/usage.read",),
+    ) -> list[str]:
+        """Run the startup warnings against one configuration.
+
+        Returns:
+            The warning texts the run added to the startup event.
+        """
+        from stdapi.aws_cloudwatch import add_usage_api_warnings  # noqa: PLC0415
+        from stdapi.config import SETTINGS  # noqa: PLC0415
+
+        monkeypatch.setattr(SETTINGS, "cloudwatch_metrics", cloudwatch_metrics)
+        monkeypatch.setattr(SETTINGS, "cost_tracking", cost_tracking)
+        monkeypatch.setattr(SETTINGS, "aws_cognito_user_pool_id", user_pool)
+        monkeypatch.setattr(SETTINGS, "usage_api_admin_scopes", list(admin_scopes))
+        event: Any = {"level": "info"}
+        add_usage_api_warnings(event)
+        return [str(warning) for warning in event.get("server_warnings", [])]
+
+    def test_metrics_off_is_reported_as_nothing_to_report(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The usage endpoints read what ``cloudwatch_metrics`` publishes.
+
+        Cost tracking is off here too, and is deliberately *not* warned about a
+        second time: without the metrics there is nothing for a cost to be
+        attached to, so naming both would make the operator fix the wrong one.
+        """
+        warnings = self._warnings(
+            monkeypatch, cloudwatch_metrics=False, cost_tracking=False
+        )
+        assert len(warnings) == 1
+        assert "'cloudwatch_metrics'" in warnings[0]
+
+    def test_cost_tracking_off_is_reported_for_the_costs_endpoint_alone(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only the costs endpoint needs it, so only it is named."""
+        warnings = self._warnings(monkeypatch, cost_tracking=False)
+        assert len(warnings) == 1
+        assert "'cost_tracking'" in warnings[0]
+        assert "costs endpoint" in warnings[0]
+
+    def test_a_user_pool_without_admin_scopes_is_reported(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Otherwise the operator meets the closed door as a 403 in production.
+
+        Ref: stdapi/routes/openai_organization_usage.py:_require_admin
+        """
+        warnings = self._warnings(
+            monkeypatch, user_pool="eu-west-3_abc123", admin_scopes=()
+        )
+        assert len(warnings) == 1
+        assert "'usage_api_admin_scopes'" in warnings[0]
+
+    def test_a_fully_configured_deployment_is_warned_about_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A warning the operator cannot act on trains them to ignore the rest."""
+        assert self._warnings(monkeypatch, user_pool="eu-west-3_abc123") == []

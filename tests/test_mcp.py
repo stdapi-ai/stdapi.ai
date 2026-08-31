@@ -828,6 +828,96 @@ class TestToolSelectionSettings:
         assert served == ["tool_gamma"]
         assert card == ["tool_gamma"]
 
+    @staticmethod
+    def _usage_tools_published(
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        enabled: bool,
+        metrics: bool = True,
+        costs: bool = True,
+    ) -> tuple[bool, bool]:
+        """Whether the usage operations survive the default filters.
+
+        Args:
+            monkeypatch: The patcher.
+            enabled: Value of ``usage_api``.
+            metrics: Value of ``cloudwatch_metrics``.
+            costs: Value of ``cost_tracking``.
+
+        Returns:
+            Whether the ten usage tools are published, and whether the costs
+            tool is, each True when none of them is excluded.
+        """
+        from stdapi.mcp import (  # noqa: PLC0415
+            _COSTS_OPERATIONS,
+            _USAGE_API_OPERATIONS,
+            _operation_filters,
+        )
+
+        monkeypatch.setattr(SETTINGS, "mcp_include_tools", None)
+        monkeypatch.setattr(SETTINGS, "mcp_exclude_tools", None)
+        monkeypatch.setattr(SETTINGS, "usage_api", enabled)
+        monkeypatch.setattr(SETTINGS, "cloudwatch_metrics", metrics)
+        monkeypatch.setattr(SETTINGS, "cost_tracking", costs)
+        _, exclude = _operation_filters()
+        excluded = frozenset(exclude or ())
+        return (
+            (_USAGE_API_OPERATIONS - _COSTS_OPERATIONS).isdisjoint(excluded),
+            _COSTS_OPERATIONS.isdisjoint(excluded),
+        )
+
+    def test_the_usage_tools_are_withheld_while_the_surface_is_off(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Off by default, so a stock session is not given eleven 503 tools.
+
+        Every tool schema an agent loads costs it context on each session, and
+        these eleven can only answer that the surface is disabled.
+
+        Ref: stdapi/routes/openai_organization_usage.py:_require_metrics
+        """
+        assert self._usage_tools_published(monkeypatch, enabled=False) == (False, False)
+
+    def test_the_usage_tools_are_withheld_without_the_metrics_they_report(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``usage_api`` alone answers 503, so it alone does not publish them.
+
+        The endpoints read every setting the gate does: with
+        ``cloudwatch_metrics`` off -- the combination the server already warns
+        about at startup -- there is nothing to report and the tools are
+        withheld rather than published to answer a 503.
+
+        Ref: stdapi/routes/openai_organization_usage.py:_require_metrics
+             stdapi/aws_cloudwatch.py:add_usage_api_warnings
+        """
+        assert self._usage_tools_published(
+            monkeypatch, enabled=True, metrics=False
+        ) == (False, False)
+
+    def test_the_costs_tool_alone_is_withheld_without_cost_tracking(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only ``/v1/organization/costs`` needs the cost it reports computed.
+
+        Ref: stdapi/routes/openai_organization_usage.py:_require_metrics
+        """
+        assert self._usage_tools_published(monkeypatch, enabled=True, costs=False) == (
+            True,
+            False,
+        )
+
+    def test_the_usage_tools_are_published_once_the_surface_is_on(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An operator who enabled the surface keeps every other tool as well.
+
+        ``mcp_include_tools`` is an exclusive list, so re-exposing these by
+        naming them there would drop every tool it does not name: the gate has
+        to be the settings the endpoints themselves read.
+        """
+        assert self._usage_tools_published(monkeypatch, enabled=True) == (True, True)
+
     @pytest.mark.usefixtures("local_test_client")
     def test_unfiltered_advertises_every_operation(
         self, monkeypatch: pytest.MonkeyPatch, api_key: str

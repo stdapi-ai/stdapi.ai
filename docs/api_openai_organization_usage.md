@@ -101,7 +101,8 @@ bucket may be earlier than the one asked for.
 | `api_key_id` | :material-check: When [tenant API keys](operations_authentication_security.md) are issued. Otherwise refused: the deployment has one key, which identifies itself rather than a caller. |
 | `user_id` | :material-check: When [`cloudwatch_metrics_user_dimension`](operations_configuration.md#cloudwatch-metrics-user-dimension) is enabled. Otherwise refused: consumption is not recorded per user by default, because that is one stored metric series per user. |
 | `project_id` | :material-close: There are no projects here, so usage is never attributed to one. |
-| `batch`, `service_tier` | :material-close: The service tier a request ran under is not reported apart. |
+| `batch` | :material-close: Batch API usage is not reported by these endpoints at all — see [Differences from Upstream](#differences-from-upstream). |
+| `service_tier` | :material-close: The service tier a request ran under is not reported apart. |
 | `size` | :material-close: The size of a generated image is not reported. |
 | `context_level` | :material-close: The context size of a web search is not reported. |
 | `vector_store_id` | :material-close: File searches are not reported per vector store. |
@@ -115,8 +116,10 @@ other: usage is reported per key or per user, never per pair of the two. The
 same holds for the `api_key_ids` and `user_ids` filters, and for one of them
 combined with a grouping by the other.
 
-A key that was not grouped by is `null` in the result, which is what upstream
-declares for every one of them.
+A key that was not grouped by is **omitted from the JSON object** rather than
+sent as an explicit `null`. The `openai` SDK reads it back as `None` either
+way, so only a client parsing the raw JSON sees the difference — read such a
+key with `result.get("model")`, never `result["model"]`.
 
 ## :material-clock-alert: Bucket Width and How Far Back { #retention }
 
@@ -212,14 +215,20 @@ express.
   another call, so their records are counted — and a moderation answered by an
   Amazon Bedrock guardrail counts once per policy that guardrail applies.
 - `web_search_calls` reports `num_requests` and `num_model_requests`;
-  `context_level` is always `null`. `num_model_requests` counts every request
+  `context_level` is never reported. `num_model_requests` counts every request
   the model answered in the bucket, not only the ones that called the search
   tool, whenever the two shared the same model, operation and grouping in that
   bucket: the search count is recorded on the model's own usage record, so a
   bucket mixing searching and non-searching traffic to the same model cannot
   be told apart from the metrics alone.
 - `file_search_calls` counts searches for the deployment as a whole;
-  `vector_store_id` is always `null`.
+  `vector_store_id` is never reported.
+- **Batch API usage is absent from the usage endpoints.** A batch's tokens are
+  recorded against the route that collected its results, which carries no
+  reported endpoint, so they reach neither `completions` nor `embeddings` — yet
+  their spend *is* included in `/v1/organization/costs`. On a deployment
+  running significant batch traffic, usage and costs therefore do not
+  reconcile, by the whole batch workload.
 - Usage is reported from a single region — see
   [`cloudwatch_metrics_region`](operations_configuration.md#cloudwatch-metrics-region).
   A deployment publishing from more than one region reports the one it reads.

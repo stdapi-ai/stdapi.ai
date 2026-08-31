@@ -43,7 +43,7 @@ RETENTION_SECONDS: Final[dict[int, int]] = {
 #: caller-supplied values reach it verbatim.
 _SAFE_VALUE: Final = regex_compile(r"[A-Za-z0-9._:/@+-]{1,255}").fullmatch
 
-#: Most result pages one query reads before giving up on the rest.
+#: Most result pages one query reads; still paginating past it is refused.
 _MAX_PAGES: Final = 20
 
 
@@ -259,6 +259,10 @@ async def read_series(
 
     Returns:
         One entry per metric and dimension combination that carried data.
+
+    Raises:
+        ApiError: 400 when the range still paginates past ``_MAX_PAGES``, rather
+            than reporting the pages already read as if they were the total.
     """
     label = "|".join(f"${{PROP('Dim.{name}')}}" for name in dimension_names)
     queries = [
@@ -303,4 +307,11 @@ async def read_series(
             token = response.get("NextToken")
             if not token:
                 break
+    if token:
+        message = (
+            "This query reads more data than one report can carry. Narrow it "
+            "with 'models', ask for fewer grouping keys, or ask for a shorter "
+            "range."
+        )
+        raise ApiError(message)
     return list(collected.values())
