@@ -234,6 +234,66 @@ class TestDefaultRouting:
         finally:
             MANTLE_MODELS.clear()
 
+    @pytest.mark.xdist_group("model_cache")
+    def test_a_displaced_model_keeps_its_bedrock_runtime_display_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A preferred dual-homed model is published under its runtime display name.
+
+        ``bedrock:ListFoundationModels`` is the only one of the two catalogues
+        carrying a human-readable ``modelName``: the Mantle ``/v1/models``
+        entries have none, so ``_get_mantle_models_from_region`` names them
+        after the identifier. Serving the family from Mantle therefore replaces
+        "GPT-5.6 Sol" with "gpt-5.6-sol" everywhere the catalogue is published,
+        the public Models page included, unless the merge carries the displaced
+        name over. A Mantle-only model has no name to inherit and keeps its own.
+
+        Ref: stdapi/models/__init__.py:_merge_mantle_models
+             stdapi/models/__init__.py:_get_mantle_models_from_region
+        """
+
+        def details(model_id: str, name: str, service: str | None) -> ModelDetails:
+            model = ModelDetails(
+                id=model_id,
+                name=name,
+                provider="OpenAI",
+                input_modalities=["TEXT"],
+                output_modalities=["TEXT"],
+                regions=[_REGION],
+            )
+            if service is not None:
+                model.service = service
+            return model
+
+        saved_mantle_models = dict(MANTLE_MODELS)
+        try:
+            monkeypatch.setattr(
+                SETTINGS,
+                "aws_bedrock_mantle_preferred_models",
+                [*DEFAULT_MANTLE_PREFERRED_MODELS],
+            )
+            runtime = {
+                "openai.gpt-5.6-sol": details("openai.gpt-5.6-sol", "GPT-5.6 Sol", None)
+            }
+            mantle = {
+                "openai.gpt-5.6-sol": details(
+                    "openai.gpt-5.6-sol", "gpt-5.6-sol", MANTLE_SERVICE
+                ),
+                "openai.gpt-5.6-nimbus": details(
+                    "openai.gpt-5.6-nimbus", "gpt-5.6-nimbus", MANTLE_SERVICE
+                ),
+            }
+            _merge_mantle_models(runtime, mantle)
+
+            served = runtime["openai.gpt-5.6-sol"]
+            assert served.service == MANTLE_SERVICE
+            assert served.name == "GPT-5.6 Sol"
+            assert MANTLE_MODELS["openai.gpt-5.6-sol"].name == "GPT-5.6 Sol"
+            assert runtime["openai.gpt-5.6-nimbus"].name == "gpt-5.6-nimbus"
+        finally:
+            MANTLE_MODELS.clear()
+            MANTLE_MODELS.update(saved_mantle_models)
+
 
 class TestGuardrailRefusal:
     """Guardrails cannot reach a Mantle-served model, so the pair is refused at startup.

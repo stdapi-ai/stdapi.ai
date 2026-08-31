@@ -20,10 +20,32 @@
       "reason": "matched claude-sonnet-4-20250514, a different model generation"
     }
   },
+  "anthropic.claude-opus-4-5-20251101-v1:0": {
+    "epoch/simpleqa_verified": {
+      "match": "claude-opus-4-5-20251101_32K",
+      "reason": "Epoch's row is named after this exact model; the matcher flip-flops on it"
+    }
+  },
   "qwen.qwen3-235b-a22b-2507-v1:0": {
     "lmarena/text": {
       "match": null,
       "reason": "matched qwen3-235b-a22b, a different release of the model"
+    },
+    "epoch/frontiermath": {
+      "match": null,
+      "reason": "matched Qwen/Qwen3-235B-A22B-Thinking-2507, a different release of the model; Bedrock serves Instruct-2507, which the board does not rank"
+    },
+    "epoch/math_level_5": {
+      "match": null,
+      "reason": "matched qwen3-235b-a22b, a different release of the model"
+    },
+    "epoch/gpqa_diamond": {
+      "match": null,
+      "reason": "matched qwen3-235b-a22b, a different release of the model"
+    },
+    "epoch/aider_polyglot_external": {
+      "match": null,
+      "reason": "matched Qwen3-235B-A22B, a different release of the model"
     }
   },
   "qwen.qwen3-235b-a22b-2507": {
@@ -34,6 +56,18 @@
     "epoch/aider_polyglot_external": {
       "match": null,
       "reason": "matched Qwen3-235B-A22B, a different release of the model"
+    },
+    "epoch/frontiermath": {
+      "match": null,
+      "reason": "matched Qwen/Qwen3-235B-A22B-Thinking-2507, a different release of the model; Bedrock serves Instruct-2507, which the board does not rank"
+    },
+    "lmarena/text": {
+      "match": null,
+      "reason": "matched qwen3-235b-a22b, a different release of the model"
+    },
+    "epoch/gpqa_diamond": {
+      "match": null,
+      "reason": "matched qwen3-235b-a22b, a different release of the model"
     }
   }
 }

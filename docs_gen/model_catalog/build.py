@@ -601,16 +601,15 @@ def build(
     rows: list[ModelRow] = []
     for model in models:
         row = _build_row(model, price_cards, bedrock_facts, region_index)
-        # AWS's own documentation first: for a model AWS hosts, its card is the
-        # authoritative statement of the context window and the dates.
-        _apply_published_facts(row, card_facts.get(row.id, {}))
-        _apply_published_facts(row, published_facts.get(row.id, {}))
         _attach_results(row, model, boards_by_source, collected, matcher, matched_names)
         report.matched += len(row.scores) + len(row.references)
         rows.append(row)
 
     rows, absorbed, fold_notes = fold_service_variants(rows)
     report.notes.extend(f"service variants: {note}" for note in fold_notes)
+    apply_stated_facts(rows, card_facts, published_facts)
+    # Last, so that a card can only ever fill a date Amazon Bedrock left unsaid.
+    apply_card_lifecycle_fallback(rows, card_facts)
 
     overlay = enrichment_module.load()
     report.enrichment = enrichment_module.apply(rows, overlay)
@@ -648,6 +647,31 @@ def build(
         )
     matcher.save_cache()
 
+    # A source that published nothing this run is credited with nothing, and a
+    # row reading "0 of 0 entries" reads as a broken page rather than as the
+    # unreachable source it is: the run's notes already report why it is missing.
+    source_reports = [
+        report_
+        for report_ in (
+            SourceReport(
+                key=info.key,
+                name=info.name,
+                url=info.url,
+                licence=info.licence,
+                licence_url=info.licence_url,
+                attribution=info.attribution,
+                as_of=collected[info.key].as_of if info.key in collected else "",
+                rows=_source_rows(info.key, collected, published_facts, card_facts),
+                matched=_source_matched(
+                    info.key, matched_names, rows, published_facts, card_facts
+                ),
+            )
+            for info in SOURCES
+            if info.key in collected or info.key in ("models_dev", "aws_model_cards")
+        )
+        if report_.rows
+    ]
+
     manifest = Manifest(
         generated=generated,
         headline_dimensions=list(HEADLINE_DIMENSIONS),
@@ -665,23 +689,7 @@ def build(
             if region in REGION_COUNTRIES
         },
         unreachable_regions=unreachable,
-        sources=[
-            SourceReport(
-                key=info.key,
-                name=info.name,
-                url=info.url,
-                licence=info.licence,
-                licence_url=info.licence_url,
-                attribution=info.attribution,
-                as_of=collected[info.key].as_of if info.key in collected else "",
-                rows=_source_rows(info.key, collected, published_facts, card_facts),
-                matched=_source_matched(
-                    info.key, matched_names, rows, published_facts, card_facts
-                ),
-            )
-            for info in SOURCES
-            if info.key in collected or info.key in ("models_dev", "aws_model_cards")
-        ],
+        sources=source_reports,
     )
     return (
         Catalog(manifest=manifest, models=rows),
@@ -904,6 +912,32 @@ _VARIANT_UNION: tuple[str, ...] = (
     "output_modalities",
 )
 
+#: Row fields holding a model's lifecycle dates.
+#:
+#: Amazon Bedrock states these itself, in ``ListFoundationModels``'s
+#: ``modelLifecycle``, and that is the catalogue's reference for them. They are
+#: named here so that the precedence is a rule the code states rather than a
+#: consequence of the order two functions happen to run in.
+_LIFECYCLE_FIELDS: tuple[str, ...] = ("start_of_life", "end_of_life")
+
+#: Row fields stating a fact about the model rather than a capability of one
+#: service, which a folded row therefore takes from whichever variant states it.
+#:
+#: This is the fact half of the split ``_absorb_variant`` makes; the capability
+#: half is ``_VARIANT_EITHER``, which is true when *either* service offers it and
+#: so may only ever be turned on by a variant, never off. Keep a field in exactly
+#: one of the two: reading a capability off an absorbed variant would let a third
+#: party stating ``reasoning: false`` publish a denial where the catalogue had
+#: honestly said nothing.
+_VARIANT_FACTS: tuple[str, ...] = (
+    "context_window",
+    "max_output_tokens",
+    "knowledge_cutoff",
+    "licence",
+    "start_of_life",
+    "end_of_life",
+)
+
 #: Row fields true for the model when either service offers them.
 _VARIANT_EITHER: tuple[str, ...] = (
     "streaming",
@@ -1113,7 +1147,9 @@ def _absorb_variant(primary: ModelRow, other: ModelRow) -> None:
         if getattr(other, name) and not getattr(primary, name):
             setattr(primary, name, getattr(other, name))
     # A fact one surface reports and the other does not is still the model's.
-    for name in ("context_window", "max_output_tokens", "knowledge_cutoff", "licence"):
+    # The lifecycle dates are here because Bedrock Mantle's listing carries no
+    # ``modelLifecycle`` at all, so only the Runtime twin ever states them.
+    for name in _VARIANT_FACTS:
         if getattr(primary, name) in (None, "", []):
             setattr(primary, name, getattr(other, name))
     # AWS spells the same model two ways; the prose name reads better than the
@@ -1122,6 +1158,94 @@ def _absorb_variant(primary: ModelRow, other: ModelRow) -> None:
         primary.name = other.name
     if other.id not in primary.aliases:
         primary.aliases = sorted({*primary.aliases, other.id})
+
+
+def apply_stated_facts(
+    rows: Iterable[ModelRow],
+    card_facts: dict[str, dict[str, Any]],
+    published_facts: dict[str, dict[str, Any]],
+) -> None:
+    """Fill the facts no AWS API returns, once the service variants are folded.
+
+    Read after the fold, so that the row being filled is the one the catalogue
+    publishes. The lifecycle dates are not read here at all:
+    :func:`apply_card_lifecycle_fallback` resolves those against Amazon Bedrock's
+    own answer, which outranks what a card states.
+
+    A folded row is one model reached through several IDs, so a fact stated
+    against any of them is the model's own — models.dev keys its entries to the
+    Runtime ID, which the fold absorbs. Only ``_VARIANT_FACTS`` are read that
+    way, mirroring the fact-versus-capability split ``_absorb_variant`` already
+    makes: a capability an absorbed variant denies must not overwrite what the
+    surviving row leaves unknown.
+
+    The loops run in precedence order and ``_apply_published_facts`` never
+    overwrites, so the first source to state a fact wins: AWS's own card before
+    the open database, and a row's own ID before one it absorbed.
+
+    Args:
+        rows: The rows the catalogue will publish, after folding.
+        card_facts: Model ID to the facts its AWS model card states.
+        published_facts: Model ID to the facts models.dev publishes for it.
+    """
+    for row in rows:
+        absorbed = [item.id for item in row.variants if item.id != row.id]
+        for source in (card_facts, published_facts):
+            _apply_published_facts(row, _model_wide(source.get(row.id, {})))
+            for identity in absorbed:
+                _apply_published_facts(
+                    row,
+                    {
+                        name: value
+                        for name, value in _model_wide(source.get(identity, {})).items()
+                        if name in _VARIANT_FACTS
+                    },
+                )
+
+
+def _model_wide(stated: dict[str, Any]) -> dict[str, Any]:
+    """Drop the facts a source may not decide on its own.
+
+    Args:
+        stated: What one source publishes for one model ID.
+
+    Returns:
+        The same facts without the lifecycle dates, which
+        :func:`apply_card_lifecycle_fallback` resolves against Amazon Bedrock's
+        own answer instead.
+    """
+    return {
+        name: value for name, value in stated.items() if name not in _LIFECYCLE_FIELDS
+    }
+
+
+def apply_card_lifecycle_fallback(
+    rows: Iterable[ModelRow], card_facts: dict[str, dict[str, Any]]
+) -> None:
+    """Fill a lifecycle date only where no Amazon Bedrock API stated one.
+
+    Amazon Bedrock's ``modelLifecycle`` is the reference for these dates, and a
+    model card is a fallback for the models it says nothing about. The order is
+    stated here rather than left to whichever function happens to run first,
+    because a reordering elsewhere would otherwise invert it silently.
+
+    The fallback is an approximation, knowingly accepted. A card's "Launch date"
+    is frequently the vendor's announcement of the model rather than the date it
+    reached Amazon Bedrock — the Qwen cards state the upstream Alibaba release —
+    so it answers a different question from the one this column asks. It is
+    published where nothing better exists because a date close to the truth
+    serves a reader better than an empty cell.
+
+    Args:
+        rows: The rows the catalogue will publish, after folding.
+        card_facts: Model ID to the facts its AWS model card states.
+    """
+    for row in rows:
+        for identity in (row.id, *(item.id for item in row.variants)):
+            stated = card_facts.get(identity, {})
+            for name in _LIFECYCLE_FIELDS:
+                if getattr(row, name) in (None, "", []) and stated.get(name):
+                    setattr(row, name, stated[name])
 
 
 def _apply_published_facts(row: ModelRow, facts: dict[str, Any]) -> None:
