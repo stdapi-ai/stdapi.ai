@@ -72,6 +72,9 @@ pytestmark = [
     # One endpoint, one worker: these tests share a single paid resource, and
     # one of them deliberately takes its capacity away.
     pytest.mark.xdist_group("sagemaker_endpoint"),
+    # Past the suite default: scaling the component in is a _SCALE_IN_TIMEOUT wait
+    # of its own, before the test it prepares has started.
+    pytest.mark.timeout(1800),
 ]
 
 #: How long to wait for the inference component to release its last copy.

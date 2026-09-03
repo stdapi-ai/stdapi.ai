@@ -1080,6 +1080,8 @@ _ROUND_TRIP_TIMEOUT: float = 3600.0
 _POLL_INTERVAL: float = 20.0
 
 
+# A real batch is given _ROUND_TRIP_TIMEOUT to end, well past the suite default.
+@pytest.mark.timeout(4200)
 @pytest.mark.slow
 @pytest.mark.usefixtures("anthropic_batches_api")
 class TestMessageBatchRoundTrip:

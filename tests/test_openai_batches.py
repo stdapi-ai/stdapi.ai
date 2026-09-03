@@ -2664,6 +2664,8 @@ def _cosine(left: list[float], right: list[float]) -> float:
     return dot / (sqrt(sum(a * a for a in left)) * sqrt(sum(b * b for b in right)))
 
 
+# A real batch is given _ROUND_TRIP_TIMEOUT to end, well past the suite default.
+@pytest.mark.timeout(4200)
 @pytest.mark.slow
 @pytest.mark.usefixtures("batches_api")
 class TestOpenAIBatchRoundTrip:
