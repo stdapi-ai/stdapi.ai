@@ -126,6 +126,7 @@ Mantle-only Claude models are passed through to the upstream Anthropic Messages 
 | `top_k` | Forwarded | Dropped |
 | `cache_control` markers | Forwarded (prompt caching preserved) | Dropped |
 | `stop_sequences` | Forwarded | Dropped when served via the Responses API |
+| `max_tokens` | Forwarded | Below 16, raised to 16 when served via the Responses API (its minimum; a budget of 1, sent as a cheap model probe by some clients, would otherwise be rejected with `400`) — where the classic endpoint also serves the model (the GPT-5.6 family, by default), clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration.md#bedrock-mantle-preferred-models) moves it there, where it is honored as sent; forwarded unchanged when served via Chat Completions |
 | `metadata.user_id` | Forwarded | Forwarded, SHA-256-hashed when over 64 characters |
 | `service_tier` | Forwarded | Only `auto` is forwarded |
 
