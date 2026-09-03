@@ -6,7 +6,7 @@ keywords: AI coding assistant AWS, Cline AWS Bedrock, OpenCode AWS Bedrock, Code
 
 # :material-code-braces: AI Coding Assistants Integration
 
-Connect your favorite AI coding assistants to Amazon Bedrock models through stdapi.ai—three client-side changes: the base URL, the API key, and — where the name differs from what the assistant already sends — the model name, now picked from every provider in the catalogue rather than one vendor's list. Get intelligent code completions, chat assistance, and codebase understanding with powerful AWS models like Claude, Kimi thinking, and Qwen3 Coder Next—no vendor lock-in required.
+Connect your favorite AI coding assistants to Amazon Bedrock models through stdapi.ai—three client-side changes: the base URL, the API key, and — where the name differs from what the assistant already sends — the model name, now picked from every provider in the catalogue rather than one vendor's list. Get intelligent code completions, chat assistance, and codebase understanding with AWS models like Claude, Kimi thinking, and Qwen3 Coder Next.
 
 ## :material-information-outline: About AI Coding Assistants
 
@@ -39,8 +39,8 @@ AI coding assistants are IDE extensions and terminal tools that leverage large l
 - :material-server-network: __Flexible Deployment Options__
   <br>Run stdapi.ai in AWS for production or locally with Docker for development. Test locally, deploy to cloud—same API, same experience.
 
-- :material-currency-usd-off: __Pay-Per-Use, No Subscriptions__
-  <br>No per-developer licenses or monthly subscriptions. Pay only Amazon Bedrock rates for actual usage. Use powerful models without per-seat costs.
+- :material-currency-usd-off: __No Per-Developer Licence__
+  <br>The gateway is licensed per container-hour, not per developer, and model usage is billed by Amazon Bedrock at its published rates with no markup, on your own AWS account. Enable per-user attribution and the invoice shows which developer spent what. A flat-rate subscription can still cost less for one developer coding all day; this is for the calls a subscription does not cover, and for seeing who made them.
 
 </div>
 
@@ -191,7 +191,7 @@ Most AI coding assistants follow a similar configuration pattern. The exact menu
 
     - **Auto-detect**: Some assistants query `/v1/models` and show a dropdown
     - **Manual entry**: Use full Bedrock model ID (e.g., `anthropic.claude-fable-5`)
-    - **Multi-model setup**: Use fast, cheap models for secondary tasks (autocomplete, summaries) and powerful models for complex generation
+    - **Multi-model setup**: Use fast, cheap models for secondary tasks (autocomplete, summaries) and stronger models for complex generation
 
 #### :material-chat-outline: Chat Completions
 
