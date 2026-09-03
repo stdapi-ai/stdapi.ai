@@ -364,6 +364,7 @@ Common configuration issues with non-Claude models:
 
 - **Prompt caching** — Claude Code sends `cache_control` headers that can cause errors on models that handle caching differently. Set `DISABLE_PROMPT_CACHING=1` to suppress them.
 - **Output token limit** — Claude Code defaults to requesting up to 32,000 output tokens, which exceeds the maximum for many non-Claude models. Set `CLAUDE_CODE_MAX_OUTPUT_TOKENS` to a value within the model's limit to avoid `max_tokens` validation errors.
+- **One-token model probes** — Claude Code probes a model with a `max_tokens: 1` request. The Responses API refuses any budget below 16, and it is the transport [Amazon Bedrock Mantle](features.md#bedrock-mantle-models) reaches most of its models over, so stdapi.ai raises the budget to 16 instead of letting the probe fail with a `400`. Nothing to configure — the probe costs up to 16 output tokens rather than one. Where the classic endpoint also serves the model (the GPT-5.6 family, by default), clearing [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](operations_configuration.md#bedrock-mantle-preferred-models) moves it there, where the budget is honored as sent.
 
 ```json
 {

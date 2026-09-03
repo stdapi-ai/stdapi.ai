@@ -4054,6 +4054,42 @@ class TestChatToResponsesDropList:
         assert field not in out
 
 
+class TestChatToResponsesTokenBudget:
+    """A budget below the Responses minimum is raised, never refused.
+
+    The Anthropic Messages API and Chat Completions both accept a budget of one
+    token -- Claude Code sends exactly that to probe a model -- while the
+    Responses API refuses anything under 16, so a request valid on the surface
+    the caller used would otherwise come back as a 400 from the transport.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         https://platform.claude.com/docs/en/api/messages
+         stdapi/models/chat/_mantle/_convert.py:_chat_to_responses_request
+    """
+
+    @pytest.mark.parametrize("field", ["max_completion_tokens", "max_tokens"])
+    @pytest.mark.parametrize(
+        ("asked", "sent"), [(1, 16), (15, 16), (16, 16), (17, 17), (4096, 4096)]
+    )
+    def test_the_budget_reaches_the_transport_usable(
+        self, field: str, asked: int, sent: int
+    ) -> None:
+        """Only a value the Responses API would refuse is moved."""
+        out = mantle_convert._chat_to_responses_request(  # noqa: SLF001
+            {"model": "m", "messages": [], field: asked}
+        )
+
+        assert out["max_output_tokens"] == sent
+
+    def test_no_budget_stays_unset(self) -> None:
+        """Nothing is invented for a request that named no budget."""
+        out = mantle_convert._chat_to_responses_request(  # noqa: SLF001
+            {"model": "m", "messages": []}
+        )
+
+        assert "max_output_tokens" not in out
+
+
 class TestChatToMessagesDropList:
     """Chat Completions fields without an Anthropic equivalent are dropped.
 

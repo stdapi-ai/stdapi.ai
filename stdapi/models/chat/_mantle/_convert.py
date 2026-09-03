@@ -69,6 +69,9 @@ if TYPE_CHECKING:
 #: Default Anthropic ``max_tokens`` injected when a request does not set one.
 _DEFAULT_MAX_TOKENS = 4096
 
+#: Smallest ``max_output_tokens`` the Responses API accepts, below what the other surfaces do.
+_MIN_MAX_OUTPUT_TOKENS = 16
+
 #: Assistant field carrying a reasoning model's thinking text upstream.
 _REASONING_KEY = "reasoning"
 
@@ -1061,7 +1064,9 @@ def _chat_to_responses_request(payload: dict[str, Any]) -> dict[str, Any]:
         out["instructions"] = instructions
     out.update(_optional_fields(payload, _OPENAI_COMMON_FIELDS))
     if tokens := payload.get("max_completion_tokens") or payload.get("max_tokens"):
-        out["max_output_tokens"] = tokens
+        # Anthropic and Chat Completions accept a budget the Responses API refuses,
+        # so it is raised to what the transport takes rather than turned into a 400.
+        out["max_output_tokens"] = max(tokens, _MIN_MAX_OUTPUT_TOKENS)
     if effort := payload.get("reasoning_effort"):
         out["reasoning"] = {"effort": effort}
     if text_format := _text_format_from_response_format(payload.get("response_format")):
