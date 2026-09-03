@@ -54,6 +54,7 @@ test = [
     "pytest-asyncio",
     "pytest-cov",
     "pytest-rerunfailures",
+    "pytest-timeout",
     "pytest-xdist[psutil]",
     "httpx",
     "openai",
@@ -212,6 +213,15 @@ addopts = [
     "--strict-markers",
     "--dist=loadgroup",
 ]
+# Nothing outside the self-timed lanes waits this long on purpose, so a run that
+# reaches it is deadlocked. The default signal method is kept: the thread method
+# ends the worker with os._exit(1), skipping the finalizers that delete billable
+# AWS resources, and writes its stack dump to a stdout xdist has bound to
+# /dev/null. faulthandler is what names the culprit instead, from a watchdog
+# thread that needs no GIL to a stderr that survives capture; it also fires
+# harmlessly on the tests marked with a longer budget.
+timeout = 900
+faulthandler_timeout = 870
 markers = [
     "expensive: compute/cost expensive tests, skipped unless --expensive is passed",
     "agentic: agentic tests, skipped unless --agentic is passed",

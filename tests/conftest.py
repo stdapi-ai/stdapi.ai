@@ -559,6 +559,8 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 _OPENAI_ORGANIZATION = "tests_stdapi.ai"
 #: Markers whose tests are collected only when the matching ``--<marker>`` flag is passed.
 _OPT_IN_MARKERS = ("expensive", "agentic", "slow", "video", "container", "drift")
+#: Markers of the lanes whose own subprocess budgets already exceed the global timeout.
+_SELF_TIMED_MARKERS = ("agentic", "container")
 #: Fallback skip reason for a ``gateway`` marker that names none of its own.
 _GATEWAY_SKIP_REASON = "Exercises a gateway-only capability (official API selected)"
 #: Message every route of an optional API answers when the operator left it unconfigured.
@@ -690,6 +692,10 @@ def pytest_collection_modifyitems(
     used directly, so that every retried test has to state why it is allowed to
     fail once. A retry hides a real regression if it is ever added without one.
 
+    The ``_SELF_TIMED_MARKERS`` lanes drive containers and third-party clients on
+    subprocess budgets far past the global timeout, and fail cleanly on their own
+    when one expires, so that timeout is lifted from them unless a test sets one.
+
     Raises:
         pytest.UsageError: If a ``retry`` marker states no reason.
     """
@@ -733,6 +739,14 @@ def pytest_collection_modifyitems(
                 )
             )
 
+    def lift_timeout_on_self_timed_lanes() -> None:
+        """Drop the global timeout where a lane already bounds its own subprocesses."""
+        for item in items:
+            if item.get_closest_marker("timeout") is not None:
+                continue
+            if any(item.get_closest_marker(name) for name in _SELF_TIMED_MARKERS):
+                item.add_marker(pytest.mark.timeout(0))
+
     if config.getoption("--server-url") or config.getoption("--use-official-api"):
         skip("Tests the local implementation (remote target selected)", marked("local"))
     if config.getoption("--use-official-api"):
@@ -743,6 +757,7 @@ def pytest_collection_modifyitems(
         if not config.getoption(f"--{opt_in}"):
             skip(f"Need --{opt_in} option to run this test", marked(opt_in))
     apply_retries()
+    lift_timeout_on_self_timed_lanes()
 
 
 @pytest.fixture(scope="session")
