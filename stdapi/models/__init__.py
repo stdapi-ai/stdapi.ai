@@ -3877,6 +3877,14 @@ def _merge_candidate(existing: ModelDetails, candidate: ModelDetails) -> None:
             region
         ):
             existing.set_inference_profile_regional(region, regional_profile)
+    # A region that opened the model later reports its own rollout date, so the
+    # GA date is the earliest one any region publishes rather than whichever
+    # region happened to be listed first.
+    if candidate.start_of_life_time is not None and (
+        existing.start_of_life_time is None
+        or candidate.start_of_life_time < existing.start_of_life_time
+    ):
+        existing.start_of_life_time = candidate.start_of_life_time
 
 
 async def _check_model_availability(model: ModelDetails) -> list[str]:
