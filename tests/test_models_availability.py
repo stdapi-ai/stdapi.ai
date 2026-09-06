@@ -227,6 +227,63 @@ class TestMergeCandidate:
             == "eu.vendor.some-model-v1"
         )
 
+    def test_earliest_start_of_life_wins_over_a_later_regional_rollout(self) -> None:
+        """The GA date is the earliest a region publishes, not the first one merged.
+
+        A region that opens a model months after launch reports that rollout as its
+        own ``startOfLifeTime``: AWS serves 2026-01-06 for
+        ``anthropic.claude-haiku-4-5-20251001-v1:0`` in the seven regions it expanded
+        into and 2025-10-15 in the twenty-four that had it at launch. Keeping the
+        first-merged value made the published GA date depend on region ordering.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html
+        """
+        existing = _make_model()
+        existing.start_of_life_time = datetime(2026, 1, 6, tzinfo=UTC)
+        candidate = _make_model(region="eu-west-1")
+        candidate.start_of_life_time = datetime(2025, 10, 15, tzinfo=UTC)
+
+        _merge_candidate(existing, candidate)
+
+        assert existing.start_of_life_time == datetime(2025, 10, 15, tzinfo=UTC)
+
+    def test_later_start_of_life_does_not_displace_the_earlier_one(self) -> None:
+        """A candidate rolled out later leaves the already-merged GA date alone.
+
+        The merge order is not stable, so the rule has to hold in both directions.
+        """
+        existing = _make_model()
+        existing.start_of_life_time = datetime(2025, 10, 15, tzinfo=UTC)
+        candidate = _make_model(region="eu-west-1")
+        candidate.start_of_life_time = datetime(2026, 1, 6, tzinfo=UTC)
+
+        _merge_candidate(existing, candidate)
+
+        assert existing.start_of_life_time == datetime(2025, 10, 15, tzinfo=UTC)
+
+    def test_start_of_life_is_taken_from_the_only_region_publishing_one(self) -> None:
+        """A candidate's date fills a gap the first region left unset.
+
+        ``modelLifecycle`` omits ``startOfLifeTime`` for some models, and an absent
+        date must not shadow one a later region does publish.
+        """
+        existing = _make_model()
+        candidate = _make_model(region="eu-west-1")
+        candidate.start_of_life_time = datetime(2025, 10, 15, tzinfo=UTC)
+
+        _merge_candidate(existing, candidate)
+
+        assert existing.start_of_life_time == datetime(2025, 10, 15, tzinfo=UTC)
+
+    def test_undated_candidate_leaves_a_known_start_of_life_intact(self) -> None:
+        """A candidate publishing no date does not erase the one already merged."""
+        existing = _make_model()
+        existing.start_of_life_time = datetime(2025, 10, 15, tzinfo=UTC)
+
+        _merge_candidate(existing, _make_model(region="eu-west-1"))
+
+        assert existing.start_of_life_time == datetime(2025, 10, 15, tzinfo=UTC)
+
 
 #: Application inference profile ARN an operator maps a model onto.
 _APP_PROFILE_ARN = (
