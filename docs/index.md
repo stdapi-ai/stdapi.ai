@@ -106,7 +106,7 @@ Most gateways stop at chat completions. stdapi.ai covers text, retrieval, embedd
 </div>
 <div class="model-logos">
 <img src="styles/logo_openai.svg" alt="OpenAI" title="OpenAI-compatible API" width="503" height="499" decoding="async" loading="lazy" />
-<img src="styles/logo_anthropic.svg" alt="Anthropic" title="Anthropic-compatible API" width="24" height="24" decoding="async" loading="lazy" />
+<img src="styles/logo_anthropic.svg" alt="Anthropic" title="Anthropic-compatible API" width="24" height="24" decoding="async" loading="lazy" class="mark--on-light" />
 <img src="styles/logo_cohere.svg" alt="Cohere" title="Cohere-compatible API" width="78" height="78" decoding="async" loading="lazy" />
 <img src="styles/logo_ollama.svg" alt="Ollama" title="Ollama-compatible API" width="24" height="24" decoding="async" loading="lazy" />
 </div>
@@ -212,12 +212,12 @@ Bedrock, Bedrock Mantle, Polly, Transcribe and Comprehend all surface as models 
 <div class="model-logos">
 <img src="styles/logo_anthropic_claude.svg" alt="Claude" title="Claude" width="24" height="24" decoding="async" loading="lazy" />
 <img src="styles/logo_openai.svg" alt="OpenAI GPT" title="OpenAI GPT" width="503" height="499" decoding="async" loading="lazy" />
-<img src="styles/logo_xai.svg" alt="xAI Grok" title="xAI Grok" width="21" height="23" decoding="async" loading="lazy" />
+<img src="styles/logo_xai.svg" alt="xAI Grok" title="xAI Grok" width="21" height="23" decoding="async" loading="lazy" class="mark--on-light" />
 <img src="styles/logo_deepSeek.svg" alt="DeepSeek" title="DeepSeek" width="25" height="19" decoding="async" loading="lazy" />
 <img src="styles/logo_google.svg" alt="Google Gemma" title="Google Gemma" width="23" height="23" decoding="async" loading="lazy" />
 <img src="styles/logo_meta.svg" alt="Meta Llama" title="Meta Llama" width="25" height="17" decoding="async" />
 <img src="styles/logo_qwen.svg" alt="Qwen" title="Qwen" width="153" height="151" decoding="async" />
-<img src="styles/logo_moonshot.svg" alt="Moonshot AI" title="Moonshot AI" width="25" height="25" decoding="async" />
+<img src="styles/logo_moonshot.svg" alt="Moonshot AI" title="Moonshot AI" width="25" height="25" decoding="async" class="mark--on-light" />
 <img src="styles/logo_mistralai.svg" alt="Mistral AI" title="Mistral AI" width="191" height="135" decoding="async" />
 <img src="styles/logo_cohere.svg" alt="Cohere" title="Cohere" width="78" height="78" decoding="async" />
 <img src="styles/logo_stabilityai.svg" alt="Stability AI" title="Stability AI" width="103" height="86" decoding="async" />
@@ -405,11 +405,11 @@ Prefer hands-off? A [managed deployment service](https://aws.amazon.com/marketpl
       <span>OpenAI GPT</span>
     </div>
     <div class="logo-item" title="xAI Grok">
-      <img src="styles/logo_xai.svg" alt="xAI logo" width="21" height="23" decoding="async" />
+      <img src="styles/logo_xai.svg" alt="xAI logo" width="21" height="23" decoding="async" class="mark--on-light" />
       <span>xAI Grok</span>
     </div>
     <div class="logo-item" title="Moonshot AI">
-      <img src="styles/logo_moonshot.svg" alt="Moonshot AI logo" width="25" height="25" decoding="async" />
+      <img src="styles/logo_moonshot.svg" alt="Moonshot AI logo" width="25" height="25" decoding="async" class="mark--on-light" />
       <span>Moonshot AI</span>
     </div>
     <div class="logo-item" title="Amazon Translate">
@@ -441,7 +441,7 @@ Prefer hands-off? A [managed deployment service](https://aws.amazon.com/marketpl
       <span>AI21 Labs</span>
     </div>
     <div class="logo-item" title="Anthropic">
-      <img src="styles/logo_anthropic.svg" alt="Anthropic logo" width="24" height="24" decoding="async" />
+      <img src="styles/logo_anthropic.svg" alt="Anthropic logo" width="24" height="24" decoding="async" class="mark--on-light" />
       <span>Anthropic</span>
     </div>
     <div class="logo-item" title="Z.ai">
