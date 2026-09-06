@@ -42,14 +42,14 @@ available from any running instance through
 <tr><td>Jamba 1.5 Mini (legacy)</td><td><code>ai21.jamba-1-5-mini-v1:0</code></td><td>AI21 Labs</td><td>TEXT</td><td>TEXT</td><td>1</td></tr>
 <tr><td>Bedrock Guardrail Checks</td><td><code>amazon.bedrock-runtime-guardrail-checks</code></td><td>Amazon</td><td>TEXT</td><td>MODERATION</td><td>7</td></tr>
 <tr><td>Comprehend Toxicity Detection</td><td><code>amazon.comprehend-toxicity</code></td><td>Amazon</td><td>TEXT</td><td>MODERATION</td><td>33</td></tr>
-<tr><td>Nova 2 Lite</td><td><code>amazon.nova-2-lite-v1:0</code></td><td>Amazon</td><td>TEXT, IMAGE, VIDEO</td><td>TEXT</td><td>19</td></tr>
+<tr><td>Nova 2 Lite</td><td><code>amazon.nova-2-lite-v1:0</code></td><td>Amazon</td><td>TEXT, IMAGE, VIDEO</td><td>TEXT</td><td>25</td></tr>
 <tr><td>Amazon Nova Multimodal Embeddings</td><td><code>amazon.nova-2-multimodal-embeddings-v1:0</code></td><td>Amazon</td><td>TEXT, IMAGE, AUDIO, VIDEO</td><td>EMBEDDING</td><td>1</td></tr>
 <tr><td>Nova 2 Sonic</td><td><code>amazon.nova-2-sonic-v1:0</code></td><td>Amazon</td><td>SPEECH</td><td>SPEECH, TEXT</td><td>4</td></tr>
 <tr><td>Nova Canvas (legacy)</td><td><code>amazon.nova-canvas-v1:0</code></td><td>Amazon</td><td>TEXT, IMAGE</td><td>IMAGE</td><td>3</td></tr>
-<tr><td>Nova Lite</td><td><code>amazon.nova-lite-v1:0</code></td><td>Amazon</td><td>TEXT, IMAGE, VIDEO</td><td>TEXT</td><td>19</td></tr>
-<tr><td>Nova Micro</td><td><code>amazon.nova-micro-v1:0</code></td><td>Amazon</td><td>TEXT</td><td>TEXT</td><td>16</td></tr>
+<tr><td>Nova Lite</td><td><code>amazon.nova-lite-v1:0</code></td><td>Amazon</td><td>TEXT, IMAGE, VIDEO</td><td>TEXT</td><td>24</td></tr>
+<tr><td>Nova Micro</td><td><code>amazon.nova-micro-v1:0</code></td><td>Amazon</td><td>TEXT</td><td>TEXT</td><td>20</td></tr>
 <tr><td>Nova Premier (legacy)</td><td><code>amazon.nova-premier-v1:0</code></td><td>Amazon</td><td>TEXT, IMAGE, VIDEO</td><td>TEXT</td><td>3</td></tr>
-<tr><td>Nova Pro</td><td><code>amazon.nova-pro-v1:0</code></td><td>Amazon</td><td>TEXT, IMAGE, VIDEO</td><td>TEXT</td><td>18</td></tr>
+<tr><td>Nova Pro</td><td><code>amazon.nova-pro-v1:0</code></td><td>Amazon</td><td>TEXT, IMAGE, VIDEO</td><td>TEXT</td><td>22</td></tr>
 <tr><td>Nova Reel (legacy)</td><td><code>amazon.nova-reel-v1:0</code></td><td>Amazon</td><td>TEXT, IMAGE</td><td>VIDEO</td><td>3</td></tr>
 <tr><td>Nova Reel (legacy)</td><td><code>amazon.nova-reel-v1:1</code></td><td>Amazon</td><td>TEXT, IMAGE</td><td>VIDEO</td><td>1</td></tr>
 <tr><td>Nova Sonic (legacy)</td><td><code>amazon.nova-sonic-v1:0</code></td><td>Amazon</td><td>SPEECH</td><td>SPEECH, TEXT</td><td>3</td></tr>
@@ -67,21 +67,22 @@ available from any running instance through
 <tr><td>Claude 3.7 Sonnet</td><td><code>anthropic.claude-3-7-sonnet-20250219-v1:0</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>2</td></tr>
 <tr><td>Claude 3 Haiku (legacy)</td><td><code>anthropic.claude-3-haiku-20240307-v1:0</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>15</td></tr>
 <tr><td>Claude 3 Sonnet</td><td><code>anthropic.claude-3-sonnet-20240229-v1:0</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>5</td></tr>
-<tr><td>Claude Fable 5</td><td><code>anthropic.claude-fable-5</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
+<tr><td>Claude Fable 5</td><td><code>anthropic.claude-fable-5</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
+<tr><td>Claude Fable 5.1</td><td><code>anthropic.claude-fable-5-1</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>claude-fern-trn2-1024k</td><td><code>anthropic.claude-fern-trn2-1024k</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>1</td></tr>
 <tr><td>claude-haiku-4-5</td><td><code>anthropic.claude-haiku-4-5</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>7</td></tr>
-<tr><td>Claude Haiku 4.5</td><td><code>anthropic.claude-haiku-4-5-20251001-v1:0</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
+<tr><td>Claude Haiku 4.5</td><td><code>anthropic.claude-haiku-4-5-20251001-v1:0</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>Claude Opus 4.1 (legacy)</td><td><code>anthropic.claude-opus-4-1-20250805-v1:0</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>3</td></tr>
-<tr><td>Claude Opus 4.5</td><td><code>anthropic.claude-opus-4-5-20251101-v1:0</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
+<tr><td>Claude Opus 4.5</td><td><code>anthropic.claude-opus-4-5-20251101-v1:0</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>claude-opus-4-6</td><td><code>anthropic.claude-opus-4-6</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>2</td></tr>
-<tr><td>Claude Opus 4.6</td><td><code>anthropic.claude-opus-4-6-v1</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
-<tr><td>Claude Opus 4.7</td><td><code>anthropic.claude-opus-4-7</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
-<tr><td>Claude Opus 4.8</td><td><code>anthropic.claude-opus-4-8</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
-<tr><td>Claude Opus 5</td><td><code>anthropic.claude-opus-5</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
-<tr><td>Claude Sonnet 4 (legacy)</td><td><code>anthropic.claude-sonnet-4-20250514-v1:0</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>19</td></tr>
-<tr><td>Claude Sonnet 4.5</td><td><code>anthropic.claude-sonnet-4-5-20250929-v1:0</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
-<tr><td>Claude Sonnet 4.6</td><td><code>anthropic.claude-sonnet-4-6</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
-<tr><td>Claude Sonnet 5</td><td><code>anthropic.claude-sonnet-5</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
+<tr><td>Claude Opus 4.6</td><td><code>anthropic.claude-opus-4-6-v1</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
+<tr><td>Claude Opus 4.7</td><td><code>anthropic.claude-opus-4-7</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
+<tr><td>Claude Opus 4.8</td><td><code>anthropic.claude-opus-4-8</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
+<tr><td>Claude Opus 5</td><td><code>anthropic.claude-opus-5</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
+<tr><td>Claude Sonnet 4 (legacy)</td><td><code>anthropic.claude-sonnet-4-20250514-v1:0</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
+<tr><td>Claude Sonnet 4.5</td><td><code>anthropic.claude-sonnet-4-5-20250929-v1:0</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
+<tr><td>Claude Sonnet 4.6</td><td><code>anthropic.claude-sonnet-4-6</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
+<tr><td>Claude Sonnet 5</td><td><code>anthropic.claude-sonnet-5</code></td><td>Anthropic</td><td>TEXT, IMAGE</td><td>TEXT</td><td>31</td></tr>
 <tr><td>Embed English</td><td><code>cohere.embed-english-v3</code></td><td>Cohere</td><td>TEXT, IMAGE</td><td>EMBEDDING</td><td>12</td></tr>
 <tr><td>Embed Multilingual</td><td><code>cohere.embed-multilingual-v3</code></td><td>Cohere</td><td>TEXT, IMAGE</td><td>EMBEDDING</td><td>12</td></tr>
 <tr><td>Embed v4</td><td><code>cohere.embed-v4:0</code></td><td>Cohere</td><td>TEXT, IMAGE</td><td>EMBEDDING</td><td>23</td></tr>
@@ -168,12 +169,12 @@ available from any running instance through
 <tr><td>Stable Image Style Transfer</td><td><code>stability.stable-style-transfer-v1:0</code></td><td>Stability AI</td><td>TEXT, IMAGE</td><td>IMAGE</td><td>3</td></tr>
 <tr><td>Marengo Embed v2.7 (legacy)</td><td><code>twelvelabs.marengo-embed-2-7-v1:0</code></td><td>TwelveLabs</td><td>TEXT, IMAGE, SPEECH, VIDEO</td><td>EMBEDDING</td><td>3</td></tr>
 <tr><td>Marengo Embed 3.0</td><td><code>twelvelabs.marengo-embed-3-0-v1:0</code></td><td>TwelveLabs</td><td>TEXT, IMAGE, SPEECH, VIDEO</td><td>EMBEDDING</td><td>3</td></tr>
-<tr><td>Pegasus v1.2</td><td><code>twelvelabs.pegasus-1-2-v1:0</code></td><td>TwelveLabs</td><td>TEXT, VIDEO</td><td>TEXT</td><td>23</td></tr>
+<tr><td>Pegasus v1.2</td><td><code>twelvelabs.pegasus-1-2-v1:0</code></td><td>TwelveLabs</td><td>TEXT, VIDEO</td><td>TEXT</td><td>30</td></tr>
 <tr><td>Writer Palmyra Vision 7B</td><td><code>writer.palmyra-vision-7b</code></td><td>Writer</td><td>TEXT, IMAGE</td><td>TEXT</td><td>3</td></tr>
 <tr><td>Palmyra X4</td><td><code>writer.palmyra-x4-v1:0</code></td><td>Writer</td><td>TEXT</td><td>TEXT</td><td>4</td></tr>
 <tr><td>Palmyra X5</td><td><code>writer.palmyra-x5-v1:0</code></td><td>Writer</td><td>TEXT</td><td>TEXT</td><td>4</td></tr>
 <tr><td>grok-4.3</td><td><code>xai.grok-4.3</code></td><td>xAI</td><td>TEXT, IMAGE</td><td>TEXT</td><td>3</td></tr>
-<tr><td>Grok 4.6</td><td><code>xai.grok-4.6</code></td><td>xAI</td><td>TEXT, IMAGE</td><td>TEXT</td><td>23</td></tr>
+<tr><td>Grok 4.6</td><td><code>xai.grok-4.6</code></td><td>xAI</td><td>TEXT, IMAGE</td><td>TEXT</td><td>28</td></tr>
 <tr><td>glm-4.6</td><td><code>zai.glm-4.6</code></td><td>Zhipu AI</td><td>TEXT</td><td>TEXT</td><td>15</td></tr>
 <tr><td>GLM 4.7</td><td><code>zai.glm-4.7</code></td><td>Z.AI</td><td>TEXT</td><td>TEXT</td><td>10</td></tr>
 <tr><td>GLM 4.7 Flash</td><td><code>zai.glm-4.7-flash</code></td><td>Z.AI</td><td>TEXT</td><td>TEXT</td><td>13</td></tr>
@@ -214,7 +215,7 @@ reflects the AWS account this snapshot came from — your own
 ## :material-database-outline: Sources, licences and caveats
 
 <!-- catalog:generated -->
-Snapshot taken on **2026-08-31** from a stdapi.ai instance, covering 140 models across 33 AWS regions. Prices and availability move — before you commit to a number, confirm it against the [Amazon Bedrock pricing page](https://aws.amazon.com/bedrock/pricing/) and your own [`search_models`](api_search_models.md).
+Snapshot taken on **2026-09-06** from a stdapi.ai instance, covering 141 models across 33 AWS regions. 2 model(s) AWS no longer lists are kept, tagged `delisted`. Prices and availability move — before you commit to a number, confirm it against the [Amazon Bedrock pricing page](https://aws.amazon.com/bedrock/pricing/) and your own [`search_models`](api_search_models.md).
 <!-- /catalog:generated -->
 
 <!-- catalog:sources -->
@@ -222,14 +223,14 @@ Every number on this page comes from one of the sources below, reproduced unmodi
 
 | Source | Licence | Read on | Used here |
 | --- | --- | --- | --- |
-| The gateway's own [`search_models`](api_search_models.md) and [`model_pricing`](api_model_pricing.md) | — | 2026-08-31 | 140 |
-| [Amazon Bedrock `ListFoundationModels`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_ListFoundationModels.html), read raw so its undocumented fields survive | — | 2026-08-31 | capabilities, APIs, media types, limits |
-| [LMArena Leaderboard](https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-08-27 | 79 of 797 entries |
-| [MTEB — Massive Text Embedding Benchmark](https://github.com/embeddings-benchmark/results) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | 2026-08-31 | 5 of 12 entries |
-| [Epoch AI — AI Benchmarking Hub](https://epoch.ai/benchmarks/use-this-data) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-08-30 | 60 of 661 entries |
-| [Amazon Bedrock model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html) | [AWS documentation](https://aws.amazon.com/terms/) | 2026-08-31 | 112 of 124 model cards |
-| [models.dev](https://models.dev/) | [MIT](https://github.com/anomalyco/models.dev/blob/dev/LICENSE) | 2026-08-31 | 65 of 120 models |
-| [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) | 2026-08-31 | 2 of 61 entries |
+| The gateway's own [`search_models`](api_search_models.md) and [`model_pricing`](api_model_pricing.md) | — | 2026-09-06 | 141 |
+| [Amazon Bedrock `ListFoundationModels`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_ListFoundationModels.html), read raw so its undocumented fields survive | — | 2026-09-06 | capabilities, APIs, media types, limits |
+| [LMArena Leaderboard](https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-09-04 | 79 of 805 entries |
+| [MTEB — Massive Text Embedding Benchmark](https://github.com/embeddings-benchmark/results) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | 2026-09-06 | 5 of 12 entries |
+| [Epoch AI — AI Benchmarking Hub](https://epoch.ai/benchmarks/use-this-data) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 2026-09-01 | 63 of 702 entries |
+| [Amazon Bedrock model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html) | [AWS documentation](https://aws.amazon.com/terms/) | 2026-09-06 | 113 of 126 model cards |
+| [models.dev](https://models.dev/) | [MIT](https://github.com/anomalyco/models.dev/blob/dev/LICENSE) | 2026-09-06 | 66 of 123 models |
+| [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) | 2026-09-06 | 2 of 62 entries |
 
 - **LMArena Leaderboard** — Arena Elo ratings by LMArena (Arena Intelligence Inc.), reproduced unmodified under CC BY 4.0. The mapping to Amazon Bedrock model IDs is ours.
 - **MTEB — Massive Text Embedding Benchmark** — Benchmark results from the MTEB results repository, dedicated to the public domain under CC0 1.0. The mapping to Amazon Bedrock model IDs is ours.
