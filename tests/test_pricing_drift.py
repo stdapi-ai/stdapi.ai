@@ -164,6 +164,9 @@ _SHORT_CONTEXT_CAPTION: Final[str] = "short context"
 #: Caption fragment labelling the long-context table, absent from most cards.
 _LONG_CONTEXT_CAPTION: Final[str] = "long context"
 
+#: Heading opening the AWS GovCloud rates, which DEFAULT_MODEL_PRICES excludes.
+_GOVCLOUD_HEADING: Final[str] = "aws govcloud"
+
 #: How a card states the boundary between its two context tables, e.g. "(272K)".
 _CONTEXT_WINDOW_SIZE: Final[re.Pattern[str]] = re.compile(
     r"\((\d+)\s*K\)", re.IGNORECASE
@@ -193,6 +196,7 @@ _ROW: Final[re.Pattern[str]] = re.compile(r"<tr.*?</tr>", re.DOTALL)
 _CELL: Final[re.Pattern[str]] = re.compile(r"<t[hd][^>]*>(.*?)</t[hd]>", re.DOTALL)
 _MONEY: Final[re.Pattern[str]] = re.compile(r"^\$([0-9]+(?:\.[0-9]+)?)$")
 _H1: Final[re.Pattern[str]] = re.compile(r"<h1[\s>]")
+_PARAGRAPH: Final[re.Pattern[str]] = re.compile(r"<p[^>]*>.*?</p>", re.DOTALL)
 _PRICING_SECTION: Final[re.Pattern[str]] = re.compile(
     r'<h2[^>]*id="[^"]*-pricing"[^>]*>.*?</h2>(.*?)(?=<h2|\Z)', re.DOTALL
 )
@@ -392,7 +396,21 @@ def _pricing_section(page: str) -> str:
     if _PER_MILLION_NOTE not in _text(body).casefold():
         msg = f"the Pricing section no longer states rates {_PER_MILLION_NOTE!r}"
         raise UnreadableSourceError(msg)
-    return body
+    return _commercial_block(body)
+
+
+def _commercial_block(section: str) -> str:
+    """Return *section* truncated before the AWS GovCloud rates it may carry.
+
+    A card pricing GovCloud repeats the same context-window captions below a
+    GovCloud heading, so those tables are not distinguishable from the
+    commercial ones by caption alone. ``DEFAULT_MODEL_PRICES`` registers only
+    commercial rates, which are the ones above that heading.
+    """
+    for paragraph in _PARAGRAPH.finditer(section):
+        if _GOVCLOUD_HEADING in _text(paragraph.group(0)).casefold():
+            return section[: paragraph.start()]
+    return section
 
 
 def _pricing_rows(page: str, context: ContextLength = "") -> list[list[str]] | None:
@@ -1161,6 +1179,12 @@ def gpt_54_card() -> str:
 
 
 @pytest.fixture(scope="module")
+def gpt_56_luna_card() -> str:
+    """The recorded Pricing section of the GPT-5.6 Luna model card."""
+    return (FIXTURES_DIR / "model_card_openai_gpt_56_luna_pricing.html").read_text()
+
+
+@pytest.fixture(scope="module")
 def daybreak_blue_card() -> str:
     """The recorded Pricing section of the Daybreak Blue GPT-5.6 Sol model card."""
     path = FIXTURES_DIR / "model_card_openai_gpt_daybreak_blue_56_sol_pricing.html"
@@ -1246,6 +1270,42 @@ class TestModelCardParsing:
         assert rates[Dimension.INPUT_TOKENS] == Decimal("0.00000275")
         assert rates[Dimension.OUTPUT_TOKENS] == Decimal("0.0000165")
         assert parse_model_card_global(gpt_54_card) is None
+
+    def test_a_govcloud_block_repeating_the_commercial_captions_is_excluded(
+        self, gpt_56_luna_card: str
+    ) -> None:
+        """A GovCloud block captioned exactly like the commercial one is still skipped.
+
+        GPT-5.6 Luna captions its GovCloud tables "Short Context Window (272K)"
+        and "Long Context Window (1M)" too, so only the GovCloud heading above
+        them separates the two blocks. Reading by caption alone found two
+        short-context tables and reported the card unreadable, which left the
+        Luna and Terra rates unverified against their source.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-luna.html
+        """
+        rates = parse_model_card(gpt_56_luna_card)
+        assert rates is not None
+        assert rates[Dimension.INPUT_TOKENS] == Decimal("0.00000022")
+        assert rates[Dimension.OUTPUT_TOKENS] == Decimal("0.00000132")
+
+        long_rates = parse_model_card(gpt_56_luna_card, "long")
+        assert long_rates is not None
+        assert long_rates[Dimension.INPUT_TOKENS] == Decimal("0.00000044")
+        assert long_rates[Dimension.OUTPUT_TOKENS] == Decimal("0.00000198")
+
+    def test_the_govcloud_block_does_not_supply_a_global_rate_either(
+        self, gpt_56_luna_card: str
+    ) -> None:
+        """The Global rate still comes from the commercial table above the heading.
+
+        The GovCloud tables carry an In-Region row and no Global one, so reading
+        them would have dropped the Global rate rather than misstating it.
+        """
+        rates = parse_model_card_global(gpt_56_luna_card)
+        assert rates is not None
+        assert rates[Dimension.INPUT_TOKENS] == Decimal("0.0000002")
+        assert rates[Dimension.OUTPUT_TOKENS] == Decimal("0.0000012")
 
     def test_a_global_row_pricing_nothing_is_unreadable(
         self, gpt_56_sol_card: str
