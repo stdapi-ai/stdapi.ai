@@ -716,6 +716,15 @@ a.logo-item:focus-visible span { color: var(--primary-dark); }
 }
 .model-logos img { height: 30px; width: auto; }
 .model-logos__more { font-size: 0.68rem; color: var(--ink-60); }
+/* A mark with no declared fill paints default black and vanishes on the dark
+   cards this theme uses; same light-chip treatment as .models-logo--on-light in
+   models-table.css (see logo_backdrop() in docs_gen/model_catalog/build.py). */
+.mark--on-light {
+  background: #f3f3f1;
+  border-radius: 0.2rem;
+  padding: 0.1rem;
+  box-sizing: content-box;
+}
 
 /* Panel 5 visual: per-request cost receipt */
 .receipt__row { display: flex; justify-content: space-between; gap: 1rem; }
